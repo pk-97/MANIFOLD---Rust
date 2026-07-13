@@ -34,9 +34,9 @@ use std::path::Path;
 use manifold_core::NodeId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID,
-    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata,
-    SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID,
+    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef,
+    PresetMetadata, SerializedParamValue, SkipModeDef, StringBindingDef, StringParamSpecDef,
 };
 
 use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
@@ -383,6 +383,20 @@ fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     nodes.push(cam_node);
 
+    // Physical lens (CINEMATIC_POST D6): the one node the DoF group's
+    // circle-of-confusion AND node.motion_blur's shutter angle both read.
+    // f_stop starts at the primitive's own neutral top-of-range (32 —
+    // matches CinematicScene's declared max) and shutter_angle at 0, so an
+    // import looks unchanged until the DoF/Motion Blur cards are dialed in.
+    // focus_distance seeds to the synthesized camera's own framing distance
+    // so the subject is the first thing that stays sharp once f_stop drops.
+    let lens_id = fresh_id();
+    let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
+    lens_node.params.insert("focus_distance".to_string(), float(distance));
+    lens_node.params.insert("f_stop".to_string(), float(32.0));
+    lens_node.params.insert("shutter_angle".to_string(), float(0.0));
+    nodes.push(lens_node);
+
     let sun_id = fresh_id();
     let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
     sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
@@ -664,9 +678,21 @@ fn build_import_graph(
 
     nodes.push(render_node);
 
-    // SSAO contact-occlusion arm: render_scene's color runs through an SSAO
-    // multiply before output. render_scene's `depth` is a lazy output — it
-    // costs nothing until wired, which it now is.
+    // Scene-wide atmosphere (fog + god rays): render_scene's `atmosphere`
+    // input is lazy — unwired is byte-identical to wired-at-defaults, since
+    // every param (fog_density, shaft_intensity, …) defaults to 0 (off).
+    // Wired unconditionally, at those same all-off defaults, purely so the
+    // God Rays card has a live node to bind — an import looks unchanged
+    // until that slider moves.
+    let atmosphere_id = fresh_id();
+    nodes.push(plain_node(atmosphere_id, "atmosphere", "node.atmosphere", "atmosphere"));
+
+    // SSAO contact-occlusion arm, packaged as the same "ao" node group
+    // CinematicScene ships (CINEMATIC_POST D9): ssao_gtao → bilateral_blur
+    // (H then V) denoise → Multiply onto render_scene's color. Grouped so
+    // the graph reads as one labeled box, same as every object group above;
+    // flattens to the identical atom wiring at load
+    // (`manifold_core::flatten::flatten_groups`, docs/NODE_GROUPS_DESIGN.md).
     //
     // SSAO radius is a WORLD-space distance and the importer never rescales
     // the model, so a hero mesh can be fractions of a unit or hundreds across.
@@ -674,33 +700,142 @@ fn build_import_graph(
     // atom's declared 0.01..5.0 envelope) so contact shadows read at any size.
     let ssao_radius_default = (radius * 0.5).clamp(0.01, 5.0);
 
+    let mut ao_nodes: Vec<EffectGraphNode> = Vec::new();
+    let mut ao_wires: Vec<EffectGraphWire> = Vec::new();
+    let ao_in_id = fresh_id();
+    ao_nodes.push(plain_node(ao_in_id, "ao_in", GROUP_INPUT_TYPE_ID, "input"));
     let ssao_id = fresh_id();
     let mut ssao_node = plain_node(ssao_id, "ssao", "node.ssao_gtao", "ssao");
     ssao_node.params.insert("radius".to_string(), float(ssao_radius_default));
     ssao_node.params.insert("intensity".to_string(), float(1.0));
-    nodes.push(ssao_node);
-
+    ao_nodes.push(ssao_node);
     let ssao_mix_id = fresh_id();
     let mut ssao_mix_node = plain_node(ssao_mix_id, "ssao_mix", "node.mix", "ssao_mix");
     ssao_mix_node.params.insert("amount".to_string(), float(1.0));
     ssao_mix_node.params.insert("mode".to_string(), enum_val(4)); // Multiply
-    nodes.push(ssao_mix_node);
+    ao_nodes.push(ssao_mix_node);
+    let bilat_h_id = fresh_id();
+    let mut bilat_h_node = plain_node(bilat_h_id, "bilat_h", "node.bilateral_blur", "bilat_h");
+    bilat_h_node.params.insert("axis".to_string(), enum_val(0));
+    bilat_h_node.params.insert("depth_sigma".to_string(), float(0.1));
+    ao_nodes.push(bilat_h_node);
+    let bilat_v_id = fresh_id();
+    let mut bilat_v_node = plain_node(bilat_v_id, "bilat_v", "node.bilateral_blur", "bilat_v");
+    bilat_v_node.params.insert("axis".to_string(), enum_val(1));
+    bilat_v_node.params.insert("depth_sigma".to_string(), float(0.1));
+    ao_nodes.push(bilat_v_node);
+    let ao_out_id = fresh_id();
+    ao_nodes.push(plain_node(ao_out_id, "ao_out", GROUP_OUTPUT_TYPE_ID, "output"));
+    ao_wires.push(wire(ao_in_id, "depth", ssao_id, "depth"));
+    ao_wires.push(wire(ao_in_id, "camera", ssao_id, "camera"));
+    ao_wires.push(wire(ao_in_id, "color", ssao_mix_id, "a"));
+    ao_wires.push(wire(ssao_id, "out", bilat_h_id, "in"));
+    ao_wires.push(wire(ao_in_id, "depth", bilat_h_id, "depth"));
+    ao_wires.push(wire(ao_in_id, "camera", bilat_h_id, "camera"));
+    ao_wires.push(wire(bilat_h_id, "out", bilat_v_id, "in"));
+    ao_wires.push(wire(ao_in_id, "depth", bilat_v_id, "depth"));
+    ao_wires.push(wire(ao_in_id, "camera", bilat_v_id, "camera"));
+    ao_wires.push(wire(bilat_v_id, "out", ssao_mix_id, "b"));
+    ao_wires.push(wire(ssao_mix_id, "out", ao_out_id, "out"));
+
+    let ao_group_id = fresh_id();
+    let mut ao_group_node = plain_node(ao_group_id, "ao", GROUP_TYPE_ID, "ao");
+    ao_group_node.title = Some("Ambient Occlusion".to_string());
+    ao_group_node.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: vec![
+                InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
+                InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
+                InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
+            ],
+            outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
+            params: Vec::new(),
+        },
+        nodes: ao_nodes,
+        wires: ao_wires,
+        tint: None,
+    }));
+    nodes.push(ao_group_node);
+
+    // Depth of field, packaged as the same "dof" node group CinematicScene
+    // ships (CINEMATIC_POST P1/P4, BUG-137's coc_dilate fix): coc_from_depth
+    // → coc_dilate (fixes the hard cutoff at depth discontinuities) →
+    // bokeh_gather occlusion-aware disc gather, reading the shared lens's
+    // focus_distance/f_stop.
+    let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
+    let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
+    let dof_in_id = fresh_id();
+    dof_nodes.push(plain_node(dof_in_id, "dof_in", GROUP_INPUT_TYPE_ID, "input"));
+    let coc_id = fresh_id();
+    let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
+    coc_node.params.insert("max_radius".to_string(), float(24.0));
+    dof_nodes.push(coc_node);
+    let coc_dilate_id = fresh_id();
+    dof_nodes.push(plain_node(coc_dilate_id, "coc_dilate", "node.coc_dilate", "coc_dilate"));
+    let bokeh_id = fresh_id();
+    let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
+    bokeh_node.params.insert("max_radius".to_string(), float(24.0));
+    dof_nodes.push(bokeh_node);
+    let dof_out_id = fresh_id();
+    dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
+    dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
+    dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
+    dof_wires.push(wire(coc_id, "out", coc_dilate_id, "in"));
+    dof_wires.push(wire(coc_dilate_id, "out", bokeh_id, "width"));
+    dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
+    dof_wires.push(wire(bokeh_id, "out", dof_out_id, "out"));
+
+    let dof_group_id = fresh_id();
+    let mut dof_group_node = plain_node(dof_group_id, "dof", GROUP_TYPE_ID, "dof");
+    dof_group_node.title = Some("Depth of Field".to_string());
+    dof_group_node.group = Some(Box::new(GroupDef {
+        interface: GroupInterface {
+            inputs: vec![
+                InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
+                InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
+                InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
+            ],
+            outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
+            params: Vec::new(),
+        },
+        nodes: dof_nodes,
+        wires: dof_wires,
+        tint: None,
+    }));
+    nodes.push(dof_group_node);
+
+    // Motion blur tail (CINEMATIC_POST P3): a single primitive, not a group
+    // — it reads render_scene's `velocity` output (lazy, costs nothing until
+    // wired) directed by the shared lens's shutter_angle.
+    let motion_blur_id = fresh_id();
+    let mut motion_blur_node =
+        plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
+    motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
+    nodes.push(motion_blur_node);
 
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
-    // Camera feeds render_scene and the SSAO atom (SSAO reconstructs view-space
-    // position from the camera + depth).
-    wires.push(wire(camera_id, "out", render_id, "camera"));
+    // The lens sits between the raw orbit camera and every downstream
+    // consumer (render_scene, the ao/dof groups, motion blur) — the one
+    // node whose focus_distance/f_stop/shutter_angle all four cards read.
+    wires.push(wire(camera_id, "out", lens_id, "camera"));
+    wires.push(wire(lens_id, "out", render_id, "camera"));
     wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
-    wires.push(wire(camera_id, "out", ssao_id, "camera"));
-    wires.push(wire(render_id, "depth", ssao_id, "depth"));
+    wires.push(wire(atmosphere_id, "atmosphere", render_id, "atmosphere"));
 
-    // color × SSAO (Multiply) → final output.
-    wires.push(wire(render_id, "color", ssao_mix_id, "a"));
-    wires.push(wire(ssao_id, "out", ssao_mix_id, "b"));
-    wires.push(wire(ssao_mix_id, "out", final_id, "in"));
+    // render_scene → ao (contact AO) → dof (defocus) → motion_blur → final.
+    wires.push(wire(render_id, "depth", ao_group_id, "depth"));
+    wires.push(wire(lens_id, "out", ao_group_id, "camera"));
+    wires.push(wire(render_id, "color", ao_group_id, "color"));
+    wires.push(wire(render_id, "depth", dof_group_id, "depth"));
+    wires.push(wire(lens_id, "out", dof_group_id, "camera"));
+    wires.push(wire(ao_group_id, "out", dof_group_id, "color"));
+    wires.push(wire(dof_group_id, "out", motion_blur_id, "in"));
+    wires.push(wire(render_id, "velocity", motion_blur_id, "velocity"));
+    wires.push(wire(lens_id, "out", motion_blur_id, "camera"));
+    wires.push(wire(motion_blur_id, "out", final_id, "in"));
 
     // Shared framing / light / environment card knobs. These come LAST in
     // `card_params` (after the per-object material knobs) but read first on
@@ -802,6 +937,38 @@ fn build_import_graph(
     ));
     // No `ssao_bias` card — node.ssao_gtao (CINEMATIC_POST D9) has no `bias`
     // param; the per-tap range check subsumes it.
+
+    // Depth of field — both bind the shared "lens" node (CINEMATIC_POST D6).
+    // Focus distance is scene-scaled like the camera distance card, defaulting
+    // to it, so the subject starts in focus; range widens with `distance` the
+    // same way `cam_dist` does so a huge or tiny import both stay editable.
+    // F-Stop defaults to the lens's own neutral top-of-range (32, no visible
+    // blur) — dialing it down is what turns DoF on.
+    let focus_distance_max = (distance * 4.0).max(1.0);
+    card_params.push(card_param(
+        "dof_focus", "Focus Distance", 0.1, focus_distance_max, distance, false, "Depth of Field",
+    ));
+    card_bindings.push(card_binding(
+        "dof_focus", "Focus Distance", distance, "lens", "focus_distance", 1.0,
+    ));
+    card_params.push(card_param("dof_fstop", "F-Stop", 0.5, 32.0, 32.0, false, "Depth of Field"));
+    card_bindings.push(card_binding("dof_fstop", "F-Stop", 32.0, "lens", "f_stop", 1.0));
+
+    // Motion blur — the lens's shutter_angle (0..360°, matches a real
+    // camera's shutter dial) directs node.motion_blur's per-pixel smear.
+    // Default 0 = shutter closed, no blur, until the model or camera moves.
+    card_params.push(card_param("mb_shutter", "Shutter Angle", 0.0, 360.0, 0.0, false, "Motion Blur"));
+    card_bindings.push(card_binding(
+        "mb_shutter", "Shutter Angle", 0.0, "lens", "shutter_angle", 1.0,
+    ));
+
+    // God rays — node.atmosphere's shaft_intensity (CINEMATIC_POST/VOLUMETRIC_LIGHT).
+    // Default 0 = off; the sun's existing `cast_shadows` (already on by
+    // default above) is what gives the shafts something to carve gaps in.
+    card_params.push(card_param("god_rays", "God Rays", 0.0, 2.0, 0.0, false, "Atmosphere"));
+    card_bindings.push(card_binding(
+        "god_rays", "God Rays", 0.0, "atmosphere", "shaft_intensity", 1.0,
+    ));
 
     // Category "Geometry" matches the existing 3D-geometry generator
     // convention (Tesseract / DigitalPlants / NestedCubes / Duocylinder /
@@ -920,19 +1087,20 @@ mod tests {
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
         // + 1 Environment + 1 Ambient + 2×(metallic + roughness) = 15
-        // framing/material sliders, PLUS the 2 GTAO knobs (radius, intensity
-        // -- `bias` dropped, CINEMATIC_POST D9(b)) = 17 params.
+        // framing/material sliders, PLUS 2 GTAO knobs (radius, intensity --
+        // `bias` dropped, CINEMATIC_POST D9(b)) + 2 DoF (focus, f-stop) +
+        // 1 Motion Blur (shutter angle) + 1 God Rays (shaft intensity) = 21.
         assert_eq!(
             meta.params.len(),
-            17,
-            "15 framing/material + 2 GTAO knobs"
+            21,
+            "15 framing/material + 2 GTAO + 2 DoF + 1 motion blur + 1 god rays"
         );
         // Every param routes one-to-one except the shared Ambient, which fans
-        // out to every material's ambient (2 for azalea). 17 + 1 = 18.
+        // out to every material's ambient (2 for azalea). 21 + 1 = 22.
         assert_eq!(
             meta.bindings.len(),
-            18,
-            "17 params, Ambient fanned to 2 materials"
+            22,
+            "21 params, Ambient fanned to 2 materials"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1025,24 +1193,34 @@ mod tests {
             "camera angle bindings pass radians straight through"
         );
 
-        // The SSAO arm is wired into the spine; the lens / DoF / motion-blur
-        // nodes were removed.
-        assert!(
-            def.nodes.iter().any(|n| n.type_id == "node.ssao_gtao"),
-            "imported graph must carry the GTAO atom"
-        );
-        for absent in [
+        // The full CINEMATIC_POST stack is wired into the spine: GTAO, the
+        // lens, DoF's atom chain, motion blur, and atmosphere (god rays).
+        for present in [
+            "node.ssao_gtao",
+            "node.bilateral_blur",
             "node.camera_lens",
             "node.coc_from_depth",
-            "node.variable_blur",
+            "node.coc_dilate",
+            "node.bokeh_gather",
             "node.motion_blur",
+            "node.atmosphere",
         ] {
             assert!(
-                !def.nodes.iter().any(|n| n.type_id == absent),
-                "`{absent}` should have been removed"
+                def.nodes.iter().any(|n| n.type_id == present)
+                    || def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
+                        g.nodes.iter().any(|inner| inner.type_id == present)
+                    }),
+                "imported graph must carry `{present}`"
             );
         }
-        // The two GTAO knobs are exposed; no lens/DoF/motion params remain.
+        // `node.variable_blur` was P4's superseded DoF blur stage — never
+        // reintroduced (bokeh_gather replaced it).
+        assert!(
+            !def.nodes.iter().any(|n| n.type_id == "node.variable_blur"),
+            "`node.variable_blur` was replaced by node.bokeh_gather, never reintroduced"
+        );
+        // The GTAO knobs are exposed and still bind the ssao node directly —
+        // grouping doesn't change its explicit stable node_id.
         for id in ["ssao_intensity", "ssao_radius"] {
             let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing SSAO card param `{id}`"));
             assert_eq!(p.section.as_deref(), Some("Ambient Occlusion"), "`{id}` is an AO knob");
@@ -1054,13 +1232,35 @@ mod tests {
                 other => panic!("expected a Node target for `{id}`, got {other:?}"),
             }
         }
-        for gone in [
-            "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius", "motion_blur_px",
-            "ssao_bias",
+        // New DoF / motion blur / god rays knobs, each targeting its own node.
+        for (id, section, target_node) in [
+            ("dof_focus", "Depth of Field", "lens"),
+            ("dof_fstop", "Depth of Field", "lens"),
+            ("mb_shutter", "Motion Blur", "lens"),
+            ("god_rays", "Atmosphere", "atmosphere"),
         ] {
+            let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing card param `{id}`"));
+            assert_eq!(p.section.as_deref(), Some(section), "`{id}` section");
+            let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
+            match &b.target {
+                BindingTarget::Node { node_id, .. } => {
+                    assert_eq!(node_id.as_str(), target_node, "`{id}` binds `{target_node}`")
+                }
+                other => panic!("expected a Node target for `{id}`, got {other:?}"),
+            }
+        }
+        // Defaults keep a fresh import visually unchanged: DoF/motion blur/
+        // god rays all start at their neutral (no-op) value.
+        let dof_fstop = meta.params.iter().find(|p| p.id == "dof_fstop").unwrap();
+        assert_eq!(dof_fstop.default_value, 32.0, "f-stop starts at the lens's no-blur top-of-range");
+        let mb_shutter = meta.params.iter().find(|p| p.id == "mb_shutter").unwrap();
+        assert_eq!(mb_shutter.default_value, 0.0, "shutter starts closed (no motion blur)");
+        let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
+        assert_eq!(god_rays.default_value, 0.0, "god rays start off");
+        for gone in ["lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius", "motion_blur_px", "ssao_bias"] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),
-                "removed card param `{gone}` should be gone"
+                "unused card param id `{gone}` should not exist"
             );
         }
         // Shadow type defaults to Hard (enum 0) for the crisp dramatic look.
@@ -1126,9 +1326,10 @@ mod tests {
         assert_eq!(report.object_count, 2);
         assert_eq!(report.textures_wired, 1);
 
-        // Top level: exactly two group boxes, no bare producer nodes.
+        // Top level: two per-object group boxes PLUS the "ao" and "dof"
+        // presentation groups (CINEMATIC_POST), no bare producer nodes.
         let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
-        assert_eq!(groups.len(), 2, "one group per object");
+        assert_eq!(groups.len(), 4, "2 object groups + ao + dof");
         assert!(groups.iter().all(|g| g.group.is_some()));
         for bare in [
             "node.gltf_mesh_source",
@@ -1141,18 +1342,26 @@ mod tests {
                 "producer `{bare}` must live inside a group, not at the top level"
             );
         }
-        // Every group's interface declares a `transform` output (D9).
-        for g in &groups {
+        // Only the per-object groups carry a tint (CINEMATIC_POST's ao/dof
+        // groups are untinted presentation boxes, not per-object identity).
+        let object_groups: Vec<_> = groups
+            .iter()
+            .filter(|g| g.group.as_ref().unwrap().tint.is_some())
+            .copied()
+            .collect();
+        assert_eq!(object_groups.len(), 2, "one tinted group per object");
+        // Every object group's interface declares a `transform` output (D9).
+        for g in &object_groups {
             let outputs = &g.group.as_ref().unwrap().interface.outputs;
             assert!(
                 outputs.iter().any(|o| o.name == "transform" && o.port_type == "Transform"),
                 "every object group exposes a transform output"
             );
         }
-        // Distinct tints per group (legibility).
-        let tints: Vec<_> = groups.iter().filter_map(|g| g.group.as_ref().unwrap().tint).collect();
-        assert_eq!(tints.len(), 2, "every group gets a tint");
-        assert_ne!(tints[0], tints[1], "each group gets its own tint");
+        // Distinct tints per object group (legibility).
+        let tints: Vec<_> = object_groups.iter().filter_map(|g| g.group.as_ref().unwrap().tint).collect();
+        assert_eq!(tints.len(), 2, "every object group gets a tint");
+        assert_ne!(tints[0], tints[1], "each object group gets its own tint");
 
         // Flatten and prove the runtime sees the same flat wiring the ungrouped
         // assembler produced — in node_id space (survives id renumbering + handle
@@ -1228,22 +1437,19 @@ mod tests {
 
         // The editor's own data path (`GraphSnapshot::from_def`, which routes a
         // grouped def through the group-preserving structural snapshot) must show
-        // the two groups as navigable boxes — each carrying its inner producers —
+        // all four groups as navigable boxes — each carrying its inner producers —
         // not a flat wall of nodes. This is the legibility payoff, verified at the
         // snapshot layer (the pixels still want Peter's eyes on a real model).
         let snap = crate::node_graph::GraphSnapshot::from_def(&def)
             .expect("editor snapshot builds from the grouped def");
         let snap_groups: Vec<_> =
             snap.nodes.iter().filter(|n| n.group.is_some()).collect();
-        assert_eq!(snap_groups.len(), 2, "editor snapshot shows two group boxes");
-        assert!(
-            snap_groups
-                .iter()
-                .all(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner
-                    .type_id
-                    == "node.pbr_material")),
-            "each group box must contain its material node"
-        );
+        assert_eq!(snap_groups.len(), 4, "editor snapshot shows 2 object + ao + dof group boxes");
+        let snap_object_groups: Vec<_> = snap_groups
+            .iter()
+            .filter(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner.type_id == "node.pbr_material"))
+            .collect();
+        assert_eq!(snap_object_groups.len(), 2, "exactly the two object groups carry a material node");
 
         // Finally, it must build through the production loader (which flattens).
         let registry = PrimitiveRegistry::with_builtin();
