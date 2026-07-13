@@ -999,7 +999,11 @@ impl Application {
                         .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
                         .collect();
                     if let Ok(parsed) = cleaned.parse::<f32>() {
-                        let mut v = parsed.clamp(ctx.min, ctx.max);
+                        // PARAM_RANGE_CONTRACT_DESIGN.md D3: `ctx.min`/`ctx.max` are
+                        // the param's display hint (default slider travel), not a
+                        // restriction — a typed value is free to exceed it, exactly
+                        // like a card remap or modulation. No clamp here.
+                        let mut v = parsed;
                         if ctx.whole_numbers {
                             v = v.round();
                         }
@@ -1169,9 +1173,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1186,9 +1191,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1203,9 +1209,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1246,9 +1253,10 @@ impl Application {
                     let old_val = param
                         .map(|p| if gp.base_tracked { p.base } else { p.value })
                         .unwrap_or(0.0);
-                    let new_val = param
-                        .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                        .unwrap_or(parsed);
+                    // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max` are a
+                    // display hint, not a restriction — a typed value is free to
+                    // exceed it. No clamp here.
+                    let new_val = parsed;
                     let param_id = param.map(|p| p.id().to_string());
                     if (old_val - new_val).abs() > f32::EPSILON
                         && let Some(param_id) = param_id
@@ -1497,6 +1505,89 @@ impl Application {
                     )
                     .with_scope(scope);
                     self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            TextInputField::GraphNumericParam(node_id) => {
+                if let Some(ctx) = self.text_input.graph_numeric_param.take() {
+                    // Lenient parse, same convention as InspectorParam: keep
+                    // only the numeric head so a value typed with a unit
+                    // suffix still commits.
+                    let cleaned: String = text
+                        .trim()
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+                        .collect();
+                    if let Ok(parsed) = cleaned.parse::<f32>() {
+                        let mut v = parsed.clamp(ctx.min, ctx.max);
+                        if ctx.whole_numbers {
+                            v = v.round();
+                        }
+                        if let Some(outer_param_id) = ctx.outer_param_id {
+                            // D4/D6 parity: a group-face mirror row writes
+                            // through the outer card param's own path — the
+                            // SAME dispatch `GraphEditCommand::SetOuterParam`
+                            // uses (app_render.rs), never `SetGraphNodeParam`
+                            // on the inner node.
+                            if let Some(target) = self.watched_graph_target.as_ref() {
+                                use manifold_ui::panels::PanelAction;
+                                let gpt = match target {
+                                    manifold_core::GraphTarget::Effect(_) => {
+                                        manifold_ui::panels::GraphParamTarget::Effect(0)
+                                    }
+                                    manifold_core::GraphTarget::Generator(_) => {
+                                        manifold_ui::panels::GraphParamTarget::Generator
+                                    }
+                                };
+                                let action = PanelAction::ParamChanged(
+                                    gpt,
+                                    manifold_core::effects::ParamId::from(outer_param_id),
+                                    v,
+                                );
+                                let content_tx = self.content_tx.as_ref().unwrap();
+                                let _ = crate::ui_bridge::dispatch(
+                                    &action,
+                                    &mut self.local_project,
+                                    content_tx,
+                                    &self.content_state,
+                                    &mut self.ws.ui_root,
+                                    &mut self.selection,
+                                    &mut self.active_layer_id,
+                                    &mut self.slider_snapshot,
+                                    &mut self.trim_snapshot,
+                                    &mut self.target_snapshot,
+                                    &mut self.decay_snapshot,
+                                    &mut self.audio_shape_snapshot,
+                                    &mut self.audio_action_snapshot,
+                                    &mut self.audio_crossover_snapshot,
+                                    &mut self.audio_send_gain_drag_snapshot,
+                                    &mut self.user_prefs,
+                                    &mut self.active_inspector_drag,
+                                    self.watched_graph_target.as_ref(),
+                                );
+                            }
+                        } else if let (Some(target), Some(default)) = (
+                            self.watched_graph_target.clone(),
+                            self.watched_catalog_default.clone(),
+                        ) {
+                            let scope = self
+                                .graph_canvas
+                                .as_ref()
+                                .map(|c| c.scope_path().to_vec())
+                                .unwrap_or_default();
+                            let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                target,
+                                node_id,
+                                ctx.param_name,
+                                manifold_core::effect_graph_def::SerializedParamValue::Float {
+                                    value: v,
+                                },
+                                default,
+                            )
+                            .with_scope(scope);
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
+                        self.needs_rebuild = true;
+                    }
                 }
             }
             TextInputField::GraphNodeSearch => {
@@ -1818,7 +1909,7 @@ impl ApplicationHandler for Application {
 
         // Create native Metal GPU context
         let gpu = {
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
 
             // Create native Metal surface for the workspace window.
             // displaySyncEnabled = false: the CVDisplayLink handles vsync
@@ -2147,7 +2238,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // This gives the content thread its OWN MTLCommandQueue, completely separate
             // from the UI thread's queue. Metal interleaves GPU work from both queues,
             // preventing the content thread from starving UI submissions.
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = Arc::new(manifold_gpu::GpuDevice::new());
             // Load pipeline binary archive — subsequent pipeline creation calls
             // automatically use it for near-instant cache hits.
             if let Ok(home) = std::env::var("HOME") {
@@ -2164,7 +2255,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -2177,12 +2268,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // is order-independent, but image stays ahead of it anyway.
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::image_renderer::ImageRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                 )),
                 Box::new(GeneratorRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     gen_format,

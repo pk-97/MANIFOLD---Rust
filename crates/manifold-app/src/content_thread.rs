@@ -296,36 +296,6 @@ impl ContentThread {
             }
         }
 
-        // Set stable device pointer on renderers that cache a *const GpuDevice.
-        // This must happen here (after all moves into ContentThread are complete)
-        // so the pointer targets the final heap location inside content_pipeline.
-        {
-            let native_device_ref = self.content_pipeline.native_device().unwrap();
-            let (renderers, _) = self.engine.split_renderer_project();
-            for renderer in renderers.iter_mut() {
-                if let Some(gen_renderer) = renderer
-                    .as_any_mut()
-                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
-                ) {
-                    gen_renderer.set_device(native_device_ref);
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(vid_renderer) = renderer
-                    .as_any_mut()
-                    .downcast_mut::<manifold_media::video_renderer::VideoRenderer>(
-                ) {
-                    vid_renderer.set_device(native_device_ref);
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(img_renderer) = renderer
-                    .as_any_mut()
-                    .downcast_mut::<manifold_media::image_renderer::ImageRenderer>(
-                ) {
-                    img_renderer.set_device(native_device_ref);
-                }
-            }
-        }
-
         // LED output is NOT auto-initialized. The user enables it via the
         // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
 

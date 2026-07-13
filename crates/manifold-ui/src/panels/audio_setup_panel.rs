@@ -22,6 +22,7 @@ use manifold_foundation::{AudioSendId, LayerId};
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
+use crate::drag::DragController;
 use crate::input::{Modifiers, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
@@ -292,6 +293,15 @@ enum CalibrationDrag {
     // the Audio Setup Triggers matrix (P3, D2).
 }
 
+/// P7.6 (D12): the fold target for the `dragging_band`/`calibration_drag`
+/// pair — two `Option`s that could both be armed at once (a bug class, never
+/// a feature) now become one `DragController<AudioSetupDrag>` session.
+#[derive(Clone)]
+enum AudioSetupDrag {
+    Band(BandDivider),
+    Calibration(CalibrationDrag),
+}
+
 /// The Audio Setup modal panel.
 pub struct AudioSetupPanel {
     open: bool,
@@ -371,16 +381,15 @@ pub struct AudioSetupPanel {
     scope_mid_hz: f32,
     scope_fmin: f32,
     scope_fmax: f32,
-    /// Which divider line is currently being dragged, if any.
-    dragging_band: Option<BandDivider>,
+    /// Band-divider drag OR the D7 calibration drag (gain value label),
+    /// whichever is currently armed (P7.6: `DragController<AudioSetupDrag>`
+    /// replaces the `dragging_band`/`calibration_drag` `Option` pair — only
+    /// one is ever armed at a time, now unrepresentable otherwise).
+    drag: DragController<AudioSetupDrag>,
     /// Screen rect of the whole panel, set by `build_nodes` — the ownership
     /// test `claims_drag`/`point_in_panel` use (and nothing else; node-level
     /// hit-testing stays the authority for everything with a node).
     panel_rect: Rect,
-    /// The D7 calibration drag currently armed (gain or trigger sensitivity
-    /// value label), if any — mirrors `dragging_band` but per-send since gain
-    /// and sensitivity are per-row, not panel-global like the crossovers.
-    calibration_drag: Option<CalibrationDrag>,
     /// Per-band (Low/Mid/High) level-meter nodes `(track, fill, label)` in the
     /// scope's right margin. Created by `build`, repositioned + resized every
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
@@ -426,9 +435,8 @@ impl Default for AudioSetupPanel {
             scope_mid_hz: 0.0,
             scope_fmin: 0.0,
             scope_fmax: 0.0,
-            dragging_band: None,
+            drag: DragController::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-            calibration_drag: None,
             band_meter_ids: [(None, None, None); 3],
             consumer_row_ids: Vec::new(),
         }
@@ -1390,7 +1398,7 @@ impl AudioSetupPanel {
     /// True while a band divider is being dragged — the app suppresses the hover
     /// readout then so the two don't fight over the same gesture.
     pub fn is_dragging_band(&self) -> bool {
-        self.dragging_band.is_some()
+        matches!(self.drag.payload(), Some(AudioSetupDrag::Band(_)))
     }
 
     /// Screen y (logical) of a frequency on the scope's log axis, or `None` if
@@ -1899,14 +1907,17 @@ impl AudioSetupPanel {
             // sensitivity-value drag arm is deleted with the matrix, P3 D2.)
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(band) = self.divider_at(*pos) {
-                    self.dragging_band = Some(band);
+                    self.drag.start(AudioSetupDrag::Band(band), *pos);
                     (true, vec![PanelAction::AudioCrossoverDragBegin])
                 } else if let Some((send, start_db)) = self.gain_drag_target(*node_id) {
-                    self.calibration_drag = Some(CalibrationDrag::Gain {
-                        send: send.clone(),
-                        start_x: pos.x,
-                        start_db,
-                    });
+                    self.drag.start(
+                        AudioSetupDrag::Calibration(CalibrationDrag::Gain {
+                            send: send.clone(),
+                            start_x: pos.x,
+                            start_db,
+                        }),
+                        *pos,
+                    );
                     (true, vec![PanelAction::AudioSendGainDragBegin(send)])
                 } else if self.owns_node(*node_id) || self.point_in_scope(*pos) {
                     (true, Vec::new())
@@ -1915,42 +1926,32 @@ impl AudioSetupPanel {
                 }
             }
             UIEvent::DragBegin { .. } => {
-                if self.dragging_band.is_some() || self.calibration_drag.is_some() {
+                if self.drag.is_active() {
                     (true, Vec::new())
                 } else {
                     (false, Vec::new())
                 }
             }
-            UIEvent::Drag { pos, .. } => {
-                if let Some(band) = self.dragging_band {
-                    match self.scope_y_to_hz(pos.y) {
-                        Some(hz) => (true, vec![PanelAction::AudioCrossoverChanged(band, hz)]),
-                        None => (true, Vec::new()),
-                    }
-                } else if let Some(drag) = self.calibration_drag.clone() {
-                    // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
-                    // §3.4); the host clamps the candidate to the real range.
-                    match drag {
-                        CalibrationDrag::Gain { send, start_x, start_db } => {
-                            let new_db = start_db + (pos.x - start_x) * 0.1;
-                            (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
-                        }
-                    }
-                } else {
-                    (false, Vec::new())
+            UIEvent::Drag { pos, .. } => match self.drag.payload().cloned() {
+                Some(AudioSetupDrag::Band(band)) => match self.scope_y_to_hz(pos.y) {
+                    Some(hz) => (true, vec![PanelAction::AudioCrossoverChanged(band, hz)]),
+                    None => (true, Vec::new()),
+                },
+                // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
+                // §3.4); the host clamps the candidate to the real range.
+                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db })) => {
+                    let new_db = start_db + (pos.x - start_x) * 0.1;
+                    (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
                 }
-            }
-            UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
-                if self.dragging_band.take().is_some() {
-                    (true, vec![PanelAction::AudioCrossoverCommit])
-                } else if let Some(drag) = self.calibration_drag.take() {
-                    (true, vec![match drag {
-                        CalibrationDrag::Gain { send, .. } => PanelAction::AudioSendGainDragCommit(send),
-                    }])
-                } else {
-                    (false, Vec::new())
+                None => (false, Vec::new()),
+            },
+            UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => match self.drag.release() {
+                Some(AudioSetupDrag::Band(_)) => (true, vec![PanelAction::AudioCrossoverCommit]),
+                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, .. })) => {
+                    (true, vec![PanelAction::AudioSendGainDragCommit(send)])
                 }
-            }
+                None => (false, Vec::new()),
+            },
             _ => (false, Vec::new()),
         }
     }
@@ -1959,19 +1960,18 @@ impl AudioSetupPanel {
     /// band/calibration grab, or the origin lands inside the dock rect. Read by
     /// `UIRoot::resolve_drag_owner` once, at the gesture's first `DragBegin`.
     pub fn claims_drag(&self, origin: Vec2) -> bool {
-        self.dragging_band.is_some() || self.calibration_drag.is_some() || self.point_in_panel(origin)
+        self.drag.is_active() || self.point_in_panel(origin)
     }
 
     /// Idempotent end-of-gesture clear (band + calibration drags).
     pub fn gesture_ended(&mut self) {
-        self.dragging_band = None;
-        self.calibration_drag = None;
+        self.drag.cancel();
     }
 
     /// True iff the last `PointerDown` just armed a band-divider grab — the
     /// caller requests zero-threshold drag so a 1px move starts the drag.
     pub fn wants_immediate_drag(&self) -> bool {
-        self.dragging_band.is_some()
+        matches!(self.drag.payload(), Some(AudioSetupDrag::Band(_)))
     }
 }
 
@@ -2197,26 +2197,61 @@ mod tests {
     /// `UIRoot::broadcast_gesture_end` calls on every OPEN overlay regardless
     /// of ownership — it replaces the per-arm drag-swallow resets that used
     /// to be scattered through `on_event`, and must be safe to call when
-    /// nothing is armed too.
+    /// nothing is armed too. (P7.6: `dragging_band`/`calibration_drag` could
+    /// previously both be armed at once — a bug class, never a feature, per
+    /// D12 — `DragController<AudioSetupDrag>` makes that unrepresentable;
+    /// this test now covers each drag kind separately, plus the "a fresh
+    /// grab always wins" replacement semantics.)
     #[test]
-    fn gesture_ended_clears_armed_band_and_calibration_drags() {
+    fn gesture_ended_clears_armed_band_drag() {
         let mut p = panel_with_two_sends();
-        p.dragging_band = Some(BandDivider::Low);
-        p.calibration_drag = Some(CalibrationDrag::Gain {
-            send: AudioSendId::new("s1"),
-            start_x: 0.0,
-            start_db: 0.0,
-        });
+        p.drag.start(AudioSetupDrag::Band(BandDivider::Low), Vec2::ZERO);
+        assert!(p.is_dragging_band());
 
         p.gesture_ended();
-        assert!(p.dragging_band.is_none());
-        assert!(p.calibration_drag.is_none());
+        assert!(!p.drag.is_active());
 
         // Idempotent — a broadcast reaching every open overlay must not panic
         // when this one didn't own the gesture.
         p.gesture_ended();
-        assert!(p.dragging_band.is_none());
-        assert!(p.calibration_drag.is_none());
+        assert!(!p.drag.is_active());
+    }
+
+    #[test]
+    fn gesture_ended_clears_armed_calibration_drag() {
+        let mut p = panel_with_two_sends();
+        p.drag.start(
+            AudioSetupDrag::Calibration(CalibrationDrag::Gain {
+                send: AudioSendId::new("s1"),
+                start_x: 0.0,
+                start_db: 0.0,
+            }),
+            Vec2::ZERO,
+        );
+        assert!(p.drag.is_active());
+        assert!(!p.is_dragging_band(), "a calibration drag must not read as a band drag");
+
+        p.gesture_ended();
+        assert!(!p.drag.is_active());
+    }
+
+    #[test]
+    fn a_fresh_grab_replaces_an_armed_drag() {
+        let mut p = panel_with_two_sends();
+        p.drag.start(AudioSetupDrag::Band(BandDivider::Low), Vec2::ZERO);
+        assert!(p.is_dragging_band());
+
+        // D8: arming a second gesture always wins — the type makes the old
+        // "both armed" state unrepresentable.
+        p.drag.start(
+            AudioSetupDrag::Calibration(CalibrationDrag::Gain {
+                send: AudioSendId::new("s1"),
+                start_x: 0.0,
+                start_db: 0.0,
+            }),
+            Vec2::ZERO,
+        );
+        assert!(!p.is_dragging_band(), "the fresh calibration grab must replace the band drag");
     }
 
     // `source_chip_opens_routings_and_is_owned` removed (§7.2 item 7, P8,

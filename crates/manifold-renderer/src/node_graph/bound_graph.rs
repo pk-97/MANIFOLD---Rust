@@ -113,7 +113,29 @@ impl BoundGraph {
         node_map: &[(NodeId, NodeInstanceId)],
         def: Option<&EffectGraphDef>,
     ) {
-        apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget);
+        self.apply_inner_overrides_prefixed(graph, node_map, def, "");
+    }
+
+    /// [`Self::apply_inner_overrides`], but with `def`'s node ids translated
+    /// through `prefix` before every `node_map` / `fused_retarget` lookup —
+    /// the segment case (BUG-111). A card that is a member of a fused
+    /// multi-card SEGMENT has its own def's node ids UNPREFIXED, but the
+    /// segment's `node_map` (built from the concatenated segment def) and
+    /// `fused_retarget` (populated from the segment view's retarget map) are
+    /// both keyed with the `c{i}.` per-card prefix
+    /// (`freeze::segment::card_prefix`). Without translating here, a
+    /// surviving node `foo` is `c{i}.foo` in `node_map` and a fused-away node
+    /// isn't in `fused_retarget` either — every override silently no-ops.
+    /// `prefix` is `""` for a non-segment (whole-card or whole-generator)
+    /// slot, so this is a no-op clone-free path there.
+    pub fn apply_inner_overrides_prefixed(
+        &mut self,
+        graph: &mut Graph,
+        node_map: &[(NodeId, NodeInstanceId)],
+        def: Option<&EffectGraphDef>,
+        prefix: &str,
+    ) {
+        apply_inner_param_overrides(def, node_map, graph, &self.fused_retarget, prefix);
         self.cache.clear();
     }
 }
@@ -138,18 +160,36 @@ impl BoundGraph {
 /// node's params is routed through the retarget onto the fused kernel's uniform
 /// field — the same repoint the card + user bindings already take. Empty on an
 /// unfused graph, so the fast path is a plain per-node `node_map` hit.
+///
+/// `prefix` translates `def`'s (unprefixed, per-card) node ids into the address
+/// space `node_map`/`fused_retarget` are keyed in before every lookup. `""` for
+/// a whole-card or whole-generator slot (`node_map` is keyed identically to the
+/// def there). For a fused multi-card SEGMENT member, `node_map` and
+/// `fused_retarget` are both keyed with the `c{i}.` prefix
+/// (`freeze::segment::card_prefix`) because they were built from the
+/// concatenated segment def, while the per-card `def` passed in here is the
+/// card's own (unprefixed) graph — pass that card's prefix so surviving AND
+/// fused-away nodes both resolve (BUG-111).
 pub fn apply_inner_param_overrides(
     def: Option<&EffectGraphDef>,
     node_map: &[(NodeId, NodeInstanceId)],
     graph: &mut Graph,
     fused_retarget: &AHashMap<(String, String), (NodeId, String)>,
+    prefix: &str,
 ) {
     let Some(def) = def else { return };
     let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
         return;
     };
     for node in &flat.nodes {
-        if let Some((_, inst)) = node_map.iter().find(|(nid, _)| *nid == node.node_id) {
+        let prefixed;
+        let lookup_id: &NodeId = if prefix.is_empty() {
+            &node.node_id
+        } else {
+            prefixed = NodeId::new(format!("{prefix}{}", node.node_id.as_str()));
+            &prefixed
+        };
+        if let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == lookup_id) {
             for (name, value) in &node.params {
                 // `set_param` (not unchecked) so a dynamic-port param re-runs the
                 // node's `reconfigure` hook, matching a live slider write.
@@ -160,7 +200,7 @@ pub fn apply_inner_param_overrides(
             // Route each param onto the fused kernel's uniform field so an inner
             // value edit / undo lands on the running kernel instead of no-op'ing
             // until an unrelated rebuild (BUG-006).
-            let src = node.node_id.as_str();
+            let src = lookup_id.as_str();
             for (name, value) in &node.params {
                 let Some((fused_id, field)) =
                     fused_retarget.get(&(src.to_string(), name.clone()))

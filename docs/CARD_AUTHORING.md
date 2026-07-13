@@ -85,6 +85,31 @@ Anchors: `crates/manifold-core/src/effect_graph_def.rs`, struct `ParamSpecDef`
   makes one OSC address control two sliders, with only the last-bound one
   visibly moving.
 
+## Hints vs. contracts — what a node's `min`/`max` actually means
+
+`PARAM_RANGE_CONTRACT_DESIGN.md` (2026-07-13) splits a fact that used to be
+conflated on every inner-node `ParamDef`: its declared `min`/`max` is a
+**display hint** — the default slider travel, nothing more. A card, text
+entry, modulation, or OSC value is always free to exceed it; a lerp/blend
+factor going past 1 legitimately extrapolates (Bloom's [0,5] `mix.amount`
+drive is the canonical legitimate case — "it lets you blow out the image if
+you want," Peter's ruling). **Cards own the creative envelope** — curve,
+invert, remap, the card's own `[min, max]` — precisely because inner hints
+must not restrict it.
+
+A small minority of params instead carry a **contract**
+(`manifold_core::effects::RangeContract`, next to `ParamDef`): a named,
+real physical/mathematical boundary — an index that must address a real
+input slot, a count that sizes an allocation, a floor a kernel divides by
+zero at, a shader-side clamp beyond which the input is dead. A contract is
+never added without kernel/shader evidence, and every one that exists is
+pinned to its reason in a curated test table
+(`freeze::classify::tests::every_range_contract_names_a_real_boundary`) —
+see that table's comments for the file:line proof behind each entry.
+Contracts are what `graph_tool validate`'s lint (h) below actually
+enforces; a card range that merely disagrees with a hint is not a finding
+— that's cards doing their job, not a bug.
+
 ## What `graph_tool validate` checks on a card (D8, mechanized)
 
 **Errors** — structural breakage; the card lies to the performer:
@@ -98,16 +123,18 @@ Anchors: `crates/manifold-core/src/effect_graph_def.rs`, struct `ParamSpecDef`
 4. An `is_trigger` card param whose binding targets an inner param that isn't
    trigger-typed.
 5. Two params on the same card reusing a non-empty `osc_suffix`.
+6. A card's `[min, max]`, mapped through the binding's `scale`/`offset`,
+   landing outside the inner param's declared **contract** — see "Hints vs.
+   contracts" above. A card disagreeing with the inner node's `min`/`max`
+   *hint* is not this check; only an escaped contract is an error.
 
 **Warnings** — idiom/consistency; fix in-session, don't suppress:
 
-6. A discrete control (`is_toggle`, or `whole_numbers` + `value_labels`)
+7. A discrete control (`is_toggle`, or `whole_numbers` + `value_labels`)
    bound to a continuous blend param on a mix/blend-family node — see "Mux
    vs. blend" above.
-7. A card param's `default_value` disagreeing with its binding's
+8. A card param's `default_value` disagreeing with its binding's
    `default_value`.
-8. A card's `[min, max]`, mapped through the binding's `scale`/`offset`,
-   landing outside the inner param's registry-declared range.
 
 `BindingTarget::Composite` targets are not statically checkable (composite
 routing is built at live-graph construction time from a runtime handle) — no

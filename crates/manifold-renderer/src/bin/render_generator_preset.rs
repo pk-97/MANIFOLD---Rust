@@ -118,13 +118,13 @@ fn main() {
     }
     let manifest = ParamManifest::from_params(params);
 
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
     let registry = PrimitiveRegistry::with_builtin();
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
     let mut runtime = PresetRuntime::from_def_with_device(
         def,
         &registry,
-        &device,
+        std::sync::Arc::clone(&device),
         args.width,
         args.height,
         format,

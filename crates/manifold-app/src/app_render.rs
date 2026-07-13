@@ -1665,8 +1665,8 @@ impl Application {
                     param_id,
                     anchor,
                     value,
-                    min,
-                    max,
+                    min: _,
+                    max: _,
                     whole_numbers,
                 } => {
                     // Prefill the box with the base (set) value, formatted as a
@@ -1691,8 +1691,6 @@ impl Application {
                         target: *target,
                         param_id: param_id.clone(),
                         old_value: *value,
-                        min: *min,
-                        max: *max,
                         whole_numbers: *whole_numbers,
                     });
                     continue;
@@ -2569,6 +2567,45 @@ impl Application {
                         anchor,
                         12.0,
                     );
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::EditGraphNodeNumericParam {
+                    node_id,
+                    param_name,
+                    current,
+                    min,
+                    max,
+                    whole_numbers,
+                    outer_param_id,
+                    anchor,
+                } => {
+                    // The contract's `(ValueCell, DoubleClick) -> EditValue`
+                    // row going live on the canvas (P5d) — same anchor +
+                    // prefill convention as the inspector sidebar's
+                    // `BeginParamTextInput` (InspectorParam).
+                    let initial = if *whole_numbers {
+                        format!("{}", current.round() as i64)
+                    } else {
+                        format!("{:.3}", current)
+                    };
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphNumericParam(*node_id),
+                        &initial,
+                        crate::text_input::AnchorRect::new(
+                            anchor.0, anchor.1, anchor.2, anchor.3,
+                        ),
+                        11.0,
+                    );
+                    self.text_input.graph_numeric_param = Some(crate::text_input::GraphNumericParamCtx {
+                        param_name: param_name.clone(),
+                        min: *min,
+                        max: *max,
+                        whole_numbers: *whole_numbers,
+                        outer_param_id: outer_param_id.clone(),
+                    });
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.offscreen_dirty = true;
                     }

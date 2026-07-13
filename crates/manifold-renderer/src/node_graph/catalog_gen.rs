@@ -112,6 +112,13 @@ struct ParamRow {
     default: String,
     range: Option<(f32, f32)>,
     enum_values: &'static [&'static str],
+    /// The real physical/mathematical boundary on this param, if any
+    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`) — distinct from `range`
+    /// above, which is a display hint. `None` for the overwhelming
+    /// majority of params; rendered as its own `contract` key in the
+    /// JSON catalog so agents/tools can tell "must not cross" from
+    /// "default slider travel" without re-deriving it from the source.
+    contract: Option<manifold_core::effects::RangeContract>,
 }
 
 /// Test-only fixture primitives (`node.__smoke_test*`) register in the
@@ -179,7 +186,7 @@ fn collect_rows() -> Vec<NodeRow> {
                 examples: examples_by_type_id.get(f.type_id).cloned().unwrap_or_default(),
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs: node.outputs().iter().map(port_row).collect(),
-                params: node.parameters().iter().map(param_row).collect(),
+                params: node.parameters().iter().map(|p| param_row(p, node.as_ref())).collect(),
                 fusion,
             }
         })
@@ -196,7 +203,10 @@ fn port_row(p: &crate::node_graph::ports::NodePort) -> PortRow {
     }
 }
 
-fn param_row(p: &crate::node_graph::parameters::ParamDef) -> ParamRow {
+fn param_row(
+    p: &crate::node_graph::parameters::ParamDef,
+    node: &dyn crate::node_graph::effect_node::EffectNode,
+) -> ParamRow {
     ParamRow {
         name: crate::node_graph::effect_node::intern_name(&p.name),
         label: p.label,
@@ -204,6 +214,7 @@ fn param_row(p: &crate::node_graph::parameters::ParamDef) -> ParamRow {
         default: param_default_str(&p.default),
         range: p.range,
         enum_values: p.enum_values,
+        contract: node.param_contract(&p.name),
     }
 }
 
@@ -326,6 +337,24 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
             });
             if let Some((lo, hi)) = p.range {
                 o["range"] = serde_json::json!([fmt_f32(lo), fmt_f32(hi)]);
+            }
+            if let Some(contract) = &p.contract {
+                let reason = match contract.reason {
+                    manifold_core::effects::RangeReason::Index => "index",
+                    manifold_core::effects::RangeReason::Count => "count",
+                    manifold_core::effects::RangeReason::DegenerateFloor => "degenerate_floor",
+                    manifold_core::effects::RangeReason::DegenerateGeometry => "degenerate_geometry",
+                    manifold_core::effects::RangeReason::ShaderClamp => "shader_clamp",
+                    manifold_core::effects::RangeReason::NormalizedDomain => "normalized_domain",
+                };
+                let mut c = serde_json::json!({ "reason": reason });
+                if let Some(min) = contract.min {
+                    c["min"] = serde_json::json!(fmt_f32(min));
+                }
+                if let Some(max) = contract.max {
+                    c["max"] = serde_json::json!(fmt_f32(max));
+                }
+                o["contract"] = c;
             }
             if !p.enum_values.is_empty() {
                 o["enum_values"] = serde_json::json!(p.enum_values);

@@ -193,6 +193,10 @@ impl ParamSpec {
             // written Rust) generator has no section — only JSON-authored/
             // glTF-imported presets do, via `preset_metadata_to_def`.
             section: None,
+            // Same story for range contracts: this compile-time inventory
+            // struct describes an outer card param, which never carries a
+            // contract (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4).
+            contract: None,
         }
     }
 }

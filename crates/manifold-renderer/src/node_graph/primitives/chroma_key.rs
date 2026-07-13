@@ -267,7 +267,7 @@ mod gpu_tests {
             );
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, src_tgt);
         let ck_output_slot = Slot(backend.slot_count());
 

@@ -232,7 +232,7 @@ pub fn validate_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     kind: ValidateKind,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
 
@@ -273,7 +273,7 @@ pub fn validate_def(
         && let Err(e) = PresetRuntime::from_def_with_device(
             def.clone(),
             registry,
-            device,
+            std::sync::Arc::clone(device),
             VALIDATE_CANVAS_W,
             VALIDATE_CANVAS_H,
             VALIDATE_FORMAT,
@@ -327,6 +327,11 @@ fn check_bindings_resolve(def: &EffectGraphDef) -> Vec<ValidationIssue> {
 struct ResolvedTargetParam {
     type_id: String,
     param_def: crate::node_graph::parameters::ParamDef,
+    /// The inner param's [`RangeContract`](manifold_core::effects::RangeContract),
+    /// if any — read via `EffectNode::param_contract` (PARAM_RANGE_CONTRACT_DESIGN.md
+    /// P1). `None` for the overwhelming majority of params, which carry only a
+    /// display hint (`param_def.range`).
+    contract: Option<manifold_core::effects::RangeContract>,
 }
 
 /// Resolve a `BindingTarget::Node { node_id, param }` against the
@@ -352,9 +357,11 @@ fn resolve_target_param(
     let instance_id = graph.instance_by_node_id(node_id)?;
     let inst = graph.get_node(instance_id)?;
     let param_def = inst.node.parameters().iter().find(|p| p.name == param)?.clone();
+    let contract = inst.node.param_contract(param);
     Some(ResolvedTargetParam {
         type_id: inst.node.type_id().as_str().to_string(),
         param_def,
+        contract,
     })
 }
 
@@ -563,8 +570,14 @@ fn check_card_lints(
         }
     }
 
-    // (h) WARNING — card [min, max] mapped through scale/offset lands
-    // outside the inner param's declared [min, max].
+    // (h) ERROR — card [min, max] mapped through scale/offset escapes the
+    // inner param's declared RangeContract (PARAM_RANGE_CONTRACT_DESIGN.md
+    // D4). A contract names a real physical/mathematical boundary, so a
+    // card escaping it is always a bug. A param with no contract — the
+    // overwhelming majority — produces NOTHING here: its `range` is a
+    // display hint only, and a card is free to remap past a hint (that's
+    // the design working, not a gap). One-sided contracts (`min` or `max`
+    // alone) are checked independently.
     if let Some(graph) = graph {
         for binding in &meta.bindings {
             let Some(param) = meta.params.iter().find(|p| p.id == binding.id) else {
@@ -576,21 +589,33 @@ fn check_card_lints(
             let Some(resolved) = resolve_target_param(graph, node_id, inner) else {
                 continue;
             };
-            let Some((rmin, rmax)) = resolved.param_def.range else {
-                continue; // only checked when the inner param declares a range.
+            let Some(contract) = &resolved.contract else {
+                continue; // no contract — a hint disagreement is not a finding.
             };
             let mapped_a = param.min * binding.scale + binding.offset;
             let mapped_b = param.max * binding.scale + binding.offset;
             let (lo, hi) = (mapped_a.min(mapped_b), mapped_a.max(mapped_b));
             const EPS: f32 = 1e-4;
-            if lo < rmin - EPS || hi > rmax + EPS {
-                warnings.push(ValidationIssue {
+            let mut escapes = false;
+            if let Some(cmin) = contract.min
+                && lo < cmin - EPS
+            {
+                escapes = true;
+            }
+            if let Some(cmax) = contract.max
+                && hi > cmax + EPS
+            {
+                escapes = true;
+            }
+            if escapes {
+                errors.push(ValidationIssue {
                     node_id: None,
                     type_id: Some(resolved.type_id.clone()),
                     port: Some(inner.clone()),
                     message: format!(
-                        "card param '{}' range [{}, {}] maps through scale={}/offset={} to [{lo}, {hi}], outside inner param '{node_id}.{inner}''s declared range [{rmin}, {rmax}]",
-                        param.id, param.min, param.max, binding.scale, binding.offset
+                        "card param '{}' range [{}, {}] maps through scale={}/offset={} to [{lo}, {hi}], escaping inner param '{node_id}.{inner}''s RangeContract [{:?}, {:?}] ({:?})",
+                        param.id, param.min, param.max, binding.scale, binding.offset,
+                        contract.min, contract.max, contract.reason
                     ),
                 });
             }
@@ -621,7 +646,7 @@ mod tests {
     fn every_bundled_preset_validates_clean() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
 
         let mut total = 0usize;
         let mut failures: Vec<(std::path::PathBuf, ValidationReport)> = Vec::new();
@@ -678,7 +703,7 @@ mod tests {
     fn bundled_preset_card_warning_counts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
 
         for (subdir, kind) in ASSET_SUBDIRS {
             let dir = manifest_dir.join(subdir);
@@ -705,6 +730,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── PARAM_RANGE_CONTRACT_DESIGN.md P1 fixture ───────────────────
+    //
+    // A test-only primitive (`node.__` prefix — excluded from every
+    // registry-walking meta-test, per the `every_boundary_atom_declares_its_reason`
+    // precedent) declaring a one-sided-min and a both-sided RangeContract,
+    // so lint (h)'s contract-escape check has something real to fire
+    // against without adding any contract to production code (forbidden
+    // this phase — D6, P2's job).
+    crate::primitive! {
+        name: RangeContractFixture,
+        type_id: "node.__range_contract_fixture",
+        purpose: "Internal lint(h) test fixture — not registered in production.",
+        inputs: {
+            in: Texture2D required,
+        },
+        outputs: {
+            out: Texture2D,
+        },
+        params: [
+            crate::node_graph::parameters::ParamDef {
+                name: std::borrow::Cow::Borrowed("both_sided"),
+                label: "Both Sided",
+                ty: crate::node_graph::parameters::ParamType::Float,
+                default: crate::node_graph::parameters::ParamValue::Float(0.5),
+                range: Some((0.0, 1.0)),
+                enum_values: &[],
+            },
+            crate::node_graph::parameters::ParamDef {
+                name: std::borrow::Cow::Borrowed("min_only"),
+                label: "Min Only",
+                ty: crate::node_graph::parameters::ParamType::Float,
+                default: crate::node_graph::parameters::ParamValue::Float(1.0),
+                range: Some((0.01, 1000.0)),
+                enum_values: &[],
+            },
+        ],
+        composition_notes: "Used by tests; do not reference from real code.",
+        param_contracts: [
+            ("both_sided", manifold_core::effects::RangeContract {
+                min: Some(0.0),
+                max: Some(1.0),
+                reason: manifold_core::effects::RangeReason::NormalizedDomain,
+            }),
+            ("min_only", manifold_core::effects::RangeContract {
+                min: Some(0.01),
+                max: None,
+                reason: manifold_core::effects::RangeReason::DegenerateFloor,
+            }),
+        ],
+    }
+
+    impl crate::node_graph::primitive::Primitive for RangeContractFixture {
+        fn run(&mut self, _ctx: &mut crate::node_graph::effect_node::EffectNodeContext<'_, '_>) {}
     }
 
     // ── D8 card lint fixtures (P4) ──────────────────────────────────
@@ -1056,10 +1136,13 @@ mod tests {
         );
     }
 
-    /// (h) WARNING — card range mapped through scale/offset lands
-    /// outside the inner param's declared range.
+    /// (h) — card range mapped through scale/offset lands outside the
+    /// inner param's declared `range` (a display hint, not a contract).
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D4: hint disagreement is not a
+    /// finding at all — a card is free to remap past a hint. `node.invert`'s
+    /// `intensity` carries no `RangeContract`, so this produces NOTHING.
     #[test]
-    fn card_lint_warning_range_out_of_bounds_after_remap() {
+    fn card_lint_hint_escape_after_remap_produces_no_finding() {
         let def = parse(
             r#"{
               "version": 2,
@@ -1085,11 +1168,80 @@ mod tests {
         );
         let (errors, warnings) = lint(&def);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+        assert!(warnings.is_empty(), "expected no warnings, got: {warnings:?}");
+    }
+
+    /// (h) ERROR — card range mapped through scale/offset escapes a
+    /// both-sided `RangeContract`.
+    #[test]
+    fn card_lint_error_both_sided_contract_escaped_after_remap() {
+        let def = parse(
+            r#"{
+              "version": 2,
+              "presetMetadata": {
+                "id": "Fixture",
+                "displayName": "Fixture",
+                "category": "Color",
+                "oscPrefix": "fixture",
+                "params": [
+                  {"id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
+                ],
+                "bindings": [
+                  {"id": "amount", "label": "Amount", "defaultValue": 1.0,
+                   "target": {"kind": "node", "nodeId": "fixture", "param": "both_sided"},
+                   "scale": 2.0}
+                ]
+              },
+              "nodes": [
+                {"id": 0, "nodeId": "fixture", "typeId": "node.__range_contract_fixture"}
+              ],
+              "wires": []
+            }"#,
+        );
+        let (errors, _warnings) = lint(&def);
         assert!(
-            warnings
+            errors
                 .iter()
-                .any(|w| w.message.contains("declared range")),
-            "expected a range-out-of-bounds warning, got: {warnings:?}"
+                .any(|e| e.message.contains("RangeContract") && e.message.contains("both_sided")),
+            "expected a RangeContract-escape error, got: {errors:?}"
+        );
+    }
+
+    /// (h) ERROR — card range escapes a ONE-SIDED (min-only) `RangeContract`.
+    /// The card's own [0,1] range maps (scale=0.001) to [0, 0.001], which
+    /// dips below the contract's `min: Some(0.01)` floor — `max: None` means
+    /// no ceiling exists to escape, only the floor.
+    #[test]
+    fn card_lint_error_one_sided_min_contract_escaped_after_remap() {
+        let def = parse(
+            r#"{
+              "version": 2,
+              "presetMetadata": {
+                "id": "Fixture",
+                "displayName": "Fixture",
+                "category": "Color",
+                "oscPrefix": "fixture",
+                "params": [
+                  {"id": "amount", "name": "Amount", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
+                ],
+                "bindings": [
+                  {"id": "amount", "label": "Amount", "defaultValue": 1.0,
+                   "target": {"kind": "node", "nodeId": "fixture", "param": "min_only"},
+                   "scale": 0.001}
+                ]
+              },
+              "nodes": [
+                {"id": 0, "nodeId": "fixture", "typeId": "node.__range_contract_fixture"}
+              ],
+              "wires": []
+            }"#,
+        );
+        let (errors, _warnings) = lint(&def);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("RangeContract") && e.message.contains("min_only")),
+            "expected a RangeContract-escape error, got: {errors:?}"
         );
     }
 

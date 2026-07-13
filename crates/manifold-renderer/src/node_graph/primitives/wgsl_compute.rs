@@ -3504,7 +3504,7 @@ mod gpu_tests {
         g.connect((comp, "output_tex"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
-        let backend = MetalBackend::new(&device, w, h, format);
+        let backend = MetalBackend::new(device.arc(), w, h, format);
         let out_slot = Slot(backend.slot_count());
         let mut exec = Executor::new(Box::new(backend));
         let mut native_enc = device.create_encoder("wgsl-compute-smoke");
@@ -3772,7 +3772,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         g.set_param(comp, "n0_k", ParamValue::Float(0.5)).unwrap();
         let plan = compile(&g).unwrap();
 
-        let backend = MetalBackend::new(&device, w, h, format);
+        let backend = MetalBackend::new(device.arc(), w, h, format);
         let out_slot = Slot(backend.slot_count());
         let mut exec = Executor::new(Box::new(backend));
 

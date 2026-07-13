@@ -305,6 +305,134 @@ mod tests {
         );
     }
 
+    /// The `RangeContract` declared-excuse pattern (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`
+    /// D5), transcribed verbatim from `every_boundary_atom_declares_its_reason`
+    /// above: walks every registered primitive's params via
+    /// `EffectNode::param_contract`, and asserts the set of
+    /// `(type_id, param name, reason)` triples carrying a contract EXACTLY
+    /// EQUALS this curated table. P1 ships this table EMPTY — no contract
+    /// exists in production yet (D6: remove-by-default, no kernel proof, no
+    /// contract) — so this test proves the mechanism, not any real boundary.
+    /// `node.__`-prefixed test fixtures are excluded, same as the
+    /// boundary-reason walk (their contracts are test scaffolding, not
+    /// production facts this ledger tracks).
+    #[test]
+    fn every_range_contract_names_a_real_boundary() {
+        use crate::node_graph::PrimitiveRegistry;
+
+        // Curated table: every `(type_id, param_id, reason)` any registered
+        // primitive is allowed to declare a `RangeContract` for. Empty in
+        // P1; seeded in P2 (PARAM_RANGE_CONTRACT_DESIGN.md §2/D6) — each
+        // entry names its kernel/shader evidence file:line so a contract
+        // can't creep back onto a merely-conventional range.
+        //
+        // node.switch_texture (mux_texture.rs) — hand-`impl EffectNode`,
+        // `param_contract` override:
+        //   - selector: mux_texture.rs:197-200 `resolve_selector_index`
+        //     rounds+clamps to [0, num_inputs); absolute index space is
+        //     [0, MAX_INPUTS-1] (mux_texture.rs:45).
+        //   - num_inputs: mux_texture.rs:148-149 `rebuild_ports` clamps
+        //     n to [1, MAX_INPUTS] before slicing the static
+        //     IN_PORT_NAMES table.
+        // node.multi_blend (multi_blend.rs) — hand-`impl EffectNode`,
+        // `param_contract` override:
+        //   - num_inputs: multi_blend.rs:191 `reconfigure` clamps to
+        //     [2, MAX_INPUTS] before `rebuild_ports` slices IN_PORT_NAMES.
+        // node.connect_nearest (array_connect_nearest.rs) — `primitive!`
+        // macro `param_contracts:` field:
+        //   - max_edges: array_connect_nearest.rs `array_output_capacity`
+        //     returns `Some(max_edges)` verbatim as the allocated `edges`
+        //     array capacity — sizes a real allocation.
+        //
+        // §2 VERIFY reads performed, all REJECTED (evidence in the P2
+        // session report, not repeated here — no contract added):
+        //   - connect_nearest.max_distance: only ever squared into a
+        //     comparison threshold, no division, no degenerate collapse
+        //     at 0 — stays a display hint.
+        //   - render.window (node.draw_lines, render_lines.rs): consumed
+        //     only via `window_edges = (segments*window).ceil().max(1)` —
+        //     already div-by-zero-proof independent of `window`'s value.
+        //   - content_window.width (node.edge_stretch, uv_strip_clamp_body.wgsl):
+        //     `clamp(uv, lo, hi)` is well-defined even at width=0 (lo==hi
+        //     collapses to a single valid coordinate, not undefined math).
+        //   - split.amount (node.rgb_split, chromatic_displace_body.wgsl):
+        //     the sampler clamps at the texture edge, not at a fixed
+        //     ±32 — the actual dead-input point depends on velocity
+        //     magnitude and canvas dims, not a fixed physical bound.
+        const CURATED: &[(&str, &str, manifold_core::effects::RangeReason)] = &[
+            (
+                "node.switch_texture",
+                "selector",
+                manifold_core::effects::RangeReason::Index,
+            ),
+            (
+                "node.switch_texture",
+                "num_inputs",
+                manifold_core::effects::RangeReason::Count,
+            ),
+            (
+                "node.multi_blend",
+                "num_inputs",
+                manifold_core::effects::RangeReason::Count,
+            ),
+            (
+                "node.connect_nearest",
+                "max_edges",
+                manifold_core::effects::RangeReason::Count,
+            ),
+        ];
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut found: Vec<(String, String, manifold_core::effects::RangeReason)> = Vec::new();
+
+        for type_id in registry.known_type_ids() {
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            for param in node.parameters() {
+                if let Some(contract) = node.param_contract(&param.name) {
+                    found.push((type_id.to_string(), param.name.to_string(), contract.reason));
+                }
+            }
+        }
+
+        let mut violations: Vec<String> = Vec::new();
+        for (type_id, param_id, reason) in &found {
+            if !CURATED
+                .iter()
+                .any(|(t, p, r)| t == type_id && p == param_id && r == reason)
+            {
+                violations.push(format!(
+                    "{type_id}.{param_id}: declares RangeContract (reason {reason:?}) but is \
+                     not in the curated RANGE_CONTRACT table — add it deliberately with the \
+                     kernel/shader evidence, or remove the contract",
+                ));
+            }
+        }
+        for (type_id, param_id, reason) in CURATED {
+            if !found
+                .iter()
+                .any(|(t, p, r)| t == *type_id && p == *param_id && r == reason)
+            {
+                violations.push(format!(
+                    "{type_id}.{param_id}: listed in the curated RANGE_CONTRACT table \
+                     (reason {reason:?}) but the registered primitive declares no such \
+                     contract — either it was removed (drop the table entry) or the \
+                     declaration was lost",
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "range_contract declaration violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
+
     #[test]
     fn default_is_boundary() {
         assert_eq!(FusionKind::default(), FusionKind::Boundary);

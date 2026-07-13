@@ -54,6 +54,19 @@ crate::primitive! {
     role: Control,
     aliases: ["connect nearest", "array connect nearest", "nearest neighbour", "constellation"],
     boundary_reason: NonGpu,
+    // PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: `max_edges`
+    // sizes the output array — `array_output_capacity` (this file) returns
+    // `Some(max_edges)` verbatim as the allocated `edges` buffer capacity.
+    // `max_distance` was VERIFIED (P2 §2 read) and rejected: `run()` (this
+    // file) only ever squares it into a comparison threshold — no division,
+    // no degenerate collapse at 0, so it stays a display hint.
+    param_contracts: [
+        ("max_edges", manifold_core::effects::RangeContract {
+            min: Some(1.0),
+            max: None,
+            reason: manifold_core::effects::RangeReason::Count,
+        }),
+    ],
     extra_fields: {
         last_edge_count: Option<usize> = None,
     },
