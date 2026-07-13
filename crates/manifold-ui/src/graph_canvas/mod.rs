@@ -77,7 +77,7 @@ mod tests;
 // `rects_overlap`) are imported directly by `tests.rs` from their module.
 pub(crate) use hit::marquee_hits;
 pub use hit::GraphCanvasTargets;
-pub(crate) use interaction::DragMode;
+pub(crate) use interaction::CanvasDrag;
 pub use mapping_popover::MappingPopover;
 // App-facing structural-walk helpers — the editor present path resolves the
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
@@ -431,9 +431,10 @@ pub struct GraphCanvas {
     pub(crate) pan: (f32, f32),
     pub(crate) zoom: f32,
     pub(crate) cursor: (f32, f32),
-    pub(crate) drag_mode: DragMode,
-    pub(crate) drag_anchor: (f32, f32),
-    pub(crate) drag_pan_start: (f32, f32),
+    /// The canvas's one drag lifecycle (P7.2, D8/D9). Replaces the old
+    /// `drag_mode: DragMode` + `drag_anchor` + `drag_pan_start` fields — the
+    /// grab position lives in the controller's session, not a parallel field.
+    pub(crate) drag: crate::drag::DragController<CanvasDrag>,
     pub(crate) hovered: Option<u32>,
     /// Selected node ids at the current scope level. A set so the user can
     /// rubber-band or Shift-click several nodes before collapsing them into a
@@ -615,9 +616,7 @@ impl GraphCanvas {
             pan: (0.0, 0.0),
             zoom: 1.0,
             cursor: (0.0, 0.0),
-            drag_mode: DragMode::None,
-            drag_anchor: (0.0, 0.0),
-            drag_pan_start: (0.0, 0.0),
+            drag: crate::drag::DragController::new(),
             hovered: None,
             selected: ahash::AHashSet::new(),
             has_graph_mod: false,
@@ -678,13 +677,15 @@ impl GraphCanvas {
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
 
-        // Marquee fade.
-        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
-            let (ox, oy) = *origin_screen;
+        // Marquee fade. `origin_screen` is now the session start (D9).
+        if let Some(session) = self.drag.session()
+            && matches!(&session.payload, CanvasDrag::Marquee)
+        {
+            let (ox, oy) = (session.start.x, session.start.y);
             let (cx, cy) = self.cursor;
             self.marquee_last_rect = Some((ox.min(cx), oy.min(cy), (cx - ox).abs(), (cy - oy).abs()));
         }
-        let marquee_live = matches!(self.drag_mode, DragMode::Marquee { .. });
+        let marquee_live = matches!(self.drag.payload(), Some(CanvasDrag::Marquee));
         self.marquee_alpha.set_target(if marquee_live { 1.0 } else { 0.0 });
         any |= self.marquee_alpha.tick(dt_ms);
 
@@ -707,7 +708,7 @@ impl GraphCanvas {
     /// `present_graph_editor_window`, which already resolves `viewport` for
     /// the draw pass this feeds.
     pub fn tick_wire_magnet(&mut self, viewport: Rect) {
-        let DragMode::WireFrom { .. } = &self.drag_mode else {
+        let Some(CanvasDrag::WireFrom { .. }) = self.drag.payload() else {
             self.wire_magnet_live = false;
             self.wire_magnet_last_tick = None;
             return;
@@ -753,7 +754,7 @@ impl GraphCanvas {
     /// anim value from a previous drag), or outside a `WireFrom` drag
     /// entirely.
     pub(crate) fn wire_ghost_endpoint(&self) -> (f32, f32) {
-        if self.wire_magnet_live && matches!(self.drag_mode, DragMode::WireFrom { .. }) {
+        if self.wire_magnet_live && matches!(self.drag.payload(), Some(CanvasDrag::WireFrom { .. })) {
             (self.wire_magnet_x.value(), self.wire_magnet_y.value())
         } else {
             self.cursor
