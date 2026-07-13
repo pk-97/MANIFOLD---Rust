@@ -35,6 +35,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["mesh edges", "edges from mesh", "wireframe", "triangle edges", "topology"],
+    boundary_reason: NonGpu,
     extra_fields: {
         scratch: Vec<EdgePair> = Vec::new(),
     },

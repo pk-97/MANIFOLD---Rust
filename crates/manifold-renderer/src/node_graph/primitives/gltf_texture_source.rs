@@ -89,6 +89,7 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["gltf texture", "glb texture", "embedded texture", "import texture", "File In TOP"],
+    boundary_reason: IoBridge,
     extra_fields: {
         // (path, texture_index) last parsed (or in flight). Any change
         // re-triggers a background decode.

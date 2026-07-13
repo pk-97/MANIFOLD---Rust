@@ -84,6 +84,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Filter,
     aliases: ["rim light", "fresnel rim", "fresnel", "edge glow", "backlight"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for FresnelRim {

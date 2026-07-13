@@ -43,6 +43,7 @@ crate::primitive! {
     role: Source,
     aliases: ["value", "constant", "Constant CHOP"],
     pure: true,
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for Value {

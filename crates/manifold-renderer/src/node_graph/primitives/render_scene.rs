@@ -922,6 +922,10 @@ impl EffectNode for RenderScene {
         cached_type_id()
     }
 
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::DrawCall)
+    }
+
     fn inputs(&self) -> &[NodeInput] {
         &self.inputs
     }

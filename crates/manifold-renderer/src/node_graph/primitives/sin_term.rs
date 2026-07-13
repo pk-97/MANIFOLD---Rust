@@ -112,6 +112,7 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Map,
     aliases: ["sine wave", "sin term", "plasma", "wave"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for SinTerm {

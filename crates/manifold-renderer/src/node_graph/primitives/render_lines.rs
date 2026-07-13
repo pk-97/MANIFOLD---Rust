@@ -203,6 +203,7 @@ crate::primitive! {
     category: Generate,
     role: Filter,
     aliases: ["draw lines", "render lines", "strokes", "wireframe"],
+    boundary_reason: Blocked,
     extra_fields: {
         render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         msaa_texture: Option<manifold_gpu::GpuTexture> = None,

@@ -15,6 +15,7 @@
         "OilyFluid",
         "QuadMirror"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -49,6 +50,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -178,6 +180,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -276,6 +279,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -345,6 +349,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "source",
       "inputs": [],
       "label": "Arrange Copies",
       "outputs": [
@@ -496,6 +501,7 @@
         "FluidSim3D",
         "ParticleText"
       ],
+      "fusion": "boundary:cross_frame_state",
       "inputs": [
         {
           "name": "in",
@@ -539,6 +545,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -662,6 +669,7 @@
         "Lissajous",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "a",
@@ -793,6 +801,7 @@
       "examples": [
         "ApricotWeather"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "fog_color_r",
@@ -942,6 +951,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "boundary:cross_frame_state",
       "inputs": [],
       "label": "Bake Environment (equirect)",
       "outputs": [
@@ -1025,6 +1035,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "normal",
@@ -1127,6 +1138,7 @@
       "examples": [
         "BasicShapes"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "aspect",
@@ -1251,6 +1263,7 @@
       "examples": [
         "Strobe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": "Beat Gate",
       "outputs": [
@@ -1334,6 +1347,7 @@
       "examples": [
         "VoronoiPrism"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "beat",
@@ -1390,6 +1404,7 @@
         "ApricotBloom",
         "ApricotWeather"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -1470,6 +1485,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "a",
@@ -1522,6 +1538,7 @@
       ],
       "category": "Detection & Sampling",
       "examples": [],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -1601,6 +1618,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "in",
@@ -1688,6 +1706,7 @@
       "examples": [
         "Glitch"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "amount",
@@ -1778,6 +1797,7 @@
       "examples": [
         "SoftFocus"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "source",
@@ -1833,6 +1853,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -1918,6 +1939,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -1964,6 +1986,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -2008,6 +2031,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "camera",
@@ -2103,6 +2127,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "width",
@@ -2195,6 +2220,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "color_r",
@@ -2422,6 +2448,7 @@
       "examples": [
         "QuadMirror"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "cx",
@@ -2517,6 +2544,7 @@
         "StarField",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -2576,6 +2604,7 @@
       ],
       "category": "Generate",
       "examples": [],
+      "fusion": "source",
       "inputs": [],
       "label": "Checkerboard",
       "outputs": [
@@ -2635,6 +2664,7 @@
       ],
       "category": "Mask",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -2712,6 +2742,7 @@
       "examples": [
         "DepthOfField"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "cx",
@@ -2840,6 +2871,7 @@
         "OilyFluid",
         "Watercolor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -2909,6 +2941,7 @@
         "StrangeAttractor",
         "Wireframe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger_count",
@@ -2959,6 +2992,7 @@
         "ConcentricTunnel",
         "MriVolume"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger_count",
@@ -3011,6 +3045,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -3045,6 +3080,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "depth",
@@ -3093,6 +3129,7 @@
       "examples": [
         "Infrared"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -3153,6 +3190,7 @@
       "examples": [
         "ColorCompass"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "in",
@@ -3207,6 +3245,7 @@
       "examples": [
         "ColorGrade"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -3308,6 +3347,7 @@
         "Lissajous",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "x",
@@ -3361,6 +3401,7 @@
       "examples": [
         "Duocylinder"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "x",
@@ -3408,6 +3449,7 @@
       "examples": [
         "AutoGain"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -3494,6 +3536,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -3554,6 +3597,7 @@
         "ColorGrade",
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -3602,6 +3646,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "source",
       "inputs": [],
       "label": "Cube Mesh",
       "outputs": [
@@ -3653,6 +3698,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -3802,6 +3848,7 @@
       "examples": [
         "NestedCubes"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger_count",
@@ -3841,6 +3888,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "boundary:fused_bundle",
       "inputs": [
         {
           "name": "uv",
@@ -3945,6 +3993,7 @@
         "DepthOfField",
         "WireframeDepth"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "in",
@@ -4000,6 +4049,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "boundary:fused_bundle",
       "inputs": [
         {
           "name": "instances",
@@ -4115,6 +4165,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "source",
       "inputs": [
         {
           "name": "cx",
@@ -4222,6 +4273,7 @@
       "examples": [
         "Dither"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -4271,6 +4323,7 @@
       "examples": [
         "Dither"
       ],
+      "fusion": "source",
       "inputs": [],
       "label": "Dither Pattern",
       "outputs": [
@@ -4321,6 +4374,7 @@
         "OilyFluid",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -4372,6 +4426,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -4482,6 +4537,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -4557,6 +4613,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -4676,6 +4733,7 @@
         "Tesseract",
         "Wireframe"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "points",
@@ -4836,6 +4894,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -4938,6 +4997,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "particles",
@@ -5025,6 +5085,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "particles",
@@ -5112,6 +5173,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "particles",
@@ -5229,6 +5291,7 @@
       ],
       "category": "Generate",
       "examples": [],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -5297,6 +5360,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -5377,6 +5441,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -5481,6 +5546,7 @@
       "examples": [
         "EdgeDetect"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -5536,6 +5602,7 @@
       "examples": [
         "ConcentricTunnel"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "count",
@@ -5601,6 +5668,7 @@
         "OilyFluid",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -5669,6 +5737,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "density",
@@ -5726,6 +5795,7 @@
         "EdgeStretch",
         "VoronoiPrism"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "width",
@@ -5786,6 +5856,7 @@
         "ParticleText",
         "Strobe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger",
@@ -5833,6 +5904,7 @@
       ],
       "category": "Control",
       "examples": [],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -5902,6 +5974,7 @@
       ],
       "category": "Particles 2D",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "point_x",
@@ -6035,6 +6108,7 @@
         "VoronoiPrism",
         "Watercolor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6081,6 +6155,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "outline",
@@ -6146,6 +6221,7 @@
         "Breathe",
         "CinematicScene"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6177,6 +6253,7 @@
       ],
       "category": "Noise",
       "examples": [],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -6300,6 +6377,7 @@
         "Watercolor",
         "WireframeDepth"
       ],
+      "fusion": "boundary:cross_frame_state",
       "inputs": [
         {
           "name": "in",
@@ -6339,6 +6417,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6419,6 +6498,7 @@
       ],
       "category": "Stylize",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6468,6 +6548,7 @@
       "examples": [
         "Strobe"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6534,6 +6615,7 @@
         "BlossomWire",
         "Wireframe"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6615,6 +6697,7 @@
         "Duocylinder",
         "Tesseract"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6670,6 +6753,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6741,6 +6825,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -6790,6 +6875,7 @@
       "examples": [
         "Watercolor"
       ],
+      "fusion": "source",
       "inputs": [],
       "label": "Flow Field Noise",
       "outputs": [
@@ -6866,6 +6952,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "source",
@@ -6937,6 +7024,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "uv",
@@ -7065,6 +7153,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "pos_x",
@@ -7229,6 +7318,7 @@
       "examples": [
         "Lissajous"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "index",
@@ -7284,6 +7374,7 @@
         "ParticleText",
         "Watercolor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -7414,6 +7505,7 @@
         "BlossomField",
         "BlossomWire"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [],
       "label": "glTF Mesh",
       "outputs": [
@@ -7510,6 +7602,7 @@
         "ApricotWeather",
         "BlossomField"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [],
       "label": "glTF Texture",
       "outputs": [
@@ -7588,6 +7681,7 @@
       "examples": [
         "Infrared"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "domain",
@@ -7637,6 +7731,7 @@
       ],
       "category": "Color & Tone",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -7684,6 +7779,7 @@
       "examples": [
         "Duocylinder"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "grid_size",
@@ -7734,6 +7830,7 @@
         "MetallicGlass",
         "TwistColumn"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "size_x",
@@ -7827,6 +7924,7 @@
       "examples": [
         "Duocylinder"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "u_max",
@@ -7901,6 +7999,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "source",
       "inputs": [],
       "label": "Grid UV Field",
       "outputs": [
@@ -7939,6 +8038,7 @@
       "examples": [
         "VoronoiPrism"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "field",
@@ -8026,6 +8126,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -8145,6 +8246,7 @@
       "examples": [
         "AutoGain"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "compressed",
@@ -8202,6 +8304,7 @@
         "ColorGrade",
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -8285,6 +8388,7 @@
       "examples": [
         "Tesseract"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": "Hypercube Edges (4D)",
       "outputs": [
@@ -8313,6 +8417,7 @@
       "examples": [
         "Tesseract"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "dimension",
@@ -8356,6 +8461,7 @@
       "examples": [
         "MriVolume"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "position",
@@ -8453,6 +8559,7 @@
         "FluidSim3D",
         "ParticleText"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger",
@@ -8516,6 +8623,7 @@
         "MriVolume",
         "StrangeAttractor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -8562,6 +8670,7 @@
       "examples": [
         "Kaleidoscope"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "segments",
@@ -8629,6 +8738,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -8707,6 +8817,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -8822,6 +8933,7 @@
         "Lissajous",
         "TwistColumn"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": "LFO",
       "outputs": [
@@ -8957,6 +9069,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "pos_x",
@@ -9251,6 +9364,7 @@
       ],
       "category": "Generate",
       "examples": [],
+      "fusion": "source",
       "inputs": [
         {
           "name": "cx",
@@ -9340,6 +9454,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "pos_x",
@@ -9505,6 +9620,7 @@
       "examples": [
         "AutoGain"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "in",
@@ -9545,6 +9661,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -9599,6 +9716,7 @@
         "Glitch",
         "Watercolor"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "a",
@@ -9653,6 +9771,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "normal",
@@ -9741,6 +9860,7 @@
         "Wireframe",
         "WireframeDepth"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "a",
@@ -9830,6 +9950,7 @@
       "examples": [
         "BlossomWire"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "vertices",
@@ -9870,6 +9991,7 @@
         "Breathe",
         "TwistColumn"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10032,6 +10154,7 @@
       "examples": [
         "Mirror"
       ],
+      "fusion": "source",
       "inputs": [],
       "label": "Mirror",
       "outputs": [
@@ -10098,6 +10221,7 @@
         "VoronoiPrism",
         "Watercolor"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "a",
@@ -10171,6 +10295,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10229,6 +10354,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -10284,6 +10410,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10355,6 +10482,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10424,6 +10552,7 @@
       ],
       "category": "Composite",
       "examples": [],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in_0",
@@ -10496,6 +10625,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10550,6 +10680,7 @@
       "examples": [
         "NestedCubes"
       ],
+      "fusion": "boundary:fused_bundle",
       "inputs": [
         {
           "name": "target_angles",
@@ -10649,6 +10780,7 @@
         "DigitalDrift",
         "FilmGrain"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -10775,6 +10907,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -10807,6 +10940,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -10884,6 +11018,7 @@
       "examples": [
         "WireframeDepth"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "in",
@@ -10955,6 +11090,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "orbit",
@@ -11114,6 +11250,7 @@
         "DigitalDrift",
         "MetallicGlass"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "r",
@@ -11207,6 +11344,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "color_r",
@@ -11437,6 +11575,7 @@
       ],
       "category": "Detection & Sampling",
       "examples": [],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "in",
@@ -11466,6 +11605,7 @@
       ],
       "category": "Noise",
       "examples": [],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -11586,6 +11726,7 @@
       "examples": [
         "WireframeDepth"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "in",
@@ -11660,6 +11801,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "color_r",
@@ -11926,6 +12068,7 @@
       "examples": [
         "Wireframe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "shape",
@@ -11974,6 +12117,7 @@
       "examples": [
         "Wireframe"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "shape",
@@ -12018,6 +12162,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "source",
       "inputs": [],
       "label": "Polar Field",
       "outputs": [
@@ -12068,6 +12213,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "instances",
@@ -12183,6 +12329,7 @@
       ],
       "category": "Color & Tone",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12233,6 +12380,7 @@
       "examples": [
         "StarField"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12282,6 +12430,7 @@
       "examples": [
         "Breathe"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12356,6 +12505,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12441,6 +12591,7 @@
         "Garden",
         "MetallicGlass"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12524,6 +12675,7 @@
         "DigitalDrift",
         "Glitch"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "angle",
@@ -12604,6 +12756,7 @@
         "Lissajous",
         "Vine"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "start",
@@ -12687,6 +12840,7 @@
       "examples": [
         "DepthOfField"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "cx",
@@ -12813,6 +12967,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -12895,6 +13050,7 @@
         "QuadMirror",
         "VoronoiPrism"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "source",
@@ -12956,6 +13112,7 @@
       ],
       "category": "Particles 3D",
       "examples": [],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "in",
@@ -13023,6 +13180,7 @@
       ],
       "category": "3D Geometry",
       "examples": [],
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "vertices",
@@ -13113,6 +13271,7 @@
       "examples": [
         "MetallicGlass"
       ],
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "vertices",
@@ -13202,6 +13361,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "camera",
@@ -13329,6 +13489,7 @@
         "ParticleText",
         "Text"
       ],
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "size",
@@ -13540,6 +13701,7 @@
       "examples": [
         "ConcentricTunnel"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "outline",
@@ -13601,6 +13763,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "accum",
@@ -13645,6 +13808,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "accum",
@@ -13711,6 +13875,7 @@
         "Garden",
         "Lathe"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "profile",
@@ -13769,6 +13934,7 @@
         "Glitch",
         "OilyFluid"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -13824,6 +13990,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "normal",
@@ -13930,6 +14097,7 @@
         "BlossomWire",
         "Wireframe"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14011,6 +14179,7 @@
         "Duocylinder",
         "Tesseract"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14090,6 +14259,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "in",
@@ -14141,6 +14311,7 @@
         "OilyFluid",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14190,6 +14361,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "instances",
@@ -14241,6 +14413,7 @@
         "FluidSim3D",
         "ParticleText"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "value",
@@ -14279,6 +14452,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "particles",
@@ -14333,6 +14507,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "particles",
@@ -14387,6 +14562,7 @@
         "ColorGrade",
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14446,6 +14622,7 @@
         "VoronoiPrism",
         "Watercolor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14522,6 +14699,7 @@
         "StarField",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "a",
@@ -14603,6 +14781,7 @@
         "DigitalDrift",
         "Glitch"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "amount",
@@ -14715,6 +14894,7 @@
         "BlossomField",
         "Garden"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "vertices",
@@ -14828,6 +15008,7 @@
       "examples": [
         "MriVolume"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -14878,6 +15059,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "normal",
@@ -15037,6 +15219,7 @@
         "MetallicGlass",
         "OilyFluid"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale_x",
@@ -15155,6 +15338,7 @@
       ],
       "category": "Noise",
       "examples": [],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -15274,6 +15458,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "uv",
@@ -15373,6 +15558,7 @@
       "examples": [
         "StarField"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -15462,6 +15648,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "field",
@@ -15580,6 +15767,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -15656,6 +15844,7 @@
       "examples": [
         "Watercolor"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "base",
@@ -15727,6 +15916,7 @@
       "examples": [
         "ColorCompass"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -15788,6 +15978,7 @@
         "StarField",
         "VoronoiPrism"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -15853,6 +16044,7 @@
       "examples": [
         "FluidSim2D"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "mask",
@@ -15965,6 +16157,7 @@
       ],
       "category": "Particles 3D",
       "examples": [],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "vertices",
@@ -16060,6 +16253,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "active_count",
@@ -16137,6 +16331,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -16174,6 +16369,7 @@
       "examples": [
         "StrangeAttractor"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -16239,6 +16435,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -16315,6 +16512,7 @@
       "examples": [
         "CinematicScene"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "depth",
@@ -16383,6 +16581,7 @@
       "examples": [
         "NestedCubes"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger_count",
@@ -16452,6 +16651,7 @@
         "MetallicGlass",
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -16529,6 +16729,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "gradient",
@@ -16664,6 +16865,7 @@
       "examples": [
         "NestedCubes"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "selector",
@@ -16753,6 +16955,7 @@
         "MriVolume",
         "OilyFluid"
       ],
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "selector",
@@ -16858,6 +17061,7 @@
         "StrangeAttractor",
         "Wireframe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "selector",
@@ -16990,6 +17194,7 @@
       "examples": [
         "ApricotBloom"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -17088,6 +17293,7 @@
       "examples": [
         "OilyFluid"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -17154,6 +17360,7 @@
       "examples": [
         "FilmGrain"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -17192,6 +17399,7 @@
       ],
       "category": "Composite",
       "examples": [],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "a",
@@ -17257,6 +17465,7 @@
         "Bloom",
         "HighlightBoost"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "source",
@@ -17311,6 +17520,7 @@
       ],
       "category": "Color & Tone",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "in",
@@ -17402,6 +17612,7 @@
       "examples": [
         "DigitalPlants"
       ],
+      "fusion": "boundary:fused_bundle",
       "inputs": [
         {
           "name": "uv",
@@ -17504,6 +17715,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -17570,6 +17782,7 @@
         "StylizedFeedback",
         "Transform"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -17669,6 +17882,7 @@
         "ApricotWeather",
         "BlossomField"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "pos_x",
@@ -17832,6 +18046,7 @@
       "examples": [
         "BasicShapes"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "target",
@@ -17889,6 +18104,7 @@
         "ParticleText",
         "Strobe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "trigger_count",
@@ -17935,6 +18151,7 @@
       "examples": [
         "Vine"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "path",
@@ -18005,6 +18222,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -18129,6 +18347,7 @@
       "examples": [
         "FluidSim3D"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -18236,6 +18455,7 @@
         "TwistColumn",
         "Vine"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -18314,6 +18534,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "color_r",
@@ -18499,6 +18720,7 @@
       "examples": [
         "Watercolor"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -18559,6 +18781,7 @@
       "examples": [
         "TrivialPassthrough"
       ],
+      "fusion": "source",
       "inputs": [],
       "label": "UV Field",
       "outputs": [
@@ -18595,6 +18818,7 @@
         "Wireframe",
         "WireframeDepth"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": "Value",
       "outputs": [
@@ -18630,6 +18854,7 @@
       "examples": [
         "BlobTracking"
       ],
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "in",
@@ -18777,6 +19002,7 @@
       "examples": [
         "DepthOfField"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "in",
@@ -18860,6 +19086,7 @@
         "MetallicGlass",
         "OilyFluid"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -18891,6 +19118,7 @@
       "examples": [
         "StylizedFeedback"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -18985,6 +19213,7 @@
         "StarField",
         "VoronoiPrism"
       ],
+      "fusion": "source",
       "inputs": [
         {
           "name": "scale",
@@ -19095,6 +19324,7 @@
       ],
       "category": "Stylize",
       "examples": [],
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "in",
@@ -19183,6 +19413,7 @@
       "examples": [
         "AutoGain"
       ],
+      "fusion": "multi_input_coincident",
       "inputs": [
         {
           "name": "dry",
@@ -19243,6 +19474,7 @@
         "StrangeAttractor",
         "WireframeDepth"
       ],
+      "fusion": "boundary:io_bridge",
       "inputs": [
         {
           "name": "f0",
@@ -19281,6 +19513,7 @@
       ],
       "category": "Math & Convert",
       "examples": [],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -19327,6 +19560,7 @@
         "FluidSim2D",
         "ParticleText"
       ],
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -19430,6 +19664,7 @@
         "Wireframe",
         "WireframeDepth"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [
         {
           "name": "in",
@@ -19489,6 +19724,7 @@
         "VoronoiPrism",
         "Wireframe"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": null,
       "outputs": [
@@ -19614,6 +19850,7 @@
         "Watercolor",
         "WireframeDepth"
       ],
+      "fusion": "boundary:non_gpu",
       "inputs": [],
       "label": null,
       "outputs": [
@@ -20728,13 +20965,6 @@
           "max": "1",
           "min": "0",
           "name": "Threshold"
-        },
-        {
-          "default": "0",
-          "id": "mode",
-          "max": "2",
-          "min": "0",
-          "name": "Mode"
         }
       ]
     },

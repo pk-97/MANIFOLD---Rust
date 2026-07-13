@@ -93,6 +93,7 @@ crate::primitive! {
     role: Filter,
     aliases: ["draw particles", "scatter particles", "scatter", "splat", "points"],
     fusion_kind: Boundary,
+    boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/scatter_particles_body.wgsl"),
     derived_uniforms: ["width:u32", "height:u32"],
     atomic_outputs: ["accum"],

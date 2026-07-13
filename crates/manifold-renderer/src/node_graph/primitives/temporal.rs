@@ -50,6 +50,7 @@ crate::primitive! {
     category: Composite,
     role: Filter,
     aliases: ["feedback", "frame delay", "trails", "Feedback TOP"],
+    boundary_reason: CrossFrameState,
     extra_fields: {
         output_format_override: Option<GpuTextureFormat> = None,
         // `outputCanvasScales` from the preset JSON. Feedback state for

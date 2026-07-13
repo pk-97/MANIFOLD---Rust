@@ -74,6 +74,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Control,
     aliases: ["color sample", "eyedropper", "pick color", "probe"],
+    boundary_reason: IoBridge,
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: [f32; 3] = [0.0, 0.0, 0.0],

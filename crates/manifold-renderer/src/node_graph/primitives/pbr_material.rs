@@ -160,6 +160,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["pbr", "realistic", "metallic roughness", "material", "Principled BSDF"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for PbrMaterial {

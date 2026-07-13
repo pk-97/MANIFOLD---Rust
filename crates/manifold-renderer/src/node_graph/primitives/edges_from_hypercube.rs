@@ -62,6 +62,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["tesseract", "hypercube", "edges from hypercube", "4d cube", "edges", "wireframe"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for EdgesFromHypercube {

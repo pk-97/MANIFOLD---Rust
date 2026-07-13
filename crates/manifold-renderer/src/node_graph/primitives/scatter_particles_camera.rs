@@ -131,6 +131,7 @@ crate::primitive! {
     role: Filter,
     aliases: ["draw particles camera", "scatter particles camera", "project scatter", "3d to 2d"],
     fusion_kind: Boundary,
+    boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/scatter_particles_camera_body.wgsl"),
     derived_uniforms: ["cam_pos:vec3", "cam_fwd:vec3", "cam_right:vec3", "cam_up:vec3"],
     atomic_outputs: ["accum"],

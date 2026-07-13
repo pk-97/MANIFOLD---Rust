@@ -72,6 +72,7 @@ crate::primitive! {
     category: Generate,
     role: Filter,
     aliases: ["draw rectangles", "render filled rects", "filled rects", "boxes", "bars"],
+    boundary_reason: Blocked,
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
     },

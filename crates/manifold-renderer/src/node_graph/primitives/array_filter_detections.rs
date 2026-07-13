@@ -104,6 +104,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["filter detections", "reject blobs", "blob filter", "cull detections", "aspect filter"],
+    boundary_reason: NonGpu,
     extra_fields: {
         last_kept_count: Option<usize> = None,
     },

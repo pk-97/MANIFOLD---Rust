@@ -96,6 +96,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Map,
     aliases: ["cylinder wrap", "curved surface", "wrap"],
+    boundary_reason: FusedBundle,
 }
 
 impl Primitive for CylinderWrapField {

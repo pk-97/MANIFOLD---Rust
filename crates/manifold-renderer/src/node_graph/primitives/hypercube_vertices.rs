@@ -79,6 +79,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["tesseract", "hypercube", "hypercube vertices", "4d cube", "polytope", "dimension morph"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for HypercubeVertices {

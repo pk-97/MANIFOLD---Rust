@@ -53,6 +53,10 @@ name = "generate-preset-thumbnails"
 path = "src/bin/generate_preset_thumbnails.rs"
 
 [[bin]]
+name = "graph-tool"
+path = "src/bin/graph_tool.rs"
+
+[[bin]]
 name = "render-generator-preset"
 path = "src/bin/render_generator_preset.rs"
 

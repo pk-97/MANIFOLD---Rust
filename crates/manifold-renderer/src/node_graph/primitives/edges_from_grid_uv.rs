@@ -52,6 +52,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["grid edges", "edges from grid uv", "wireframe", "topology"],
+    boundary_reason: NonGpu,
     extra_fields: {
         scratch: Vec<EdgePair> = Vec::new(),
     },

@@ -37,6 +37,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Control,
     aliases: ["texture size", "texture dimensions", "dimensions", "resolution", "aspect"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for TextureDimensions {

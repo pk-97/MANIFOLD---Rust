@@ -121,6 +121,7 @@ crate::primitive! {
     category: Particles2D,
     role: Source,
     aliases: ["spawn from image", "seed particles from texture", "seed from texture", "image particles"],
+    boundary_reason: BarrieredReduction,
     extra_fields: {
         // The macro-allocated `pipeline` field holds count_main; these hold
         // the other three entry points of the deterministic four-pass compaction.

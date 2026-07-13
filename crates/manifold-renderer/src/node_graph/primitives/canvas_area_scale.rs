@@ -89,6 +89,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["canvas area scale", "resolution compensation", "area"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for CanvasAreaScale {

@@ -44,6 +44,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["combine xyzw", "pack vec4", "zip"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for PackVec4 {

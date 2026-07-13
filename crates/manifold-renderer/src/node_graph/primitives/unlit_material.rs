@@ -128,6 +128,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["unlit", "flat", "constant", "material", "Emission"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for UnlitMaterial {

@@ -95,6 +95,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["grid mesh", "generate grid mesh", "plane", "terrain", "Grid SOP"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for GenerateGridMesh {
