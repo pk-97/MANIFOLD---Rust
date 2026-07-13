@@ -1,6 +1,6 @@
 # UI Widget Unification — one widget vocabulary, two hosts
 
-**Status: APPROVED design, not built · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded**
+**Status: PARTIALLY BUILT · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded · 2026-07-13 (Sonnet): P1 + P2 LANDED (main). P3 (full slider derivation) and P4 (dual-surface dropdown/color-vec widgets) not attempted — each is comparable in scope to P1 itself and deserves its own session. P5 (canvas text-input) BLOCKED pending a short design pass (caret/selection/IME model, per this doc's own §"P5" acknowledgment). P6 not started. P7 in progress on a separate branch (`feat/drag-lifecycle`).**
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -214,6 +214,18 @@ script driver supports a raw-position right-click on the canvas (⚠ VERIFY-AT-I
 Performer gesture: right-click a node slider track to zero a param mid-set-build — the
 demo exercises exactly this.
 
+**P1 LANDED 2026-07-13 (Sonnet, main `02418e4d`).** Entry re-verify found 4 hand
+registration sites, not 3 — `param_card.rs`'s `register_intents` had three independent
+`on(ids.track/sl.track/cfg.decay_slider.track, RightClick, reset)` calls (main rows,
+envelope decay, audio-shape drawer rows) the §1 audit table never named. Converted all 4;
+I1's own negative gate requires it regardless of the count discrepancy. Demo: the
+`--script` JSON runner (`scripts/ui-flows/` + `ui_snapshot/script.rs`) has no graph-canvas
+wiring at all (confirmed by reading both — `AutomationTarget`/`Gesture::RightClick` exist
+but nothing routes them to `GraphCanvas`), so **L3 isn't reachable**; landed as **L2**:
+the `gltfeditor` scene's base PNG (`target/ui-snapshots/gltfeditor/gltfeditor.png`) plus
+the pre-existing `right_click_track_zone_resets_numeric_param_to_default` test, which
+asserts the exact emitted `SetGraphNodeParam` on the real `on_right_button_down` path.
+
 **P2 — stepper + send-fader contracts (closes BUG-070's remainder).**
 Entry: re-read BUG-070's backlog entry; inventory the Audio Setup gain `[−]value[＋]`
 stepper and the overlay-drag send-fader (`rg -n 'stepper|send.fader' -i
@@ -222,7 +234,22 @@ crates/manifold-ui/src/panels`). Deliverables: each widget gets the same shape �
 Gate: `-p manifold-ui --lib`; reset works on both widgets (unit tests naming BUG-070);
 BUG-070 entry closed in the same landing.
 
+**P2 LANDED 2026-07-13 (Sonnet, main `e68f033f`).** Entry re-read found BUG-070 already
+FIXED before this session (`docs/BUG_BACKLOG.md`, no reopen needed) — the stepper and the
+overlay-drag send-fader turned out to be the SAME underlying gain value with two input
+methods, already sharing one reset gesture; no second widget to contract separately.
+Added a minimal `StepperZone`/`StepperIntent` contract (`crates/manifold-ui/src/
+stepper.rs`) and converted `audio_setup_panel.rs`'s hand `UIEvent::RightClick` id match to
+consult it. Scope note NOT closed here: unlike the slider hosts, `AudioSetupPanel` routes
+none of its gestures through `IntentRegistry` — full P1-style `register_intents`
+derivation would be a panel-wide dispatch migration, left as a follow-up.
+
 **P3 — full derivation for the slider's remaining gestures.**
+**NOT ATTEMPTED 2026-07-13 (Sonnet).** The §3 VERIFY-AT-IMPL markers turned out to need
+per-site investigation across 4 hosts with heterogeneous, non-uniform label-mapping/
+value-cell-edit logic (unlike P1's track-reset, which had one regular pattern to convert
+4 copies of) — comparable in scope to P1 itself. Deferred to its own session rather than
+risk an incomplete conversion of live mapping/edit UX.
 Entry: resolve the §3 VERIFY-AT-IMPL markers (label-mapping and value-cell actions per
 site). Deliverables: Click/DoubleClick rows of the contract derived at every retained
 slider site; negative gate widens to all slider-zone gestures (`rg -n
