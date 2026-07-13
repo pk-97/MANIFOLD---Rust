@@ -34,18 +34,32 @@ pub struct Atmosphere {
     /// Scene-wide ambient/sky tint (rgb multiplier on each object's ambient
     /// term; a reserved). `[1,1,1,1]` = neutral (unwired default).
     pub ambient_tint: [f32; 4],
+    /// Light-shaft (volumetric inscatter) master gain
+    /// (VOLUMETRIC_LIGHT_DESIGN.md D1). `0` = off (default): the march
+    /// never runs, output byte-identical to today. THE fader.
+    pub shaft_intensity: f32,
+    /// Henyey–Greenstein anisotropy `g` in `[-0.9, 0.9]`. `0.6` default —
+    /// forward-scattering, sun-shaft look. Negative = backscatter halo.
+    pub shaft_anisotropy: f32,
+    /// March step count: `0` = Low (16), `1` = Med (24, default), `2` =
+    /// High (32).
+    pub shaft_quality: u32,
 }
 
 impl Default for Atmosphere {
     /// Unwired default = **no atmosphere**: `fog_density 0` (off), neutral
-    /// white ambient tint. Consumers treat this as byte-identical to having
-    /// no `atmosphere` input at all.
+    /// white ambient tint, `shaft_intensity 0` (light shafts off).
+    /// Consumers treat this as byte-identical to having no `atmosphere`
+    /// input at all.
     fn default() -> Self {
         Self {
             fog_color: [0.5, 0.55, 0.65, 1.0],
             fog_density: 0.0,
             height_falloff: 0.0,
             ambient_tint: [1.0, 1.0, 1.0, 1.0],
+            shaft_intensity: 0.0,
+            shaft_anisotropy: 0.6,
+            shaft_quality: 1,
         }
     }
 }
@@ -60,6 +74,14 @@ mod tests {
         assert_eq!(a.fog_density, 0.0, "default must be fog-off");
         assert_eq!(a.height_falloff, 0.0);
         assert_eq!(a.ambient_tint, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn default_is_shafts_off_med_quality() {
+        let a = Atmosphere::default();
+        assert_eq!(a.shaft_intensity, 0.0, "default must be shafts-off (THE fader)");
+        assert_eq!(a.shaft_anisotropy, 0.6);
+        assert_eq!(a.shaft_quality, 1, "default quality is Med (1)");
     }
 
     #[test]

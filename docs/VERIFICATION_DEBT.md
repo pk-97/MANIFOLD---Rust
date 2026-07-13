@@ -24,6 +24,23 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-028 — VOLUMETRIC_LIGHT_DESIGN P1–P3: mechanically L2 (PNGs rendered and read by the orchestrator), Peter's look-pass not yet run, and the demos read as a visual miss
+Landed 2026-07-13 (`docs/landings/2026-07-13-volumetric-light-p1-p3.md`). All numeric gates
+(V1–V6, CPU-vs-GPU parity, monotonic performer faders, content-thread perf) pass across both
+phases with a real acceptance-demo PNG at each look-critical phase (P2 Sun-only, P3 night-garden
+multi-light) — reaching L2 by the letter of §10. But unlike CINEMATIC_POST's VD-020 (numerically
+green, look unconfirmed but not known-bad), this entry's L2 evidence is itself a negative
+result: the orchestrator looked at all four demo PNGs and neither one reads as "a black void
+filled with haze with beams of light shining through" — P2 shows an ordinary dim lit scene with
+a faint shadow patch over a light-gray (not black) background; P3's night-garden shot shows a
+checkerboard void, two dim pillar silhouettes, and a soft ambient glow blob, with no legible
+directional beam in either. Burn-down: this is not a "run the demo" gap, it's a "the shipped
+math doesn't produce the intended look" gap — Peter's look-pass decides whether this needs a
+D2/D3 amendment (the landing report's recommendation) or is accepted as a first pass to iterate
+on later. Do not close this entry by re-running the existing demo; closing requires either a
+design-level fix that visibly changes the PNGs, or Peter accepting the current look as a
+baseline to build on.
+
 ### VD-027 — mechbugs wave: BUG-123/038/079 fixes reached L1 (tests green) only, not L2 (observed)
 Landed 2026-07-13 (`docs/landings/2026-07-13-mechbugs-wave.md`). Three fixes in the wave have no
 render/log/toast actually produced and read by a person: BUG-123's `mesh_edges` `active_count`

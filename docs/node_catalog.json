@@ -842,6 +842,16 @@
           "name": "ambient_tint_b",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "shaft_intensity",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "shaft_anisotropy",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Atmosphere",
@@ -931,6 +941,41 @@
             "2"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Shaft Intensity",
+          "name": "shaft_intensity",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0.6",
+          "label": "Shaft Anisotropy",
+          "name": "shaft_anisotropy",
+          "range": [
+            "-0.9",
+            "0.9"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "enum_values": [
+            "Low",
+            "Med",
+            "High"
+          ],
+          "label": "Shaft Quality",
+          "name": "shaft_quality",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Scene-wide atmosphere producer: exponential depth fog (colour + density + height falloff) plus an ambient/sky tint, emitted as a single Atmosphere struct consumed by render_scene's optional `atmosphere` input. Fog fades distant geometry toward fog_color by 1 - exp(-density·distance); height_falloff concentrates it near the ground (y=0) for a haze look; ambient_tint multiplies each object's ambient term. Every param is port-shadowed by a same-named optional scalar input, so fog density on a fader or beat_ramp is a live depth-mood knob. Unwired into render_scene = fog off (density 0), byte-identical to no atmosphere.",
