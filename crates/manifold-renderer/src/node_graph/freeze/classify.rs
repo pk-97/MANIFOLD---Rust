@@ -179,9 +179,6 @@ pub enum BoundaryReason {
 /// converting it is not permitted (the meta-test below checks both
 /// directions).
 pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
-    "node.grid_mesh",           // generate_grid_mesh
-    "node.hypercube_points",    // hypercube_vertices
-    "node.explosion_force",     // radial_burst_force_field
     "node.shininess",           // blinn_specular
     "node.rim_light",           // fresnel_rim
     "node.matcap_two_tone",     // matcap_two_tone
@@ -451,6 +448,42 @@ mod tests {
         let body = node.wgsl_body().expect("converted gain exposes a fusable body");
         assert!(body.contains("fn body"), "body fragment must define `fn body`");
         assert!(body.contains("gain"), "gain body must reference the gain param");
+    }
+
+    /// Wave 1 of the conversion-debt sweep (2026-07-14): the three buffer/
+    /// texture SOURCE atoms `node.grid_mesh`, `node.hypercube_points`,
+    /// `node.explosion_force` moved off `CONVERSION_DEBT_LEDGER` onto the
+    /// codegen path — `FusionKind::Source`, `standalone_for_spec` builds the
+    /// runtime pipeline, generated-vs-hand parity tests live in each atom's
+    /// own `gpu_tests` module. Per the v1 Source contract (this file's
+    /// `FusionKind::Source` doc comment): a Source atom is standalone
+    /// single-source only — the region-grower does NOT fold it into a
+    /// multi-node fused region (same as the already-converted
+    /// `node.cube_mesh` / `node.platonic_solid_points`). Verified against the
+    /// shipped presets that reference these atoms
+    /// (`assets/generator-presets/MetallicGlass.json` for grid_mesh,
+    /// `Tesseract.json` for hypercube_points — neither ships `explosion_force`
+    /// yet) via `graph_tool fusion`: each node reports `[source] — unfused`
+    /// (`cut: fusable atom, cut by a graph-specific gate`), replacing the
+    /// prior `[boundary:conversion_debt] — unfused` verdict — the debt is
+    /// gone, region-fusion eligibility for Source atoms is a later compiler
+    /// phase (design doc's "fusing a generator as a region producer is a
+    /// follow-on").
+    #[test]
+    fn wave1_conversion_debt_atoms_are_now_source() {
+        use crate::node_graph::PrimitiveRegistry;
+        let registry = PrimitiveRegistry::with_builtin();
+        for type_id in ["node.grid_mesh", "node.hypercube_points", "node.explosion_force"] {
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            assert_eq!(node.fusion_kind(), FusionKind::Source, "{type_id} fusion_kind");
+            assert!(node.boundary_reason().is_none(), "{type_id} must not declare a BoundaryReason");
+            let body = node
+                .wgsl_body()
+                .unwrap_or_else(|| panic!("{type_id} has no wgsl_body"));
+            assert!(body.contains("fn body"), "{type_id} body must define `fn body`");
+        }
     }
 
     /// All 7 ColorGrade atoms are now classified + carry a body fragment that

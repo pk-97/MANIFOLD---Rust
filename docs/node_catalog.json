@@ -6093,7 +6093,7 @@
       ],
       "category": "Particles 2D",
       "examples": [],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "source",
       "inputs": [
         {
           "name": "point_x",
@@ -7949,7 +7949,7 @@
         "MetallicGlass",
         "TwistColumn"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "source",
       "inputs": [
         {
           "name": "size_x",
@@ -8536,7 +8536,7 @@
       "examples": [
         "Tesseract"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "source",
       "inputs": [
         {
           "name": "dimension",
