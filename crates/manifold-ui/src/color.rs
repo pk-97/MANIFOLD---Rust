@@ -1080,3 +1080,12 @@ pub const LAYER_CTRL_CHANNEL_LABEL_WIDTH: f32 = 20.0;
 pub const LAYER_CTRL_SMALL_FONT_SIZE: u16 = 9;
 pub const LAYER_CTRL_NAME_FONT_SIZE: u16 = 11;
 pub const LAYER_CTRL_HANDLE_FONT_SIZE: u16 = 14;
+
+// ── Text editing (UI_WIDGET_UNIFICATION P5) ────────────────────────
+// The `TextEditModel`-backed caret + ranged-selection highlight, drawn by
+// every host that embeds the model (`manifold-app`'s `TextInputState` has
+// its own equal-valued consts since it's a different crate; `MappingPopover`
+// here references these directly, I7's "one editing home" extended to the
+// paint colours too).
+pub const TEXT_EDIT_SELECT_BG: Color32 = Color32::new(77, 128, 204, 102);
+pub const TEXT_EDIT_CARET: Color32 = Color32::new(224, 224, 224, 255);
