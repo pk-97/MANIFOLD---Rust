@@ -2102,12 +2102,18 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     let mut prelude: Vec<String> = Vec::new(); // deduped top-level decls, emitted once
     let mut helpers: Vec<FnBlock> = Vec::new(); // deduped, emitted once
     let mut bodies: Vec<String> = Vec::new(); // namespaced body fns
+    let mut includes: Vec<&'static str> = Vec::new(); // deduped shared WGSL libs (noise_common, depth_common, …) — BUG-135
     for (i, node) in region.nodes.iter().enumerate() {
         if !node.fusion_kind.is_fusable() {
             return Err(CodegenError::NotFusable(node.fusion_kind));
         }
         if node.body.is_empty() {
             return Err(CodegenError::NoBody);
+        }
+        for inc in node.node_includes {
+            if !includes.contains(inc) {
+                includes.push(inc);
+            }
         }
         let (pre, blocks) = split_fns(node.body);
         for line in pre {
@@ -2316,6 +2322,15 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         .unwrap();
     }
     out.push('\n');
+
+    // --- shared WGSL library includes (e.g. depth_common's linearize_depth),
+    // prepended so the bodies' helper calls resolve — mirrors
+    // generate_fused_buffer's identical block (BUG-135: this texture path
+    // previously never emitted node_includes at all). ---
+    for inc in &includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
+    }
 
     // --- shared prelude (deduped top-level consts/structs the bodies declare),
     // then deduped helpers, then namespaced bodies ---
@@ -3095,6 +3110,85 @@ mod gpu_tests {
         );
         // The sampler must exist even with no gather member.
         assert!(g.wgsl.contains("var samp: sampler;"), "shared sampler bound:\n{}", g.wgsl);
+    }
+
+    /// BUG-135: the fused TEXTURE-domain path must emit a member's
+    /// `node_includes` exactly like `generate_fused_buffer` already does.
+    /// `node.coc_from_depth` declares `wgsl_includes: [DEPTH_COMMON]` — its
+    /// body calls the shared `linearize_depth` helper. Fuse it with a
+    /// pointwise `Gain` neighbour (the real shape a DoF chain forms) and
+    /// assert the shared header text lands in the kernel exactly once and the
+    /// whole thing parses through naga — before this fix, `linearize_depth`
+    /// was never emitted and naga rejected the kernel with "no definition in
+    /// scope for identifier: linearize_depth" (BUG-141's exact symptom).
+    #[test]
+    fn fused_texture_region_carries_and_dedups_wgsl_includes() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{CocFromDepth, Gain};
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: CocFromDepth::FUSION_KIND,
+                    body: CocFromDepth::WGSL_BODY.unwrap(),
+                    params: CocFromDepth::PARAMS,
+                    inputs: vec![InputSource::External(0)],
+                    input_access: CocFromDepth::INPUT_ACCESS.to_vec(),
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: CocFromDepth::WGSL_INCLUDES,
+                    derived_uniforms: CocFromDepth::DERIVED_UNIFORMS,
+                    type_id: CocFromDepth::TYPE_ID.to_string(),
+                    derived_camera_ext: None,
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: Gain::FUSION_KIND,
+                    body: Gain::WGSL_BODY.unwrap(),
+                    params: Gain::PARAMS,
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    type_id: String::new(),
+                    derived_camera_ext: None,
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+            ],
+            num_external_inputs: 1,
+            outputs: vec![id(1)],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        let g = generate_fused(&region).expect("coc_from_depth + Gain region fuses");
+        assert!(
+            g.wgsl.contains("fn linearize_depth"),
+            "the shared depth_common.wgsl helper must be carried into the fused kernel:\n{}",
+            g.wgsl
+        );
+        assert_eq!(
+            g.wgsl.matches("fn linearize_depth").count(),
+            1,
+            "the include is deduped, not duplicated:\n{}",
+            g.wgsl
+        );
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused texture kernel with a wgsl_includes member parses through naga (BUG-135/BUG-141):\n{}",
+            g.wgsl
+        );
     }
 
     /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms
