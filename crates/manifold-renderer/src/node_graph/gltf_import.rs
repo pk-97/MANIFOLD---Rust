@@ -1315,7 +1315,7 @@ mod tests {
         }
 
         let registry = PrimitiveRegistry::with_builtin();
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
 
         assert!(
@@ -1493,7 +1493,7 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
 
         let mut generator =
-            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, format, None)
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
                 .expect("assembled azalea graph must build through PresetRuntime::from_def_with_device");
 
         let target = RenderTarget::new(&device, w, h, format, "imported-azalea");
@@ -1677,7 +1677,7 @@ mod tests {
         // is_watched = false -> production render path, INCLUDING the on-demand
         // fusion attempt the raw from_def proof never exercised.
         let mut generator = registry
-            .create_with_override(&device, &preset_id, Some(&def), w, h, false, None)
+            .create_with_override(device.arc(), &preset_id, Some(&def), w, h, false, None)
             .expect(
                 "create_with_override must build the imported generator from its override def, \
                  even though the preset id is not in the bundled catalog",

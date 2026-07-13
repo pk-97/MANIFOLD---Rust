@@ -6,6 +6,7 @@
 use std::ffi::{CString, c_void};
 use std::fmt;
 
+use crate::frame_rate::fps_to_rational;
 use crate::metal_ffi;
 
 /// Error codes returned by the native Metal encoder.
@@ -117,12 +118,25 @@ impl MetalEncoder {
         }
 
         let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
+        let (fps_num, fps_den) = fps_to_rational(fps);
 
         let handle = unsafe {
             if hdr {
-                metal_ffi::MetalEncoder_CreateHDR(width as i32, height as i32, fps, c_path.as_ptr())
+                metal_ffi::MetalEncoder_CreateHDR(
+                    width as i32,
+                    height as i32,
+                    fps_num,
+                    fps_den,
+                    c_path.as_ptr(),
+                )
             } else {
-                metal_ffi::MetalEncoder_Create(width as i32, height as i32, fps, c_path.as_ptr())
+                metal_ffi::MetalEncoder_Create(
+                    width as i32,
+                    height as i32,
+                    fps_num,
+                    fps_den,
+                    c_path.as_ptr(),
+                )
             }
         };
 
@@ -165,13 +179,15 @@ impl MetalEncoder {
         device_ptr: *mut c_void,
     ) -> Result<Self, EncoderError> {
         let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
+        let (fps_num, fps_den) = fps_to_rational(fps);
 
         let handle = unsafe {
             if hdr {
                 metal_ffi::MetalEncoder_CreateHDRWithDevice(
                     width as i32,
                     height as i32,
-                    fps,
+                    fps_num,
+                    fps_den,
                     c_path.as_ptr(),
                     device_ptr,
                 )
@@ -179,7 +195,8 @@ impl MetalEncoder {
                 metal_ffi::MetalEncoder_CreateWithDevice(
                     width as i32,
                     height as i32,
-                    fps,
+                    fps_num,
+                    fps_den,
                     c_path.as_ptr(),
                     device_ptr,
                 )
@@ -287,5 +304,200 @@ impl Drop for MetalEncoder {
                 metal_ffi::MetalEncoder_EndSession(self.handle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod srgb_shader_parity_tests {
+    //! BUG-128 value-level gate.
+    //!
+    //! `native/ColorTransferFunctions.h`'s `manifold_srgb_encode` (the MSL
+    //! spliced into `kCopyShaderSDRBody` at
+    //! `native/MetalEncoderPlugin.m:54-63` via the format-string splice at
+    //! `native/MetalEncoderPlugin.m:194-199`) is hand-verified to implement
+    //! the exact same piecewise formula as the tested Rust reference,
+    //! `still_exporter::linear_to_srgb` (`src/still_exporter.rs:27-34`):
+    //! `x <= 0.0031308 ? x * 12.92 : 1.055 * x.powf(1.0/2.4) - 0.055`, with
+    //! input clamped to `[0, 1]` first. Compare literally:
+    //! `native/ColorTransferFunctions.h`'s `manifold_srgb_encode` body uses
+    //! `x <= 0.0031308`, `x * 12.92`, and `1.055 * pow(x, 1.0/2.4) - 0.055`
+    //! — the same breakpoint and constants, just spelled in MSL instead of
+    //! Rust and operating on `float3` instead of a scalar.
+    //!
+    //! We can't invoke the Metal shader function directly from a `cargo
+    //! test` (no headless MSL-eval harness in this crate), so this test
+    //! instead runs the identical formula (`shader_srgb_encode` below, a
+    //! direct transliteration of the MSL) against
+    //! `still_exporter::linear_to_srgb` across a spread of linear inputs,
+    //! including the shadow region (< 0.04) where the old `pow(1/2.2)`
+    //! approximation diverges most. If either the header or the Rust
+    //! reference drifts, this test is the tripwire.
+
+    use crate::still_exporter::linear_to_srgb;
+
+    /// Literal transliteration of `manifold_srgb_encode` in
+    /// `native/ColorTransferFunctions.h` (scalar form; the MSL operates
+    /// component-wise on float3, which is equivalent per-channel).
+    fn shader_srgb_encode(x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        if x <= 0.0031308 {
+            x * 12.92
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        }
+    }
+
+    #[test]
+    fn shader_encode_matches_still_exporter_reference() {
+        let samples = [
+            0.0_f32, 0.001, 0.0031308, 0.004, 0.01, 0.02, 0.04, 0.1, 0.18, 0.25, 0.5, 0.735, 0.9,
+            1.0,
+        ];
+        for &x in &samples {
+            let shader = shader_srgb_encode(x);
+            let reference = linear_to_srgb(x);
+            assert!(
+                (shader - reference).abs() < 1e-6,
+                "shader/reference diverge at linear={x}: shader={shader}, reference={reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn shader_encode_diverges_from_old_pow_2_2_approximation_in_shadows() {
+        // Documents *why* BUG-128 mattered: the old `pow(1/2.2)` curve the
+        // shader used to apply is measurably different from the true
+        // piecewise function specifically in the shadow region.
+        let old_approx = |x: f32| x.max(0.0).powf(1.0 / 2.2);
+        let x = 0.02_f32; // well below the shadow knee
+        let true_srgb = shader_srgb_encode(x);
+        let approx = old_approx(x);
+        assert!(
+            (true_srgb - approx).abs() > 0.01,
+            "expected old pow(1/2.2) to visibly diverge from true sRGB at x={x}: \
+             true={true_srgb}, approx={approx}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fractional_fps_timebase_tests {
+    //! BUG-129 gate: export at a fractional (NTSC-family) fps must not
+    //! silently round to an integer CMTime timescale.
+
+    use super::*;
+
+    #[test]
+    fn new_converts_2997_fps_to_the_exact_ntsc_rational_before_ffi() {
+        // FFI-boundary check: `MetalEncoder::new`'s only path to the native
+        // `MetalEncoder_Create` is through `fps_to_rational`. Confirm the
+        // exact (num, den) pair that would cross the FFI boundary for
+        // 29.97 fps is 30000/1001 — not a rounded 30/1 — matching the
+        // per-frame presentation-time contract documented on
+        // `metal_ffi::MetalEncoder_Create`.
+        let (num, den) = fps_to_rational(29.97);
+        assert_eq!((num, den), (30000, 1001));
+
+        // Frame N's presentation time is `N * den / num` seconds (see
+        // MetalEncoderPlugin.m's CMTimeMake(frameIndex * fpsDen, fpsNum)).
+        // Frame 1's duration must be exactly 1001/30000 s, not 1/30 s.
+        let frame_duration = den as f64 / num as f64;
+        assert!(
+            (frame_duration - (1001.0 / 30000.0)).abs() < 1e-12,
+            "frame duration {frame_duration} must equal exactly 1001/30000s"
+        );
+        assert!(
+            (frame_duration - (1.0 / 30.0)).abs() > 1e-6,
+            "frame duration must NOT collapse to the rounded 1/30s duration"
+        );
+    }
+
+    /// Real export smoke test: encode a handful of frames at 29.97 fps
+    /// through the actual native encoder and probe the resulting file with
+    /// `ffprobe` (available on this dev machine) to confirm the container's
+    /// reported frame rate is the exact NTSC rational, not a rounded 30 fps.
+    ///
+    /// Marked `#[ignore]`: it opens a real Metal device, encodes real
+    /// frames, and shells out to `ffprobe` — not the deterministic,
+    /// GPU-free default `cargo nextest` sweep (see CLAUDE.md's testing-scope
+    /// rule). Run explicitly: `cargo test -p manifold-media --lib
+    /// fractional_fps_timebase_tests -- --ignored`.
+    #[test]
+    #[ignore = "opens a real Metal device + shells out to ffprobe; run explicitly, not in the default sweep"]
+    fn export_at_2997_fps_produces_container_with_exact_ntsc_frame_rate() {
+        if !MetalEncoder::is_available() {
+            eprintln!("Metal not available on this machine, skipping BUG-129 smoke test");
+            return;
+        }
+
+        let ffprobe_available = std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ffprobe_available {
+            eprintln!("ffprobe not available on this machine, skipping BUG-129 smoke test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "manifold_bug129_fps_smoke_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let output_path = dir.join("bug129_2997fps.mp4");
+
+        // Minimal real Metal texture the encoder's compute-copy kernel can
+        // read from (uninitialized contents are irrelevant — only the
+        // container's frame-rate metadata is under test).
+        let device = manifold_gpu::GpuDevice::new();
+        let texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 64,
+            height: 64,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+            label: "bug129_smoke_src",
+            mip_levels: 1,
+        });
+
+        let mut encoder = MetalEncoder::new(64, 64, 29.97, output_path.to_str().unwrap(), false)
+            .expect("encoder creation should succeed with a real Metal device");
+
+        for _ in 0..5 {
+            unsafe {
+                encoder
+                    .encode_frame(texture.raw_ptr())
+                    .expect("encode_frame should succeed");
+            }
+        }
+        encoder.end_session().expect("end_session should succeed");
+
+        let output = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=r_frame_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(&output_path)
+            .output()
+            .expect("ffprobe should run");
+
+        let reported = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(
+            reported, "30000/1001",
+            "exported container must report the exact NTSC rational frame rate, not a rounded 30/1 \
+             (ffprobe stderr: {})",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

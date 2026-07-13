@@ -24,7 +24,7 @@ use image::ImageEncoder;
 
 /// Standard sRGB opto-electronic transfer function (linear → display-encoded),
 /// applied per channel in float. Input is clamped to [0, 1] first.
-fn linear_to_srgb(x: f32) -> f32 {
+pub(crate) fn linear_to_srgb(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     if x <= 0.0031308 {
         x * 12.92

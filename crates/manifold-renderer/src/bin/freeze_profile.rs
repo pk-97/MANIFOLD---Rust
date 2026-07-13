@@ -102,7 +102,7 @@ fn resource_for_output(
 
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
 
     // `attribute [names…]` → per-node GPU/CPU attribution via counter
     // sampling (fast path, skips the sweeps).
@@ -193,7 +193,7 @@ fn main() {
             };
 
             let input_rt = RenderTarget::new(&device, w, h, FORMAT, "freeze-profile-input");
-            let mut backend = MetalBackend::new(&device, w, h, FORMAT);
+            let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), w, h, FORMAT);
             backend.pre_bind_texture_2d(source_res, input_rt);
             let mut exec = Executor::new(Box::new(backend));
 
@@ -264,7 +264,7 @@ fn main() {
 /// We vary the two things that differ — warmup count (state/particle pool
 /// accumulation) and the build path (raw `into_graph` vs `PresetRuntime`) — to
 /// localize the 11ms.
-fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     use manifold_renderer::node_graph::StateStore;
     let (w, h) = (1920u32, 1080u32);
     let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
@@ -282,7 +282,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
       for (col, prealloc) in [false, true].into_iter().enumerate() {
         let mut graph = def.clone().into_graph(registry).unwrap();
         let plan = compile(&graph).unwrap();
-        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         if prealloc {
             manifold_renderer::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend).unwrap();
         }
@@ -314,7 +314,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
     //    like profile_generators (the 11.7ms number).
     println!("\n--- B) PresetRuntime::render (production path) ---");
     {
-        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT, None).unwrap();
+        let mut generator = PresetRuntime::from_def_with_device(def.clone(), registry, std::sync::Arc::clone(device), w, h, FORMAT, None).unwrap();
         let target = RenderTarget::new(device, w, h, FORMAT, "rec-prod");
         let mk = |t: f64| PresetContext { time: t, beat: t*2.0, dt: 1.0/60.0, width: w, height: h, output_width: w, output_height: h, aspect: w as f32 / h as f32, owner_key: 0, is_clip_level: false, frame_count: 0, anim_progress: 0.0, trigger_count: 0 };
         let params = ParamManifest::default();
@@ -338,7 +338,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
 /// path. Marginals can be small/negative where the scheduler overlaps adjacent
 /// dispatches (flagged); the cumulative curve and the per-type rollup are the
 /// robust signals.
-fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     use manifold_renderer::node_graph::StateStore;
     use std::collections::BTreeMap;
 
@@ -360,7 +360,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &GpuDevice) {
             .map(|n| n.id)
             .and_then(|id| resource_for_output(&full, id, "out"));
 
-        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         if let Some(res) = input_res {
             backend.pre_bind_texture_2d(res, RenderTarget::new(device, w, h, FORMAT, "pd-input"));
         }
@@ -599,7 +599,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
 /// time (`commit_and_wait_completed_timed`). Reports p50/p95/max for both
 /// arms plus a spike census, so a steady delta and a sawtooth read
 /// differently. Fresh runtime per arm (no state bleed).
-fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]) {
+fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, args: &[&str]) {
     use manifold_core::params::Param;
     use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 
@@ -678,7 +678,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]
     {
         let (w, h) = (640u32, 360u32);
         let mut generator =
-            match PresetRuntime::from_def_with_device(def.clone(), registry, device, w, h, FORMAT, None)
+            match PresetRuntime::from_def_with_device(def.clone(), registry, std::sync::Arc::clone(device), w, h, FORMAT, None)
             {
                 Ok(g) => g,
                 Err(e) => {
@@ -761,7 +761,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &GpuDevice, args: &[&str]
             let mut generator = match PresetRuntime::from_def_with_device(
                 def.clone(),
                 registry,
-                device,
+                std::sync::Arc::clone(device),
                 w,
                 h,
                 FORMAT,
@@ -947,7 +947,7 @@ fn profile_pool_stats(device: &GpuDevice) {
 /// introspection + dispatch overhead the live chain pays, not the bare
 /// hand-kernel dispatch `profile_fused_colorgrade` measures. This is the speedup
 /// that lands on screen.
-fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     use manifold_renderer::node_graph::freeze::install::fused_view_by_id;
 
     println!(
@@ -987,7 +987,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevic
             .map(|n| n.id)?;
         let source_res = resource_for_output(&plan, source_id, "out")?;
         let input_rt = RenderTarget::new(device, w, h, FORMAT, "auto-cg-input");
-        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         backend.pre_bind_texture_2d(source_res, input_rt);
         let mut exec = Executor::new(Box::new(backend));
         let frame_time = FrameTime {
@@ -1043,7 +1043,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevic
 /// can't: the unfused baseline gets the GPU's free cross-dispatch overlap that
 /// fusion forfeits, so the real speedup may sit below the naive
 /// steps-×-ms/step projection. Measured, not projected.
-fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     use manifold_renderer::node_graph::freeze::reference::{
         ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade,
     };
@@ -1125,7 +1125,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
             continue;
         };
         let input_rt = RenderTarget::new(device, w, h, FORMAT, "cg-unfused-input");
-        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         backend.pre_bind_texture_2d(source_res, input_rt);
         let mut exec = Executor::new(Box::new(backend));
         for _ in 0..WARMUP {
@@ -1179,7 +1179,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &GpuDevice) {
 /// samples at stage boundaries), so absolute ms run slightly above
 /// production; the per-node SHARES are the signal. Work the spans can't see
 /// (MPS/MetalFX internal encoders) shows as "unattributed".
-fn profile_attribution(registry: &PrimitiveRegistry, device: &GpuDevice, names: &[&str]) {
+fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, names: &[&str]) {
     use manifold_renderer::node_graph::freeze::install;
 
     const DEFAULT_NAMES: &[&str] = &[
@@ -1260,7 +1260,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &GpuDevice, names: 
 /// `execute_frame_with_state` with their boundary input pre-bound.
 fn attribute_def(
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     sampler: &manifold_gpu::GpuTimestampSampler,
     def: &EffectGraphDef,
     title: &str,
@@ -1287,7 +1287,7 @@ fn attribute_def(
         }
     };
 
-    let mut backend = MetalBackend::new(device, w, h, FORMAT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
     for boundary in ["system.source", "system.generator_input"] {
         if let Some(id) = graph
             .nodes()
@@ -1443,7 +1443,7 @@ fn attribute_def(
 /// topology (it forks at `mix`, so linear prefix-truncation would be
 /// ambiguous). Gain runs at its default (identity) but still does a full
 /// read+math+write pass, which is exactly the bandwidth cost being measured.
-fn profile_synthetic_pointwise(device: &GpuDevice) {
+fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
     let (w, h) = (3840u32, 2160u32);
     println!(
         "\n--- synthetic pointwise chains (Source → Gain×N → FinalOutput) @ {w}x{h}, real GPU time ---"
@@ -1477,7 +1477,7 @@ fn profile_synthetic_pointwise(device: &GpuDevice) {
         let source_res =
             resource_for_output(&plan, source, "out").expect("Source.out resolves");
         let input_rt = RenderTarget::new(device, w, h, FORMAT, "syn-input");
-        let mut backend = MetalBackend::new(device, w, h, FORMAT);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         backend.pre_bind_texture_2d(source_res, input_rt);
         let mut exec = Executor::new(Box::new(backend));
         let frame_time = FrameTime {
@@ -1516,7 +1516,7 @@ fn profile_synthetic_pointwise(device: &GpuDevice) {
 /// production `Generator::render` path (state-aware), timing one frame
 /// with `commit_and_wait_completed`. Each (preset, resolution) is wrapped
 /// in `catch_unwind` so one failing preset can't abort the sweep.
-fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     println!("\n--- generators (buffer/particle domain), avg over {GEN_FRAMES} frames ---");
     println!("{:<16} {:>6} {:>11}", "generator", "res", "ms/frame");
     println!("{}", "-".repeat(36));
@@ -1543,7 +1543,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
                 let mut generator = PresetRuntime::from_def_with_device(
                     def.clone(),
                     registry,
-                    device,
+                    std::sync::Arc::clone(device),
                     w,
                     h,
                     FORMAT,
@@ -1623,7 +1623,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
 /// overhead. This decomposes the 11 ms by measurement, not inference, and
 /// answers "does buffer fusion help FluidSim, or does it need a different
 /// lever."
-fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDevice) {
+fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     const COUNTS: &[i32] = &[1_000_000, 2_000_000, 4_000_000, 8_000_000];
     let (w, h) = (1920u32, 1080u32);
 
@@ -1669,7 +1669,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut generator =
-                PresetRuntime::from_def_with_device(def, registry, device, w, h, FORMAT, None)
+                PresetRuntime::from_def_with_device(def, registry, std::sync::Arc::clone(device), w, h, FORMAT, None)
                     .map_err(|e| e.to_string())?;
             let target = RenderTarget::new(device, w, h, FORMAT, "fluidsweep-gen");
             let mk_ctx = |t: f64| PresetContext {

@@ -146,7 +146,7 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,
@@ -323,7 +323,7 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,

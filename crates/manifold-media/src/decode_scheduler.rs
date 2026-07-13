@@ -195,6 +195,26 @@ impl DecodeScheduler {
         results
     }
 
+    /// Block for at most `timeout` waiting for the first result, then drain
+    /// any others that arrived without further waiting.
+    ///
+    /// Returns empty if the timeout elapses with nothing received, or if the
+    /// channel is disconnected. Defense-in-depth backstop (BUG-127): every
+    /// worker reply path is expected to always answer a submitted job, but
+    /// this bounds a caller's wait even if that protocol is ever violated,
+    /// instead of hanging forever.
+    pub fn recv_results_timeout(&self, timeout: std::time::Duration) -> Vec<DecodeResult> {
+        let mut results = Vec::new();
+        match self.result_rx.recv_timeout(timeout) {
+            Ok(result) => results.push(result),
+            Err(_) => return results, // timed out or disconnected
+        }
+        while let Ok(result) = self.result_rx.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+
     /// Get a reference to the shared decoder pool.
     pub fn pool(&self) -> &Arc<DecoderPool> {
         &self.pool
@@ -274,6 +294,18 @@ fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, poo
                             });
                         }
                     }
+                } else {
+                    // No handle for this clip (e.g. the preceding Open failed on a
+                    // missing/corrupt file). The content thread's decode_pending
+                    // invariant assumes every submitted job produces exactly one
+                    // result — reply with an error so it always resolves instead
+                    // of hanging forever (BUG-127).
+                    let _ = result_tx.send(DecodeResult {
+                        clip_id: clip_id.clone(),
+                        status: DecodeResultStatus::Error(format!(
+                            "no handle for clip {clip_id} (Prepare)"
+                        )),
+                    });
                 }
             }
 
@@ -301,6 +333,15 @@ fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, poo
                             });
                         }
                     }
+                } else {
+                    // See Prepare's else-branch: no handle means the job would
+                    // otherwise be silently dropped, wedging decode_pending forever.
+                    let _ = result_tx.send(DecodeResult {
+                        clip_id: clip_id.clone(),
+                        status: DecodeResultStatus::Error(format!(
+                            "no handle for clip {clip_id} (Seek)"
+                        )),
+                    });
                 }
             }
 
@@ -331,6 +372,15 @@ fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, poo
                             });
                         }
                     }
+                } else {
+                    // See Prepare's else-branch: no handle means the job would
+                    // otherwise be silently dropped, wedging decode_pending forever.
+                    let _ = result_tx.send(DecodeResult {
+                        clip_id: clip_id.clone(),
+                        status: DecodeResultStatus::Error(format!(
+                            "no handle for clip {clip_id} (DecodeNext)"
+                        )),
+                    });
                 }
             }
 
@@ -367,5 +417,66 @@ fn worker_loop(job_rx: Receiver<DecodeJob>, result_tx: Sender<DecodeResult>, poo
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // BUG-127: a job for a clip_id the worker never opened a handle for
+    // (e.g. the preceding `Open` failed) must still produce exactly one
+    // result, so `decode_pending` on the content side always resolves
+    // instead of hanging forever.
+
+    fn scheduler() -> DecodeScheduler {
+        let pool = Arc::new(DecoderPool::new().expect("failed to create decoder pool"));
+        DecodeScheduler::new(pool)
+    }
+
+    #[test]
+    fn prepare_for_unknown_clip_replies_with_error_not_silence() {
+        let sched = scheduler();
+        sched.submit(DecodeJob::Prepare {
+            clip_id: "never-opened".to_string(),
+        });
+        let results = sched.recv_results_timeout(Duration::from_secs(5));
+        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert!(
+            matches!(results[0].status, DecodeResultStatus::Error(_)),
+            "expected an Error status for a job with no handle"
+        );
+        assert_eq!(results[0].clip_id, "never-opened");
+    }
+
+    #[test]
+    fn seek_for_unknown_clip_replies_with_error_not_silence() {
+        let sched = scheduler();
+        sched.submit(DecodeJob::Seek {
+            clip_id: "never-opened".to_string(),
+            target_time: 0.0,
+        });
+        let results = sched.recv_results_timeout(Duration::from_secs(5));
+        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert!(matches!(results[0].status, DecodeResultStatus::Error(_)));
+    }
+
+    #[test]
+    fn decode_next_for_unknown_clip_replies_with_error_not_silence() {
+        let sched = scheduler();
+        sched.submit(DecodeJob::DecodeNext {
+            clip_id: "never-opened".to_string(),
+        });
+        let results = sched.recv_results_timeout(Duration::from_secs(5));
+        assert_eq!(results.len(), 1, "expected exactly one reply, got none (hang)");
+        assert!(matches!(results[0].status, DecodeResultStatus::Error(_)));
+    }
+
+    #[test]
+    fn recv_results_timeout_returns_empty_when_nothing_arrives() {
+        let sched = scheduler();
+        let results = sched.recv_results_timeout(Duration::from_millis(50));
+        assert!(results.is_empty());
     }
 }

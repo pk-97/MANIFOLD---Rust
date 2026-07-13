@@ -619,6 +619,17 @@ struct EffectSlot {
     /// `ctx_target_node` field + `apply_ctx_params_at` hardcoded match
     /// were deleted in the same change.
     generator_input_node: Option<NodeInstanceId>,
+    /// `freeze::segment::card_prefix(seg_idx)` for a card that is a member of
+    /// a fused multi-card SEGMENT, `""` otherwise. [`Self::node_map`] and
+    /// `bound.fused_retarget` are keyed in the segment's `c{i}.`-prefixed
+    /// namespace for a segment member (both were built from the concatenated
+    /// segment def / its retarget map), while [`Self::run`]'s per-frame
+    /// inner-override path reads each card's own (unprefixed) `fx.graph`.
+    /// This prefix is threaded through
+    /// [`BoundGraph::apply_inner_overrides_prefixed`] so that lookup lands in
+    /// the right namespace for BOTH a surviving node (via `node_map`) and a
+    /// fused-away one (via `fused_retarget`) — BUG-111.
+    card_prefix: String,
 }
 
 /// The active (enabled, group-enabled) effects of a chain, with their original
@@ -1072,7 +1083,14 @@ impl PresetRuntime {
                                 ),
                             }
                         }
-                        let bound = BoundGraph::new(bindings, &mut graph);
+                        let mut bound = BoundGraph::new(bindings, &mut graph);
+                        // Carry the segment view's retarget (already prefixed
+                        // in this card's `c{i}.` namespace) so an in-place
+                        // inner-param edit on a fused-away node reaches the
+                        // live kernel — the segment analog of the BUG-006
+                        // fix above (BUG-111). Empty when nothing in this
+                        // segment fused away.
+                        bound.fused_retarget = view.retarget.clone();
                         let generator_input_node = node_map.iter().find_map(|(nid, inst)| {
                             (nid.as_str().starts_with(prefix.as_str())
                                 && graph.get_node(*inst).is_some_and(|n| {
@@ -1100,6 +1118,7 @@ impl PresetRuntime {
                             user_bindings_version: fx.graph_version,
                             def_content_key: 0,
                             generator_input_node,
+                            card_prefix: prefix.clone(),
                         });
                     }
                     prev_node = output.0;
@@ -1457,6 +1476,7 @@ impl PresetRuntime {
                     effective_def,
                 ),
                 generator_input_node: generator_input_id,
+                card_prefix: String::new(),
             });
             prev_node = output.0;
             prev_out_port = output.1;
@@ -1904,8 +1924,16 @@ impl PresetRuntime {
             // so bound params keep their live value and only the unbound
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
-                slot.bound
-                    .apply_inner_overrides(&mut self.graph, &slot.node_map, fx.graph.as_ref());
+                // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
+                // per-card) node ids into the segment's `c{i}.`-prefixed
+                // `node_map`/`fused_retarget` namespace for a segment member
+                // (BUG-111); `""` for a whole-card slot, a no-op lookup.
+                slot.bound.apply_inner_overrides_prefixed(
+                    &mut self.graph,
+                    &slot.node_map,
+                    fx.graph.as_ref(),
+                    &slot.card_prefix,
+                );
                 slot.applied_graph_version = fx.graph_version;
             }
             // Re-hydrate the user tail if the effect's binding list
@@ -2687,6 +2715,7 @@ impl PresetRuntime {
             // chain dispatcher's prior-runtime handoff — no harvest key.
             def_content_key: 0,
             generator_input_node: Some(generator_input_id),
+            card_prefix: String::new(),
         };
 
         let mut g = Self {
@@ -2723,7 +2752,7 @@ impl PresetRuntime {
     pub fn from_json_str_with_device(
         json: &str,
         registry: &PrimitiveRegistry,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -2739,7 +2768,7 @@ impl PresetRuntime {
     pub fn from_def_with_device(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -2748,7 +2777,7 @@ impl PresetRuntime {
         let mut g = Self::from_def(doc, registry, manifest)?;
         g.width = width;
         g.height = height;
-        let mut backend = MetalBackend::new(device, width, height, format);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
         let PresetIo::Generate {
             final_output_input_resource,
             ..
@@ -2760,7 +2789,7 @@ impl PresetRuntime {
         // exists across frames; `install_target` swaps in the host's real target
         // via `replace_texture_2d` each render call.
         let placeholder =
-            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
+            RenderTarget::new(&device, 1, 1, format, "preset_runtime_target_owner");
         let slot = backend.pre_bind_texture_2d(final_output_input_resource, placeholder);
         if let PresetIo::Generate {
             final_output_slot, ..
@@ -2773,7 +2802,7 @@ impl PresetRuntime {
         // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
-        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, device, &mut backend)
+        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
             .map_err(generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
@@ -5526,7 +5555,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5544,7 +5573,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5570,7 +5599,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5589,7 +5618,7 @@ mod generator_runtime_tests {
         let mut g = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5652,7 +5681,7 @@ mod generator_runtime_tests {
         let mut g = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5727,7 +5756,7 @@ mod generator_runtime_tests {
             let mut g = PresetRuntime::from_json_str_with_device(
                 json,
                 &PrimitiveRegistry::with_builtin(),
-                &device,
+                device.arc(),
                 w,
                 h,
                 GpuTextureFormat::Rgba16Float,
@@ -6077,6 +6106,108 @@ mod chain_fusion_tests {
             r2.max_abs,
             r2.over_count,
             r2.total
+        );
+    }
+
+    /// BUG-111: an in-place inner-param edit (value/position edit — bumps
+    /// `graph_version` only, no rebuild) on a card that is a member of a
+    /// fused multi-card SEGMENT must still reach the live kernel. The
+    /// segment's `node_map`/`fused_retarget` are keyed with the `c{i}.`
+    /// per-card prefix (`freeze::segment::card_prefix`), built from the
+    /// concatenated segment def, while the per-frame override path reads
+    /// each card's own UNPREFIXED `fx.graph`. Without translating through
+    /// that prefix (`EffectSlot::card_prefix` →
+    /// `BoundGraph::apply_inner_overrides_prefixed`) the override misses
+    /// every node in the map and silently no-ops — the old value keeps
+    /// rendering until an unrelated rebuild. Segment sibling of
+    /// `bound_graph::inner_override_routes_fused_away_node_through_retarget`.
+    #[test]
+    fn fused_segment_inner_override_reaches_live_kernel() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        // Two adjacent ColorGrades — same fusable two-card segment shape as
+        // `fused_segment_build_matches_per_card_build_and_stays_param_driven`.
+        let mut e1 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e1, "amount", 1.0);
+        let mut e2 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e2, "amount", 1.0);
+        let effects = vec![e1, e2];
+
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [(view1.canonical_def, view1), (view2.canonical_def, view2)];
+        freeze_install::seed_segment_cache_for_test(&cards, &primitives)
+            .expect("two pointwise ColorGrades fuse across the seam");
+
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("fused-segment chain builds");
+        assert!(!fused.pending_segments);
+        let fused_kernels = fused
+            .graph
+            .nodes()
+            .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
+            .count();
+        assert_eq!(
+            fused_kernels, 1,
+            "both cards must collapse into ONE cross-card kernel — every one \
+             of card 2's inner nodes, including `clamp`, is fused away and \
+             only reachable through the segment's retarget map"
+        );
+
+        run_once(&mut fused, &device, &input, &effects, &pc);
+        let before = snapshot_output(&fused, &device, w, h);
+
+        // Card 2's own (unprefixed) per-instance graph, with `clamp.max`
+        // edited to clip the output hard. `clamp` carries no card-slider
+        // binding (unlike gain/saturation/contrast/…, which ColorGrade DOES
+        // bind — an edit there would just be re-asserted-over by the live
+        // binding on the very next apply, proving nothing about the override
+        // path itself). Bump `graph_version` only, NOT
+        // `graph_structure_version`, so the runtime takes the in-place
+        // override path instead of rebuilding.
+        let mut effects2 = effects.clone();
+        let mut edited = view2.canonical_def.clone();
+        {
+            use manifold_core::effect_graph_def::SerializedParamValue;
+            let clamp = edited
+                .nodes
+                .iter_mut()
+                .find(|n| n.node_id.as_str() == "clamp")
+                .expect("ColorGrade has a `clamp` node");
+            clamp
+                .params
+                .insert("max".to_string(), SerializedParamValue::Float { value: 0.05 });
+        }
+        effects2[1].graph = Some(edited);
+        effects2[1].bump_graph_version();
+        assert_eq!(
+            effects2[1].graph_structure_version, effects[1].graph_structure_version,
+            "sanity: this must be a value-only edit, not a rebuild"
+        );
+
+        run_once(&mut fused, &device, &input, &effects2, &pc);
+        let differ = TextureDiff::new(&device);
+        let moved = differ.compare(
+            &device,
+            &before.texture,
+            fused.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert!(
+            moved.over_count > 0,
+            "an inner-param edit on a fused SEGMENT member must reach the \
+             live kernel (BUG-111) — clamping card 2's output to 0.05 must \
+             visibly darken the frame: max_abs={}, over={}/{}",
+            moved.max_abs,
+            moved.over_count,
+            moved.total
         );
     }
 

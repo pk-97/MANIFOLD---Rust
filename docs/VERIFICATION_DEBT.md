@@ -24,6 +24,17 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-027 — mechbugs wave: BUG-123/038/079 fixes reached L1 (tests green) only, not L2 (observed)
+Landed 2026-07-13 (`docs/landings/2026-07-13-mechbugs-wave.md`). Three fixes in the wave have no
+render/log/toast actually produced and read by a person: BUG-123's `mesh_edges` `active_count`
+guard (a visual-artifact fix — the absence of the bright dot has not been confirmed on a real
+scene render), BUG-038's Ableton log throttle (the once-then-debug pattern has not been observed
+in a real console run with Live absent), and BUG-079's missing-preset toast (the toast has not
+been seen firing on a project with a genuinely unresolvable preset ref). All three are unit-tested
+at the value level and reachable headless or via a short manual run — none needs the live rig.
+**Burn down:** the wave's own click-script (in the landing report) is exactly this — three short
+manual checks, ≤2 minutes total.
+
 ### VD-026 — AUDIO_SETUP_DOCK P7: tap-follow + band dimming has no L3 flow and no live full-pipeline PNG
 Landed 2026-07-11 (`docs/landings/2026-07-11-audio-dock-p7.md`). The phase's own gate asked for an
 L3 ui-flow (expand a trigger drawer on send B while the panel shows send A ⇒ tap command for B;

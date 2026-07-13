@@ -149,19 +149,22 @@ and out applies its own transfer function — and they do not all agree:
 | Display (live show) | true sRGB, at scanout | EDR passthrough (tonemap soft-clip per display peak) |
 | Still export, faithful | true piecewise sRGB (`linear_f16_rgba_to_srgb8`) | hard clip at white |
 | Still export, rolloff | true sRGB after tanh shoulder above 0.8 | compressed into SDR white |
-| **SDR video export** | **`pow(1/2.2)` approximation** (encoder copy shader) | hard clip (BGRA8 write) |
+| SDR video export | true piecewise sRGB (`manifold_srgb_encode`, `ColorTransferFunctions.h`, matches `linear_f16_rgba_to_srgb8`) | hard clip (BGRA8 write) |
 | HDR video export | PQ (applied by `pq_encode_for_export`, 200/10000 nits), BT.2020 metadata | carried in PQ |
-| **Video decode (playback)** | **BT.709 matrix + `pow(2.2)` approximation, hardcoded** | n/a (SDR sources) |
+| Video decode (playback) | `manifold_srgb_decode` (matching EOTF) for luma/chroma linearization; YCbCr matrix selected per-frame from `CVImageBuffer` colorimetry attachments (601/709/2020) | n/a (SDR sources) |
 
-Decode and SDR-encode are mutually consistent (2.2 both ways), but both diverge from the
-true sRGB used by stills and the display — same frame, three subtly different tones
-(worst in shadows). Logged as BUG-128; the decoder matrix hardcode as BUG-131.
+**FIXED 2026-07-13 (BUG-128, BUG-131):** decode and SDR-encode now share one true-sRGB
+transfer-function definition with the still exporter (`ColorTransferFunctions.h`) instead
+of each approximating `pow(2.2)`/`pow(1/2.2)` independently, and the decoder reads the
+buffer's actual colorimetry tag instead of hardcoding BT.709. See `docs/BUG_BACKLOG.md`
+for commits and verification detail (BUG-132's nearest-neighbor scaling in the same
+decode shader was also fixed — bilinear 4-tap — same wave).
 
 ## 8. Config surface & validation
 
 `ProjectSettings.output_width/height` (default 1920×1080, clamped ≥1, **no upper bound**),
-`frame_rate` (default 60, clamped ≥1.0, fractional accepted but rounded to integer inside
-the encoder — BUG-129), `export_hdr` (undoable command). Export range:
+`frame_rate` (default 60, clamped ≥1.0, fractional rates now stamped with an exact
+rational CMTime timebase, not rounded — BUG-129 FIXED), `export_hdr` (undoable command). Export range:
 `Timeline::export_in/out_beat`, plain serde fields, validated only at export start.
 `ExportConfig.start_beat/end_beat` are raw `f32`, not `Beats` (a tolerated edge of the
 newtype invariant; the app side converts through `TempoMap` immediately). Still-export
@@ -206,27 +209,36 @@ quality is hardcoded (JPEG 95).
 
 ## 12. Honest edges (the bug-hunt starts here)
 
-Backlogged with ids:
+Backlogged with ids (BUG-127..133 below are FIXED as of 2026-07-13, `feat/media-export-bugs` —
+full commits/verification in `docs/BUG_BACKLOG.md`; kept here as historical context, not
+open items):
 
-1. **BUG-127 — decode worker silently drops jobs for missing handles; export can hang.**
+1. **BUG-127 — FIXED — decode worker silently drops jobs for missing handles; export can hang.**
    Worker `Prepare`/`Seek`/`DecodeNext` on an absent clip-id sends *no result*; app-side
    `decode_pending` stays true forever; `flush_pending_decodes` (called every export
    frame) blocks on `recv_results_blocking` until it clears. Failed-open file + one seek
-   = wedged export, stalled clip in live playback.
-2. **BUG-128 — SDR export gamma ≠ display/still gamma** (§7).
-3. **BUG-129 — fractional fps silently rounds** to integer CMTime (23.976/29.97 exports
-   get wrong frame timing and drift against the muxed audio).
-4. **BUG-130 — ffmpeg resolved only at finalize**: an audio export renders every frame,
+   = wedged export, stalled clip in live playback. Fixed: missing-handle arms now reply
+   `DecodeResultStatus::Error`, plus a bounded-wait backstop in `flush_pending_decodes`.
+2. **BUG-128 — FIXED — SDR export gamma ≠ display/still gamma** (§7).
+3. **BUG-129 — FIXED — fractional fps silently rounds** to integer CMTime (23.976/29.97 exports
+   got wrong frame timing and drifted against the muxed audio). Fixed: exact rational
+   timebase end-to-end, including the `AVAssetWriter` track `mediaTimeScale`.
+4. **BUG-130 — FIXED — ffmpeg resolved only at finalize**: an audio export renders every frame,
    then fails at the last step if ffmpeg is missing; the `.video_only.mp4` temp is left
-   behind on mux *failure* (only the success path deletes it).
-5. **BUG-131 — decoder hardcodes BT.709 video-range**: BT.601 (SD) and BT.2020 sources
+   behind on mux *failure* (only the success path deletes it). Fixed: ffmpeg resolved
+   before frame 0 when audio is present; mux failure renames (preserves) the temp instead
+   of deleting it.
+5. **BUG-131 — FIXED — decoder hardcodes BT.709 video-range**: BT.601 (SD) and BT.2020 sources
    decode with a wrong matrix; full-range flags unchecked (VideoToolbox likely
-   normalizes to the requested video-range NV12 — unverified).
-6. **BUG-132 — nearest-neighbor scaling in the decode shader**: any source whose
-   resolution ≠ canvas gets unfiltered scaling (blockiness up, shimmer down).
-7. **BUG-133 — `SUPPORTED_EXTENSIONS` overpromises**: `.webm`/`.avi` pass the extension
-   gate but AVFoundation generally can't open them; failure surfaces as a per-clip
-   decode error later instead of at import.
+   normalizes to the requested video-range NV12 — unverified, unchanged). Fixed: matrix
+   now selected per-frame from the buffer's actual colorimetry attachments.
+6. **BUG-132 — FIXED — nearest-neighbor scaling in the decode shader**: any source whose
+   resolution ≠ canvas gets unfiltered scaling (blockiness up, shimmer down). Fixed:
+   manual 4-tap bilinear; pixel-level before/after remains Peter-owed.
+7. **BUG-133 — FIXED — `SUPPORTED_EXTENSIONS` overpromises**: `.webm`/`.avi` pass the extension
+   gate but AVFoundation generally can't open them; failure surfaced as a per-clip
+   decode error later instead of at import. Fixed: the probe-failure path now rejects the
+   import with a visible codec-not-supported message via the existing import-error dialog.
 8. No cancel-export UI (self-documented dead `CancelExport` variant) — a multi-minute
    render is uninterruptible; UX gap, release-relevant.
 9. Loop restart seeks to file time 0.0, not the clip in-point (§5) — masked if engine

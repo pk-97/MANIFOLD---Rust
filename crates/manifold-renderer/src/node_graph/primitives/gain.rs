@@ -191,7 +191,7 @@ mod gpu_tests {
             "gain-src-clear",
         );
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
         let out_slot = backend.pre_bind_texture_2d(r_out, out_target);
 
@@ -290,7 +290,7 @@ mod gpu_tests {
             "gain-wired-src-clear",
         );
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
         let out_slot = backend.pre_bind_texture_2d(r_out, out_target);
 

@@ -51,19 +51,12 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-145 | **bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs** | `bokeh_gather.rs`'s `#[cfg(test)]` module declares `BOKEH_N`/`BOKEH_GOLDEN_ANGLE`/`bokeh_hash_angle`/`Plane4` (+ its `texel`/`sample` methods)/`bokeh_gather_texel` — the CPU-reference parity harness — but they're only consumed by the inner `#[cfg(all(test, feature = "gpu-proofs"))]` submodule, so a plain `cargo test`/`cargo nextest` (no `gpu-proofs`) compiles the outer `#[cfg(test)]` module without ever using them and rustc emits `dead_code` warnings. Cosmetic (the standard scoped `clippy -p manifold-renderer -- -D warnings` gate, no `--tests`, doesn't compile test code at all and stays clean) — found via IDE diagnostics while gating an unrelated P6 (`bilateral_blur`) session, not caused by that diff (`bokeh_gather.rs` untouched, `git log` shows its last change is P4's original commit `d85c6dc0`). Fix shape: nest the outer items under the same `#[cfg(feature = "gpu-proofs")]` gate as the submodule that uses them, or move them inside it directly. LOW (lint-only, no correctness impact — same family as BUG-126). |
-| BUG-144 | **prewarm-pipeline-cache-tests-flake-under-full-suite-run** | `gltf_texture_source`'s and `render_scene`'s "cache goes from empty to populated" gpu_tests both fail with a zero before/after delta when run as part of the full `--features gpu-proofs --lib` sweep (some earlier test in the same process already warms the shared pipeline cache), but pass cleanly in isolation. `--test-threads=1` rules out a race — it's cross-test cache pollution from ordering, not concurrency. Not caused by, or related to, `node.bilateral_blur` (found while running that phase's own gpu-proofs sweep). LOW (test-isolation only). |
-| BUG-143 | **macros-panel-ableton-trim-drag-outside-p7-inventory** | `MacrosPanel`'s Ableton-range trim-bar drag (`dragging_ableton_trim: i32` sentinel + `dragging_ableton_trim_is_min: bool`) is a hand-rolled drag machine — the pre-P7.1 `ParamDragState` shape — found during P7.6's closing `rg 'dragging'` inventory. Not `SliderDragState`-backed, not `DragController`-backed, not in D12's out-list; P7's original audit missed it (it's a distinct gesture from `MacrosPanel`'s per-macro value sliders, which ARE already migrated). Deliberately left unfolded — P7.6's scope is viewport/audio-setup/dock only, "don't invent additional scope" per its own brief. LOW (works correctly today; this is drag-lifecycle-unification debt, not a behavior bug). |
+| BUG-144 | **gpu-proofs-prewarm-tests-order-dependent-under-full-suite** | `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` and `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` (both added by BUG-037's fix) fail under `cargo test -p manifold-renderer --features gpu-proofs --lib` (the full in-crate GPU suite) with `before=N after=N` — some earlier test in the same process already warmed the shared pipeline cache, so the assertion "prewarm adds an entry" finds nothing left to add. Both pass standalone and when run together in isolation (`cargo test ... prewarm`). Order-dependent test-hygiene gap, not a functional regression — confirmed twice (BUG-111 and BUG-054 landings, same two tests, same shape) and a third time independently by CINEMATIC_POST P6/P5 (`bilateral_blur`/`ssao_gtao`, same two tests, reproduced on the unmodified pre-lane tip). LOW (gate-only). |
+| ~~BUG-143~~ FIXED | **macros-panel-ableton-trim-drag-outside-p7-inventory** | FIXED @ `d5ab1ae7` (UI_WIDGET_UNIFICATION P8) — folded onto `DragController<AbletonTrimDrag>`. |
 | BUG-142 | **fire-meter-capture-bench-flakes-under-parallel-load** | `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard µs/tick ceiling on fire-meter capture cost; failed once under `cargo nextest run --workspace` right after a merge-then-rerun (254.54 µs/tick), passed in isolation and on a clean full-workspace rerun immediately after (3192/3192). Same class as BUG-113 (`ParamManifest::get`'s bench) — a wall-clock ceiling assertion inside the default nextest sweep, contention-sensitive by construction. LOW (flaky-gate, not functional). |
 | BUG-141 | **import-graph-fused-region-linearize-depth-parse-fail** | glb import card logs `[freeze] fused region 0 failed to parse: no definition in scope for identifier: linearize_depth` and silently renders unfused — fusion win lost on heavy scene cards. Suspect: codegen doesn't prepend the shared `depth.wgsl` helper header for inlined bodies that call `linearize_depth` (ssao_from_depth / coc_from_depth). Output correct, perf-only. LOW-MED. |
 | BUG-136 | **cinematic-post-motion-blur-no-visible-effect-despite-correct-wiring** | Peter (`SceneLadders.manifold`, glb auto-import wiring): orbiting the camera with `lens.shutter_angle=181` and `motion_blur.max_blur_px=128` shows no visible blur. Statically verified correct — not yet observed at runtime: the graph wiring is right (`camera` → `lens` → `render`, `lens.out` also feeds `motion_blur.camera`, `render.velocity` → `motion_blur.velocity`, `motion_blur` sits last before `final`, confirmed via `project.json`/`wires`), and `render_scene.rs`'s `prev_view_proj` frame-to-frame diff (the velocity source) only resets on a structural rebuild (`rebuild()`, object/light count change), not on an ordinary param edit like dragging Orbit — so camera-orbit motion should register. Root cause UNKNOWN pending runtime observation. Suspects: (a) the UI param-edit path may not be live-propagating slider drags into the running content-thread graph in real time (the codebase's known `ui-state-sync-path` bug class); (b) `node.motion_blur`'s fused-vs-standalone codegen routing may be silently mis-selecting a stale/pass-through kernel, same failure family as BUG-135's fused `wgsl_includes` gap; (c) the render loop may not be ticking continuously while scrubbing outside playback, collapsing `prev`/`current` camera state to the same value per redraw. Fix shape: reproduce live, add temporary `println!`s in `render_scene.rs`'s velocity computation and `motion_blur`'s `evaluate()`/derived-uniform recompute to confirm both are seeing nonzero values at runtime, then narrow. MED-HIGH — a shipped P3 feature with no observable effect. |
 | BUG-134 | **bug-status-py-tail-boundary-hides-entries-past-the-appendix** | `bug_status.py`'s `parse()` stops entry-scanning at the first `## ` heading past `## Fixed` (the "Checked and safe" appendix) and copies the rest of the file verbatim — any `### BUG-NNN` entry appended after that point (BUG-094/095/096/097/103/126, this session) is invisible to `--check`. Concretely hid a real duplicate `BUG-097` id (one FIXED, one OPEN) and a `derive_status()` false positive (`\bFIXED\b` matches inside "found not fixed" — BUG-126). Fix shape: continue the entry scan across every appendix heading, or make an entry-outside-Open/Fixed a hard check failure; separately tighten the FIXED regex to exclude a preceding not/never. LOW (tooling only). |
-| BUG-133 | **video-extension-list-overpromises-webm-avi** | `metadata::SUPPORTED_EXTENSIONS` includes `.webm`/`.avi` but the decoder is AVFoundation, which generally can't open them — import accepts the file, failure surfaces later as a per-clip decode error instead of at the import gate. Fix shape: trim the list to what AVFoundation decodes, or probe at import and reject with a message. LOW. |
-| BUG-132 | **video-decode-nearest-neighbor-scaling** | The NV12→RGBA convert shader samples with `read()` at a truncated coordinate — nearest-neighbor — while also doing the aspect-fit scale, so any source whose resolution ≠ canvas is scaled unfiltered (blocky upscale, shimmering downscale). Fix shape: bilinear tap in the shader (sample Y/CbCr with a linear sampler or manual 4-tap). LOW-MED visual. |
-| BUG-131 | **video-decode-hardcodes-bt709-video-range** | `MetalVideoDecoderPlugin.m`'s convert shader applies the BT.709 matrix + video-range expansion + `pow(2.2)` unconditionally — BT.601 (SD) and BT.2020 sources decode with a wrong matrix (visible hue shift); the pixel buffer's actual colorimetry attachments are never read. Fix shape: read `CVImageBuffer` color attachments and select the matrix (function constants or a small matrix uniform). LOW-MED. |
-| BUG-130 | **export-audio-mux-fails-late-and-leaks-temp** | `run_export` resolves ffmpeg only at finalize — an audio export encodes every frame, then fails at the very last step when ffmpeg is missing; and `ExportSession::finalize` deletes the `.video_only.mp4` temp only on mux *success* (mux failure leaves it behind). Fix shape: resolve ffmpeg before frame 0 and fail fast; delete (or explicitly keep-and-report) the temp on the mux-error path. MED for the release flow. |
-| BUG-129 | **export-fractional-fps-silently-rounds** | `MetalEncoderState.fpsNum = (int)(fps + 0.5)` and `CMTimeMake(frameIndex, fpsNum)` — a 23.976/29.97 project exports with integer-fps frame timing, so duration is wrong and the muxed audio drifts (~0.1%/1.5s per minute at 29.97→30). Fix shape: rational CMTime (e.g. 24000/1001) or reject non-integer fps at config time. LOW-MED. |
-| BUG-128 | **sdr-video-export-gamma-diverges-from-display-and-stills** | The SDR export copy shader bakes `pow(1/2.2)` while the display scanout and the still exporter apply the true piecewise sRGB OETF — the same frame renders with three subtly different tones (worst in shadows); video round-trips are self-consistent (decode applies `pow(2.2)`) but all video diverges from the show. Fix shape: true sRGB OETF in the encoder shader (and matching EOTF in the decoder shader), one shared definition. MED — visual fidelity of the primary release deliverable. |
-| BUG-127 | **decode-worker-silent-drop-wedges-export-flush** | A decode worker receiving `Prepare`/`Seek`/`DecodeNext` for a clip-id with no handle (e.g. its `Open` failed) sends NO result back; the renderer's `decode_pending` stays true forever, and `flush_pending_decodes` — called every export frame (`content_export.rs:458`) — blocks in `recv_results_blocking` until it clears. A missing/corrupt video file plus one seek = wedged export loop on the content thread; in live playback the clip just stalls black. Fix shape: workers always answer (send `Error("no handle")` on the missing-handle arms) + optionally a flush timeout. MED-HIGH — it can hang an export mid-render. |
 | BUG-125 | **preset-runtime-generator-picks-first-final-output-nondeterministically** | A generator JSON with two `system.final_output` nodes has `PresetRuntime::from_def`'s tracked output picked via `graph.nodes().find(...)` over an unordered `AHashMap` — nondeterministic per process, and `render()`'s `replace_texture_2d` can silently overwrite whichever one loses with the canvas's format, up to a real GPU command-buffer fault. No shipped preset does this today. Fix shape: reject >1 `system.final_output` at load, or design a keyed multi-output surface. LOW today, real trap. |
 | BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | ~~BUG-123~~ FIXED | **mesh-edges-capacity-vs-active-count** | FIXED @ `1b854d45` — optional `active_count` scalar input mirroring `node.range` overrides the buffer-capacity-derived vertex count. |
@@ -105,13 +98,13 @@ or human can read it, and it needs no external tool.
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | PARTIAL @ `dea66221`/`7fdf25d0` — `render_scene`/`gltf_texture_source` PSO compiles now prewarmed at startup; live trace shows a real ~37% frame-0 reduction but a large preset (BlossomField) still doesn't clear the 20ms bar. Remaining cost is elsewhere (scatter_on_mesh, mesh upload, shadow pass) — see full entry. (MED) |
 | ~~BUG-038~~ FIXED | **ableton-log-spam** | FIXED @ `06bfd879` — throttled: warn once, then debug until reconnect, which logs once at info. |
-| BUG-111 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
+| ~~BUG-111~~ FIXED | **fused-segment-inner-override-noop** | FIXED @ `d73b3e36` — `EffectSlot::card_prefix` translates both the `node_map` and `fused_retarget` lookups into the segment's `c{i}.`-prefixed namespace. |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | ~~BUG-060~~ FIXED | **inspector-footer-overpaint** | FIXED @ `39836352` (landed `cc4eeb37`, rig-verified by Peter 2026-07-10, re-confirmed solved by Peter 2026-07-12; class-killed — clip bound per command at enqueue). History: REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
-| BUG-054 | **renderer-device-ptr-dangles** | renderers cache `*const GpuDevice` only `ContentThread::run()` repoints — any other consumer segfaults (MED, latent) |
+| ~~BUG-054~~ FIXED | **renderer-device-ptr-dangles** | FIXED @ `d447ec8d` — `Arc<GpuDevice>` replaces the cached raw pointer end-to-end (`GeneratorRenderer`/`VideoRenderer`/`ImageRenderer`/`MetalBackend`); `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted as structurally unneeded. `rg '\*const GpuDevice' crates/` — zero code hits. |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -145,15 +138,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Not caused by this session's diff:** `bokeh_gather.rs` is untouched by the `bilateral_blur` commit; `git log` shows its last change is P4's original `d85c6dc0`.
 **Fix shape:** move the outer helpers under the same `#[cfg(feature = "gpu-proofs")]` gate as the submodule that uses them (or nest them directly inside it). Mechanical, no behavior change.
 
-### BUG-144 (prewarm-pipeline-cache-tests-flake-under-full-suite-run) — two "cache goes from empty to populated" gpu_tests fail when the whole `--features gpu-proofs --lib` suite runs in one process, pass in isolation — LOW (test-isolation only, no product bug)
-**Status:** OPEN — found 2026-07-13 during CINEMATIC_POST P6 (`node.bilateral_blur`), running the full crate's gpu-proofs `--lib` sweep as this phase's "when unsure, run the feature build too" check.
-
-**Symptom** — `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` and `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` both fail with "must add a cache entry: before=N after=N" (cache already warm going in) ONLY when run as part of the full `cargo test -p manifold-renderer --features gpu-proofs --lib -- --test-threads=1` sweep; both pass cleanly run individually (`cargo test ... prewarm_pipeline_populates_the_shared_compute_cache` → ok, `... prewarm_pipelines_populates_the_shared_render_cache` → ok). Not caused by, or related to, `node.bilateral_blur` — bilateral_blur touches no shared pipeline cache.
-
-**Root cause** — unknown, suspect: both tests assert a *shared* (process-global, presumably `OnceLock`/`static`-keyed) pipeline cache is empty-then-one-bigger across their own prewarm call, but some earlier test in the same process already warms the same cache entries (same `test_device()` singleton the whole crate's gpu_tests share), so by the time these two run the entry already exists and the "before≠after" delta is 0. `--test-threads=1` rules out a race; it's ordering/pollution from a prior test in the same binary, not concurrency.
-
-**Fix shape** — either isolate the assertion to a cache key neither test has warmed yet (a synthetic/unique spec instead of a real primitive's), or make the two tests reset/scope their own slice of the cache before asserting, or move them to a separate test binary/process. Not investigated further — out of scope for P6 (touches shared pipeline-cache infra, not the bilateral_blur primitive), and the two GPU-proofs invocations this phase's own gate calls for (`bilateral_blur` module-scoped, and the crate `--lib` sweep) both otherwise passed clean (1502/1504 in the full run).
-
 ### BUG-141 (import-graph-fused-region-linearize-depth-parse-fail) — glb import's fused region fails WGSL parse (`no definition in scope for identifier: linearize_depth`), card silently renders unfused — LOW-MED (perf, not visual)
 **Status:** OPEN — found 2026-07-12 in Peter's run log during the BUG-140 session (`[freeze] fused region 0 failed to parse, card renders unfused`), not investigated.
 
@@ -162,15 +146,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause** — unknown. Suspect: a fused region includes a node whose `wgsl_body` calls the shared `linearize_depth` helper (`depth.wgsl`, GBUFFER D4 — likely `node.ssao_gtao` (replaces the retired `node.ssao_from_depth`, CINEMATIC_POST D9, 2026-07-13) or `coc_from_depth`) but the codegen assembler doesn't prepend that shared helper header into the fused module, so the identifier is unresolved at naga parse time.
 
 **Fix shape** — make the freeze codegen emit required shared WGSL helper headers for the nodes it inlines (dependency-tag on the primitive spec, or scan bodies for known helper names); add a freeze proof for a region containing a depth-linearizing atom. Verify against the glb import card and CinematicScene (DoF's CoC path likely shares the helper).
-
-### BUG-143 (macros-panel-ableton-trim-drag-outside-p7-inventory) — `MacrosPanel`'s Ableton-range trim-bar drag is a hand-rolled sentinel machine, outside every P7 fold — LOW
-**Status:** OPEN — found not fixed 2026-07-13 (UI_WIDGET_UNIFICATION P7.6 closing inventory), deliberately left unfolded (out of P7.6's named scope).
-
-**Symptom** — none. The gesture (dragging a macro's Ableton min/max range trim bars, `handle_press`/`handle_drag`/`handle_release` in `panels/macros_panel.rs`) works correctly today. This is a drag-lifecycle-unification gap, not a behavior bug.
-
-**Root cause** — `dragging_ableton_trim: i32` (−1 = idle sentinel) + `dragging_ableton_trim_is_min: bool` (`macros_panel.rs:70-71`) is exactly the pre-P7.1 `ParamDragState` shape — a discriminant-by-sentinel plus a parallel bool, the disease D8 exists to kill. It is distinct from `MacrosPanel`'s own per-macro VALUE sliders (`self.sliders: Vec<BitmapSlider>`, already `SliderDragState`/`DragController`-backed — see `is_dragging()` at `macros_panel.rs:159`), so P7's original design-pass audit (which inventoried `InteractionOverlay`, the canvas, viewport, audio-setup, and dock) never surfaced it: nothing in that audit's search terms (`ViewportDragMode`, `dragging_band`/`calibration_drag`, the divider-edge triad) would have matched a field named `dragging_ableton_trim`. Found only by P7.6's own closing `rg -n 'dragging' crates/manifold-ui/src/panels/*.rs crates/manifold-ui/src/*.rs` inventory — the phase named specifically to catch exactly this kind of miss.
-
-**Fix shape** — same pattern as every other P7 fold: `enum AbletonTrimDrag { Min(usize), Max(usize) }` (or a struct carrying `index: usize, is_min: bool`), `DragController<AbletonTrimDrag>` replacing the two fields, `handle_press`/`handle_drag`/`handle_release` updated to `start`/`payload`/`release`. Small (~60 line) change once scheduled. Trigger: Peter schedules a P7.7 (or folds it into a future "sweep the rest" pass) — same trigger shape as D12's other named-out items.
 
 ### BUG-134 (bug-status-py-tail-boundary-hides-entries-past-the-appendix) — `bug_status.py`'s parser silently excludes any `### BUG-NNN` entry written after the first appendix section, hiding a real duplicate ID and a status-derivation false positive — LOW (tooling, not runtime)
 **Status:** OPEN — found 2026-07-12 during the docs(backlog) archive-split session (`docs-git-sync` worktree), auditing every `### BUG-NNN` heading in the file against what `bug_status.py --check` actually validates.
@@ -183,61 +158,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape** — two independent, small fixes: (a) extend `parse()`'s entry-scan to continue past every `## ` heading in the appendix region instead of stopping at the first one (or: require all `### BUG-NNN` entries to live within the Open/Fixed span as a `--check` invariant, and fail loudly if one is found in the tail); (b) tighten `FIXED`'s regex to exclude a preceding "not"/"never" within a few words (e.g. negative lookbehind or an explicit `NOT\s+FIXED` exclusion checked first). Neither touched this session — logged per the archive-split's own audit, out of scope for a doc-reorg change.
 
-### BUG-127 (decode-worker-silent-drop-wedges-export-flush) — missing-handle decode jobs get no reply, `decode_pending` never clears, export flush blocks forever — MED-HIGH
-**Status:** OPEN — found 2026-07-12 during the MEDIA_EXPORT_MAP.md mapping pass (full read of `manifold-media`). See that map §12 for the pipeline context of BUG-127..133.
-
-**Symptom** — `decode_scheduler.rs` worker arms for `Prepare`/`Seek`/`DecodeNext` are `if let Some(handle) = active.get_mut(&clip_id) { ... }` with no else — a job for a clip the worker doesn't hold (its `Open` failed on a missing/corrupt file, since `start_clip` inserts the `ActiveVideoClip` eagerly and submits `Open`+`Prepare` back-to-back) is dropped with no result sent. App-side `decode_pending` (set true at submit) then never clears. `VideoRenderer::flush_pending_decodes` loops on `recv_results_blocking()` until no clip is pending — and `ContentThread::export_one_frame` calls it every export frame (`content_export.rs:458`). Failed-open clip + one `Seek` (a scrub, a loop restart, export warmup) = the export loop wedges on the content thread with no way out (there is also no cancel-export UI). In live playback the same state just leaves the clip permanently black (no flush, so no hang).
-
-**Root cause (known)** — the worker protocol has no "job refused" reply; the `decode_pending` invariant assumes every submitted job produces exactly one result.
-
-**Fix shape** — make the missing-handle arms send `DecodeResultStatus::Error("no handle for <job>")` so the pending flag always resolves; consider a bounded wait in `flush_pending_decodes` as a second fence. Small, contained in `decode_scheduler.rs`.
-
-### BUG-128 (sdr-video-export-gamma-diverges-from-display-and-stills) — export bakes `pow(1/2.2)`, display/stills use true sRGB — MED (release deliverable fidelity)
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass. Full transfer-function table: MEDIA_EXPORT_MAP.md §7.
-
-**Symptom** — the SDR encoder copy shader (`MetalEncoderPlugin.m`, `kCopyShaderSDR`) applies a plain 2.2 power curve to the linear compositor output; the live display applies the true piecewise sRGB function at scanout, and `still_exporter::linear_f16_rgba_to_srgb8` applies the true function too. The same frame therefore has three subtly different tones — video export darkest in the shadows (2.2 vs sRGB diverge most below ~0.04 linear). The decoder's inverse (`pow(2.2)` in `MetalVideoDecoderPlugin.m`) makes video→export→import self-consistent, but everything video diverges from what Peter sees on stage and in stills.
-
-**Root cause (known)** — approximate gamma chosen in both native shaders; stills got the correct function later (still_exporter is documented and tested against sRGB) and the video shaders were never aligned.
-
-**Fix shape** — one shared sRGB OETF/EOTF definition used by both native shaders (piecewise, matching `still_exporter.rs`); EDR handling stays hard-clip unless the still exporter's rolloff is wanted for parity. Behavior change is subtle-but-visible: worth one before/after export Peter can eyeball.
-
-### BUG-129 (export-fractional-fps-silently-rounds) — integer CMTime timebase mistimes 23.976/29.97 exports — LOW-MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `MetalEncoder_CreateInternal` stores `fpsNum = (int)(fps + 0.5)` and stamps frames `CMTimeMake(frameIndex, fpsNum)`. `ProjectSettings::frame_rate` accepts any f32 ≥ 1.0, so a 29.97 project exports at a 30 fps timebase: frame count is computed from the true fps (`ExportSession`), but presentation times use the rounded one — duration shrinks ~0.1% and the ffmpeg-muxed audio (correct wall-clock) drifts ~60 ms/min against picture.
-
-**Fix shape** — rational timebase (`CMTimeMake(frameIndex * 1001, 30000)`-style, derived from the f32), or clamp/validate `frame_rate` to integers at the settings layer and say so in the UI. Decide which; don't leave the silent mismatch.
-
-### BUG-130 (export-audio-mux-fails-late-and-leaks-temp) — ffmpeg resolved only at finalize; temp video left behind on mux failure — MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `run_export` calls `AudioMuxer::resolve_ffmpeg` only in the finalize block, after every frame has been encoded: a machine without ffmpeg renders a full multi-minute export and then fails at the last step. Separately, `ExportSession::finalize` deletes the `<output>.video_only.mp4` intermediate only after a *successful* mux — on `MuxError` the temp stays on disk next to the (absent) final file.
-
-**Root cause (known)** — fail-fast check missing at export start; cleanup only on the happy path.
-
-**Fix shape** — resolve ffmpeg before frame 0 when `config.has_audio()` and abort with a clear error; on mux failure either delete the temp or (better for a failed long render) rename it to the output path with a "video-only, mux failed: <reason>" report so the render isn't lost. The second half is a product call — flag to Peter.
-
-### BUG-131 (video-decode-hardcodes-bt709-video-range) — one YCbCr matrix for every source — LOW-MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — the NV12→RGBA shader in `MetalVideoDecoderPlugin.m` applies BT.709 video-range constants unconditionally. BT.601-tagged SD sources (old footage, some phone/web encodes) and BT.2020 sources get a visible hue/saturation shift (601-vs-709 green/magenta skew). The CVPixelBuffer's colorimetry attachments (`kCVImageBufferYCbCrMatrixKey` etc.) are never read. Unverified secondary: full-range sources — the reader requests video-range NV12, so VideoToolbox probably normalizes; confirm with a full-range fixture before trusting it.
-
-**Fix shape** — read the attachments on the decoded buffer and pick 601/709/2020 constants (function-constant variants or a matrix uniform). A 601-tagged fixture clip is the proof.
-
-### BUG-132 (video-decode-nearest-neighbor-scaling) — unfiltered scale in the convert shader — LOW-MED visual
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — the convert shader does the FitInside scale with `texture.read()` at a truncated source coordinate: nearest-neighbor. Any resolution mismatch between source and canvas (1080p file on a 4K canvas, 4K file on a 1080p canvas) gets blocky upscaling or shimmering downscaling — on the live rig's portrait towers most video content is resolution-mismatched, so this is the common case, not the edge.
-
-**Fix shape** — bilinear: sample Y and CbCr planes with a linear sampler (or manual 4-tap around the fractional coordinate). One shader change; eyeball a mismatched-resolution clip before/after.
-
-### BUG-133 (video-extension-list-overpromises-webm-avi) — import gate accepts what the decoder can't open — LOW
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `metadata::SUPPORTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".avi"]`, but decode is AVFoundation, which has no VP8/VP9 and patchy AVI support: the import gate accepts the file, then `VideoDecoder_Open`/probe fails per-clip later, surfacing as a mystery-black clip instead of an import-time rejection.
-
-**Fix shape** — either trim the list to `.mp4`/`.mov` (honest), or keep the broader list and make `import_video_clip`'s existing probe failure reject the import with a "codec not supported" message (better). One-file change either way.
-
 ### BUG-142 (fire-meter-capture-bench-flakes-under-parallel-load) — a hard µs/tick ceiling on fire-meter capture cost fails under contention, same class as BUG-113 — LOW (flaky-gate)
 **Status:** OPEN — found 2026-07-13 landing the `mechbugs` wave (BUG-123/037/038/079/076), rerunning `cargo nextest run --workspace` immediately after a fetch+merge of `origin/main`.
 
@@ -246,6 +166,15 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause (known, by analogy)** — same shape as BUG-113: a wall-clock micro-benchmark with a hard ceiling, run inside the normal correctness sweep, sensitive to CPU contention from nextest's parallel thread pool and whatever else the machine was doing (this session had just finished a `cargo clippy --workspace` compile moments before). `crates/manifold-core/src/audio_trigger.rs` was not touched by this session's changes.
 
 **Fix shape** — same remedy BUG-113 names: give the ceiling real margin under parallel/loaded conditions, retry once before asserting, or move wall-clock ceiling assertions out of the default nextest sweep entirely (a dedicated feature/bin, same convention as `gpu-proofs`). Worth fixing both BUG-113 and this one together since they're the same underlying gate-design gap, not two unrelated bugs.
+
+### BUG-144 (gpu-proofs-prewarm-tests-order-dependent-under-full-suite) — two BUG-037 prewarm tests fail under the full in-crate GPU suite but pass standalone — LOW (gate-only)
+**Status:** OPEN — found 2026-07-13 landing the `mechbugs` wave, gating both the BUG-111 and BUG-054 fixes.
+
+**Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib` fails two tests added by BUG-037's prewarm fix: `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` (`before=368 after=368`) and `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` (`before=17 after=17`) — the assertion "prewarm adds a cache entry" finds nothing left to add. Both pass cleanly when run standalone or together in isolation (`cargo test -p manifold-renderer --features gpu-proofs --lib prewarm`). Reproduced identically three times, independently, landing three unrelated fixes in the same session (BUG-111, BUG-054) and again by CINEMATIC_POST P6/P5 (`bilateral_blur`/`ssao_gtao`, reproduced on the unmodified pre-lane tip) — not a fluke.
+
+**Root cause (known)** — the two tests assert against a process-wide shared pipeline cache (the same cache `GeneratorRegistry::prewarm_all` populates at real startup). Under the full in-crate test binary, some earlier test in the same process already exercises the code path that populates this cache before these two run, so by the time they check "before vs after" the entry is already there — an order-dependency the tests don't guard against (no reset of the shared cache between tests, no isolation of the specific pipeline key they check).
+
+**Fix shape** — either reset/isolate the specific cache entry the test checks (a fresh, uniquely-keyed pipeline variant that no other test could plausibly warm first), or check for "entry exists after" instead of "count increased by exactly one" (a weaker but order-independent assertion), or move these two under `--test-threads=1`-adjacent isolation the way `test_device()` already serializes GPU access. Small, contained to these two tests.
 
 ### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
 **Status:** OPEN — found 2026-07-12 during REALTIME_3D_DESIGN §11 (P9 PCSS) landing, while scoping clippy for that phase.
@@ -392,30 +321,6 @@ can't express variable arity.
 coincident inputs as `0u` use flags per FREEZE_COMPILER_MAP §4 region gates), body selects/sums
 over the wired flags. If the spike shows dynamic ports can't square with the static spec, growing
 dynamic-arity codegen support becomes a design decision for Peter — flag it, don't improvise.
-
-### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
-**Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
-
-**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
-from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
-(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
-preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
-So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
-map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
-segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
-too), and even a prefixed retarget wouldn't cover the surviving-node miss.
-
-**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
-never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
-class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
-fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
-
-**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
-prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
-translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
-apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
-fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
-but over a 2-card segment would pin it.
 
 ### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
@@ -755,27 +660,6 @@ requiring many small real-time-gated ticks; or (b) expose a
 `skip_to_settled()`/`finish_all()` on `ParamCardPanel` the driver calls
 unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
 gap for every future script that arms something mid-flow, not just this one.
-
-### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
-**Status:** OPEN
-
-**Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
-drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
-`ImageRenderer` cache a raw device pointer set at construction
-(`generator_renderer.rs:126,180`); it dangles as soon as the owning `ContentPipeline` moves.
-The running app is safe only because `ContentThread::run()` repoints every renderer once,
-after all moves are complete (`content_thread.rs:300-328`) — a load-bearing, undocumented
-ordering invariant. Any new consumer (headless export/journey harness, future preview
-contexts, tests) that constructs a `ContentThread` and calls methods without replicating that
-exact repoint gets an ObjC nil-receiver panic or a straight segfault, as the P3 build did
-twice before finding the correct point. **Workaround shipped:** `journey_proof.rs`
-`rebind_gpu_device_pointers` runs after the struct reaches its final binding — correct but a
-second copy of the invariant. **Fix shape (root):** remove the self-referential raw pointer —
-either pass `&GpuDevice` per render call (renderers already receive per-call context), or
-hold the device behind a stable heap indirection owned above the pipeline so moves can't
-invalidate it. Blast radius: renderer call signatures; no behavior change. Until then, any
-brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
-step.
 
 ### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
 **Status:** OPEN
@@ -1442,6 +1326,115 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-127 (decode-worker-silent-drop-wedges-export-flush) — missing-handle decode jobs get no reply, `decode_pending` never clears, export flush blocks forever — MED-HIGH
+**Status:** FIXED @ `450f01c4` — missing-handle arms now reply `DecodeResultStatus::Error`, plus a bounded-wait backstop in `flush_pending_decodes`. Found 2026-07-12 during the MEDIA_EXPORT_MAP.md mapping pass (full read of `manifold-media`). See that map §12 for the pipeline context of BUG-127..133.
+
+**Symptom** — `decode_scheduler.rs` worker arms for `Prepare`/`Seek`/`DecodeNext` are `if let Some(handle) = active.get_mut(&clip_id) { ... }` with no else — a job for a clip the worker doesn't hold (its `Open` failed on a missing/corrupt file, since `start_clip` inserts the `ActiveVideoClip` eagerly and submits `Open`+`Prepare` back-to-back) is dropped with no result sent. App-side `decode_pending` (set true at submit) then never clears. `VideoRenderer::flush_pending_decodes` loops on `recv_results_blocking()` until no clip is pending — and `ContentThread::export_one_frame` calls it every export frame (`content_export.rs:458`). Failed-open clip + one `Seek` (a scrub, a loop restart, export warmup) = the export loop wedges on the content thread with no way out (there is also no cancel-export UI). In live playback the same state just leaves the clip permanently black (no flush, so no hang).
+
+**Root cause (known)** — the worker protocol has no "job refused" reply; the `decode_pending` invariant assumes every submitted job produces exactly one result.
+
+**Fix shape** — make the missing-handle arms send `DecodeResultStatus::Error("no handle for <job>")` so the pending flag always resolves; consider a bounded wait in `flush_pending_decodes` as a second fence. Small, contained in `decode_scheduler.rs`.
+
+### BUG-128 (sdr-video-export-gamma-diverges-from-display-and-stills) — export bakes `pow(1/2.2)`, display/stills use true sRGB — MED (release deliverable fidelity)
+**Status:** FIXED @ `63937590` (encode side `b692bb9a`) — shared `manifold_srgb_encode`/`manifold_srgb_decode` in `ColorTransferFunctions.h`, ported literally from `still_exporter.rs`'s tested constants, now used by both the SDR export shader and the decoder's linearization. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass. Full transfer-function table: MEDIA_EXPORT_MAP.md §7.
+
+**Symptom** — the SDR encoder copy shader (`MetalEncoderPlugin.m`, `kCopyShaderSDR`) applies a plain 2.2 power curve to the linear compositor output; the live display applies the true piecewise sRGB function at scanout, and `still_exporter::linear_f16_rgba_to_srgb8` applies the true function too. The same frame therefore has three subtly different tones — video export darkest in the shadows (2.2 vs sRGB diverge most below ~0.04 linear). The decoder's inverse (`pow(2.2)` in `MetalVideoDecoderPlugin.m`) makes video→export→import self-consistent, but everything video diverges from what Peter sees on stage and in stills.
+
+**Root cause (known)** — approximate gamma chosen in both native shaders; stills got the correct function later (still_exporter is documented and tested against sRGB) and the video shaders were never aligned.
+
+**Fix shape** — one shared sRGB OETF/EOTF definition used by both native shaders (piecewise, matching `still_exporter.rs`); EDR handling stays hard-clip unless the still exporter's rolloff is wanted for parity. Behavior change is subtle-but-visible: worth one before/after export Peter can eyeball.
+
+### BUG-129 (export-fractional-fps-silently-rounds) — integer CMTime timebase mistimes 23.976/29.97 exports — LOW-MED
+**Status:** FIXED @ `8a814c23` — Option A (Peter's call): exact rational timebase. `fps_to_rational()` maps f32 fps to (num, den), passed across FFI instead of a rounded int; `AVAssetWriter`'s track `mediaTimeScale` also had to be set explicitly (it silently re-rounded to 600 otherwise) — verified end-to-end with a real export + `ffprobe` showing `r_frame_rate=30000/1001`. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `MetalEncoder_CreateInternal` stores `fpsNum = (int)(fps + 0.5)` and stamps frames `CMTimeMake(frameIndex, fpsNum)`. `ProjectSettings::frame_rate` accepts any f32 ≥ 1.0, so a 29.97 project exports at a 30 fps timebase: frame count is computed from the true fps (`ExportSession`), but presentation times use the rounded one — duration shrinks ~0.1% and the ffmpeg-muxed audio (correct wall-clock) drifts ~60 ms/min against picture.
+
+**Fix shape** — rational timebase (`CMTimeMake(frameIndex * 1001, 30000)`-style, derived from the f32), or clamp/validate `frame_rate` to integers at the settings layer and say so in the UI. Decide which; don't leave the silent mismatch.
+
+### BUG-130 (export-audio-mux-fails-late-and-leaks-temp) — ffmpeg resolved only at finalize; temp video left behind on mux failure — MED
+**Status:** FIXED @ `2c829eaf` — `ffmpeg_preflight` runs before frame 0 when audio is present and aborts immediately if ffmpeg is missing; on mux failure the temp video is renamed to `<output>.video-only-audio-mux-failed.mp4` (preserved, not deleted) with the failure reason surfaced. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `run_export` calls `AudioMuxer::resolve_ffmpeg` only in the finalize block, after every frame has been encoded: a machine without ffmpeg renders a full multi-minute export and then fails at the last step. Separately, `ExportSession::finalize` deletes the `<output>.video_only.mp4` intermediate only after a *successful* mux — on `MuxError` the temp stays on disk next to the (absent) final file.
+
+**Root cause (known)** — fail-fast check missing at export start; cleanup only on the happy path.
+
+**Fix shape** — resolve ffmpeg before frame 0 when `config.has_audio()` and abort with a clear error; on mux failure either delete the temp or (better for a failed long render) rename it to the output path with a "video-only, mux failed: <reason>" report so the render isn't lost. The second half is a product call — flag to Peter.
+
+### BUG-131 (video-decode-hardcodes-bt709-video-range) — one YCbCr matrix for every source — LOW-MED
+**Status:** FIXED @ `87427ec0` — reads `kCVImageBufferYCbCrMatrixKey` (via `CVBufferCopyAttachment`) to select 601/709/2020 coefficients per-frame, falling back to the SD/HD height convention when untagged; verified against ffmpeg-generated 601/709/2020-tagged fixtures in-session (instrumented smoke test, then removed as a one-off manual check, not a permanent gate). Full-range-vs-video-range sources remain an unverified secondary, unchanged from the original bug note. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — the NV12→RGBA shader in `MetalVideoDecoderPlugin.m` applies BT.709 video-range constants unconditionally. BT.601-tagged SD sources (old footage, some phone/web encodes) and BT.2020 sources get a visible hue/saturation shift (601-vs-709 green/magenta skew). The CVPixelBuffer's colorimetry attachments (`kCVImageBufferYCbCrMatrixKey` etc.) are never read. Unverified secondary: full-range sources — the reader requests video-range NV12, so VideoToolbox probably normalizes; confirm with a full-range fixture before trusting it.
+
+**Fix shape** — read the attachments on the decoded buffer and pick 601/709/2020 constants (function-constant variants or a matrix uniform). A 601-tagged fixture clip is the proof.
+
+### BUG-132 (video-decode-nearest-neighbor-scaling) — unfiltered scale in the convert shader — LOW-MED visual
+**Status:** FIXED @ `2b3e15e1` — manual 4-tap bilinear blend (`bilinear_read_r`/`bilinear_read_rg`) replaces truncated-coordinate nearest-neighbor sampling on Y and CbCr planes independently. Code-verified (shader compiles, exercised by decoder tests); pixel-level before/after on a resolution-mismatched clip is **Peter-owed** (no GPU readback harness for this path in-crate). Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — the convert shader does the FitInside scale with `texture.read()` at a truncated source coordinate: nearest-neighbor. Any resolution mismatch between source and canvas (1080p file on a 4K canvas, 4K file on a 1080p canvas) gets blocky upscaling or shimmering downscaling — on the live rig's portrait towers most video content is resolution-mismatched, so this is the common case, not the edge.
+
+**Fix shape** — bilinear: sample Y and CbCr planes with a linear sampler (or manual 4-tap around the fractional coordinate). One shader change; eyeball a mismatched-resolution clip before/after.
+
+### BUG-133 (video-extension-list-overpromises-webm-avi) — import gate accepts what the decoder can't open — LOW
+**Status:** FIXED @ `5711f65c` — Peter's call: extension list stays broad; the existing probe-failure path (previously `log::warn!` + silent skip) now routes through the same `alerts::error` dialog used for other import/save/load failures, naming the file and the codec problem. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `metadata::SUPPORTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".avi"]`, but decode is AVFoundation, which has no VP8/VP9 and patchy AVI support: the import gate accepts the file, then `VideoDecoder_Open`/probe fails per-clip later, surfacing as a mystery-black clip instead of an import-time rejection.
+
+**Fix shape** — either trim the list to `.mp4`/`.mov` (honest), or keep the broader list and make `import_video_clip`'s existing probe failure reject the import with a "codec not supported" message (better). One-file change either way.
+
+### BUG-143 (macros-panel-ableton-trim-drag-outside-p7-inventory) — `MacrosPanel`'s Ableton-range trim-bar drag is a hand-rolled sentinel machine, outside every P7 fold — LOW
+**Status:** FIXED @ `d5ab1ae7` (UI_WIDGET_UNIFICATION P8, 2026-07-13) — `dragging_ableton_trim: i32` + `dragging_ableton_trim_is_min: bool` folded onto `DragController<AbletonTrimDrag>` (struct payload); pinning test green before and after; `manifold-ui --lib` 759/759; negative gate (`rg 'dragging_ableton_trim' crates/manifold-ui/src`) zero hits.
+
+**Symptom** — none. The gesture (dragging a macro's Ableton min/max range trim bars, `handle_press`/`handle_drag`/`handle_release` in `panels/macros_panel.rs`) worked correctly before and after. This was a drag-lifecycle-unification gap, not a behavior bug.
+
+**Root cause** — `dragging_ableton_trim: i32` (−1 = idle sentinel) + `dragging_ableton_trim_is_min: bool` (`macros_panel.rs:70-71`) was exactly the pre-P7.1 `ParamDragState` shape — a discriminant-by-sentinel plus a parallel bool, the disease D8 exists to kill. It was distinct from `MacrosPanel`'s own per-macro VALUE sliders (`self.sliders`, already `SliderDragState`/`DragController`-backed), so P7's original design-pass audit never surfaced it. Found only by P7.6's own closing `rg -n 'dragging'` inventory.
+
+**Fix shape (as landed)** — `struct AbletonTrimDrag { index: usize, is_min: bool }` (chosen over an enum: the call sites already carry index and a min/max bool as separate values, so the struct converts one-for-one with no match-arm rewrites), `DragController<AbletonTrimDrag>` replacing the two fields, `handle_press`/`handle_drag`/`handle_release` updated to `start`/`payload`/`release`.
+
+### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
+**Status:** FIXED @ `d73b3e36` — `EffectSlot::card_prefix` (`c{i}.` for a segment member, `""` otherwise) threads through a new `BoundGraph::apply_inner_overrides_prefixed`, translating both the `node_map` lookup (surviving nodes) and the `fused_retarget` lookup (fused-away nodes) into the segment's prefixed namespace; the segment slot's `bound.fused_retarget` is now also populated from `SegmentView::retarget` at build time. New gpu-proofs test `fused_segment_inner_override_reaches_live_kernel` (`preset_runtime.rs`) proves it on a real 2-card fused ColorGrade segment — independently reconfirmed red (`over=0/65536`) on the pre-fix code path and green with the fix restored.
+
+**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
+from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
+(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
+preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
+So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
+map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
+segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
+too), and even a prefixed retarget wouldn't cover the surviving-node miss.
+
+**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
+never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
+class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
+fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
+
+**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
+prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
+translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
+apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
+fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
+but over a 2-card segment would pin it.
+
+### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
+**Status:** FIXED @ `d447ec8d` — `Arc<GpuDevice>` (approved sharing, device is internally synchronized, no `Arc<Mutex<_>>` introduced) replaces the cached raw pointer end-to-end: `ContentPipeline` and the UI-thread `GpuContext` own it from construction; every renderer clones it. Beyond the three renderers named above, `MetalBackend` also cached the same raw pointer and needed the same migration — threaded through `PresetRuntime`'s constructors, `GeneratorRegistry`, preset-thumbnail/graph-tool/freeze-profile/render-generator-preset bins, and the freeze GPU-parity test harness. `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted — the invariant they existed to paper over no longer exists. Negative gate: `rg '\*const GpuDevice' crates/` — zero code hits (one doc-comment mention narrating the fix). Full workspace nextest (3250/3250), full workspace clippy, and the full `gpu-proofs` suite (1488/1490 — the 2 failures are BUG-144, a pre-existing order-dependent flake, confirmed unrelated) all independently reverified by the orchestrator, not just the worker.
+
+**Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
+drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
+`ImageRenderer` cache a raw device pointer set at construction
+(`generator_renderer.rs:126,180`); it dangles as soon as the owning `ContentPipeline` moves.
+The running app is safe only because `ContentThread::run()` repoints every renderer once,
+after all moves are complete (`content_thread.rs:300-328`) — a load-bearing, undocumented
+ordering invariant. Any new consumer (headless export/journey harness, future preview
+contexts, tests) that constructs a `ContentThread` and calls methods without replicating that
+exact repoint gets an ObjC nil-receiver panic or a straight segfault, as the P3 build did
+twice before finding the correct point. **Workaround shipped:** `journey_proof.rs`
+`rebind_gpu_device_pointers` runs after the struct reaches its final binding — correct but a
+second copy of the invariant. **Fix shape (root):** remove the self-referential raw pointer —
+either pass `&GpuDevice` per render call (renderers already receive per-call context), or
+hold the device behind a stable heap indirection owned above the pipeline so moves can't
+invalidate it. Blast radius: renderer call signatures; no behavior change. Until then, any
+brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
+step.
 
 ### BUG-123 (mesh-edges-capacity-vs-active-count) — node.mesh_edges emits edges for the full buffer capacity, not the loaded vertex count — LOW visual artifact, tracked v1 limitation
 **Status:** FIXED @ `1b854d45` — added an optional `active_count` scalar input (port-shadow, mirrors `node.range`'s convention) that overrides the buffer-capacity-derived vertex count when wired; unwired graphs are unaffected. 5 new tests in `edges_from_mesh.rs`.
