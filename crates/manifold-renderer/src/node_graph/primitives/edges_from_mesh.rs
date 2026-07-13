@@ -19,15 +19,16 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: EdgesFromMesh,
     type_id: "node.mesh_edges",
-    purpose: "Emit the per-triangle wireframe edge topology of a flat triangle-list Array<MeshVertex> as Array<EdgePair>: triangle t contributes (3t, 3t+1), (3t+1, 3t+2), (3t+2, 3t). Pure index arithmetic — glTF meshes are unindexed flat triangle lists (gltf_load expands indices), so no vertex data is read and edge count equals vertex count. Pair with node.flatten_3d (same mesh) into node.draw_lines for a true mesh wireframe of any imported or procedural triangle mesh. Interior edges shared by two triangles are emitted twice (flat verts carry no adjacency) — under draw_lines' additive blend shared edges draw ~2x brighter; dedup would need adjacency reconstruction (future work if renders demand it). Edge count tracks the BUFFER capacity, not a runtime active count — size the source's max_capacity to the asset (a zero-filled tail draws degenerate dot edges at vertex 0).",
+    purpose: "Emit the per-triangle wireframe edge topology of a flat triangle-list Array<MeshVertex> as Array<EdgePair>: triangle t contributes (3t, 3t+1), (3t+1, 3t+2), (3t+2, 3t). Pure index arithmetic — glTF meshes are unindexed flat triangle lists (gltf_load expands indices), so no vertex data is read and edge count equals vertex count. Pair with node.flatten_3d (same mesh) into node.draw_lines for a true mesh wireframe of any imported or procedural triangle mesh. Interior edges shared by two triangles are emitted twice (flat verts carry no adjacency) — under draw_lines' additive blend shared edges draw ~2x brighter; dedup would need adjacency reconstruction (future work if renders demand it). `active_count` (input-only) overrides the vertex count used for topology when the source buffer's capacity exceeds the asset's real loaded vertex count — when unwired, edge count tracks the BUFFER capacity, which produces degenerate (0,0)-style dot edges from the zero-filled tail if max_capacity was sized larger than the asset.",
     inputs: {
         vertices: Array(MeshVertex) required,
+        active_count: ScalarF32 optional,
     },
     outputs: {
         edges: Array(EdgePair),
     },
     params: [],
-    composition_notes: "Output capacity = input vertex capacity (one edge per vertex: 3 edges per 3-vertex triangle) at plan time. Runtime fills floor(buffer_verts / 3) * 3 edges and sentinel-pads the tail. Size gltf_mesh_source.max_capacity to the asset's exact vertex count or the zero tail contributes (0,0) dot edges. CPU-write topology, same content-thread pattern as node.grid_edges — draw_lines consumes it same-frame.",
+    composition_notes: "Output capacity = input vertex capacity (one edge per vertex: 3 edges per 3-vertex triangle) at plan time. Runtime fills floor(min(buffer_verts, active_count) / 3) * 3 edges and sentinel-pads the tail. `active_count` (input-only port-shadow, mirrors node.range) lets a source with a larger max_capacity than the loaded asset still emit only real topology — when unwired the count is the buffer's own vertex capacity, so old graphs (fully-sized sources) dispatch identically. CPU-write topology, same content-thread pattern as node.grid_edges — draw_lines consumes it same-frame.",
     examples: [],
     picker: { label: "Mesh Edges", category: Atom },
     summary: "Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges.",
@@ -37,6 +38,18 @@ crate::primitive! {
     extra_fields: {
         scratch: Vec<EdgePair> = Vec::new(),
     },
+}
+
+/// Resolve the vertex count to build topology from: the source buffer's
+/// own capacity, clamped down by an optional `active_count` port-shadow
+/// override (BUG-123). Pure so it can be unit-tested without a real
+/// `GpuBuffer`/Metal device — mirrors `node.range`'s `active_count`
+/// clamp-to-`[0, capacity]` convention.
+fn resolve_vert_count(buffer_vert_count: u32, active_count: Option<f32>) -> u32 {
+    match active_count {
+        Some(n) => (n.round().max(0.0) as u32).min(buffer_vert_count),
+        None => buffer_vert_count,
+    }
 }
 
 impl Primitive for EdgesFromMesh {
@@ -69,7 +82,13 @@ impl Primitive for EdgesFromMesh {
 
         let vert_size = std::mem::size_of::<MeshVertex>() as u64;
         let edge_size = std::mem::size_of::<EdgePair>() as u64;
-        let vert_count = (src.size / vert_size) as u32;
+        let buffer_vert_count = (src.size / vert_size) as u32;
+        // Port-shadow: when `active_count` is wired, it overrides the
+        // buffer-capacity-derived vertex count so a source sized larger
+        // than the loaded asset (max_capacity > real vertex count)
+        // doesn't emit degenerate edges from its zero-filled tail.
+        let active_count_input = ctx.inputs.scalar("active_count").and_then(|v| v.as_scalar());
+        let vert_count = resolve_vert_count(buffer_vert_count, active_count_input);
         let edge_capacity = (edge_dst.size / edge_size) as u32;
         if edge_capacity == 0 {
             return;
@@ -120,15 +139,24 @@ mod tests {
 
     #[test]
     fn declares_mesh_input_and_edge_pair_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
+        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
         assert_eq!(EdgesFromMesh::TYPE_ID, "node.mesh_edges");
-        assert_eq!(EdgesFromMesh::INPUTS.len(), 1);
+        assert_eq!(EdgesFromMesh::INPUTS.len(), 2);
         assert_eq!(EdgesFromMesh::INPUTS[0].name, "vertices");
         assert!(EdgesFromMesh::INPUTS[0].required);
         assert_eq!(
             EdgesFromMesh::INPUTS[0].ty,
             PortType::Array(ArrayType::of_known::<MeshVertex>()),
+        );
+        assert_eq!(EdgesFromMesh::INPUTS[1].name, "active_count");
+        assert!(
+            !EdgesFromMesh::INPUTS[1].required,
+            "active_count must be optional (port-shadow)"
+        );
+        assert_eq!(
+            EdgesFromMesh::INPUTS[1].ty,
+            PortType::Scalar(ScalarType::F32),
         );
 
         assert_eq!(EdgesFromMesh::OUTPUTS.len(), 1);
@@ -164,5 +192,46 @@ mod tests {
         let prim = EdgesFromMesh::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.mesh_edges");
+    }
+
+    // BUG-123: a source buffer sized larger than the asset's real loaded
+    // vertex count (max_capacity > actual vertices) must not let the
+    // zero-filled tail contribute degenerate (0,0)-style edges. Without
+    // `active_count` wired, behavior is unchanged (buffer capacity IS the
+    // count) — old graphs still dispatch bit-identically.
+    #[test]
+    fn active_count_unwired_falls_back_to_buffer_capacity() {
+        assert_eq!(resolve_vert_count(9210, None), 9210);
+        assert_eq!(resolve_vert_count(0, None), 0);
+    }
+
+    #[test]
+    fn active_count_clamps_a_buffer_sized_larger_than_the_real_asset() {
+        // max_capacity was sized for a bigger asset (e.g. reused across a
+        // preset swap) than the currently-loaded mesh's real vertex count.
+        let buffer_capacity = 12_000; // sized for a larger asset
+        let real_asset_verts = 300.0; // the actually-loaded glTF's vertex count
+        assert_eq!(
+            resolve_vert_count(buffer_capacity, Some(real_asset_verts)),
+            300,
+        );
+        // Topology built from this count is a whole number of triangles —
+        // no degenerate zero-vertex edges from the buffer's zero-filled tail.
+        assert_eq!(300 % 3, 0);
+    }
+
+    #[test]
+    fn active_count_cannot_exceed_buffer_capacity() {
+        // A stray/over-large active_count is clamped down, mirroring
+        // node.range's `active_count.min(max_capacity)` convention — it can
+        // shrink the active set but never read past the real buffer.
+        assert_eq!(resolve_vert_count(300, Some(50_000.0)), 300);
+    }
+
+    #[test]
+    fn active_count_rounds_and_floors_at_zero() {
+        assert_eq!(resolve_vert_count(300, Some(150.4)), 150);
+        assert_eq!(resolve_vert_count(300, Some(150.6)), 151);
+        assert_eq!(resolve_vert_count(300, Some(-5.0)), 0);
     }
 }
