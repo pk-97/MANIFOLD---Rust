@@ -14384,7 +14384,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -15773,7 +15773,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "field",

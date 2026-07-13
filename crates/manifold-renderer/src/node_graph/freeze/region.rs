@@ -2759,6 +2759,53 @@ mod tests {
         }
     }
 
+    /// P3 wave 3 (2026-07-14, final conversion wave): `node.rotate_coordinates`
+    /// and `node.sine_wave` also ship in zero bundled presets today (palette/
+    /// vocabulary atoms, not yet wired into a shipped preset), so — same
+    /// documented fallback as `tone_map_fuses_gradient_map_stays_boundary_
+    /// next_to_a_fusable_neighbor` above — this synthetic pair covers each
+    /// instead of a real-preset proof. Both are genuinely scalar-only
+    /// (`angle`; `a, b, c, freq, freq_scale, time, time_scale` — all Float,
+    /// no Color/Vec3/Vec4), so both actually DO join the region next to
+    /// `node.contrast`, unlike the wave-2 Color-param atoms above. `graph_tool
+    /// fusion` confirms the same per-node verdict interactively. The third
+    /// remaining ledger atom, `node.watercolor`, is NOT covered here — it's a
+    /// 7-pass composite with persistent cross-frame feedback state, not a
+    /// single-dispatch atom, so it was left in `CONVERSION_DEBT_LEDGER`
+    /// rather than converted this wave (see the ledger's comment).
+    #[test]
+    fn wave3_scalar_only_atoms_fuse_next_to_a_fusable_neighbor() {
+        let registry = registry();
+        for (type_id, in_port, should_fuse) in
+            [("node.rotate_coordinates", "in", true), ("node.sine_wave", "field", true)]
+        {
+            let json = format!(
+                r#"{{
+                    "version": 1, "name": "pair", "nodes": [
+                        {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+                        {{ "id": 1, "typeId": "node.contrast", "nodeId": "contrast" }},
+                        {{ "id": 2, "typeId": "{type_id}", "nodeId": "target" }},
+                        {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+                    ], "wires": [
+                        {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }},
+                        {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "{in_port}" }},
+                        {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+                    ]
+                }}"#
+            );
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let regions = partition_regions(&def, &registry);
+            let fused_doc_ids: std::collections::HashSet<u32> =
+                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            assert_eq!(
+                fused_doc_ids.contains(&2),
+                should_fuse,
+                "{type_id}: region-membership next to a fusable neighbour (contrast) \
+                 didn't match expectation (fuse={should_fuse})"
+            );
+        }
+    }
+
     /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,
     /// and the producer stays a boundary. `texture_dimensions` (a scalar reducer,
     /// boundary) drives `gain.gain`; gain + invert still form one region. The

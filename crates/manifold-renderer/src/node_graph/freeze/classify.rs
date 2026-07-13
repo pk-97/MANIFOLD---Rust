@@ -179,9 +179,23 @@ pub enum BoundaryReason {
 /// converting it is not permitted (the meta-test below checks both
 /// directions).
 pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
-    "node.rotate_coordinates",  // rotate_2d
-    "node.sine_wave",           // sin_term
-    "node.watercolor",          // watercolor
+    // watercolor — NOT a mechanical wgsl_body conversion candidate: this is
+    // a 7-pass sequential composite (grain+max, flow-gen, displace,
+    // diffusion blur, slope displace, luma blur into persistent
+    // cross-frame feedback, wet/dry blend), not a single barrier-free
+    // per-element function. It fails the codegen-path scope test on two
+    // independent grounds — cross-frame GPU state (the `feedback` texture
+    // must survive into next frame, matching `BoundaryReason::CrossFrameState`'s
+    // own `node.feedback` example) and multi-pass dependent composition
+    // (matching `BoundaryReason::FusedBundle`'s "awaiting decomposition
+    // into atoms" — `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`
+    // already tracks the real fix: decompose into `flow_field_noise` +
+    // `uv_displace_by_flow` (both registered, unused) + existing
+    // blur/displace atoms, composed as a graph). Left in this ledger
+    // (2026-07-14 wave 3) rather than reclassified, pending that
+    // decomposition design — same category as DigitalPlants/NestedCubes,
+    // explicitly out of scope for a mechanical wgsl_body conversion.
+    "node.watercolor",
 ];
 
 impl InputAccess {
