@@ -2180,7 +2180,7 @@ impl LayerHeaderPanel {
             if let (Some(ids), Some(reset)) =
                 (self.gain_sliders[i].ids(), self.gain_slider_resets.get(i).and_then(|r| r.as_ref()))
             {
-                intents.on(ids.track, crate::intent::Gesture::RightClick, reset.clone());
+                crate::slider::BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
     }
