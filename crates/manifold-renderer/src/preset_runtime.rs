@@ -837,6 +837,14 @@ impl PresetRuntime {
         // view; an effect without one is unrunnable.
         for (_, fx) in &active_effects {
             if loaded_preset_view_by_id(fx.effect_type()).is_none() {
+                // BUG-079: this eprintln stays as a console diagnostic, but
+                // it is no longer the only signal — the same root cause (a
+                // preset def that never registered) is what leaves this
+                // instance's `PresetInstance::template_unresolved()` true at
+                // load time, which the loader folds into
+                // `Project::load_report.unresolved_preset_templates` and
+                // surfaces as an "opened with repairs" toast
+                // (manifold-app/src/project_io.rs).
                 eprintln!(
                     "[chain-build-fail] no LoadedPresetView for effect_type={:?} \
                      (effect_id={:?}) — chain build returns None, layer falls back \

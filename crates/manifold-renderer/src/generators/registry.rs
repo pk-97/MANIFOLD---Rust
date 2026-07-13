@@ -1,4 +1,5 @@
 use crate::node_graph::{bundled_preset_json, bundled_preset_type_ids};
+use crate::node_graph::primitives::{GltfTextureSource, RenderScene};
 use crate::preset_runtime::PresetRuntime;
 use manifold_core::preset_def::PresetKind;
 use crate::node_graph::PrimitiveRegistry;
@@ -51,6 +52,21 @@ impl GeneratorRegistry {
                 );
             }
         }
+
+        // BUG-037: `node.render_scene` and `node.gltf_texture_source` compile
+        // their GPU pipelines lazily inside `run()` (a hand-written
+        // `Option::get_or_insert_with`, not the codegen-path pipelines the
+        // bundled-preset loop above touches indirectly), gated on real
+        // project data (a material actually drawn, a texture actually
+        // decoded) that no bundled preset carries — so the loop above never
+        // reaches them. Neither pipeline depends on project/asset content
+        // (fixed shader source, fixed entry points), so both warm
+        // unconditionally here rather than waiting for a real glTF scene
+        // layer's first rendered frame to pay the compile cost
+        // (`RENDER_TRACE` showed `generators=37.1ms` on that frame).
+        RenderScene::prewarm_pipelines(device);
+        GltfTextureSource::prewarm_pipeline(device);
+
         log::info!("Generator pipeline pre-warm complete");
     }
 

@@ -62,6 +62,15 @@ pub enum TextInputField {
     /// Graph-editor `wgsl_compute` source. Carries the node's runtime id; the
     /// source edits multiline. Routes to `SetWgslSourceCommand`.
     GraphWgsl(u32),
+    /// Graph-editor ranged-param numeric type-in, opened by a double-click on
+    /// a node-face value box (UI_WIDGET_UNIFICATION P5d — the contract's
+    /// `(ValueCell, DoubleClick) -> EditValue` row's last dead stop). Carries
+    /// the node's runtime id; the rest (param name, clamp range,
+    /// `outer_param_id`) rides on [`TextInputState::graph_numeric_param`]
+    /// (not `Copy`). Commit parses, clamps, and dispatches
+    /// `SetGraphNodeParam` — or `SetOuterParam`'s own write path for a
+    /// group-face mirror row (D4/D6 parity).
+    GraphNumericParam(u32),
     /// Graph-editor find-a-node search. Commit / live filter highlights matching
     /// nodes on the canvas; no undo command.
     GraphNodeSearch,
@@ -96,6 +105,7 @@ impl TextInputField {
                 | TextInputField::GraphWgsl(_)
                 | TextInputField::GraphNodeSearch
                 | TextInputField::GraphTableCell
+                | TextInputField::GraphNumericParam(_)
         )
     }
 }
@@ -134,6 +144,22 @@ pub struct InspectorParamCtx {
 pub struct DriverFreePeriodCtx {
     pub target: manifold_ui::panels::GraphParamTarget,
     pub param_id: manifold_core::effects::ParamId,
+}
+
+/// Context for an in-flight graph-canvas numeric type-in — set when the box
+/// opens ([`TextInputField::GraphNumericParam`]) and read on commit. Lives
+/// off the `Copy` field enum because `param_name`/`outer_param_id` aren't
+/// `Copy` (P5d).
+#[derive(Debug, Clone)]
+pub struct GraphNumericParamCtx {
+    pub param_name: String,
+    pub min: f32,
+    pub max: f32,
+    pub whole_numbers: bool,
+    /// `Some(outer_param_id)` when this row is a group-face mirror (D6):
+    /// commit must write through the outer card param's own path
+    /// (`SetOuterParam`), never `SetGraphNodeParam` on the inner node.
+    pub outer_param_id: Option<String>,
 }
 
 /// Which library door a [`TextInputField::SavePresetName`] session is headed
@@ -249,6 +275,9 @@ pub struct TextInputState {
     /// Context for `DriverFreePeriod` (target + id). Set right after `begin()`,
     /// read on commit.
     pub driver_free_period: Option<DriverFreePeriodCtx>,
+    /// Context for `GraphNumericParam` (param name + clamp range +
+    /// `outer_param_id`). Set right after `begin()`, read on commit (P5d).
+    pub graph_numeric_param: Option<GraphNumericParamCtx>,
     /// Context for `SavePresetName` (kind + effective def + destination). Set
     /// right after `begin()`, read (and taken) on commit.
     pub save_preset: Option<SavePresetCtx>,
@@ -286,6 +315,7 @@ impl TextInputState {
             graph_table_edit: None,
             inspector_param: None,
             driver_free_period: None,
+            graph_numeric_param: None,
             save_preset: None,
             rename_preset: None,
             dragging: false,
@@ -319,9 +349,10 @@ impl TextInputState {
         );
         // Stale param ctx from a prior session must not leak in; the caller sets
         // it again immediately for an `InspectorParam` / `DriverFreePeriod` /
-        // `SavePresetName` / `RenamePreset` field.
+        // `GraphNumericParam` / `SavePresetName` / `RenamePreset` field.
         self.inspector_param = None;
         self.driver_free_period = None;
+        self.graph_numeric_param = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;
@@ -368,6 +399,7 @@ impl TextInputState {
         self.graph_table_edit = None;
         self.inspector_param = None;
         self.driver_free_period = None;
+        self.graph_numeric_param = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;

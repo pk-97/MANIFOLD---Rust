@@ -7,8 +7,8 @@
 //! session lifecycle (begin/commit/cancel), pointer↔byte mapping via a
 //! concrete measurer, clipboard, undo-stack integration — stays with the
 //! host (P5b/P5c). `manifold-app/src/text_input.rs`'s `TextInputState` and
-//! `mapping_popover.rs`'s `edit_buffer` both embed this instead of hand-
-//! rolling their own caret/selection mechanics (I7).
+//! `graph_canvas/mapping_popover.rs`'s `MappingPopover` both embed one
+//! instead of hand-rolling their own caret/selection mechanics (I7).
 //!
 //! Selection model (Peter, 2026-07-13): click places the caret, click-drag
 //! selects a range, shift-click extends, double-click selects the word,

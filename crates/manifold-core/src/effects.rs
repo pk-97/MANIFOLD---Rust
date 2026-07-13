@@ -1609,6 +1609,19 @@ impl PresetInstance {
         }
     }
 
+    /// Whether this instance's preset def failed to resolve at load (BUG-036's
+    /// class) — no registry template AND no inline generator `meta.params`,
+    /// so its saved params are kept on a placeholder spec rather than dropped
+    /// (`build_param_manifest`'s keep-don't-drop branch). Used by
+    /// `Project::reconcile_param_manifests` (BUG-079) to count how many
+    /// instances need the "opened with repairs" toast to name them — the
+    /// same condition `PresetRuntime::try_build` hits later at chain-build
+    /// time when it can't find a `LoadedPresetView` for the effect type and
+    /// falls back to source passthrough (`preset_runtime.rs`).
+    pub fn template_unresolved(&self) -> bool {
+        !template_known_for(self.is_generator(), &self.effect_type, &self.graph)
+    }
+
     #[inline]
     pub fn is_generator(&self) -> bool {
         matches!(self.kind, crate::preset_def::PresetKind::Generator)
