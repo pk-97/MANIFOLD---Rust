@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CinematicScene",
-  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> coc_dilate -> bokeh_gather occlusion-aware disc gather (coc_dilate fixes BUG-137's hard cutoff at depth discontinuities by spreading the max CoC into neighboring pixels before the gather reads it; bokeh_gather is CINEMATIC_POST P4's single-pass 32-tap circular-aperture gather, replacing the earlier two-pass variable_blur H/V separable blur), and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 added the motion-blur tail; BUG-137 added the coc_dilate stage; P4 swapped variable_blur(H)+variable_blur(V) for one node.bokeh_gather.",
+  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, the dof group's circle-of-confusion, AND node.motion_blur's shutter angle all read), an 'ao' node group (ssao_from_depth -> mix(Multiply) contact-occlusion arm), a 'dof' node group (coc_from_depth -> coc_dilate -> bokeh_gather occlusion-aware disc gather, dilate fixing BUG-137's hard cutoff at depth discontinuities), and a motion_blur tail reading render_scene's velocity output. The ao/dof groups (docs/NODE_GROUPS_DESIGN.md) are pure presentation: they flatten to the same atom graph at load time, each atom stays independently wireable elsewhere. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 added the motion-blur tail; BUG-137 added the coc_dilate stage; P4 swapped variable_blur(H)+variable_blur(V) for one node.bokeh_gather; grouped into 'ao'/'dof' boxes for readability post-P4.",
   "presetMetadata": {
     "id": "CinematicScene",
     "displayName": "Cinematic Scene",
@@ -136,7 +136,7 @@
         "defaultValue": 1.0,
         "target": {
           "kind": "node",
-          "nodeId": "ssao",
+          "nodeId": "ao/ssao",
           "param": "intensity"
         },
         "convert": {
@@ -149,7 +149,7 @@
         "defaultValue": 0.5,
         "target": {
           "kind": "node",
-          "nodeId": "ssao",
+          "nodeId": "ao/ssao",
           "param": "radius"
         },
         "convert": {
@@ -272,54 +272,112 @@
       }
     },
     {
-      "id": 12,
-      "typeId": "node.ssao_from_depth",
-      "nodeId": "ssao",
-      "handle": "ssao",
-      "title": "SSAO From Depth",
-      "params": {
-        "radius": { "type": "Float", "value": 0.5 },
-        "intensity": { "type": "Float", "value": 1.0 },
-        "bias": { "type": "Float", "value": 0.025 }
+      "id": 20,
+      "typeId": "group",
+      "nodeId": "ao",
+      "handle": "ao",
+      "title": "Ambient Occlusion",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "depth", "portType": "Texture2D" },
+            { "name": "camera", "portType": "Camera" },
+            { "name": "color", "portType": "Texture2D" }
+          ],
+          "outputs": [
+            { "name": "out", "portType": "Texture2D" }
+          ],
+          "params": []
+        },
+        "nodes": [
+          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 1,
+            "typeId": "node.ssao_from_depth",
+            "handle": "ssao",
+            "title": "SSAO From Depth",
+            "params": {
+              "radius": { "type": "Float", "value": 0.5 },
+              "intensity": { "type": "Float", "value": 1.0 },
+              "bias": { "type": "Float", "value": 0.025 }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.mix",
+            "handle": "ssao_mix",
+            "title": "SSAO Multiply",
+            "params": {
+              "amount": { "type": "Float", "value": 1.0 },
+              "mode": { "type": "Enum", "value": 4 }
+            }
+          },
+          { "id": 3, "typeId": "system.group_output" }
+        ],
+        "wires": [
+          { "fromNode": 0, "fromPort": "depth", "toNode": 1, "toPort": "depth" },
+          { "fromNode": 0, "fromPort": "camera", "toNode": 1, "toPort": "camera" },
+          { "fromNode": 0, "fromPort": "color", "toNode": 2, "toPort": "a" },
+          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "out" }
+        ]
       }
     },
     {
-      "id": 13,
-      "typeId": "node.mix",
-      "nodeId": "ssao_mix",
-      "handle": "ssao_mix",
-      "title": "SSAO Multiply",
-      "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 4 }
+      "id": 21,
+      "typeId": "group",
+      "nodeId": "dof",
+      "handle": "dof",
+      "title": "Depth of Field",
+      "group": {
+        "interface": {
+          "inputs": [
+            { "name": "depth", "portType": "Texture2D" },
+            { "name": "camera", "portType": "Camera" },
+            { "name": "color", "portType": "Texture2D" }
+          ],
+          "outputs": [
+            { "name": "out", "portType": "Texture2D" }
+          ],
+          "params": []
+        },
+        "nodes": [
+          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 1,
+            "typeId": "node.coc_from_depth",
+            "handle": "coc",
+            "title": "CoC From Depth",
+            "params": {
+              "max_radius": { "type": "Float", "value": 24.0 }
+            }
+          },
+          {
+            "id": 2,
+            "typeId": "node.coc_dilate",
+            "handle": "coc_dilate",
+            "title": "CoC Dilate"
+          },
+          {
+            "id": 3,
+            "typeId": "node.bokeh_gather",
+            "handle": "bokeh",
+            "title": "Bokeh Gather",
+            "params": {
+              "max_radius": { "type": "Float", "value": 24.0 }
+            }
+          },
+          { "id": 4, "typeId": "system.group_output" }
+        ],
+        "wires": [
+          { "fromNode": 0, "fromPort": "depth", "toNode": 1, "toPort": "depth" },
+          { "fromNode": 0, "fromPort": "camera", "toNode": 1, "toPort": "camera" },
+          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "width" },
+          { "fromNode": 0, "fromPort": "color", "toNode": 3, "toPort": "in" },
+          { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "out" }
+        ]
       }
-    },
-    {
-      "id": 9,
-      "typeId": "node.coc_from_depth",
-      "nodeId": "coc",
-      "handle": "coc",
-      "title": "CoC From Depth",
-      "params": {
-        "max_radius": { "type": "Float", "value": 24.0 }
-      }
-    },
-    {
-      "id": 16,
-      "typeId": "node.bokeh_gather",
-      "nodeId": "bokeh",
-      "handle": "bokeh",
-      "title": "Bokeh Gather",
-      "params": {
-        "max_radius": { "type": "Float", "value": 24.0 }
-      }
-    },
-    {
-      "id": 15,
-      "typeId": "node.coc_dilate",
-      "nodeId": "coc_dilate",
-      "handle": "coc_dilate",
-      "title": "CoC Dilate"
     },
     {
       "id": 14,
@@ -343,20 +401,17 @@
     { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "camera" },
     { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 12, "toPort": "camera" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 21, "toPort": "camera" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 20, "toPort": "camera" },
     { "fromNode": 5, "fromPort": "out", "toNode": 14, "toPort": "camera" },
     { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "material_0" },
     { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
     { "fromNode": 3, "fromPort": "out", "toNode": 8, "toPort": "mesh_0" },
-    { "fromNode": 8, "fromPort": "depth", "toNode": 9, "toPort": "depth" },
-    { "fromNode": 8, "fromPort": "depth", "toNode": 12, "toPort": "depth" },
-    { "fromNode": 8, "fromPort": "color", "toNode": 13, "toPort": "a" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "b" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 16, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 15, "toPort": "in" },
-    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "width" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 8, "fromPort": "depth", "toNode": 21, "toPort": "depth" },
+    { "fromNode": 8, "fromPort": "depth", "toNode": 20, "toPort": "depth" },
+    { "fromNode": 8, "fromPort": "color", "toNode": 20, "toPort": "color" },
+    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "color" },
+    { "fromNode": 21, "fromPort": "out", "toNode": 14, "toPort": "in" },
     { "fromNode": 8, "fromPort": "velocity", "toNode": 14, "toPort": "velocity" },
     { "fromNode": 14, "fromPort": "out", "toNode": 99, "toPort": "in" }
   ]
