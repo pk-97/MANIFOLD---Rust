@@ -1,6 +1,6 @@
 # UI Widget Unification — one widget vocabulary, two hosts
 
-**Status: APPROVED design, not built · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P6 added, D6 superseded**
+**Status: APPROVED design, not built · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded**
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -254,11 +254,24 @@ widget-declared contracts anyway, so a future canvas appearance (or any new host
 free and I1's "no hand-registered gestures" gate can go repo-wide. Mechanical;
 schedule after P4/P5 or interleave with release-push bricks.
 
+**P7 — drag lifecycle onto `DragController<T>` (added 2026-07-13, Peter).**
+D5 stands — drags stay OUT of the intent contract (no `Gesture` drag variants) — but
+the lifecycle plumbing is quintuplicated: `drag.rs`'s own module doc names five drag
+state machines sharing one shape (`SliderDragState` — already migrated as the proof
+consumer; per-panel `dragging` bools; `UIState` timeline drag;
+`InteractionOverlay::DragMode`; canvas `DragMode`). Deliverables: migrate the four
+remaining machines onto `DragController<T>`, one landing each, behavior pinned by a
+test per migration before the switch. Entry step: also inventory drag *value* math
+(sensitivity, fine-modifier scaling, snap) across hosts — if duplicated, fold it into
+the widget's home module in the same pass; if genuinely host-specific (camera-zoom
+delta scaling is), leave it and record why. Gate: `-p manifold-ui --lib` per landing.
+
 Phasing-completeness walk: contract both surfaces → P1; stepper/fader reset → P2; full
 slider derivation → P3; dual-surface twins (dropdown, color/vec, node-face toggles) →
 P4; canvas text entry → P5 (was Deferred, rescheduled 2026-07-13); chrome-only widgets
-→ P6 (was Deferred). Drag unification stays deferred on D5's still-true premise (both
-hosts already emit identical drag commands — no divergence to remove). No
+→ P6 (was Deferred); drag lifecycle consolidation → P7 (was Deferred — D5's
+"emission is parity-true" claim was correct but incomplete: five lifecycle machines
+share one shape, `DragController<T>` already exists with one migrated consumer). No
 body-committed affordance is unphased.
 
 ## 6. Decided — do not reopen
@@ -276,10 +289,12 @@ body-committed affordance is unphased.
 
 ## 7. Deferred
 
-(2026-07-13: canvas text entry and the remaining widget kinds moved OUT of this section
-into scheduled phases P5 / P4+P6 — Peter's call: unify by design, don't wait for bugs.)
+(2026-07-13: canvas text entry, the remaining widget kinds, and drag lifecycle
+consolidation moved OUT of this section into scheduled phases P5 / P4+P6 / P7 —
+Peter's call: unify by design, don't wait for bugs.)
 
-- **Drag/scrub contract unification** — both hosts already emit identical commands.
-  Revive if a host-drag divergence bug appears (that would falsify D5's premise).
+- **Drag *semantics* in the intent contract** — still out, per D5: no `Gesture` drag
+  variants; hosts own capture and coordinate transforms. P7 unifies the lifecycle
+  plumbing (`DragController<T>`), not the gesture contract.
 - **Graph-editor sidebar** — already on `IntentRegistry<GraphEditCommand>`; no work. Noted
   so nobody "unifies" it twice.
