@@ -951,7 +951,7 @@
       "examples": [
         "MetallicGlass"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:cross_frame_state",
       "inputs": [],
       "label": "Bake Environment (equirect)",
       "outputs": [
@@ -1538,7 +1538,7 @@
       ],
       "category": "Detection & Sampling",
       "examples": [],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in",
@@ -1797,7 +1797,7 @@
       "examples": [
         "SoftFocus"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "source",
@@ -1986,7 +1986,7 @@
       "examples": [
         "MetallicGlass"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -2544,7 +2544,7 @@
         "StarField",
         "StrangeAttractor"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -7731,7 +7731,7 @@
       ],
       "category": "Color & Tone",
       "examples": [],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:conversion_debt",
       "inputs": [
         {
           "name": "source",
@@ -10547,7 +10547,7 @@
       ],
       "category": "Composite",
       "examples": [],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "in_0",
@@ -13107,7 +13107,7 @@
       ],
       "category": "Particles 3D",
       "examples": [],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "in",
@@ -13758,7 +13758,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "accum",
@@ -13803,7 +13803,7 @@
       "examples": [
         "FluidSim3D"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "accum",
@@ -16039,7 +16039,7 @@
       "examples": [
         "FluidSim2D"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "mask",
@@ -16248,7 +16248,7 @@
         "ParticleText",
         "StrangeAttractor"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "active_count",
@@ -16950,7 +16950,7 @@
         "MriVolume",
         "OilyFluid"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "selector",
@@ -18849,7 +18849,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:undeclared",
+      "fusion": "boundary:draw_call",
       "inputs": [
         {
           "name": "in",

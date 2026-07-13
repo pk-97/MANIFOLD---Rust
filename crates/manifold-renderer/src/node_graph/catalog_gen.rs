@@ -83,9 +83,11 @@ struct NodeRow {
     /// `"pointwise"` | `"source"` | `"multi_input_coincident"` |
     /// `"boundary:<reason_snake_case>"`. Computed from the live instance's
     /// `fusion_kind()`/`boundary_reason()` — never hand-maintained, so it
-    /// can't drift from the registry. `"boundary:undeclared"` is a real
-    /// possible value (an atom on `ESCALATED_PENDING_TRIAGE`, awaiting
-    /// orchestrator triage) — see `freeze::classify` doc comments.
+    /// can't drift from the registry. `"boundary:undeclared"` must never
+    /// appear in the shipped catalog — the meta-test
+    /// (`every_boundary_atom_declares_its_reason`) fails any registered
+    /// Boundary primitive without a declared reason before the catalog
+    /// could pick it up.
     fusion: String,
 }
 

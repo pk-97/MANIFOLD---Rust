@@ -92,12 +92,12 @@ pub trait PrimitiveSpec: Send {
         crate::node_graph::freeze::classify::FusionKind::Boundary;
 
     /// Why this primitive stays a fusion Boundary (design doc D4,
-    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default — required for
-    /// every fusable (`FUSION_KIND != Boundary`) primitive, and required
-    /// (exactly one reason) for every Boundary primitive that isn't on the
-    /// `ESCALATED_PENDING_TRIAGE` allowlist
-    /// ([`freeze::classify`](crate::node_graph::freeze::classify)). Set via
-    /// the macro's `boundary_reason:` field.
+    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default — required to
+    /// stay `None` for every fusable (`FUSION_KIND != Boundary`) primitive,
+    /// and required (exactly one reason) for every Boundary primitive
+    /// ([`freeze::classify`](crate::node_graph::freeze::classify) — enforced
+    /// by `every_boundary_atom_declares_its_reason`). Set via the macro's
+    /// `boundary_reason:` field.
     const BOUNDARY_REASON: Option<crate::node_graph::freeze::classify::BoundaryReason> = None;
 
     /// PURE primitive: `run()`'s output depends ONLY on its param values and

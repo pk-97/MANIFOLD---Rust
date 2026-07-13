@@ -97,6 +97,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["environment map", "bake equirect envmap", "equirect", "ibl", "reflection map"],
+    boundary_reason: CrossFrameState,
 }
 
 impl Primitive for BakeEquirectEnvmap {
