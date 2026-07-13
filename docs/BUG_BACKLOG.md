@@ -132,7 +132,8 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-145 (bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs) — `bokeh_gather.rs`'s `#[cfg(test)]` CPU-reference helpers emit `dead_code` warnings under a plain (no `gpu-proofs`) test compile — LOW, found not fixed 2026-07-13 (CINEMATIC_POST P6, `bilateral_blur` session)
+### BUG-145 (bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs) — `bokeh_gather.rs`'s `#[cfg(test)]` CPU-reference helpers emit `dead_code` warnings under a plain (no `gpu-proofs`) test compile — LOW (cosmetic, no correctness impact)
+**Status:** OPEN — found 2026-07-13 during CINEMATIC_POST P6 (`node.bilateral_blur`), not fixed this session (out of scope for that phase).
 **Symptom:** rustc/rust-analyzer flags `BOKEH_N`, `BOKEH_GOLDEN_ANGLE`, `bokeh_hash_angle`, `Plane4` (+ its `texel`/`sample` methods), and `bokeh_gather_texel` in `bokeh_gather.rs` as unused.
 **Root cause:** these items live in the outer `#[cfg(test)]` module but are only consumed by the nested `#[cfg(all(test, feature = "gpu-proofs"))]` submodule; a compile of test code without `gpu-proofs` builds the outer module and never calls them. The standard scoped gate (`cargo clippy -p manifold-renderer -- -D warnings`, no `--tests`) doesn't compile test code at all, so it stays clean — this is only visible via `--tests` or IDE diagnostics, same blind spot as BUG-126.
 **Not caused by this session's diff:** `bokeh_gather.rs` is untouched by the `bilateral_blur` commit; `git log` shows its last change is P4's original `d85c6dc0`.
