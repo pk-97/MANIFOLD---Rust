@@ -874,7 +874,22 @@ impl ParamCardPanel {
     /// base value to prefill, the clamp range, and the int-rounding flag. Returns
     /// `None` for non-value-cell nodes and for enum params (`value_labels` use the
     /// dropdown, not text). Toggle/trigger rows carry no slider, so never match.
+    ///
+    /// Called only from `route_value_typein` on `UIEvent::DoubleClick`
+    /// (inspector.rs:2375) — this IS the contract's `(ValueCell, DoubleClick)
+    /// -> EditValue` row (D13/D14), constructed at input time because the
+    /// action's payload (anchor, value, clamp range) is live state, not a
+    /// build-time constant (D14). The debug_assert below is the single
+    /// written record that this call site and the contract table agree.
     pub fn value_cell_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        debug_assert_eq!(
+            crate::slider::BitmapSlider::intent_for(
+                crate::slider::SliderZone::ValueCell,
+                crate::intent::Gesture::DoubleClick
+            ),
+            Some(crate::slider::SliderIntent::EditValue),
+            "value_cell_typein is the contract's ValueCell+DoubleClick->EditValue translation (D13/D14)"
+        );
         if !self.is_live() {
             return None;
         }
@@ -4218,9 +4233,12 @@ impl ParamCardPanel {
             // the track reliably opens the param menu — no narrow-target lottery.
             if self.context == CardContext::Perform {
                 let menu = PanelAction::ParamLabelRightClick(target, self.pid_at(pi));
-                if let Some(label) = ids.label {
-                    intents.on(label, RightClick, menu.clone());
-                }
+                // Label registration goes through the contract (P3/D14).
+                BitmapSlider::register_label_mapping(ids, &menu, intents);
+                // The row catcher is a second node carrying the SAME action
+                // — host-attached chrome, not a contract zone (it's a
+                // full-row dead-zone catcher behind the value cell + gaps,
+                // no `SliderZone` of its own), so it stays hand-registered.
                 if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
                     intents.claim_area(catcher);
                     intents.on(catcher, RightClick, menu);

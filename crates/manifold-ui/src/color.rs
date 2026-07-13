@@ -836,6 +836,11 @@ pub const BROWSER_CELL_BADGE_TEXT: Color32 = Color32::new(130, 130, 134, 255);
 // ── Interaction thresholds ──────────────────────────────────────────
 pub const DRAG_THRESHOLD_PX: f32 = 4.0;
 pub const DOUBLE_CLICK_TIME_SEC: f32 = 0.3;
+/// Max screen-space distance (px) between the two presses of a double-click.
+/// A drag further than this is two separate single-clicks, not a double.
+/// Equal to `DRAG_THRESHOLD_PX` by design (UI_WIDGET_UNIFICATION P4/I8) — one
+/// constant home for every gesture-timing/radius threshold in the app.
+pub const DOUBLE_CLICK_RADIUS_PX: f32 = DRAG_THRESHOLD_PX;
 pub const DRAG_EDGE_ZONE_PX: f32 = 72.0;
 pub const DRAG_SCROLL_SPEED_PX_PER_SEC: f32 = 900.0;
 pub const TRIM_HANDLE_THRESHOLD_PX: f32 = 8.0;
