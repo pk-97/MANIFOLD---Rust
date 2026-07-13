@@ -1,6 +1,6 @@
 # Cinematic Post — DoF, SSAO, motion blur as graph atoms
 
-**Status:** P0–P3 SHIPPED 2026-07-12 · Sonnet 5 · **P0 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm. P3 (`docs/landings/2026-07-12-cinematic-post-batch-c.md`) — `node.motion_blur` tail. `CinematicScene` now runs the full DoF+SSAO+motion-blur chain. P4 (`node.bokeh_gather` swap) is pre-approved but deliberately not run this wave — triggered whenever Peter wants bokeh over gaussian.**
+**Status:** IN PROGRESS — P0–P3 SHIPPED 2026-07-12 · Sonnet 5 · **P0 (D7/I6, both layers, `docs/landings/2026-07-12-cinematic-post-batch-a.md`) — derived uniforms are first-class on the texture codegen path AND in fused regions. P1+P2 (`docs/landings/2026-07-12-cinematic-post-batch-b.md`) — `node.coc_from_depth` + DoF slice, `node.ssao_from_depth` + SSAO arm. P3 (`docs/landings/2026-07-12-cinematic-post-batch-c.md`) — `node.motion_blur` tail. `CinematicScene` now runs the full DoF+SSAO+motion-blur chain. P4 (`node.bokeh_gather` swap) pre-approved, not run. AMENDED 2026-07-13 (Fable, with Peter): quality verdict on the shipped stack (*"look terrible and need a lot of work... very blocky and has a hard cut off on the blur"*) → P4 escalated from optional to the DoF root fix (see the `dof-polish-wave-prompt` lane; bugs BUG-136/137/138 own the diagnosis), P5 GTAO decisions committed (D9), P6 AO denoise added (D8), PNG look-pass rule added to open phases (§4). P4/P5/P6 open.**
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
@@ -227,6 +227,77 @@ it leaves the whitelist alive); camera scalars as fake user params packed
 by the preset (breaks the wire-carries-the-camera model and desyncs the
 lens from render_scene).
 
+**D8 — AO ships denoised: `node.bilateral_blur`, a depth-guided separable
+blur pair between the AO atom and its mix (amendment 2026-07-13).** The
+observed defect that forces this: the shipped chain wires `ssao → ssao_mix`
+raw (`CinematicScene.json` wire `12.out → 13.b`, verified 2026-07-13) — 16
+hash-rotated samples per pixel with NO smoothing pass is per-pixel noise by
+construction, and every production AO implementation (SSAO or GTAO) follows
+the sampler with an edge-aware blur. We shipped the sampler without the blur.
+§2.5 audit (2026-07-13, 214 primitives surveyed): no edge-aware/bilateral
+blur exists — nearest relatives are `separable_gaussian.rs` (the axis-pair
+pattern + fixed 9-tap kernel to copy) and `gaussian_blur_variable_width.rs`
+(the two-texture-input Gather ABI to copy) — genuinely new, and
+general-purpose by design (any texture + depth guide, not AO-only).
+
+Committed atom: inputs `in: Texture2D` (Gather), `depth: Texture2D` raw
+[0,1] (GatherTexel), `camera: Camera` (derived uniforms `near`/`far` for
+`linearize_depth` — the D7 mechanism, precedent `coc_from_depth`); params
+`axis` (Enum H/V), `depth_sigma` (world units, default 0.1). Fixed 9 taps at
+1-px spacing; `weight_j = K9_j · exp(−(Δz_j / depth_sigma)²)` where `K9_j`
+are the σ≈2 gaussian constants (same values as `VBW_K9_*`) and `Δz_j` is the
+linearized-depth difference from center; renormalize by the weight sum;
+alpha = center pass-through. `fusion_kind: MultiInputCoincident`,
+`input_access: [Gather, GatherTexel]` — codegen-path by construction. Preset:
+insert `bilat_h`(15) + `bilat_v`(16) into the `12.out → 13.b` wire, `8.depth`
+→ both `depth`, `5.out` → both `camera`. No new cards (denoise is quality
+plumbing, not a performer knob). Rejected: joint-bilateral inside the AO atom
+(a second dispatch hiding in one kernel — the no-monolith rule); a non-
+separable 5×5 single pass (2× the taps of the pair for marginal quality on a
+smooth AO field).
+
+**D9 — GTAO replaces SSAO: `node.ssao_gtao`, decisions committed (amendment
+2026-07-13; closes P5's two open lines).** Peter 2026-07-13: worth it if it
+beats SSAO's look *"without hitting the performance harder than the current
+SSAO"* — the committed budget below is deliberately the same sample class as
+D3's (16 occlusion taps + 4 normal taps).
+
+(a) **Deterministic single-frame sampling, committed:** 2 slices per pixel,
+slice angles `φ_i = ssao_hash_angle(px) · 0.5 + i · (π/2)`, `i ∈ {0,1}` (the
+D2 hash, halved into [0,π) so two slices spread the semicircle); per slice,
+per side (±tangent), 4 steps at screen-space radii `r_j = radius_px · (j+1)/4`
+(`radius_px` = the world `radius` projected at center depth — transcribe
+`ssao_from_depth`'s existing projection, don't re-derive). Total: 2·2·4 = 16
+depth taps + the same ±1-texel normal reconstruction as D3. No temporal
+accumulation (D2 stands; this is the "sized for ONE deterministic frame"
+answer P5 demanded). Committed integral, per slice: view-space center `P`,
+view vector `V = normalize(−P)`; per side, horizon cosine `hcos` = max over
+in-range samples (range check: reject `|S_j − P| > radius`, the D3 halo
+guard) of `dot(normalize(S_j − P), V)`; signed horizon angles `h1 =
+−acos(hcos₋)`, `h2 = +acos(hcos₊)`; normal projected into the slice plane →
+length `‖N_p‖` and signed angle `n` from `V` (sign by the slice tangent);
+clamp `h1 = n + max(h1 − n, −π/2)`, `h2 = n + min(h2 − n, π/2)`; per-side
+arc `a(h) = 0.25·(−cos(2h − n) + cos n + 2h·sin n)`; slice visibility =
+`‖N_p‖ · (a(h1) + a(h2))`. Pixel visibility = mean of the 2 slices;
+`out.r = clamp(1 − intensity·(1 − visibility), 0, 1)`, broadcast RGB, alpha 1
+— same output contract as D3, so the mix wiring and cards are untouched.
+
+(b) **REPLACES `node.ssao_from_depth` outright** — the primitive file is
+deleted, not paralleled. Params carry: `radius` → `radius`, `intensity` →
+`intensity`; `bias` dies (the range check subsumes it; recorded here so
+nobody re-adds it). Load-migration maps the type id `node.ssao_from_depth` →
+`node.ssao_gtao` (precedent: `WireframeDepthGraph` → `WireframeDepth` at
+v1.7.0; ⚠ VERIFY-AT-IMPL: locate the migration table via
+`rg 'WireframeDepthGraph' crates/` and add the mapping in the same shape).
+`CinematicScene` node 12 swaps type in place (handle/id/wires unchanged).
+Rejected: shipping both AO atoms behind a picker (double parity surface,
+double maintenance, and a picker choice no performer can evaluate — the
+curated-vocabulary rule); HBAO as an intermediate step (GTAO subsumes it,
+already stated in P5's original stub). Honest costs: GTAO's thin-object
+over-darkening (no thickness heuristic in v1 — deterministic budget) and
+slightly more ALU per tap (acos + arc math; Apple-silicon-trivial, and the
+tap count is unchanged, which is where the real cost lives).
+
 **Consequences of the whole design, stated honestly:** four full-res
 dispatches when the whole chain is wired (CoC + 2×blur + SSAO + blur ≈ 5)
 — on top of GBUFFER's bandwidth line; the perf gate measures, the lazy/
@@ -247,6 +318,8 @@ the committed math is the contract, upgrades are new decisions).
 | I4 — All four atoms are codegen-path | existing meta-test that every `primitive!` with `wgsl_body` proves generated-vs-hand parity; plus negative gate `rg 'create_compute_pipeline\(include_str' <the four new files>` = 0 hits |
 | I5 — Presets stay loadable | `check_presets` green + load-smoke gpu_test instantiating `CinematicScene` and executing one frame (magenta-free readback: no structured errors) |
 | I6 — Derived-uniform atoms are fused == unfused, byte-identical under the precision contract (FREEZE_COMPILER_MAP §7) | freeze proof gpu_test: a graph chaining a camera-derived pointwise atom with a pointwise neighbour, fused vs unfused full-buffer byte-compare; PLUS the entire existing freeze proof suite stays green (the time-family migration in D7 touches every fused buffer sim) |
+| I7 — `bilateral_blur` on a uniform-depth plane equals the plain 9-tap gaussian; across a depth step it does not bleed | gpu_tests (P6): `bilateral_uniform_depth_matches_gaussian` (flat synthetic depth, byte-compare vs K9 reference) + `bilateral_depth_edge_no_bleed` (step-edge depth, cross-edge contribution < 1% asserted numerically) + I1-pattern CPU-reference parity |
+| I8 — GTAO analytic sanity + migration round trip | gpu_tests (P5): `gtao_flat_plane_full_visibility` (unoccluded plane → out.r ≈ 1 within 1e-3) + `gtao_matches_cpu_reference` (I1 pattern, synthetic depth ramp) · unit test `ssao_from_depth_migrates_to_gtao` (a saved graph JSON with the old type id loads, node resolves to `node.ssao_gtao`, radius/intensity carried) · negative gate: `rg 'ssao_from_depth' crates/ assets/` → only migration-table + doc hits |
 
 ## 4. Phasing
 
@@ -258,6 +331,16 @@ kernels · any gate that requires looking at an image · touching tone-map
 atoms · frame-index/time inputs into any of these atoms (determinism is
 load-bearing). **Test scope:** focused `-p manifold-renderer` + the new
 gpu_tests; workspace sweep at landing.
+
+**Demo rule for the open phases (P4/P5/P6), amended 2026-07-13:** the
+original cluster rule was numeric-only by Peter's directive (*"No need to
+produce the PNGs if they're not going to look at them"*); his verdict on the
+P0–P3 result — *"look terrible and need a lot of work"* — ended that
+premise: he IS going to look now. Gates stay numeric; additionally each open
+phase ends with ONE headless `render-generator-preset` PNG of
+`CinematicScene` (before/after pair for a swap phase) in the landing report,
+and Peter's look-pass is the real exit. P0–P3 shipped under the old rule;
+this governs everything still open.
 
 - **P0 — derived uniforms first-class in the freeze compiler — SHIPPED
   2026-07-12** (D7; two sessions, standalone layer `42929678` then fusion
@@ -319,32 +402,46 @@ gpu_tests; workspace sweep at landing.
   new decision). Deliverables: atom per D5, CPU reference (I1), preset
   re-wire (two variable_blur nodes → one bokeh_gather), I2 re-proof, I5.
   Demo: none — L1 (cluster no-PNG rule).
-- **P5 — `node.ssao_gtao` swap (NOT pre-approved — decision needed before
-  a build session, unlike P4)** (proposed 2026-07-12, Peter: GTAO visibly
-  beats SSAO/HBAO on real scenes, want it if it's cheap). GTAO subsumes
-  HBAO — same horizon-search core, plus a proper cosine-weighted integral
-  — so this phase targets GTAO directly, not an HBAO intermediate step.
-  Two things need a committed decision before any code, both because
-  real-world GTAO implementations typically lean on temporal
-  accumulation to hit good quality cheaply, which conflicts with D2
-  ("no temporal accumulation... deterministic... CPU-reference-parity
-  testable... two exports bit-identical" — §5 "Decided — do not reopen"
-  item 2): (a) the exact per-pixel horizon-direction/step counts sized
-  for ONE deterministic frame, no cross-frame spread — this is what
-  keeps it cheap without breaking D2, and is a real algorithm choice,
-  not an implementation detail; (b) whether `node.ssao_gtao` REPLACES
-  `node.ssao_from_depth` outright or ships alongside it as a second,
-  pickable AO atom. Once those two lines are committed (a short doc
-  amendment, not a new design campaign), the build itself is
-  P2-shaped and P2-sized: one primitive, same `depth`+`camera` inputs,
-  same AO-texture output, same `node.mix` preset wiring, CPU reference
-  parity test, roughly one session.
+- **P6 — `node.bilateral_blur` AO denoise (one session; amendment
+  2026-07-13; INDEPENDENT of P4/P5 — land it FIRST: it improves the
+  already-shipped SSAO immediately, and P5's GTAO plugs into the same
+  denoise unchanged).** Entry: `rg 'bilateral' crates/manifold-renderer/src/
+  node_graph/primitives/` → 0 hits; D8 anchors re-verified. Read-back adds:
+  D8 whole, `separable_gaussian.rs` (axis-pair + K9 precedent),
+  `gaussian_blur_variable_width.rs` (two-input Gather ABI precedent).
+  Deliverables: the atom per D8 (descriptor/picker/aliases; codegen-path
+  `wgsl_body`), CPU reference, I7's three named tests, `CinematicScene`
+  insert (nodes 15/16 per D8), I5 re-smoke. Gate: I7 + I5 + I4's negative
+  `rg` on the new file + focused suite + scoped clippy. Acceptance demo
+  (L2, amended rule): before/after PNG pair of `CinematicScene` — the AO
+  noise visibly gone, Peter look-pass. Performer gesture: none (quality
+  plumbing; the existing `ssao_intensity` fader is unchanged). Forbidden
+  moves, this phase: making `depth_sigma` a card · widening to a general
+  "denoiser framework" · touching the AO atom itself (that's P5).
+- **P5 — `node.ssao_gtao` replaces `node.ssao_from_depth` (one session;
+  decisions COMMITTED 2026-07-13 in D9 — this phase is now buildable;
+  prefer landing after P6 so the look-pass judges GTAO denoised).**
+  Entry: P6 landed (preferred; if scheduling forces P5-first, the demo
+  comparison is raw-vs-raw and says so); D9 anchors re-verified; the
+  migration-table VERIFY-AT-IMPL resolved and recorded in phase notes
+  before code. Deliverables: the atom per D9(a) (Gather, derived uniforms
+  fov_y/near/far — same as D3), CPU reference, `ssao_from_depth` deleted +
+  load-migration per D9(b), `CinematicScene` node-12 type swap, I8's four
+  named checks, I5 re-smoke. Gate: I8 + I5 + I4 negative gate on the new
+  file + focused suite + scoped clippy. Acceptance demo (L2, amended
+  rule): before/after PNG pair (SSAO+denoise vs GTAO+denoise), Peter
+  look-pass. Performer gesture: `ssao_intensity` fader still swells
+  contact weight — gate re-drives the card against the new atom.
+  Forbidden moves, this phase: keeping both AO atoms alive (D9(b) is a
+  seam brief: old symbol deleted, negative gate proves it) · adding a
+  thickness heuristic or temporal reuse "for quality" (D2/D9 are the
+  contract) · re-adding `bias`.
 
 Phasing-completeness check: D7→P0, D1→P1, D3→P2, D4→P3, D5→P4, D6 grown
 across P1–P4; D2 is inside P2/P4 deliverables; exposure card (CAMERA D5)
-rides P1's preset. No body-committed affordance is unphased. P5 is a
-2026-07-12 addition, outside the original phasing-completeness set — it
-extends D3, not any of D1/D4/D5/D6/D7.
+rides P1's preset. 2026-07-13 amendment: D8→P6, D9→P5 — every committed
+line in D8/D9 lands in exactly one of those two briefs. No body-committed
+affordance is unphased.
 
 ## 5. Decided — do not reopen
 
@@ -358,6 +455,13 @@ extends D3, not any of D1/D4/D5/D6/D7.
 7. Derived uniforms are first-class on both codegen paths; the sourcing
    whitelist dies; NO boundary carve-out for camera atoms — Peter,
    2026-07-12: "I don't want any stopgaps" (D7/P0).
+8. AO is always denoised in the preset: `bilateral_blur` H/V between the AO
+   atom and its mix; denoise params are not cards (D8, 2026-07-13).
+9. GTAO replaces SSAO — one AO atom, deleted-not-paralleled, load-migrated;
+   16-tap deterministic single-frame budget, no thickness heuristic, no
+   temporal (D9, 2026-07-13).
+10. Open phases gate numeric AND ship a looked-at PNG — the 2026-07-12
+    no-PNG directive is ended by Peter's 2026-07-13 verdict (§4 demo rule).
 
 ## 6. Deferred
 

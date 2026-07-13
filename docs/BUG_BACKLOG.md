@@ -267,7 +267,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Fix shape** — read make_triangles' emission order against grid_mesh row-major layout; if winding is inverted, either fix the emission order (check draw paths that might depend on current order) or write the engine-wide rule "vertex normals are authoritative, winding is not" into DEVELOPMENT_REFERENCE.md.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
-**Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call.
+**Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1)** — the design diagnoses the washout as the light-blind constant-color fog model; its P1 runs this entry's fix-shape sweep and records the numbers here.
 
 **Symptom** — `node.atmosphere` fog at even low density (0.04) washes out the whole
 frame uniformly: near geometry loses contrast as much as far geometry, so fog reads
