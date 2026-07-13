@@ -46,8 +46,14 @@ grades and changes nothing is a valid pass; bias toward silence.
    collides across workers (pass-1 lesson: colliding grades attached to the
    wrong fires and cost real attribution work).
    Sessions self-grade at fire time since 2026-07-04 (records with
-   `"grader": "session"`, prompted by the supervised-mode sentence, which since
-   2026-07-05 names the fire's own `seq` directly in the sentence — `"seq"` is
+   `"grader": "session"`, prompted by the supervised-mode sentence; since
+   2026-07-13 that sentence names a one-shot command — `python3
+   .claude/daemon/log_grade.py <seq> <move_id> <correct> <effective>
+   "<notes>" [--agent-id ID]` — which owns the record format, normalizes
+   stray vocabulary, resolves the MAIN checkout's session file even from a
+   worktree copy, and lints with `check_grades.py` at write time;
+   hand-written records remain valid input. The sentence has named
+   the fire's own `seq` directly since 2026-07-05 — `"seq"` is
    REQUIRED on every session-graded record; a record without one can only be
    joined by move_id, and reads as AMBIGUOUS whenever that move fired more than
    once in the session). Since 2026-07-05 those land in

@@ -383,7 +383,7 @@ def test_posttooluse_hook_agent_delivery_includes_agent_id_in_ack():
         check("real subprocess exits 0", r.returncode == 0, r.returncode)
         out = json.loads(r.stdout) if r.stdout.strip() else None
         ctx = (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
-        check("worker delivery via PostToolUse carries this agent_id in the ack", f'"agent_id": "{fake_agent}"' in ctx, ctx)
+        check("worker delivery via PostToolUse carries this agent_id in the ack", f" --agent-id {fake_agent} " in ctx, ctx)
 
 
 def _resolve_fire_fixture(td, move_id, mailbox_kind="worker", event_count=100):
