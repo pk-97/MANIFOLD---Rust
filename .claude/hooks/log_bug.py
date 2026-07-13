@@ -86,11 +86,10 @@ def insert(text: str, bug_id: str, args) -> str:
     """Splice the new index row + entry directly into the raw lines.
 
     Deliberately does NOT go through ``bug_status.rebuild()`` — that helper
-    reconstructs the file from parsed ``Entry`` objects only, and silently
-    drops every non-entry "stray" line (notably the `## Fixed` archive
-    pointer lines, e.g. "- BUG-NNN (slug) — FIXED ... — full history in
-    docs/archive/..."). Routing a write through it would corrupt the file.
-    Splicing preserves everything untouched except the two insertion points.
+    reconstructs the file from parsed ``Entry`` objects (plus, since the
+    BUG-139 fix, the ## Fixed archive-pointer lines) and still drops any
+    other "stray" line. Splicing preserves everything untouched except the
+    two insertion points.
     """
     lines = text.split("\n")
 
@@ -131,7 +130,7 @@ def main() -> int:
             "or pass --dry-run to preview, or --force to override deliberately.")
 
     text = BACKLOG.read_text()
-    head, entries, _, _ = bug_status.parse(text)
+    head, entries, _, _, _ = bug_status.parse(text)
     bug_id = args.bug_id or next_id(head, entries)
     if any(e.id == bug_id for e in entries) or bug_id in bug_status.index_ids(head):
         raise SystemExit(f"{bug_id} already exists — pick a different --id or omit it to auto-assign")
