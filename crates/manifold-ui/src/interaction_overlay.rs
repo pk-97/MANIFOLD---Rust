@@ -307,50 +307,6 @@ fn apply_draw_point(points: &mut Vec<(Beats, f32, UiSegmentShape)>, beat: Beats,
     }
 }
 
-// ── TimelineDrag (P7.3, D8/D11) ────────────────────────────────────
-// The single lifecycle-owner payload for `InteractionOverlay`'s drag
-// controller. `Move`/`TrimLeft`/`TrimRight`/`RegionSelect` stay unit
-// variants here — their state still lives in the loose fields below
-// (`drag_snapshots`, `trim_originals`, `region_drag_start_*`) until P7.4
-// (trim/region) and P7.5 (move) fold it in. The six automation variants
-// carry their state now (P7.3's fold).
-
-#[derive(Debug, Clone)]
-enum TimelineDrag {
-    Move,
-    TrimLeft,
-    TrimRight,
-    RegionSelect,
-    AutomationPoint(AutomationDragState),
-    AutomationSegmentBend(AutomationSegmentBendState),
-    AutomationSegmentDrag(AutomationSegmentDragState),
-    /// Rubber-band marquee — the press corner is the controller session's
-    /// own `start`, so no separate state struct is needed (D9-style: the
-    /// session geometry IS the state; `AutomationMarqueeState` is deleted).
-    AutomationMarquee,
-    AutomationGroupMove(AutomationGroupDragState),
-    AutomationDraw(AutomationDrawState),
-}
-
-impl TimelineDrag {
-    /// 1:1 projection onto the public discriminant every external consumer
-    /// (auto-scroll polling, drag readout, snap, input routing) still reads.
-    fn kind(&self) -> DragMode {
-        match self {
-            TimelineDrag::Move => DragMode::Move,
-            TimelineDrag::TrimLeft => DragMode::TrimLeft,
-            TimelineDrag::TrimRight => DragMode::TrimRight,
-            TimelineDrag::RegionSelect => DragMode::RegionSelect,
-            TimelineDrag::AutomationPoint(_) => DragMode::AutomationPoint,
-            TimelineDrag::AutomationSegmentBend(_) => DragMode::AutomationSegmentBend,
-            TimelineDrag::AutomationSegmentDrag(_) => DragMode::AutomationSegmentDrag,
-            TimelineDrag::AutomationMarquee => DragMode::AutomationMarquee,
-            TimelineDrag::AutomationGroupMove(_) => DragMode::AutomationGroupMove,
-            TimelineDrag::AutomationDraw(_) => DragMode::AutomationDraw,
-        }
-    }
-}
-
 // ── DragSnapshot ────────────────────────────────────────────────
 // Unity InteractionOverlay lines 49-54.
 
@@ -376,6 +332,82 @@ struct TrimOriginal {
     is_looping: bool,
 }
 
+// ── TrimDrag / RegionDrag (P7.4) ─────────────────────────────────
+// The grabbed clip's own pre-trim geometry (for the shared edge-delta snap
+// context) plus every selected clip's `TrimOriginal` the delta fans over —
+// the fold target for the grabbed-clip-id field, the three grabbed-clip
+// geometry fields, and the fan-over Vec that previously sat as four
+// parallel fields on `InteractionOverlay` directly.
+#[derive(Debug, Clone)]
+struct TrimDrag {
+    clip_id: ClipId,
+    original_start_beat: Beats,
+    original_duration_beats: Beats,
+    // Doc-committed shape (UI_WIDGET_UNIFICATION_DESIGN.md P7.4) — mirrors
+    // `original_start_beat`/`original_duration_beats`'s role for the grabbed
+    // clip, but no current handler consults it (the per-clip fan-over reads
+    // `TrimOriginal::in_point` on `originals` instead). Was equally unread
+    // as the pre-fold loose field it replaces — carried forward for shape
+    // parity, not new dead weight. Un-suppression trigger: wire it into a
+    // grabbed-clip-specific in_point read, or delete in a follow-up hygiene
+    // pass if P7.5+ never needs it.
+    #[allow(dead_code)]
+    original_in_point: Seconds,
+    originals: Vec<TrimOriginal>,
+}
+
+/// Rubber-band region-select's grab geometry — the fold target for the two
+/// parallel grab-beat/grab-layer fields that previously sat directly on
+/// `InteractionOverlay`.
+#[derive(Debug, Clone, Copy)]
+struct RegionDrag {
+    start_beat: Beats,
+    start_layer: usize,
+}
+
+// ── TimelineDrag (P7.3/P7.4, D8/D11) ────────────────────────────────────
+// The single lifecycle-owner payload for `InteractionOverlay`'s drag
+// controller. `Move` stays a unit variant here — its state still lives in
+// the loose fields below (`drag_snapshots`, etc.) until P7.5 folds it in.
+// Trim/region/automation all carry their state now (P7.3's automation fold,
+// P7.4's trim/region fold).
+
+#[derive(Debug, Clone)]
+enum TimelineDrag {
+    Move,
+    TrimLeft(TrimDrag),
+    TrimRight(TrimDrag),
+    RegionSelect(RegionDrag),
+    AutomationPoint(AutomationDragState),
+    AutomationSegmentBend(AutomationSegmentBendState),
+    AutomationSegmentDrag(AutomationSegmentDragState),
+    /// Rubber-band marquee — the press corner is the controller session's
+    /// own `start`, so no separate state struct is needed (D9-style: the
+    /// session geometry IS the state; `AutomationMarqueeState` is deleted).
+    AutomationMarquee,
+    AutomationGroupMove(AutomationGroupDragState),
+    AutomationDraw(AutomationDrawState),
+}
+
+impl TimelineDrag {
+    /// 1:1 projection onto the public discriminant every external consumer
+    /// (auto-scroll polling, drag readout, snap, input routing) still reads.
+    fn kind(&self) -> DragMode {
+        match self {
+            TimelineDrag::Move => DragMode::Move,
+            TimelineDrag::TrimLeft(_) => DragMode::TrimLeft,
+            TimelineDrag::TrimRight(_) => DragMode::TrimRight,
+            TimelineDrag::RegionSelect(_) => DragMode::RegionSelect,
+            TimelineDrag::AutomationPoint(_) => DragMode::AutomationPoint,
+            TimelineDrag::AutomationSegmentBend(_) => DragMode::AutomationSegmentBend,
+            TimelineDrag::AutomationSegmentDrag(_) => DragMode::AutomationSegmentDrag,
+            TimelineDrag::AutomationMarquee => DragMode::AutomationMarquee,
+            TimelineDrag::AutomationGroupMove(_) => DragMode::AutomationGroupMove,
+            TimelineDrag::AutomationDraw(_) => DragMode::AutomationDraw,
+        }
+    }
+}
+
 // ── InteractionOverlay ──────────────────────────────────────────
 // Unity InteractionOverlay lines 17-73.
 
@@ -384,10 +416,9 @@ pub struct InteractionOverlay {
     clip_vertical_padding: f32,
 
     // Drag state (Unity lines 37-73) — EXCLUSIVELY owned here
-    // P7.3 (D8/D11): the lifecycle + the six automation gestures' state fold
-    // onto this one controller. `Move`/`TrimLeft`/`TrimRight`/`RegionSelect`
-    // stay unit variants — their state is still the loose fields below,
-    // until P7.4/P7.5 fold those in too.
+    // P7.3/P7.4 (D8/D11): the lifecycle + automation/trim/region gestures'
+    // state fold onto this one controller. `Move` stays a unit variant —
+    // its state is still the loose fields below, until P7.5 folds it in too.
     drag: DragController<TimelineDrag>,
     drag_anchor_clip_id: Option<ClipId>,
     drag_start_layer_index: usize,
@@ -396,27 +427,15 @@ pub struct InteractionOverlay {
     drag_selection_min_start_beat: Beats,
     drag_selection_min_layer: usize,
     drag_selection_max_layer: usize,
-    trim_clip_id: Option<ClipId>,
     drag_layer_blocked: bool,
     // Alt/Opt held at move-drag start → on release, leave a copy of each moved
     // clip at its original position (opt-drag duplicate).
     duplicate_on_release: bool,
-    region_drag_start_beat: Beats,
-    region_drag_start_layer: usize,
 
     // Move-drag anchor geometry, captured at grab time. (Formerly mirrored on
     // UIState — folded here so transient gesture state has one owner.)
     drag_start_beat: Beats,
     drag_offset_beats: Beats, // offset from the anchor clip's start to the mouse beat
-
-    // Trim originals for the GRABBED clip, captured at grab time — these drive
-    // the snap context and the shared edge delta.
-    trim_original_start_beat: Beats,
-    trim_original_duration_beats: Beats,
-    trim_original_in_point: Seconds, // video source offset
-    // Pre-trim geometry for EVERY selected clip — the trim delta fans over
-    // these, and each changed clip is recorded into the undo batch on drag end.
-    trim_originals: Vec<TrimOriginal>,
 
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
@@ -483,17 +502,10 @@ impl InteractionOverlay {
             drag_selection_min_start_beat: Beats::ZERO,
             drag_selection_min_layer: 0,
             drag_selection_max_layer: 0,
-            trim_clip_id: None,
             drag_layer_blocked: false,
             duplicate_on_release: false,
-            region_drag_start_beat: Beats::ZERO,
-            region_drag_start_layer: 0,
             drag_start_beat: Beats::ZERO,
             drag_offset_beats: Beats::ZERO,
-            trim_original_start_beat: Beats::ZERO,
-            trim_original_duration_beats: Beats::ZERO,
-            trim_original_in_point: Seconds::ZERO,
-            trim_originals: Vec::with_capacity(8),
             modifiers: Modifiers::NONE,
             lift_anim: AnimF32::new(0.0, color::MOTION_MED_MS),
             ghost_alpha: AnimF32::new(1.0, color::MOTION_MED_MS),
@@ -616,9 +628,9 @@ impl InteractionOverlay {
     /// `ClipId` wraps `Arc<str>`, so this clone is a refcount bump, not an
     /// allocation.
     pub fn drag_readout_clip_id(&self) -> Option<ClipId> {
-        match self.drag_mode() {
-            DragMode::Move => self.drag_anchor_clip_id.clone(),
-            DragMode::TrimLeft | DragMode::TrimRight => self.trim_clip_id.clone(),
+        match self.drag.payload() {
+            Some(TimelineDrag::Move) => self.drag_anchor_clip_id.clone(),
+            Some(TimelineDrag::TrimLeft(t)) | Some(TimelineDrag::TrimRight(t)) => Some(t.clip_id.clone()),
             _ => None,
         }
     }
@@ -636,35 +648,35 @@ impl InteractionOverlay {
         self.drag_offset_beats = mouse_beat - anchor_start_beat;
     }
 
-    /// Capture a clip's pre-trim geometry for the undo command (formerly
-    /// `UIState::begin_trim_left` / `begin_trim_right` — the left/right flag was
-    /// unused; the drag mode already distinguishes the edge).
-    fn begin_trim(&mut self, clip: &ClipRef) {
-        self.trim_original_start_beat = clip.start_beat;
-        self.trim_original_duration_beats = clip.duration_beats;
-        self.trim_original_in_point = clip.in_point;
-    }
-
-    /// Capture pre-trim geometry for every selected clip, so a trim drag fans
-    /// the grabbed clip's edge delta over the whole selection and records one
-    /// batched undo entry. Locked clips are skipped. The `on_begin_drag` select
-    /// guard ensures the grabbed clip is in the selection before this runs.
-    fn capture_trim_selection(&mut self, ui_state: &UIState, host: &dyn TimelineEditingHost) {
-        self.trim_originals.clear();
+    /// Build the `TrimDrag` payload for a trim begin (P7.4): the grabbed
+    /// clip's own pre-trim geometry (the snap-context half, formerly
+    /// `begin_trim`) plus every selected clip's pre-trim geometry (the
+    /// fan-over half, formerly `capture_trim_selection`) — locked clips
+    /// skipped. The `on_begin_drag` select guard ensures the grabbed clip is
+    /// in the selection before this runs.
+    fn build_trim_drag(clip_id: ClipId, clip: &ClipRef, ui_state: &UIState, host: &dyn TimelineEditingHost) -> TrimDrag {
+        let mut originals = Vec::new();
         for id in ui_state.get_selected_clip_ids() {
-            if let Some(clip) = host.find_clip_by_id(&id) {
-                if clip.is_locked {
+            if let Some(c) = host.find_clip_by_id(&id) {
+                if c.is_locked {
                     continue;
                 }
-                self.trim_originals.push(TrimOriginal {
+                originals.push(TrimOriginal {
                     clip_id: id.clone(),
-                    start_beat: clip.start_beat,
-                    duration_beats: clip.duration_beats,
-                    in_point: clip.in_point,
-                    is_generator: clip.is_generator,
-                    is_looping: clip.is_looping,
+                    start_beat: c.start_beat,
+                    duration_beats: c.duration_beats,
+                    in_point: c.in_point,
+                    is_generator: c.is_generator,
+                    is_looping: c.is_looping,
                 });
             }
+        }
+        TrimDrag {
+            clip_id,
+            original_start_beat: clip.start_beat,
+            original_duration_beats: clip.duration_beats,
+            original_in_point: clip.in_point,
+            originals,
         }
     }
 
@@ -1501,10 +1513,10 @@ impl InteractionOverlay {
 
         if hit.is_none() {
             // Unity lines 288-291: empty area drag → region selection
-            self.drag.start(TimelineDrag::RegionSelect, press_pos);
             // Unity reads Keyboard.current for ctrl/cmd — we use stored modifiers
             let ctrl = self.modifiers.ctrl || self.modifiers.command;
-            self.begin_region_drag(press_pos, ctrl, ui_state, viewport);
+            let region = Self::begin_region_drag(press_pos, ctrl, ui_state, viewport);
+            self.drag.start(TimelineDrag::RegionSelect(region), press_pos);
             return;
         }
 
@@ -1526,12 +1538,10 @@ impl InteractionOverlay {
                     ui_state.select_clip(hit.clip_id.clone(), hit_layer_id.clone());
                     host.on_clip_selected(&hit.clip_id);
                 }
-                self.drag.start(TimelineDrag::TrimLeft, press_pos);
-                self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
-                    self.begin_trim(&clip);
+                    let trim = Self::build_trim_drag(hit.clip_id.clone(), &clip, ui_state, host);
+                    self.drag.start(TimelineDrag::TrimLeft(trim), press_pos);
                 }
-                self.capture_trim_selection(ui_state, host);
             }
             // Unity lines 311-320: trim right
             HitRegion::TrimRight => {
@@ -1539,12 +1549,10 @@ impl InteractionOverlay {
                     ui_state.select_clip(hit.clip_id.clone(), hit_layer_id);
                     host.on_clip_selected(&hit.clip_id);
                 }
-                self.drag.start(TimelineDrag::TrimRight, press_pos);
-                self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
-                    self.begin_trim(&clip);
+                    let trim = Self::build_trim_drag(hit.clip_id.clone(), &clip, ui_state, host);
+                    self.drag.start(TimelineDrag::TrimRight(trim), press_pos);
                 }
-                self.capture_trim_selection(ui_state, host);
             }
             // Unity lines 322-324: body → move drag
             HitRegion::Body => {
@@ -1636,10 +1644,10 @@ impl InteractionOverlay {
         // here (their own state still lives in the loose fields until
         // P7.4/P7.5 fold it onto the payload).
         let ended_move;
-        let ended_trim;
+        let mut trim_state: Option<TrimDrag> = None;
         match self.drag.release() {
             // Unity lines 358-363: region select → finalize
-            Some(TimelineDrag::RegionSelect) => {
+            Some(TimelineDrag::RegionSelect(_)) => {
                 host.invalidate_all_layer_bitmaps();
                 return;
             }
@@ -1689,15 +1697,13 @@ impl InteractionOverlay {
             }
             Some(TimelineDrag::Move) => {
                 ended_move = true;
-                ended_trim = false;
             }
-            Some(TimelineDrag::TrimLeft) | Some(TimelineDrag::TrimRight) => {
+            Some(TimelineDrag::TrimLeft(t)) | Some(TimelineDrag::TrimRight(t)) => {
                 ended_move = false;
-                ended_trim = true;
+                trim_state = Some(t);
             }
             None => {
                 ended_move = false;
-                ended_trim = false;
             }
         }
 
@@ -1750,10 +1756,10 @@ impl InteractionOverlay {
             for snapshot in &self.drag_snapshots {
                 host.enforce_non_overlap(&snapshot.clip_id, &self.drag_snapshot_clip_ids);
             }
-        } else if ended_trim {
+        } else if let Some(trim) = &trim_state {
             // Unity lines 390-401: record a trim command for every selected clip
             // that actually changed, each with its own pre/post geometry.
-            for orig in &self.trim_originals {
+            for orig in &trim.originals {
                 if let Some(clip) = host.find_clip_by_id(&orig.clip_id) {
                     let start_changed =
                         (clip.start_beat - orig.start_beat).abs() >= Beats(0.0001);
@@ -1777,7 +1783,7 @@ impl InteractionOverlay {
             // ignoring the trimmed set itself so co-selected clips don't shove
             // each other (mirrors the move path's drag_snapshot_clip_ids).
             let trimmed_ids: HashSet<ClipId> =
-                self.trim_originals.iter().map(|o| o.clip_id.clone()).collect();
+                trim.originals.iter().map(|o| o.clip_id.clone()).collect();
             for id in &trimmed_ids {
                 host.enforce_non_overlap(id, &trimmed_ids);
             }
@@ -1828,8 +1834,8 @@ impl InteractionOverlay {
     /// P1.4 (D5/D8); callers should only invoke this when `drag_mode()` is
     /// `Move`, `TrimLeft`, or `TrimRight`.
     pub fn cancel_drag(&mut self, host: &mut dyn TimelineEditingHost) {
-        match self.drag_mode() {
-            DragMode::Move => {
+        match self.drag.payload() {
+            Some(TimelineDrag::Move) => {
                 for snapshot in &self.drag_snapshots {
                     host.set_clip_start_beat(&snapshot.clip_id, snapshot.start_beat);
                     if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id)
@@ -1839,8 +1845,8 @@ impl InteractionOverlay {
                     }
                 }
             }
-            DragMode::TrimLeft | DragMode::TrimRight => {
-                for orig in &self.trim_originals {
+            Some(TimelineDrag::TrimLeft(t)) | Some(TimelineDrag::TrimRight(t)) => {
+                for orig in &t.originals {
                     host.set_clip_trim(
                         &orig.clip_id,
                         orig.start_beat,
@@ -1871,8 +1877,6 @@ impl InteractionOverlay {
         self.drag_snapshots.clear();
         self.drag_snapshot_clip_ids.clear();
         self.drag_anchor_clip_id = None;
-        self.trim_clip_id = None;
-        self.trim_originals.clear();
         self.duplicate_on_release = false;
         self.drag_layer_blocked = false;
         host.mark_dirty();
@@ -2033,10 +2037,11 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &mut TimelineViewportPanel,
     ) {
-        let trim_id = match &self.trim_clip_id {
-            Some(id) => id.clone(),
-            None => return,
+        let Some(TimelineDrag::TrimLeft(trim)) = self.drag.payload() else {
+            return;
         };
+        let trim_id = trim.clip_id.clone();
+        let grabbed_original_start_beat = trim.original_start_beat;
 
         // B11: autoscroll BEFORE the beat conversion, same ordering as
         // `handle_move_drag` — a parked pointer still advances the trim as
@@ -2057,9 +2062,9 @@ impl InteractionOverlay {
         } else {
             viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
         };
-        let raw_delta = snapped - self.trim_original_start_beat;
+        let raw_delta = snapped - grabbed_original_start_beat;
 
-        for orig in &self.trim_originals {
+        for orig in &trim.originals {
             let original_end = orig.start_beat + orig.duration_beats;
             // Video clips clamp to their own original start (in_point can't go
             // negative); generators extend left freely. (Unity lines 548-551.)
@@ -2087,10 +2092,11 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &mut TimelineViewportPanel,
     ) {
-        let trim_id = match &self.trim_clip_id {
-            Some(id) => id.clone(),
-            None => return,
+        let Some(TimelineDrag::TrimRight(trim)) = self.drag.payload() else {
+            return;
         };
+        let trim_id = trim.clip_id.clone();
+        let grabbed_original_end = trim.original_start_beat + trim.original_duration_beats;
 
         // B11: autoscroll BEFORE the beat conversion (see handle_trim_left_drag).
         viewport.autoscroll_edge(screen_pos);
@@ -2107,11 +2113,9 @@ impl InteractionOverlay {
         } else {
             viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id))
         };
-        let grabbed_original_end =
-            self.trim_original_start_beat + self.trim_original_duration_beats;
         let raw_delta = snapped - grabbed_original_end;
 
-        for orig in &self.trim_originals {
+        for orig in &trim.originals {
             let new_end = (orig.start_beat + orig.duration_beats + raw_delta)
                 .max(orig.start_beat + min_duration);
             let mut new_duration = new_end - orig.start_beat;
@@ -2320,20 +2324,22 @@ impl InteractionOverlay {
     // ────────────────────────────────────────────────────────────
 
     /// Port of Unity InteractionOverlay.BeginRegionDrag (lines 778-795).
+    /// Builds the `RegionDrag` payload (P7.4) — no `&mut self` needed, the
+    /// caller starts the controller with the result.
     fn begin_region_drag(
-        &mut self,
         press_pos: Vec2,
         ctrl_held: bool,
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
-    ) {
-        self.region_drag_start_beat = viewport.pixel_to_beat(press_pos.x);
-        self.region_drag_start_layer = viewport.layer_at_y(press_pos.y).unwrap_or(0);
+    ) -> RegionDrag {
+        let start_beat = viewport.pixel_to_beat(press_pos.x);
+        let start_layer = viewport.layer_at_y(press_pos.y).unwrap_or(0);
 
         // Unity lines 793-794: clear selection unless Ctrl held
         if !ctrl_held {
             ui_state.clear_selection();
         }
+        RegionDrag { start_beat, start_layer }
     }
 
     /// Port of Unity InteractionOverlay.UpdateRegionDrag (lines 797-836).
@@ -2344,18 +2350,21 @@ impl InteractionOverlay {
         viewport: &mut TimelineViewportPanel,
         host: &dyn TimelineEditingHost,
     ) {
+        let Some(TimelineDrag::RegionSelect(region)) = self.drag.payload() else {
+            return;
+        };
+        let (region_start_beat, region_start_layer) = (region.start_beat, region.start_layer);
+
         // B11: edge autoscroll for rubber-band, same ordering as move/trim —
         // BEFORE the beat conversion below.
         viewport.autoscroll_edge(pos);
         let beat = viewport.pixel_to_beat(pos.x);
-        let layer = viewport
-            .layer_at_y(pos.y)
-            .unwrap_or(self.region_drag_start_layer);
+        let layer = viewport.layer_at_y(pos.y).unwrap_or(region_start_layer);
 
-        let min_beat = self.region_drag_start_beat.min(beat);
-        let max_beat = self.region_drag_start_beat.max(beat);
-        let min_layer = self.region_drag_start_layer.min(layer);
-        let max_layer = self.region_drag_start_layer.max(layer);
+        let min_beat = region_start_beat.min(beat);
+        let max_beat = region_start_beat.max(beat);
+        let min_layer = region_start_layer.min(layer);
+        let max_layer = region_start_layer.max(layer);
 
         // Unity lines 818-821: grid snap both edges
         let snapped_min = viewport.snap_to_grid(min_beat);
@@ -2828,6 +2837,7 @@ mod p1_4_gesture_integrity_tests {
         start_beat: Beats,
         duration_beats: Beats,
         in_point: Seconds,
+        is_locked: bool,
     }
 
     struct GestureTestHost {
@@ -2893,6 +2903,19 @@ mod p1_4_gesture_integrity_tests {
                 start_beat: Beats::from_f32(start),
                 duration_beats: Beats::from_f32(duration),
                 in_point: Seconds::ZERO,
+                is_locked: false,
+            });
+            self
+        }
+
+        fn with_locked_clip(mut self, id: &str, layer_index: usize, start: f32, duration: f32) -> Self {
+            self.clips.push(ClipEntry {
+                id: ClipId::new(id),
+                layer_index,
+                start_beat: Beats::from_f32(start),
+                duration_beats: Beats::from_f32(duration),
+                in_point: Seconds::ZERO,
+                is_locked: true,
             });
             self
         }
@@ -2907,7 +2930,7 @@ mod p1_4_gesture_integrity_tests {
                 layer_id: self.layers[e.layer_index].layer_id.clone(),
                 in_point: e.in_point,
                 is_generator: false,
-                is_locked: false,
+                is_locked: e.is_locked,
                 is_looping: false,
             }
         }
@@ -3386,6 +3409,128 @@ mod p1_4_gesture_integrity_tests {
 
         assert_eq!(overlay.drag_mode(), DragMode::None);
         assert_eq!(host.automation_draw_commits.len(), 1, "one commit per finished stroke");
+    }
+
+    // ── P7.4 trim/region-fold pinning ───────────────────────────────────
+    // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.4: prove trim-left/trim-right
+    // fan-over (incl. locked-clip skip) and region-select extents survive the
+    // fold of the grabbed-clip-id/geometry fields and the fan-over Vec onto
+    // `TimelineDrag::TrimLeft(TrimDrag)`/`TrimRight(TrimDrag)`, and the grab
+    // beat/layer pair onto `TimelineDrag::RegionSelect(RegionDrag)`.
+
+    fn trim_left_pos(panel: &TimelineViewportPanel, clip_start_beat: f32) -> Vec2 {
+        Vec2::new(panel.beat_to_pixel(Beats::from_f32(clip_start_beat)) + 3.0, panel.tracks_rect().y + 70.0)
+    }
+
+    fn trim_right_pos(panel: &TimelineViewportPanel, clip_end_beat: f32) -> Vec2 {
+        Vec2::new(panel.beat_to_pixel(Beats::from_f32(clip_end_beat)) - 3.0, panel.tracks_rect().y + 70.0)
+    }
+
+    #[test]
+    fn build_trim_drag_skips_locked_clips_in_the_fan_over() {
+        let host = GestureTestHost::new(&["layer-0"])
+            .with_clip("a", 0, 0.0, 8.0)
+            .with_locked_clip("b", 0, 2.0, 3.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("a"), ClipId::new("b")]);
+        let clip_a = host.find_clip_by_id("a").unwrap();
+
+        let trim = InteractionOverlay::build_trim_drag(ClipId::new("a"), &clip_a, &ui_state, &host);
+
+        assert_eq!(trim.clip_id, ClipId::new("a"));
+        assert_eq!(trim.originals.len(), 1, "the locked clip must be skipped");
+        assert_eq!(trim.originals[0].clip_id, ClipId::new("a"));
+    }
+
+    #[test]
+    fn trim_left_drag_fans_delta_over_the_whole_selection_and_batches_undo() {
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"])
+            .with_clip("clip_a", 0, 0.0, 8.0)
+            .with_clip("clip_b", 0, 16.0, 4.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a"), ClipId::new("clip_b")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let press = trim_left_pos(&panel, 0.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::TrimLeft, "pressing the left edge must begin a left trim");
+
+        // Drag right by ~1 beat — shrinks clip_a from the left; the SAME
+        // beat delta fans over clip_b too (it's part of the selection).
+        overlay.on_drag(press + Vec2::new(panel.beat_to_pixel(Beats::from_f32(1.0)) - panel.beat_to_pixel(Beats::ZERO), 0.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        assert_eq!(host.trim_records.len(), 2, "both selected clips must be recorded (fan-over)");
+        assert_eq!(host.committed_batches.len(), 1, "one batched undo entry for the whole trim");
+        let a = host.find_clip_by_id("clip_a").unwrap();
+        assert!(a.start_beat > Beats::ZERO, "clip_a's start must have moved right");
+    }
+
+    #[test]
+    fn trim_right_drag_clamps_to_minimum_duration() {
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let press = trim_right_pos(&panel, 8.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::TrimRight);
+
+        // Drag far left — must clamp at the 1/16-note (0.25 beat) minimum,
+        // never collapse to zero or negative duration.
+        overlay.on_drag(Vec2::new(panel.tracks_rect().x, press.y), &mut host, &mut ui_state, &mut panel);
+        let mid = host.find_clip_by_id("clip_a").unwrap().duration_beats;
+        assert!(mid >= Beats(0.25), "duration must clamp at the 1/16 minimum mid-drag: {mid:?}");
+
+        overlay.on_end_drag(&mut host);
+        let end = host.find_clip_by_id("clip_a").unwrap().duration_beats;
+        assert!(end >= Beats(0.25), "duration must clamp at the 1/16 minimum at commit: {end:?}");
+    }
+
+    #[test]
+    fn drag_readout_clip_id_reports_the_trimmed_clip() {
+        let panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let press = trim_left_pos(&panel, 0.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_readout_clip_id(), Some(ClipId::new("clip_a")));
+
+        overlay.on_end_drag(&mut host);
+        assert_eq!(overlay.drag_readout_clip_id(), None, "readout clears once the drag ends");
+    }
+
+    #[test]
+    fn region_select_drag_updates_extents_and_clears_prior_selection() {
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"])
+            .with_clip("clip_a", 0, 0.0, 8.0)
+            .with_clip("clip_b", 0, 16.0, 4.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        // Press empty area (well past clip_b, at beat ~30) to begin a region drag.
+        let press = body_pos_for(&panel, 30.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::RegionSelect);
+        assert!(ui_state.get_selected_clip_ids().is_empty(), "a bare region drag clears prior clip selection");
+
+        // Drag back to beat ~2, spanning most of clip_a's range.
+        overlay.on_drag(body_pos_for(&panel, 2.0), &mut host, &mut ui_state, &mut panel);
+        let region = ui_state.current_region().expect("region must be active mid-drag");
+        assert!(region.start_beat < region.end_beat);
+        assert!(region.end_beat >= Beats::from_f32(29.0), "region must extend to the drag's far corner");
+
+        overlay.on_end_drag(&mut host);
+        assert_eq!(overlay.drag_mode(), DragMode::None);
     }
 
     fn body_pos_for(panel: &TimelineViewportPanel, beat_center: f32) -> Vec2 {
