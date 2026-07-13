@@ -47,6 +47,7 @@ pub mod primitives;
 mod snapshot;
 mod state_store;
 pub mod trigger_shadow_lint;
+pub mod validate;
 mod validation;
 
 /// Canonical channel-name registry for the Channel type system. The
@@ -117,6 +118,7 @@ pub use snapshot::{
 /// with the structural snapshot, so frozen and live values format identically.
 pub(crate) use snapshot::param_default_to_f32;
 pub use state_store::{NodeState, OwnerKey, StateStore};
+pub use validate::{ValidateKind, ValidationIssue, ValidationReport, validate_def};
 pub use validation::{
     ChannelMismatchInfo, ChannelMismatchReason, GraphError, TextureChannelMismatchInfo,
     TextureChannelMismatchReason, channels_compatible, texture_channels_compatible,
