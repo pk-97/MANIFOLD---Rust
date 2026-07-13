@@ -330,7 +330,7 @@ edge-detector reads the raw conditioned value, never the display-smoothed one); 
 it into the round-trip test session.
 
 ### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
-**Status:** DEFERRED — default post-release (Peter can pull it forward if overlay chains start to matter); logged 2026-07-11 while sharpening the codegen-mandate scope test.
+**Status:** OPEN — scheduled: `docs/FUSION_SOTA_DESIGN.md` P4 (the `BufferIndex` read path + draw-family conversion) owns the fix. Peter, 2026-07-14: "I never made a call about post release. No need to defer this fusion work" — the earlier "default post-release" framing was never his decision. Logged 2026-07-11 while sharpening the codegen-mandate scope test.
 
 **Symptom** — the six `draw_*` atoms (draw_dots/markers/ticks/gauge/scanlines/connections) remain
 plain-WGSL fusion boundaries despite being per-element in shape: each dispatches one thread per
