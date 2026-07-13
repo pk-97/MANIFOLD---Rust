@@ -966,11 +966,20 @@ fn build_import_graph(
     // how every other card knob here maps 1:1 to a node param. Both
     // default to 0 (off, matches the atom's own defaults) — the sun's
     // `cast_shadows` (already on above) is what gives the shafts their
-    // shape once both faders are up. Range mirrors the primitive's own
-    // declared envelope.
+    // shape once both faders are up.
+    //
+    // Fog density is scene-scaled like `ssao_radius`/`dof_focus` (BUG-149):
+    // the atom's `fog_density` is per-world-unit, so a raw 0–1 slider is a
+    // cliff on any real import (0.13 at the apricot fixture's 27.87-unit
+    // framing distance is optical depth ~3.6 ≈ 97% fog — flat grey mesh,
+    // and the shaft march's in-scattering then blows out the whole frame).
+    // The binding scale maps the slider to optical depth AT THE SUBJECT
+    // (density · framing distance): 3.0/distance puts slider 1.0 at depth
+    // 3 ≈ 95% fogged (whiteout stays reachable), 0.5 ≈ 78%, 0.1 ≈ 26%
+    // haze — the same perceptual fader on any model scale.
     card_params.push(card_param("fog_density", "Fog Density", 0.0, 1.0, 0.0, false, "Atmosphere"));
     card_bindings.push(card_binding(
-        "fog_density", "Fog Density", 0.0, "atmosphere", "fog_density", 1.0,
+        "fog_density", "Fog Density", 0.0, "atmosphere", "fog_density", 3.0 / distance,
     ));
     card_params.push(card_param("god_rays", "God Rays", 0.0, 2.0, 0.0, false, "Atmosphere"));
     card_bindings.push(card_binding(
@@ -1274,6 +1283,18 @@ mod tests {
         assert_eq!(fog_density.default_value, 0.0, "fog starts off");
         let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
         assert_eq!(god_rays.default_value, 0.0, "god rays start off");
+        // BUG-149: fog density is scene-scaled — the binding maps the 0–1
+        // slider to optical depth at the subject (3.0 / framing distance,
+        // where the framing distance is exactly the cam_dist card default),
+        // never raw per-world-unit density.
+        let cam_dist = meta.params.iter().find(|p| p.id == "cam_dist").unwrap();
+        let fog_binding = meta.bindings.iter().find(|b| b.id == "fog_density").unwrap();
+        assert!(
+            (fog_binding.scale * cam_dist.default_value - 3.0).abs() < 1e-4,
+            "fog slider must scale by 3.0/framing-distance (got scale {} at distance {})",
+            fog_binding.scale,
+            cam_dist.default_value
+        );
         for gone in [
             "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
             "motion_blur_px", "mb_shutter", "ssao_bias",
