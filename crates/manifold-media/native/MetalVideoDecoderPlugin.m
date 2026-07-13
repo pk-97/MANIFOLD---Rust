@@ -56,12 +56,19 @@
 // transfer function the display and the still exporter use. Built by
 // concatenating kManifoldColorTransferFunctionsMSL with this kernel body in
 // VideoDecoder_CreatePool (see below), same pattern as the encoder plugin.
+//
+// BUG-131: the YCbCr->RGB matrix used to be BT.709 unconditionally. It's now
+// a uniform (`matrix_coeffs`, buffer(0)) selected on the CPU side per frame
+// from the decoded CVPixelBuffer's colorimetry attachments — see
+// `MatrixCoeffsForPixelBuffer` below. `matrix_coeffs` = (rCr, gCb, gCr, bCb):
+// r = y + rCr*cr; g = y + gCb*cb + gCr*cr; b = y + bCb*cb.
 
 static NSString* const kYuvToRgbaShaderBody =
     @"kernel void yuv_to_rgba(\n"
      "    texture2d<float, access::read>  y_tex    [[texture(0)]],\n"
      "    texture2d<float, access::read>  cbcr_tex [[texture(1)]],\n"
      "    texture2d<float, access::write> out_tex  [[texture(2)]],\n"
+     "    constant float4& matrix_coeffs [[buffer(0)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= out_tex.get_width() || gid.y >= out_tex.get_height()) return;\n"
@@ -96,21 +103,68 @@ static NSString* const kYuvToRgbaShaderBody =
      "    uint2 cbcr_coord = src_coord / 2;\n"
      "    float2 cbcr = cbcr_tex.read(cbcr_coord).rg;\n"
      "\n"
-     "    // BT.709 video range (16-235 Y, 16-240 CbCr) → normalized\n"
+     "    // Video range (16-235 Y, 16-240 CbCr) → normalized\n"
      "    float y = (y_val - 16.0 / 255.0) * (255.0 / 219.0);\n"
      "    float cb = cbcr.r - 0.5;\n"
      "    float cr = cbcr.g - 0.5;\n"
      "\n"
-     "    // BT.709 YCbCr → RGB\n"
-     "    float r = y + 1.5748 * cr;\n"
-     "    float g = y - 0.1873 * cb - 0.4681 * cr;\n"
-     "    float b = y + 1.8556 * cb;\n"
+     "    // YCbCr -> RGB using the matrix selected on the CPU side for this\n"
+     "    // source's colorimetry (BT.601 / BT.709 / BT.2020 — see\n"
+     "    // MatrixCoeffsForPixelBuffer).\n"
+     "    float r = y + matrix_coeffs.x * cr;\n"
+     "    float g = y + matrix_coeffs.y * cb + matrix_coeffs.z * cr;\n"
+     "    float b = y + matrix_coeffs.w * cb;\n"
      "\n"
      "    // sRGB gamma -> linear (true piecewise EOTF, matches display + still export)\n"
      "    float3 linear_rgb = manifold_srgb_decode(max(float3(r, g, b), 0.0));\n"
      "\n"
      "    out_tex.write(float4(linear_rgb, 1.0), gid);\n"
      "}\n";
+
+// -- BUG-131: per-source YCbCr->RGB matrix coefficients -----------------------
+// (rCr, gCb, gCr, bCb) matching the shader's:
+//   r = y + rCr*cr; g = y + gCb*cb + gCr*cr; b = y + bCb*cb
+// Standard published coefficients for each matrix, derived from Kr/Kb:
+//   BT.601 (Kr=0.299,  Kb=0.114):  rCr=1.402,   gCb=-0.344136, gCr=-0.714136, bCb=1.772
+//   BT.709 (Kr=0.2126, Kb=0.0722): rCr=1.5748,  gCb=-0.1873,   gCr=-0.4681,   bCb=1.8556
+//   BT.2020(Kr=0.2627, Kb=0.0593): rCr=1.4746,  gCb=-0.16455,  gCr=-0.57135,  bCb=1.8814
+
+typedef struct
+{
+    float rCr;
+    float gCb;
+    float gCr;
+    float bCb;
+} YCbCrMatrixCoeffs;
+
+static const YCbCrMatrixCoeffs kMatrixBT601 = { 1.402f, -0.344136f, -0.714136f, 1.772f };
+static const YCbCrMatrixCoeffs kMatrixBT709 = { 1.5748f, -0.1873f, -0.4681f, 1.8556f };
+static const YCbCrMatrixCoeffs kMatrixBT2020 = { 1.4746f, -0.16455f, -0.57135f, 1.8814f };
+
+/// Select the YCbCr->RGB matrix for a decoded CVPixelBuffer from its
+/// kCVImageBufferYCbCrMatrixKey colorimetry attachment. Falls back to the
+/// conventional SD/HD split (BT.601 for <=576 lines, BT.709 above) when the
+/// attachment is absent, since untagged sources still need a matrix picked.
+static YCbCrMatrixCoeffs MatrixCoeffsForPixelBuffer(CVPixelBufferRef pixelBuffer, size_t height)
+{
+    CVAttachmentMode attachmentMode = kCVAttachmentMode_ShouldPropagate;
+    CFTypeRef matrixKey = CVBufferCopyAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, &attachmentMode);
+    if (matrixKey != NULL)
+    {
+        YCbCrMatrixCoeffs coeffs;
+        if (CFEqual(matrixKey, kCVImageBufferYCbCrMatrix_ITU_R_601_4))
+            coeffs = kMatrixBT601;
+        else if (CFEqual(matrixKey, kCVImageBufferYCbCrMatrix_ITU_R_2020))
+            coeffs = kMatrixBT2020;
+        else
+            // kCVImageBufferYCbCrMatrix_ITU_R_709_2, or any other/unknown
+            // tag — BT.709 is the safe default for anything HD-shaped.
+            coeffs = kMatrixBT709;
+        CFRelease(matrixKey);
+        return coeffs;
+    }
+    return (height <= 576) ? kMatrixBT601 : kMatrixBT709;
+}
 
 // -- Pool State (shared across all decoders) ----------------------------------
 
@@ -134,6 +188,7 @@ typedef struct
     CVPixelBufferRef                currentFrame;   // retained NV12 CVPixelBuffer
     CVMetalTextureRef               metalTextureY;  // Y plane as R8Unorm
     CVMetalTextureRef               metalTextureCbCr; // CbCr plane as RG8Unorm
+    YCbCrMatrixCoeffs               matrixCoeffs;   // BUG-131: selected per decoded frame
     float                           currentFrameTime;
     float                           duration;
     float                           frameRate;
@@ -255,6 +310,11 @@ static int DecodeOneFrame(VideoDecoderHandle* h)
     CVPixelBufferRetain(pixelBuffer);
     h->currentFrame = pixelBuffer;
     h->currentFrameTime = frameTime;
+
+    // BUG-131: select the YCbCr->RGB matrix from this frame's colorimetry
+    // attachment (sources can be re-tagged mid-asset in principle; cheap to
+    // recompute per frame).
+    h->matrixCoeffs = MatrixCoeffsForPixelBuffer(pixelBuffer, CVPixelBufferGetHeight(pixelBuffer));
 
     // Create Metal texture views for both NV12 planes via CVMetalTextureCache
     // Plane 0: Y (R8Unorm, full resolution)
@@ -558,6 +618,9 @@ int VideoDecoder_CopyFrameToTexture(void* poolPtr, void* handle, void* destMetal
         [compute setComputePipelineState:pool->convertPipeline];
         [compute setTexture:yTexture atIndex:0];
         [compute setTexture:cbcrTexture atIndex:1];
+        // BUG-131: matrix chosen per frame in DecodeOneFrame from the
+        // buffer's colorimetry attachments.
+        [compute setBytes:&h->matrixCoeffs length:sizeof(h->matrixCoeffs) atIndex:0];
         [compute setTexture:destTexture atIndex:2];
 
         // Dispatch based on destination texture size
