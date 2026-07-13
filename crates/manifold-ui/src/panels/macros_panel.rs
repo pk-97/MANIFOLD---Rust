@@ -464,15 +464,13 @@ impl MacrosPanel {
     }
 
     /// Node-intent dispatch for the macro sliders: track → reset (via the
-    /// host's shared replay), label → open mappings dropdown.
+    /// host's shared replay), label → open mappings dropdown (P3/D14: through
+    /// the contract's `register_label_mapping`, not a hand `intents.on`).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::RightClick;
         self.host.register_slider_resets(intents);
         for (i, s) in self.sliders.iter().enumerate() {
-            if let Some(ids) = s.ids()
-                && let Some(label) = ids.label
-            {
-                intents.on(label, RightClick, PanelAction::MacroLabelRightClick(i));
+            if let Some(ids) = s.ids() {
+                BitmapSlider::register_label_mapping(ids, &PanelAction::MacroLabelRightClick(i), intents);
             }
         }
     }

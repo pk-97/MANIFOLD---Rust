@@ -155,10 +155,10 @@ impl GraphCanvas {
         // Ghost wire while the user is dragging from an output port.
         // Drawn beneath nodes so the wire passes "through" the cursor
         // visually if the cursor overlaps a node.
-        if let DragMode::WireFrom {
+        if let Some(CanvasDrag::WireFrom {
             from_node,
             from_port,
-        } = &self.drag_mode
+        }) = self.drag.payload()
         {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
@@ -233,7 +233,7 @@ impl GraphCanvas {
         // over a param row — that param's help line. Drawn above the nodes, and
         // only when the canvas is idle (a tooltip chasing the cursor mid-drag
         // would be noise) and no popover is open.
-        if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
+        if !self.drag.is_active() && !self.mapping_popover.is_open() {
             ui.push_depth(Depth::TOOLTIP);
             self.draw_hover_tooltip(ui, viewport, canvas);
             ui.pop_depth();
@@ -384,7 +384,10 @@ impl GraphCanvas {
             format!("crumbs: {:?}", self.scope_titles),
             format!("nodes: {}   wires: {}", self.nodes.len(), self.wires.len()),
             format!("selected: {:?}   hovered: {:?}", self.selected, self.hovered),
-            format!("drag: {}", self.drag_mode.debug_label()),
+            format!(
+                "drag: {}",
+                self.drag.payload().map(CanvasDrag::debug_label).unwrap_or("none")
+            ),
             format!(
                 "zoom: {:.2}   pan: ({:.0}, {:.0})",
                 self.zoom, self.pan.0, self.pan.1
