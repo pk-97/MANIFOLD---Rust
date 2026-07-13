@@ -1177,6 +1177,7 @@ impl Application {
                             scale,
                             offset,
                             range,
+                            section,
                         )) = crate::app_render::resolve_canvas_binding(
                             self.content_state.active_graph_snapshot.as_deref(),
                             self.watched_graph_target.as_ref(),
@@ -1188,6 +1189,7 @@ impl Application {
                         canvas.open_mapping_popover(
                             viewport, node_id, pi, binding_id, label, min, max, invert,
                             crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
+                            section,
                         );
                     }
                 }
