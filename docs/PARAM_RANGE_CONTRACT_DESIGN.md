@@ -1,6 +1,6 @@
 # Param Range Contract — real boundaries are contracts, everything else is a hint
 
-**Status:** APPROVED design, in execution · 2026-07-13 · Fable (design session with Peter; approved by Peter same day: "Go")
+**Status:** SHIPPED — P1–P2 built, gated, landed 2026-07-13 (same-day design→execution). Outcome: only FOUR contracts exist library-wide (mux selector/counts — Index/Count); every §2 "likely real" floor/clamp was REJECTED on kernel evidence (P2 report in docs/landings/2026-07-13-param-range-contract.md). Text-entry hint clamps removed (5 sites).
 **Prerequisites:** GRAPH_TOOLING_DESIGN (SHIPPED 2026-07-13) — the card lints, `validate_def`, and the `boundary_reason` declared-excuse pattern this design reuses.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 
