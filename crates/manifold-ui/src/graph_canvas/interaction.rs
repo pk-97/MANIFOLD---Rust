@@ -1,15 +1,24 @@
-//! Canvas interaction: the `DragMode` state machine, the per-event input
-//! handlers the editor window calls (pointer/pan/left-button), selection and
-//! scope navigation, the mapping-popover forwarders, and the `request_*`
-//! command emitters. Every mutation is queued onto `pending_actions` and
-//! drained by the editor window each event.
+//! Canvas interaction: the `CanvasDrag` drag-lifecycle payload, the per-event
+//! input handlers the editor window calls (pointer/pan/left-button),
+//! selection and scope navigation, the mapping-popover forwarders, and the
+//! `request_*` command emitters. Every mutation is queued onto
+//! `pending_actions` and drained by the editor window each event.
 
 use super::*;
 
+/// The canvas's one drag-lifecycle payload (P7.2,
+/// `docs/UI_WIDGET_UNIFICATION_DESIGN.md` D8/D9). Was `DragMode` — renamed so
+/// the compiler-driven sweep touched every site (D9). Session geometry
+/// replaces the per-variant position fields: `press_origin_x` is
+/// `session.start.x`; `Marquee`'s `origin_screen` is `session.start`; `Pan`'s
+/// `drag_anchor` is `session.start` with `drag_pan_start` captured at grab as
+/// `pan_at_grab`. Idle is the controller's `None` session — there is no
+/// `None` variant here.
 #[derive(Debug, Clone)]
-pub(crate) enum DragMode {
-    None,
-    Pan,
+pub(crate) enum CanvasDrag {
+    /// Panning the canvas. `pan_at_grab` is `self.pan` at press time — was
+    /// the field `drag_pan_start`.
+    Pan { pan_at_grab: (f32, f32) },
     /// Dragging from an output port to draw a wire. On release over an
     /// input port, emits `GraphEditCommand::ConnectPorts`.
     WireFrom {
@@ -26,7 +35,7 @@ pub(crate) enum DragMode {
         anchor_offset: (f32, f32),
     },
     /// Scrubbing a numeric param on a node's face. Cumulative pixel delta
-    /// from `press_origin_x` maps to a value delta over
+    /// from the grab position (`session.start.x`) maps to a value delta over
     /// `PARAM_SCRUB_FULL_RANGE_PX`, anchored on `start_value` so a long
     /// drag doesn't accumulate float error. Emits `SetGraphNodeParam` each
     /// pointer move, matching the inspector sidebar — unless `outer_param_id`
@@ -40,7 +49,6 @@ pub(crate) enum DragMode {
         range: (f32, f32),
         start_value: f32,
         is_int: bool,
-        press_origin_x: f32,
         outer_param_id: Option<String>,
     },
     /// Scrubbing one channel of a `Color` / `Vec2..4` param via its row in the
@@ -48,8 +56,9 @@ pub(crate) enum DragMode {
     /// press; the dragged `channel` is overwritten each pointer move and the full
     /// vector emitted as one `SetGraphNodeParam` (the other channels held) —
     /// parity with the sidebar's channel scrub. Colours scrub 0..1; vectors over
-    /// their declared range. Anchored on `start_value = base[channel]` via
-    /// `press_origin_x` so a long drag doesn't accumulate float error.
+    /// their declared range. Anchored on `start_value = base[channel]` via the
+    /// grab position (`session.start.x`) so a long drag doesn't accumulate
+    /// float error.
     VecScrub {
         node_id: u32,
         param_name: String,
@@ -57,29 +66,26 @@ pub(crate) enum DragMode {
         channel: usize,
         base: [f32; 4],
         range: (f32, f32),
-        press_origin_x: f32,
     },
-    /// Rubber-band selection from a Shift+empty-canvas press. `origin_screen`
-    /// is the press point; the live rect spans it to the current cursor. On
-    /// release, the nodes the box intersects become the selection (replace).
-    Marquee { origin_screen: (f32, f32) },
+    /// Rubber-band selection from a Shift+empty-canvas press. The press point
+    /// is `session.start` (was the field `origin_screen`); the live rect
+    /// spans it to the current cursor. On release, the nodes the box
+    /// intersects become the selection (replace).
+    Marquee,
 }
 
-impl DragMode {
-    fn is_pan(&self) -> bool {
-        matches!(self, DragMode::Pan)
-    }
-
-    /// Short tag for the debug overlay readout.
+impl CanvasDrag {
+    /// Short tag for the debug overlay readout. The idle case (was
+    /// `DragMode::None`) lives at the readout call site now — there's no
+    /// idle variant to match here.
     pub(crate) fn debug_label(&self) -> &'static str {
         match self {
-            DragMode::None => "none",
-            DragMode::Pan => "pan",
-            DragMode::WireFrom { .. } => "wire",
-            DragMode::NodeMove { .. } => "node-move",
-            DragMode::ParamScrub { .. } => "param-scrub",
-            DragMode::VecScrub { .. } => "vec-scrub",
-            DragMode::Marquee { .. } => "marquee",
+            CanvasDrag::Pan { .. } => "pan",
+            CanvasDrag::WireFrom { .. } => "wire",
+            CanvasDrag::NodeMove { .. } => "node-move",
+            CanvasDrag::ParamScrub { .. } => "param-scrub",
+            CanvasDrag::VecScrub { .. } => "vec-scrub",
+            CanvasDrag::Marquee => "marquee",
         }
     }
 }
@@ -305,14 +311,17 @@ impl GraphCanvas {
     /// canvas alone). A right-click anywhere first dismisses an open
     /// popover.
     ///
-    /// BUG-105: mirrors the card slider's own hit-zone split — a right-click
-    /// on a numeric ranged param row's TRACK zone (right of the label cell,
-    /// same boundary `param_slider_track_x` mirrors from the `render.rs`
-    /// draw call) resets that param to its default in place, exactly like
-    /// every card/panel slider (`chrome/diff.rs`'s `Gesture::RightClick ->
-    /// SliderReset`, which this immediate-mode surface never reaches). The
-    /// LABEL zone is unaffected and keeps falling through to the
-    /// mapping-popover path below. Wire-driven rows are skipped — read-only,
+    /// BUG-105 (now unified via UI_WIDGET_UNIFICATION_DESIGN.md P1's slider
+    /// contract): mirrors the card slider's own hit-zone split — a
+    /// right-click on a numeric ranged param row's TRACK zone (right of the
+    /// label cell, same boundary `param_slider_track_x` sources from
+    /// `BitmapSlider::zones()`) resets that param to its default in place
+    /// (`SliderIntent::ResetToDefault`, resolved via `intent_for`), exactly
+    /// like every card/panel slider (D4: the same absolute-set command shape
+    /// the scrub-commit path emits). The LABEL zone is unaffected and keeps
+    /// falling through to the mapping-popover path below (D3: this host has
+    /// no translation for `OpenMapping` here — the existing popover path
+    /// covers it independently). Wire-driven rows are skipped — read-only,
     /// same guard the scrub uses.
     pub fn on_right_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
         // A right-click outside the open popover dismisses it (and is
@@ -322,12 +331,22 @@ impl GraphCanvas {
         }
         let hit = self.param_row_under(viewport, sx, sy)?;
         let (node_id, pi) = hit;
-        if let Some(track_x) = self.param_slider_track_x(viewport, node_id)
-            && sx >= track_x
+        let track_hit = self.param_slider_track_x(viewport, node_id).is_some_and(|track_x| sx >= track_x);
+        let wants_reset = track_hit
+            && matches!(
+                crate::slider::BitmapSlider::intent_for(
+                    crate::slider::SliderZone::Track,
+                    crate::intent::Gesture::RightClick,
+                ),
+                Some(crate::slider::SliderIntent::ResetToDefault)
+            );
+        if wants_reset
             && let Some(p) = self.find_node(node_id).and_then(|n| n.params.get(pi).cloned())
             && p.scrub.is_some()
             && !p.wire_driven
         {
+            // D4: the same absolute-set command shape the scrub-commit path
+            // emits, carrying `default_value` — undo == a drag to default.
             if let Some(outer_param_id) = p.outer_param_id {
                 self.pending_actions.push(GraphEditCommand::SetOuterParam {
                     outer_param_id,
@@ -448,13 +467,21 @@ impl GraphCanvas {
 
     pub fn on_pointer_move(&mut self, viewport: Rect, sx: f32, sy: f32) {
         self.cursor = (sx, sy);
-        match &self.drag_mode {
-            DragMode::Pan => {
-                let dx = (sx - self.drag_anchor.0) / self.zoom;
-                let dy = (sy - self.drag_anchor.1) / self.zoom;
-                self.pan = (self.drag_pan_start.0 + dx, self.drag_pan_start.1 + dy);
+        let pos = crate::node::Vec2::new(sx, sy);
+        let Some(session) = self.drag.track(pos) else {
+            self.hovered = self.node_under(viewport, sx, sy);
+            return;
+        };
+        // Session geometry replaces the old per-variant position fields (D9):
+        // `press_origin_x` is `session.start.x`.
+        let press_origin_x = session.start.x;
+        match &session.payload {
+            CanvasDrag::Pan { pan_at_grab } => {
+                let dx = (sx - session.start.x) / self.zoom;
+                let dy = (sy - session.start.y) / self.zoom;
+                self.pan = (pan_at_grab.0 + dx, pan_at_grab.1 + dy);
             }
-            DragMode::NodeMove {
+            CanvasDrag::NodeMove {
                 node_id,
                 anchor_offset,
                 ..
@@ -469,17 +496,16 @@ impl GraphCanvas {
                     );
                 }
             }
-            DragMode::WireFrom { .. } | DragMode::Marquee { .. } => {
+            CanvasDrag::WireFrom { .. } | CanvasDrag::Marquee => {
                 // Cursor position is enough — render reads `self.cursor` for
                 // both the ghost wire and the live marquee rect.
             }
-            DragMode::ParamScrub {
+            CanvasDrag::ParamScrub {
                 node_id,
                 param_name,
                 range,
                 start_value,
                 is_int,
-                press_origin_x,
                 outer_param_id,
             } => {
                 let node_id = *node_id;
@@ -487,7 +513,6 @@ impl GraphCanvas {
                 let (min, max) = *range;
                 let start_value = *start_value;
                 let is_int = *is_int;
-                let press_origin_x = *press_origin_x;
                 let outer_param_id = outer_param_id.clone();
                 let span = (max - min).max(f32::EPSILON);
                 let delta_px = sx - press_origin_x;
@@ -512,14 +537,13 @@ impl GraphCanvas {
                     });
                 }
             }
-            DragMode::VecScrub {
+            CanvasDrag::VecScrub {
                 node_id,
                 param_name,
                 kind,
                 channel,
                 base,
                 range,
-                press_origin_x,
             } => {
                 let node_id = *node_id;
                 let param_name = param_name.clone();
@@ -527,7 +551,6 @@ impl GraphCanvas {
                 let channel = *channel;
                 let base = *base;
                 let (min, max) = *range;
-                let press_origin_x = *press_origin_x;
                 let span = (max - min).max(f32::EPSILON);
                 let delta_px = sx - press_origin_x;
                 let v =
@@ -544,22 +567,20 @@ impl GraphCanvas {
                     });
                 }
             }
-            DragMode::None => {
-                self.hovered = self.node_under(viewport, sx, sy);
-            }
         }
     }
 
     /// Begin panning unconditionally (e.g. middle-mouse drag).
     pub fn on_pan_button_down(&mut self, sx: f32, sy: f32) {
-        self.drag_mode = DragMode::Pan;
-        self.drag_anchor = (sx, sy);
-        self.drag_pan_start = self.pan;
+        self.drag.start(
+            CanvasDrag::Pan { pan_at_grab: self.pan },
+            crate::node::Vec2::new(sx, sy),
+        );
     }
 
     pub fn on_pan_button_up(&mut self) {
-        if self.drag_mode.is_pan() {
-            self.drag_mode = DragMode::None;
+        if matches!(self.drag.payload(), Some(CanvasDrag::Pan { .. })) {
+            self.drag.cancel();
         }
     }
 
@@ -630,15 +651,17 @@ impl GraphCanvas {
                         (p.vec_value, range, p.kind)
                     })
                 {
-                    self.drag_mode = DragMode::VecScrub {
-                        node_id,
-                        param_name,
-                        kind,
-                        channel: ch,
-                        base,
-                        range,
-                        press_origin_x: sx,
-                    };
+                    self.drag.start(
+                        CanvasDrag::VecScrub {
+                            node_id,
+                            param_name,
+                            kind,
+                            channel: ch,
+                            base,
+                            range,
+                        },
+                        crate::node::Vec2::new(sx, sy),
+                    );
                 }
                 return;
             }
@@ -739,10 +762,13 @@ impl GraphCanvas {
         // click falls through to select / drag below.
         if let Some(hit) = self.port_under(viewport, sx, sy) {
             if hit.is_output {
-                self.drag_mode = DragMode::WireFrom {
-                    from_node: hit.node_id,
-                    from_port: hit.port_name,
-                };
+                self.drag.start(
+                    CanvasDrag::WireFrom {
+                        from_node: hit.node_id,
+                        from_port: hit.port_name,
+                    },
+                    crate::node::Vec2::new(sx, sy),
+                );
                 return;
             }
             // Input port — if a wire feeds this port, breaking it on
@@ -847,15 +873,17 @@ impl GraphCanvas {
                 }
                 // Numeric ranged params scrub in place.
                 if let Some(s) = p.scrub {
-                    self.drag_mode = DragMode::ParamScrub {
-                        node_id,
-                        param_name: p.name,
-                        range: s.range,
-                        start_value: s.current_value,
-                        is_int: s.is_int,
-                        press_origin_x: sx,
-                        outer_param_id: p.outer_param_id,
-                    };
+                    self.drag.start(
+                        CanvasDrag::ParamScrub {
+                            node_id,
+                            param_name: p.name,
+                            range: s.range,
+                            start_value: s.current_value,
+                            is_int: s.is_int,
+                            outer_param_id: p.outer_param_id,
+                        },
+                        crate::node::Vec2::new(sx, sy),
+                    );
                     return;
                 }
                 // A Table param (`kind` is `Other`, carries `table_value`) opens
@@ -1040,10 +1068,13 @@ impl GraphCanvas {
             let (gx, gy) = self.to_graph(viewport, sx, sy);
             if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
                 let anchor_offset = (gx - node.pos_graph.0, gy - node.pos_graph.1);
-                self.drag_mode = DragMode::NodeMove {
-                    node_id,
-                    anchor_offset,
-                };
+                self.drag.start(
+                    CanvasDrag::NodeMove {
+                        node_id,
+                        anchor_offset,
+                    },
+                    crate::node::Vec2::new(sx, sy),
+                );
             }
             return;
         }
@@ -1069,16 +1100,15 @@ impl GraphCanvas {
                     // Shift+drag = rubber-band box select (replaces the
                     // selection with whatever the box covers). A shift-press
                     // with no drag is a no-op (guarded on release).
-                    self.drag_mode = DragMode::Marquee {
-                        origin_screen: (sx, sy),
-                    };
+                    self.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(sx, sy));
                 } else {
                     // Plain left-drag = pan, so the canvas stays navigable on a
                     // trackpad. A left-click with no drag clears the selection
                     // (handled on release).
-                    self.drag_mode = DragMode::Pan;
-                    self.drag_anchor = (sx, sy);
-                    self.drag_pan_start = self.pan;
+                    self.drag.start(
+                        CanvasDrag::Pan { pan_at_grab: self.pan },
+                        crate::node::Vec2::new(sx, sy),
+                    );
                 }
             }
         }
@@ -1166,19 +1196,24 @@ impl GraphCanvas {
     }
 
     pub fn on_left_button_up(&mut self, viewport: Rect, sx: f32, sy: f32) {
-        let prev = std::mem::replace(&mut self.drag_mode, DragMode::None);
+        // Read the grab position before release() consumes the session —
+        // Pan and Marquee need it for their release-time geometry.
+        let start = self.drag.session().map(|s| s.start);
+        let Some(prev) = self.drag.release() else {
+            return;
+        };
         match prev {
-            DragMode::None => {}
-            DragMode::Pan => {
+            CanvasDrag::Pan { .. } => {
                 // A left-press that didn't actually pan (cursor barely moved) is
                 // a click on empty space — clear the selection. A real pan
                 // leaves the selection alone.
-                let moved = (sx - self.drag_anchor.0).hypot(sy - self.drag_anchor.1);
+                let start = start.expect("a Pan session always has a start position");
+                let moved = (sx - start.x).hypot(sy - start.y);
                 if moved < CLICK_MOVE_SLOP_PX {
                     self.selected.clear();
                 }
             }
-            DragMode::WireFrom {
+            CanvasDrag::WireFrom {
                 from_node,
                 from_port,
             } => {
@@ -1219,7 +1254,7 @@ impl GraphCanvas {
                     }
                 }
             }
-            DragMode::NodeMove { node_id, .. } => {
+            CanvasDrag::NodeMove { node_id, .. } => {
                 if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
                     self.pending_actions.push(GraphEditCommand::MoveGraphNode {
                         node_id,
@@ -1230,11 +1265,13 @@ impl GraphCanvas {
             // The scrub emitted its value on each pointer move; nothing to
             // finalize on release. The Color/Vec editor stays open on release so
             // the next channel can be grabbed — only a press outside it dismisses.
-            DragMode::ParamScrub { .. } | DragMode::VecScrub { .. } => {}
-            DragMode::Marquee { origin_screen } => {
+            CanvasDrag::ParamScrub { .. } | CanvasDrag::VecScrub { .. } => {}
+            CanvasDrag::Marquee => {
                 // A shift-press with no real drag leaves the selection alone —
-                // don't let a zero-area box wipe it.
-                let (ox, oy) = origin_screen;
+                // don't let a zero-area box wipe it. `origin_screen` is now the
+                // session start (D9).
+                let start = start.expect("a Marquee session always has a start position");
+                let (ox, oy) = (start.x, start.y);
                 if (sx - ox).hypot(sy - oy) < CLICK_MOVE_SLOP_PX {
                     return;
                 }

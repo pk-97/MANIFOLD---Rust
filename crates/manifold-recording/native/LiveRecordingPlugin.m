@@ -56,6 +56,7 @@
 #define LR_ERR_NULL_TEXTURE      8
 #define LR_ERR_SHADER_FAILED     9
 #define LR_ERR_AUDIO_FAILED     10
+#define LR_ERR_AUDIO_DROPPED    11
 
 // -- Recorder State -----------------------------------------------------------
 
@@ -80,6 +81,13 @@ typedef struct
     // while recording is in progress (the handle is freed at Finalize, so
     // callers must stop polling once they call LiveRecorder_Finalize).
     atomic_int                              audioFramesDropped;
+    // BUG-085 instrument: video frames whose async appendPixelBuffer: call
+    // was skipped or failed (writer not Writing, encoder backpressure, or
+    // the append itself returning NO) — the drop `videoFramesAppended`
+    // alone can't distinguish from a frame that was never submitted. Read
+    // via LiveRecorder_GetVideoFramesAppendDropped before Finalize (which
+    // frees state).
+    atomic_int                              videoFramesAppendDropped;
     int                                     audioSampleRate;
     int                                     audioChannels;
     BOOL                                    isHDR;
@@ -112,6 +120,7 @@ void* LiveRecorder_Create(int width, int height, float fps, const char* outputPa
         state->commandQueue = [device newCommandQueue];
         atomic_init(&state->videoFramesAppended, 0);
         atomic_init(&state->audioFramesDropped, 0);
+        atomic_init(&state->videoFramesAppendDropped, 0);
         state->lastVideoPTSValue = -1;
         state->ptsClampCount = 0;
         state->appendQueue = dispatch_queue_create("com.manifold.recording.append",
@@ -495,6 +504,7 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
 
         AVAssetWriterInput* videoIn = state->videoInput;
         atomic_int* appendedCounter = &state->videoFramesAppended;
+        atomic_int* appendDroppedCounter = &state->videoFramesAppendDropped;
         dispatch_async(state->appendQueue, ^{
             @try
             {
@@ -507,16 +517,30 @@ int LiveRecorder_EncodeVideoFrame(void* handle, void* metalTexturePtr, double el
                         {
                             atomic_fetch_add(appendedCounter, 1);
                         }
+                        else
+                        {
+                            atomic_fetch_add(appendDroppedCounter, 1);
+                            NSLog(@"[LiveRecorder] appendPixelBuffer: returned NO — dropped frame at %.3fs",
+                                  CMTimeGetSeconds(presentTime));
+                        }
                     }
                     else
                     {
+                        atomic_fetch_add(appendDroppedCounter, 1);
                         NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs",
                               CMTimeGetSeconds(presentTime));
                     }
                 }
+                else
+                {
+                    atomic_fetch_add(appendDroppedCounter, 1);
+                    NSLog(@"[LiveRecorder] writer not Writing at append time — dropped frame at %.3fs",
+                          CMTimeGetSeconds(presentTime));
+                }
             }
             @catch (NSException* e)
             {
+                atomic_fetch_add(appendDroppedCounter, 1);
                 NSLog(@"[LiveRecorder] Video append exception (dropped frame): %@", e.reason);
             }
             CFRelease(cvMetalTexture);
@@ -551,18 +575,36 @@ int LiveRecorder_WriteAudioSamples(void* handle, const float* samples,
             return LR_ERR_WRITER_NOT_READY;
         }
 
+        int spinCount = 0;
         if (!state->audioInput.isReadyForMoreMediaData)
         {
-            // BUG-084/BUG-086: this used to return LR_OK (success) with zero
-            // visibility — the video path at least logs
-            // (`videoFramesAppended` above); this drop had neither a log nor
-            // a counter until now. Count sample-frames (not raw samples) so
-            // the unit matches `videoFramesAppended`/`WriteAudioSamples`'s
-            // own `frameCount` below.
+            // BUG-086: WriteAudioSamples runs on the dedicated
+            // "manifold-recording" thread (recording_thread.rs), never a
+            // real-time audio callback — that thread already tolerates
+            // bounded waits elsewhere (the GPU fence wait above, and the
+            // video path's own spin below). So, like the video path, spin
+            // briefly for the writer to catch up before giving up — this is
+            // the fix for the actual defect (silent unconditional drop),
+            // not just its visibility.
+            while (!state->audioInput.isReadyForMoreMediaData && spinCount < 500)
+            {
+                usleep(100);
+                spinCount++;
+            }
+        }
+
+        if (!state->audioInput.isReadyForMoreMediaData)
+        {
+            // Still not ready after the bounded wait — a genuine, sustained
+            // backpressure drop. Count it (sample-frames, matching
+            // `videoFramesAppended`/this function's own `frameCount` below)
+            // and return a real error code — no path may report LR_OK on a
+            // dropped buffer.
             atomic_fetch_add(&state->audioFramesDropped, sampleCount / state->audioChannels);
-            NSLog(@"[LiveRecorder] Audio backpressure — dropped %d sample-frames at %.3fs",
-                  sampleCount / state->audioChannels, elapsedSeconds);
-            return LR_OK; // drop samples rather than block
+            NSLog(@"[LiveRecorder] Audio backpressure — dropped %d sample-frames at %.3fs "
+                  "(after %dus bounded wait)",
+                  sampleCount / state->audioChannels, elapsedSeconds, spinCount * 100);
+            return LR_ERR_AUDIO_DROPPED;
         }
 
         int frameCount = sampleCount / state->audioChannels;
@@ -681,6 +723,21 @@ int LiveRecorder_GetAudioFramesDropped(void* handle)
         return 0;
     LiveRecorderState* state = (LiveRecorderState*)handle;
     return atomic_load(&state->audioFramesDropped);
+}
+
+// -- GetVideoFramesAppendDropped ------------------------------------------------
+
+// BUG-085 instrument: live poll of the async video-append drop counter.
+// Atomic read — safe from any thread while the handle is valid. Callers
+// must stop polling once LiveRecorder_Finalize has been called on this
+// handle (it frees the state) — poll this BEFORE Finalize, same contract
+// as LiveRecorder_GetAudioFramesDropped.
+int LiveRecorder_GetVideoFramesAppendDropped(void* handle)
+{
+    if (handle == NULL)
+        return 0;
+    LiveRecorderState* state = (LiveRecorderState*)handle;
+    return atomic_load(&state->videoFramesAppendDropped);
 }
 
 // -- Finalize -----------------------------------------------------------------

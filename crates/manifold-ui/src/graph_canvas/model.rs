@@ -1515,12 +1515,12 @@ impl GraphCanvas {
         // The param the user is mid-scrub on stays the source of truth until
         // release; cloned so the per-node mutable walk below has no live borrow
         // of `self.drag_mode`.
-        let scrubbing: Option<(u32, String)> = match &self.drag_mode {
-            DragMode::ParamScrub {
+        let scrubbing: Option<(u32, String)> = match self.drag.payload() {
+            Some(CanvasDrag::ParamScrub {
                 node_id,
                 param_name,
                 ..
-            } => Some((*node_id, param_name.clone())),
+            }) => Some((*node_id, param_name.clone())),
             _ => None,
         };
         // Sparkline samples gathered during the mutable node walk, applied to

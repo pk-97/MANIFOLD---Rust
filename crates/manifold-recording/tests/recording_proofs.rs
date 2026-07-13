@@ -438,19 +438,25 @@ fn pool_accounting_consistent() {
         "accounting mismatch: {result:?}"
     );
     assert!(result.frames_recorded > 0, "expected at least some frames to survive backpressure: {result:?}");
+    // BUG-085 gate: the forced-backpressure stall (frames ~4..~99 held on a
+    // FIFO-blocked fence) must produce real drops, and `frames_recorded`
+    // must be the native ground truth, not an overstated synchronous count.
+    assert!(
+        result.frames_dropped > 0,
+        "expected the forced backpressure stall to drop at least one frame: {result:?}"
+    );
 
     let report = proofs::probe(&out, true).expect("probe");
-    // <= not ==: BUG-085 (docs/BUG_BACKLOG.md) — under real backpressure the
-    // native encoder's async VideoToolbox append can silently drop a frame
-    // AFTER `LiveRecorder_EncodeVideoFrame` already returned success, so
-    // Rust's `frames_recorded` can (rarely) overstate the file's real packet
-    // count by a small amount. The file itself stays valid either way — the
-    // invariant this test actually gates is the Rust-side accounting sum
-    // above, which BUG-085 doesn't touch.
-    assert!(
-        report.pts.len() as u32 <= result.frames_recorded,
-        "file has MORE packets than Rust recorded — that would be real corruption \
-         (not BUG-085's direction): pts.len()={} frames_recorded={}",
+    // Exact, not <=: BUG-085's fix moves success accounting into the async
+    // append block (`videoFramesAppended`, read after
+    // `LiveRecorder_Finalize` drains the append queue) — `frames_recorded`
+    // is now the file's real packet count under backpressure, not an
+    // overstated synchronous-LR_OK accumulation.
+    assert_eq!(
+        report.pts.len() as u32,
+        result.frames_recorded,
+        "frames_recorded must equal the file's real packet count exactly (BUG-085): \
+         pts.len()={} frames_recorded={}",
         report.pts.len(),
         result.frames_recorded
     );

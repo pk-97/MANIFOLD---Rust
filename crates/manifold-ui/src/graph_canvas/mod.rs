@@ -77,7 +77,7 @@ mod tests;
 // `rects_overlap`) are imported directly by `tests.rs` from their module.
 pub(crate) use hit::marquee_hits;
 pub use hit::GraphCanvasTargets;
-pub(crate) use interaction::DragMode;
+pub(crate) use interaction::CanvasDrag;
 pub use mapping_popover::MappingPopover;
 // App-facing structural-walk helpers — the editor present path resolves the
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
@@ -397,11 +397,13 @@ const SAVE_BUTTON_H: f32 = RESET_BUTTON_H;
 const SAVE_BUTTON_GAP: f32 = 8.0;
 
 /// Max seconds between two empty-canvas presses for them to count as a
-/// double-click. Matches the typical OS double-click window.
-const DOUBLE_CLICK_SECONDS: f32 = 0.3;
-/// Max screen-space distance (px) between the two presses of a double-click.
-/// A drag further than this is two separate single-clicks, not a double.
-const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0;
+/// double-click, and the max screen-space distance (px) between them.
+/// Single-sourced at `color.rs` (UI_WIDGET_UNIFICATION P4/I8) — this module
+/// no longer declares its own copy. The recognizer itself (keyed on node
+/// identity via `last_click_node`, interaction.rs) stays canvas-side by
+/// design; only the timing/radius constants unify.
+use color::DOUBLE_CLICK_TIME_SEC as DOUBLE_CLICK_SECONDS;
+use color::DOUBLE_CLICK_RADIUS_PX;
 /// A left-press that moves less than this on release counts as a click, not a
 /// drag — used to tell a pan from a deselecting click, and a marquee from a
 /// stray shift-click.
@@ -431,9 +433,10 @@ pub struct GraphCanvas {
     pub(crate) pan: (f32, f32),
     pub(crate) zoom: f32,
     pub(crate) cursor: (f32, f32),
-    pub(crate) drag_mode: DragMode,
-    pub(crate) drag_anchor: (f32, f32),
-    pub(crate) drag_pan_start: (f32, f32),
+    /// The canvas's one drag lifecycle (P7.2, D8/D9). Replaces the old
+    /// `drag_mode: DragMode` + `drag_anchor` + `drag_pan_start` fields — the
+    /// grab position lives in the controller's session, not a parallel field.
+    pub(crate) drag: crate::drag::DragController<CanvasDrag>,
     pub(crate) hovered: Option<u32>,
     /// Selected node ids at the current scope level. A set so the user can
     /// rubber-band or Shift-click several nodes before collapsing them into a
@@ -615,9 +618,7 @@ impl GraphCanvas {
             pan: (0.0, 0.0),
             zoom: 1.0,
             cursor: (0.0, 0.0),
-            drag_mode: DragMode::None,
-            drag_anchor: (0.0, 0.0),
-            drag_pan_start: (0.0, 0.0),
+            drag: crate::drag::DragController::new(),
             hovered: None,
             selected: ahash::AHashSet::new(),
             has_graph_mod: false,
@@ -678,13 +679,15 @@ impl GraphCanvas {
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
 
-        // Marquee fade.
-        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
-            let (ox, oy) = *origin_screen;
+        // Marquee fade. `origin_screen` is now the session start (D9).
+        if let Some(session) = self.drag.session()
+            && matches!(&session.payload, CanvasDrag::Marquee)
+        {
+            let (ox, oy) = (session.start.x, session.start.y);
             let (cx, cy) = self.cursor;
             self.marquee_last_rect = Some((ox.min(cx), oy.min(cy), (cx - ox).abs(), (cy - oy).abs()));
         }
-        let marquee_live = matches!(self.drag_mode, DragMode::Marquee { .. });
+        let marquee_live = matches!(self.drag.payload(), Some(CanvasDrag::Marquee));
         self.marquee_alpha.set_target(if marquee_live { 1.0 } else { 0.0 });
         any |= self.marquee_alpha.tick(dt_ms);
 
@@ -707,7 +710,7 @@ impl GraphCanvas {
     /// `present_graph_editor_window`, which already resolves `viewport` for
     /// the draw pass this feeds.
     pub fn tick_wire_magnet(&mut self, viewport: Rect) {
-        let DragMode::WireFrom { .. } = &self.drag_mode else {
+        let Some(CanvasDrag::WireFrom { .. }) = self.drag.payload() else {
             self.wire_magnet_live = false;
             self.wire_magnet_last_tick = None;
             return;
@@ -753,7 +756,7 @@ impl GraphCanvas {
     /// anim value from a previous drag), or outside a `WireFrom` drag
     /// entirely.
     pub(crate) fn wire_ghost_endpoint(&self) -> (f32, f32) {
-        if self.wire_magnet_live && matches!(self.drag_mode, DragMode::WireFrom { .. }) {
+        if self.wire_magnet_live && matches!(self.drag.payload(), Some(CanvasDrag::WireFrom { .. })) {
             (self.wire_magnet_x.value(), self.wire_magnet_y.value())
         } else {
             self.cursor
@@ -854,6 +857,12 @@ impl Rect {
 /// closes it. Peter's call (2026-07-01): pick from a list, never click-to-cycle.
 /// Canvas-owned and hit-tested inside the canvas's own press handler — no
 /// app-level input plumbing, same path as the row scrub + expose checkbox.
+// Single-host by design (UI_WIDGET_UNIFICATION D17): the chrome "twin" this
+// once shared a contract with (a sidebar enum picker) was deleted by
+// GRAPH_EDITOR_REDESIGN Phase 6 — chrome cards never render enum dropdowns
+// anymore (enum params render as labeled sliders there). Do not build a
+// shared option-list abstraction between this and `dropdown.rs` — D17 names
+// and rejects that as an adapter trap around a misfit.
 #[derive(Debug, Clone)]
 pub(crate) struct EnumDropdown {
     /// Runtime (doc) id of the node whose param this drives.
@@ -927,6 +936,9 @@ impl EnumDropdown {
 /// `on_left_button_down`, same pattern as [`EnumDropdown`]; the live channel
 /// values + swatch are read from the node's `ParamView` each frame, so an edit
 /// round-tripping through the snapshot keeps the panel current.
+// Single-host by design (UI_WIDGET_UNIFICATION D17) — same classification as
+// `EnumDropdown`: chrome cards never render color/vec rows, so there is no
+// twin to unify with.
 #[derive(Debug, Clone)]
 pub(crate) struct VecEditor {
     /// Runtime (doc) id of the node whose param this drives.
@@ -1031,6 +1043,9 @@ impl VecEditor {
 /// round-tripping through the snapshot keeps the grid current. Dimensions
 /// (`rows`/`cols`) are captured at open — a cell edit never reshapes the table,
 /// and a structural reshape re-opens the editor.
+// Single-host by design (UI_WIDGET_UNIFICATION D17) — same classification as
+// `EnumDropdown`/`VecEditor`: chrome cards never render table rows, so there
+// is no twin to unify with.
 #[derive(Debug, Clone)]
 pub(crate) struct TableEditor {
     /// Runtime (doc) id of the node whose param this drives.

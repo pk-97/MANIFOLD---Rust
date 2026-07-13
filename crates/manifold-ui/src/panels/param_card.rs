@@ -874,7 +874,22 @@ impl ParamCardPanel {
     /// base value to prefill, the clamp range, and the int-rounding flag. Returns
     /// `None` for non-value-cell nodes and for enum params (`value_labels` use the
     /// dropdown, not text). Toggle/trigger rows carry no slider, so never match.
+    ///
+    /// Called only from `route_value_typein` on `UIEvent::DoubleClick`
+    /// (inspector.rs:2375) — this IS the contract's `(ValueCell, DoubleClick)
+    /// -> EditValue` row (D13/D14), constructed at input time because the
+    /// action's payload (anchor, value, clamp range) is live state, not a
+    /// build-time constant (D14). The debug_assert below is the single
+    /// written record that this call site and the contract table agree.
     pub fn value_cell_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        debug_assert_eq!(
+            crate::slider::BitmapSlider::intent_for(
+                crate::slider::SliderZone::ValueCell,
+                crate::intent::Gesture::DoubleClick
+            ),
+            Some(crate::slider::SliderIntent::EditValue),
+            "value_cell_typein is the contract's ValueCell+DoubleClick->EditValue translation (D13/D14)"
+        );
         if !self.is_live() {
             return None;
         }
@@ -3651,7 +3666,7 @@ impl ParamCardPanel {
             if let Some(t) = etarget
                 && node_id == t.target_bar_id
             {
-                self.drag.dragging_target_param = pi as i32;
+                self.drag.begin(ParamDragTarget::EnvTarget { index: pi }, pos);
                 return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
             }
         }
@@ -3661,7 +3676,7 @@ impl ParamCardPanel {
             if let Some(c) = env_cfg
                 && node_id == c.decay_slider.track
             {
-                self.drag.dragging_decay_param = pi as i32;
+                self.drag.begin(ParamDragTarget::EnvDecay { index: pi }, pos);
                 let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
                 let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
                 return vec![
@@ -3686,7 +3701,7 @@ impl ParamCardPanel {
                 {
                     let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
                     let value = audio_shape_value_from_norm(which, norm);
-                    self.drag.dragging_audio_shape = Some((pi, which));
+                    self.drag.begin(ParamDragTarget::AudioShape { index: pi, param: which }, pos);
                     let pid = self.pid_at(pi);
                     return vec![
                         PanelAction::AudioModShapeSnapshot(target, pid.clone()),
@@ -3711,7 +3726,7 @@ impl ParamCardPanel {
                 if info.whole_numbers {
                     value = value.round();
                 }
-                self.drag.dragging_step_amount = Some(pi);
+                self.drag.begin(ParamDragTarget::StepAmount { index: pi }, pos);
                 let pid = self.pid_at(pi);
                 return vec![
                     PanelAction::AudioModStepAmountSnapshot(target, pid.clone()),
@@ -3739,7 +3754,7 @@ impl ParamCardPanel {
             }
         }
         if let Some((kind, pi, is_min)) = trim_hit {
-            self.drag.dragging_trim = Some((kind, pi, is_min));
+            self.drag.begin(ParamDragTarget::Trim { kind, index: pi, is_min }, pos);
             return vec![PanelAction::TrimSnapshot(kind, target, self.pid_at(pi))];
         }
 
@@ -3809,12 +3824,18 @@ impl ParamCardPanel {
                     let dist_max = (pos.x - max_center).abs();
 
                     if dist_min < hit_zone && dist_min <= dist_max {
-                        self.drag.dragging_trim = Some((TrimKind::Driver, pi, true));
+                        self.drag.begin(
+                            ParamDragTarget::Trim { kind: TrimKind::Driver, index: pi, is_min: true },
+                            pos,
+                        );
                         let _ = trim;
                         return vec![PanelAction::TrimSnapshot(TrimKind::Driver, target, self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
-                        self.drag.dragging_trim = Some((TrimKind::Driver, pi, false));
+                        self.drag.begin(
+                            ParamDragTarget::Trim { kind: TrimKind::Driver, index: pi, is_min: false },
+                            pos,
+                        );
                         return vec![PanelAction::TrimSnapshot(TrimKind::Driver, target, self.pid_at(pi))];
                     }
                 }
@@ -3840,13 +3861,13 @@ impl ParamCardPanel {
                         .unwrap_or(1.0);
                     let target_center = base_x + tgt * usable;
                     if (pos.x - target_center).abs() < 8.0 {
-                        self.drag.dragging_target_param = pi as i32;
+                        self.drag.begin(ParamDragTarget::EnvTarget { index: pi }, pos);
                         return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
                     }
                 }
 
                 // No trim/target handle nearby — normal param slider drag
-                self.drag.dragging_param = pi as i32;
+                self.drag.begin(ParamDragTarget::Param { index: pi }, pos);
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let info = &self.param_info[pi];
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
@@ -3869,54 +3890,52 @@ impl ParamCardPanel {
 
         // Envelope target handle drag — update depth, reposition the orange bar
         // along the parameter's own track, dispatch the Target change.
-        if self.drag.dragging_target_param >= 0 {
-            let pi = self.drag.dragging_target_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
-                    *v = norm;
-                }
-                if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
-                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = slider.track_rect.x + OVERLAY_INSET;
-                    let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
-                    let bar_h = slider.track_rect.height + 4.0;
-                    let bar_y = slider.track_rect.y - 2.0;
-                    tree.set_bounds(
-                        t.target_bar_id,
-                        Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
-                    );
-                }
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
-                    ParamCardKind::Generator => vec![PanelAction::TargetChanged(GraphParamTarget::Generator, pid, norm)],
-                };
+        if let Some(pi) = self.drag.env_target_index()
+            && let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
+        {
+            let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+            if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
+                *v = norm;
             }
+            if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+                let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                let base_x = slider.track_rect.x + OVERLAY_INSET;
+                let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
+                let bar_h = slider.track_rect.height + 4.0;
+                let bar_y = slider.track_rect.y - 2.0;
+                tree.set_bounds(
+                    t.target_bar_id,
+                    Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
+                );
+            }
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
+                ParamCardKind::Generator => vec![PanelAction::TargetChanged(GraphParamTarget::Generator, pid, norm)],
+            };
         }
 
         // Envelope decay slider drag — update the drawer slider's fill + value,
         // dispatch the decay change (in beats).
-        if self.drag.dragging_decay_param >= 0 {
-            let pi = self.drag.dragging_decay_param as usize;
-            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(cfg.decay_slider.track_rect, pos.x)
-                    .clamp(0.0, 1.0);
-                let decay = norm * ENV_DECAY_MAX;
-                if let Some(v) = self.state.mod_state.env_decay.get_mut(pi) {
-                    *v = decay;
-                }
-                BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Effect(ei), pid, decay)],
-                    ParamCardKind::Generator => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Generator, pid, decay)],
-                };
+        if let Some(pi) = self.drag.env_decay_index()
+            && let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref())
+        {
+            let norm = BitmapSlider::x_to_normalized(cfg.decay_slider.track_rect, pos.x)
+                .clamp(0.0, 1.0);
+            let decay = norm * ENV_DECAY_MAX;
+            if let Some(v) = self.state.mod_state.env_decay.get_mut(pi) {
+                *v = decay;
             }
+            BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Effect(ei), pid, decay)],
+                ParamCardKind::Generator => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Generator, pid, decay)],
+            };
         }
 
         // Audio shaping slider drag — update fill + value, dispatch live edit.
-        if let Some((pi, which)) = self.drag.dragging_audio_shape {
+        if let Some((pi, which)) = self.drag.audio_shape() {
             let si = match which {
                 AudioShapeParam::Sensitivity => 0,
                 AudioShapeParam::Attack => 1,
@@ -3974,7 +3993,7 @@ impl ParamCardPanel {
 
         // Step-Amount slider drag (D8) — its own path, see `handle_pointer_down`
         // 2c. Updates fill + value and dispatches the live edit.
-        if let Some(pi) = self.drag.dragging_step_amount {
+        if let Some(pi) = self.drag.step_amount() {
             let rect = self
                 .audio_configs
                 .get(pi)
@@ -4019,7 +4038,7 @@ impl ParamCardPanel {
         // identical across kinds (`x_to_normalized` pre-clamps to [0,1], so the
         // old `norm.min`/`norm.clamp` spellings coincide); only the backing
         // store differs, and `TrimKind` selects it via the trim accessors.
-        if let Some((kind, pi, is_min)) = self.drag.dragging_trim
+        if let Some((kind, pi, is_min)) = self.drag.trim()
             && let Some(track_rect) = self
                 .slider_ids
                 .get(pi)
@@ -4054,29 +4073,28 @@ impl ParamCardPanel {
         }
 
         // Param slider drag
-        if self.drag.dragging_param >= 0 {
-            let pi = self.drag.dragging_param as usize;
-            if let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let info = &self.param_info[pi];
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
-                let val = if info.whole_numbers { val.round() } else { val };
-                let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                let text = format_param_value(
-                    val,
-                    info.min,
-                    info.whole_numbers,
-                    info.is_angle,
-                    info.value_labels.as_deref(),
-                );
-                BitmapSlider::update_value(tree, ids, display_norm, &text);
-                self.param_cache[pi] = val;
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => vec![PanelAction::ParamChanged(GraphParamTarget::Effect(ei), pid, val)],
-                    ParamCardKind::Generator => vec![PanelAction::ParamChanged(GraphParamTarget::Generator, pid, val)],
-                };
-            }
+        if let Some(pi) = self.drag.param_index()
+            && let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
+        {
+            let info = &self.param_info[pi];
+            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+            let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
+            let val = if info.whole_numbers { val.round() } else { val };
+            let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
+            let text = format_param_value(
+                val,
+                info.min,
+                info.whole_numbers,
+                info.is_angle,
+                info.value_labels.as_deref(),
+            );
+            BitmapSlider::update_value(tree, ids, display_norm, &text);
+            self.param_cache[pi] = val;
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => vec![PanelAction::ParamChanged(GraphParamTarget::Effect(ei), pid, val)],
+                ParamCardKind::Generator => vec![PanelAction::ParamChanged(GraphParamTarget::Generator, pid, val)],
+            };
         }
 
         Vec::new()
@@ -4087,60 +4105,59 @@ impl ParamCardPanel {
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        if self.drag.dragging_target_param >= 0 {
-            let pi = self.drag.dragging_target_param as usize;
-            self.drag.dragging_target_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::TargetCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::TargetCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if self.drag.dragging_decay_param >= 0 {
-            let pi = self.drag.dragging_decay_param as usize;
-            self.drag.dragging_decay_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if let Some((pi, _)) = self.drag.dragging_audio_shape.take() {
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if let Some(pi) = self.drag.dragging_step_amount.take() {
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => {
-                    vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Effect(ei), pid)]
+        match self.drag.end() {
+            Some(ParamDragTarget::EnvTarget { index: pi }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::TargetCommit(GraphParamTarget::Effect(ei), pid)],
+                    ParamCardKind::Generator => vec![PanelAction::TargetCommit(GraphParamTarget::Generator, pid)],
                 }
-                ParamCardKind::Generator => {
-                    vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Generator, pid)]
+            }
+            Some(ParamDragTarget::EnvDecay { index: pi }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid)],
+                    ParamCardKind::Generator => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Generator, pid)],
                 }
-            };
+            }
+            Some(ParamDragTarget::AudioShape { index: pi, .. }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid)],
+                    ParamCardKind::Generator => {
+                        vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Generator, pid)]
+                    }
+                }
+            }
+            Some(ParamDragTarget::StepAmount { index: pi }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => {
+                        vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Effect(ei), pid)]
+                    }
+                    ParamCardKind::Generator => {
+                        vec![PanelAction::AudioModStepAmountCommit(GraphParamTarget::Generator, pid)]
+                    }
+                }
+            }
+            Some(ParamDragTarget::Trim { kind, index: pi, .. }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::TrimCommit(kind, GraphParamTarget::Effect(ei), pid)],
+                    ParamCardKind::Generator => {
+                        vec![PanelAction::TrimCommit(kind, GraphParamTarget::Generator, pid)]
+                    }
+                }
+            }
+            Some(ParamDragTarget::Param { index: pi }) => {
+                let pid = self.pid_at(pi);
+                match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::ParamCommit(GraphParamTarget::Effect(ei), pid)],
+                    ParamCardKind::Generator => vec![PanelAction::ParamCommit(GraphParamTarget::Generator, pid)],
+                }
+            }
+            None => Vec::new(),
         }
-        if let Some((kind, pi, _)) = self.drag.dragging_trim.take() {
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::TrimCommit(kind, GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::TrimCommit(kind, GraphParamTarget::Generator, pid)],
-            };
-        }
-        if self.drag.dragging_param >= 0 {
-            let pi = self.drag.dragging_param as usize;
-            self.drag.dragging_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::ParamCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::ParamCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-
-        Vec::new()
     }
 
     /// Node-intent dispatch for this card's right-click gestures. The sole
@@ -4181,16 +4198,16 @@ impl ParamCardPanel {
             if let (Some(ids), Some(reset)) =
                 (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
             {
-                intents.on(ids.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
         for cfg in self.envelope_config_ids.iter().flatten() {
-            intents.on(cfg.decay_slider.track, RightClick, cfg.decay_reset.clone());
+            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
         }
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                intents.on(sl.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(sl, reset, intents);
             }
         }
 
@@ -4216,9 +4233,12 @@ impl ParamCardPanel {
             // the track reliably opens the param menu — no narrow-target lottery.
             if self.context == CardContext::Perform {
                 let menu = PanelAction::ParamLabelRightClick(target, self.pid_at(pi));
-                if let Some(label) = ids.label {
-                    intents.on(label, RightClick, menu.clone());
-                }
+                // Label registration goes through the contract (P3/D14).
+                BitmapSlider::register_label_mapping(ids, &menu, intents);
+                // The row catcher is a second node carrying the SAME action
+                // — host-attached chrome, not a contract zone (it's a
+                // full-row dead-zone catcher behind the value cell + gaps,
+                // no `SliderZone` of its own), so it stays hand-registered.
                 if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
                     intents.claim_area(catcher);
                     intents.on(catcher, RightClick, menu);
@@ -5089,12 +5109,263 @@ mod tests {
         use crate::view::UiParamSlot as ParamSlot;
         panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
 
-        panel.drag.dragging_param = 0;
+        panel.drag.begin(ParamDragTarget::Param { index: 0 }, Vec2::ZERO);
         panel.sync_values(&mut tree, &[ParamSlot::exposed(75.0), ParamSlot::exposed(0.8)]);
         assert!(
             panel.value_flash[0].progress().is_none(),
             "no flash while this card is mid-drag"
         );
+    }
+
+    // ── P7.1 pinning tests — one per `ParamDragTarget` category, written
+    // against the CURRENT six-slot `ParamDragState` before the
+    // `DragController<ParamDragTarget>` fold (docs/UI_WIDGET_UNIFICATION_
+    // DESIGN.md P7.1). Re-run green post-switch to prove the fold is a
+    // lifecycle-only swap with byte-identical command emission.
+
+    #[test]
+    fn pinning_param_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y));
+        assert!(
+            matches!(down.as_slice(), [PanelAction::ParamSnapshot(..), PanelAction::ParamChanged(..)]),
+            "begin emits snapshot + first value: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let quarter_x = track_rect.x + track_rect.width * 0.25;
+        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::ParamChanged(target, pid, val)]
+                if *target == GraphParamTarget::Effect(0) && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
+            "track emits the live value at the new position: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::ParamCommit(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging(), "drag slot cleared after end");
+    }
+
+    #[test]
+    fn pinning_trim_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let trim = panel.trim_ids[0].as_ref().expect("driver trim built");
+        let min_bar_id = trim.min_bar_id;
+
+        let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0));
+        assert!(
+            matches!(down.as_slice(), [PanelAction::TrimSnapshot(TrimKind::Driver, GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "begin emits a trim snapshot: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let new_x = track_rect.x + track_rect.width * 0.4;
+        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::TrimChanged(TrimKind::Driver, GraphParamTarget::Effect(0), pid, ..)] if pid.as_ref() == "radius"),
+            "track emits the live trim range: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::TrimCommit(TrimKind::Driver, GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one trim commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn pinning_env_target_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let target = panel.target_ids[0].as_ref().expect("envelope target built");
+        let target_bar_id = target.target_bar_id;
+
+        let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0));
+        assert!(
+            matches!(down.as_slice(), [PanelAction::TargetSnapshot(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "begin emits a target snapshot: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let new_x = track_rect.x + track_rect.width * 0.3;
+        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::TargetChanged(GraphParamTarget::Effect(0), pid, norm)] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
+            "track emits the live target norm: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::TargetCommit(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one target commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn pinning_env_decay_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let cfg = panel.envelope_config_ids[0].as_ref().expect("envelope config built");
+        let decay_track = cfg.decay_slider.track;
+        let decay_rect = cfg.decay_slider.track_rect;
+
+        let down = panel.handle_pointer_down(decay_track, Vec2::new(decay_rect.x, decay_rect.y));
+        assert!(
+            matches!(
+                down.as_slice(),
+                [PanelAction::EnvDecaySnapshot(GraphParamTarget::Effect(0), pid1), PanelAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid2, _)]
+                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
+            ),
+            "begin emits snapshot + first decay value: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let new_x = decay_rect.x + decay_rect.width * 0.6;
+        let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::EnvDecayChanged(GraphParamTarget::Effect(0), pid, _)] if pid.as_ref() == "radius"),
+            "track emits the live decay value: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::EnvDecayCommit(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one decay commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging());
+    }
+
+    /// Fixture with param 0's audio mod armed and Continuous — exercises the
+    /// shaping sliders (Sensitivity/Attack/Release, `DrawerIds.sliders[0..3]`).
+    fn effect_config_with_audio_shape_armed() -> ParamCardConfig {
+        let mut c = effect_config();
+        let n = c.params.len();
+        c.audio.send_labels = vec!["Kick".into()];
+        c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
+        c.audio.active = vec![false; n];
+        c.audio.send_id = vec![None; n];
+        c.audio.kind_idx = vec![0; n];
+        c.audio.band_idx = vec![0; n];
+        c.audio.range_min = vec![0.0; n];
+        c.audio.range_max = vec![1.0; n];
+        c.audio.invert = vec![false; n];
+        c.audio.rate = vec![false; n];
+        c.audio.sensitivity = vec![1.0; n];
+        c.audio.attack_ms = vec![5.0; n];
+        c.audio.release_ms = vec![120.0; n];
+        c.audio.trigger_mode_idx = vec![0; n];
+        c.audio.action_idx = vec![0; n];
+        c.audio.step_amount = vec![1.0; n];
+        c.audio.wrap_idx = vec![0; n];
+        c.audio.active[0] = true;
+        c.audio.send_id[0] = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c
+    }
+
+    #[test]
+    fn pinning_audio_shape_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_audio_shape_armed());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
+        let sens_slider = dids.sliders[0]; // Sensitivity — the first shaping slider
+        let sens_track = sens_slider.track;
+        let sens_rect = sens_slider.track_rect;
+
+        let down = panel.handle_pointer_down(sens_track, Vec2::new(sens_rect.x, sens_rect.y));
+        assert!(
+            matches!(
+                down.as_slice(),
+                [PanelAction::AudioModShapeSnapshot(GraphParamTarget::Effect(0), pid1), PanelAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity, _)]
+                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
+            ),
+            "begin emits snapshot + first shape value: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let new_x = sens_rect.x + sens_rect.width * 0.7;
+        let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::AudioModShapeParamChanged(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity, _)] if pid.as_ref() == "radius"),
+            "track emits the live shape value: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one shape commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn pinning_step_amount_drag_begin_track_end() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut cfg = effect_config_with_audio_shape_armed();
+        cfg.audio.action_idx[0] = 1; // Step — the 4th drawer slider appears
+        panel.configure(&cfg);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
+        let step_slider = *dids.sliders.get(3).expect("Step slider built while Action=Step");
+        let step_track = step_slider.track;
+        let step_rect = step_slider.track_rect;
+
+        let down = panel.handle_pointer_down(step_track, Vec2::new(step_rect.x, step_rect.y));
+        assert!(
+            matches!(
+                down.as_slice(),
+                [PanelAction::AudioModStepAmountSnapshot(GraphParamTarget::Effect(0), pid1), PanelAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid2, _)]
+                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
+            ),
+            "begin emits snapshot + first step value: {down:?}"
+        );
+        assert!(panel.is_dragging());
+
+        let new_x = step_rect.x + step_rect.width * 0.8;
+        let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::AudioModStepAmountChanged(GraphParamTarget::Effect(0), pid, _)] if pid.as_ref() == "radius"),
+            "track emits the live step value: {moved:?}"
+        );
+
+        let ended = panel.handle_drag_end(&mut tree);
+        assert!(
+            matches!(ended.as_slice(), [PanelAction::AudioModStepAmountCommit(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
+            "end emits exactly one step commit: {ended:?}"
+        );
+        assert!(!panel.is_dragging());
     }
 
     #[test]

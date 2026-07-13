@@ -39,6 +39,7 @@ use super::param_slider_shared::{
 use super::{AudioShapeParam, PanelAction};
 use crate::chrome::{Align, ChromeHost, Sizing, View};
 use crate::color;
+use crate::drag::DragController;
 use crate::node::*;
 use crate::slider::BitmapSlider;
 use crate::tree::UITree;
@@ -113,8 +114,11 @@ pub struct AudioTriggerSection {
     first_node: Option<NodeId>,
     node_count: usize,
     /// `(row_index, which)` of the shaping slider currently being dragged,
-    /// mirroring `ParamCardPanel::DragState::dragging_audio_shape`.
-    dragging_shape: Option<(usize, AudioShapeParam)>,
+    /// mirroring `ParamCardPanel::DragState::dragging_audio_shape`. Lifecycle
+    /// on `DragController` (P7, `docs/UI_WIDGET_UNIFICATION_DESIGN.md`) — the
+    /// grab position isn't read back (each `handle_drag` call gets a fresh
+    /// `pos_x`), only the active/payload/release shape is used.
+    dragging_shape: DragController<(usize, AudioShapeParam)>,
 }
 
 impl Default for AudioTriggerSection {
@@ -138,7 +142,7 @@ impl AudioTriggerSection {
             audio_configs: Vec::new(),
             first_node: None,
             node_count: 0,
-            dragging_shape: None,
+            dragging_shape: DragController::new(),
         }
     }
 
@@ -535,7 +539,7 @@ impl AudioTriggerSection {
                 {
                     let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos_x).clamp(0.0, 1.0);
                     let value = shape_value_from_norm(which, norm);
-                    self.dragging_shape = Some((i, which));
+                    self.dragging_shape.start((i, which), Vec2::new(pos_x, 0.0));
                     return vec![
                         PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), i),
                         PanelAction::AudioTriggerShapeParamChanged(layer_id, i, which, value),
@@ -547,7 +551,7 @@ impl AudioTriggerSection {
     }
 
     pub fn handle_drag(&mut self, pos_x: f32, tree: &mut UITree) -> Vec<PanelAction> {
-        let Some((i, which)) = self.dragging_shape else { return Vec::new() };
+        let Some(&(i, which)) = self.dragging_shape.payload() else { return Vec::new() };
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
         let si = match which {
             AudioShapeParam::Sensitivity => 0,
@@ -590,13 +594,13 @@ impl AudioTriggerSection {
     }
 
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
-        let Some((i, _)) = self.dragging_shape.take() else { return Vec::new() };
+        let Some((i, _)) = self.dragging_shape.release() else { return Vec::new() };
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
         vec![PanelAction::AudioTriggerShapeCommit(layer_id, i)]
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.dragging_shape.is_some()
+        self.dragging_shape.is_active()
     }
 
     /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
@@ -654,13 +658,14 @@ impl AudioTriggerSection {
     }
 
     /// Right-click resets on the shaping sliders — the drawer's own
-    /// `slider_resets`, registered exactly as `ParamCardPanel` does.
+    /// `slider_resets`, registered exactly as `ParamCardPanel` does. Walks
+    /// the contract via [`BitmapSlider::register_track_reset`]
+    /// (UI_WIDGET_UNIFICATION_DESIGN.md P1).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::RightClick;
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                intents.on(sl.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(sl, reset, intents);
             }
         }
     }
@@ -679,5 +684,70 @@ fn shape_value_text(which: AudioShapeParam, value: f32) -> String {
     match which {
         AudioShapeParam::Sensitivity => format!("{value:.2}"),
         AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // P7 (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`) behavior-pinning test for the
+    // `dragging_shape` grab/release lifecycle, written BEFORE migrating the
+    // field from `Option<(usize, AudioShapeParam)>` onto `DragController<T>`.
+    // Drives only the public `is_dragging`/`handle_release` surface (plus the
+    // module-private field directly, legitimate white-box access in the same
+    // module) so it stays valid regardless of the field's internal shape.
+
+    #[test]
+    fn not_dragging_by_default() {
+        let section = AudioTriggerSection::new();
+        assert!(!section.is_dragging());
+    }
+
+    #[test]
+    fn grab_marks_dragging_and_release_commits_once() {
+        let mut section = AudioTriggerSection::new();
+        section.layer_id = Some(LayerId::new("layer-1"));
+
+        // Simulate `handle_press` having grabbed row 2's Attack slider.
+        section
+            .dragging_shape
+            .start((2, AudioShapeParam::Attack), Vec2::ZERO);
+        assert!(section.is_dragging());
+
+        let actions = section.handle_release();
+        assert!(!section.is_dragging(), "release must clear the drag");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::AudioTriggerShapeCommit(layer_id, row) => {
+                assert_eq!(layer_id, &LayerId::new("layer-1"));
+                assert_eq!(*row, 2);
+            }
+            other => panic!("expected AudioTriggerShapeCommit, got {other:?}"),
+        }
+
+        // Releasing again with nothing in flight signals nothing — take-once.
+        let actions = section.handle_release();
+        assert!(actions.is_empty());
+        assert!(!section.is_dragging());
+    }
+
+    #[test]
+    fn release_without_layer_id_emits_nothing_but_still_clears() {
+        let mut section = AudioTriggerSection::new();
+        section
+            .dragging_shape
+            .start((0, AudioShapeParam::Sensitivity), Vec2::ZERO);
+
+        let actions = section.handle_release();
+        assert!(actions.is_empty());
+        assert!(!section.is_dragging());
+    }
+
+    #[test]
+    fn handle_drag_is_noop_when_not_dragging() {
+        let mut tree = UITree::new();
+        let mut section = AudioTriggerSection::new();
+        assert!(section.handle_drag(0.5, &mut tree).is_empty());
     }
 }
