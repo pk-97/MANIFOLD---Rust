@@ -35,7 +35,7 @@ fn slot(spec: &ParamSpecDef, value: f32) -> Param {
 /// with every card param at its declared default EXCEPT `param_id`, which
 /// is set to `value`. Returns the tonemapped RGBA8 readback.
 fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> Vec<u8> {
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
     let registry = PrimitiveRegistry::with_builtin();
     let json = manifold_renderer::node_graph::bundled_preset_json(&PresetTypeId::new(preset_id))
         .unwrap_or_else(|| panic!("{preset_id} bundled preset json"));
@@ -59,7 +59,7 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json,
         &registry,
-        &device,
+        std::sync::Arc::clone(&device),
         W,
         H,
         GpuTextureFormat::Rgba16Float,

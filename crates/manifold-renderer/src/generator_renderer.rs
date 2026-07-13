@@ -12,6 +12,7 @@ use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, NodeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Per-clip active state.
 struct ActiveClip {
@@ -122,8 +123,10 @@ struct ThumbGen {
 }
 
 pub struct GeneratorRenderer {
-    /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
-    device_ptr: *const GpuDevice,
+    /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
+    /// clone instead of a cached raw pointer means this survives any future
+    /// move of `ContentPipeline`/`ContentThread` (BUG-054).
+    device: Arc<GpuDevice>,
     width: u32,
     height: u32,
     format: GpuTextureFormat,
@@ -152,13 +155,9 @@ pub struct GeneratorRenderer {
     preview_layer: Option<LayerId>,
 }
 
-// Safety: device_ptr points to GpuDevice on the content thread.
-// GeneratorRenderer is only used on the content thread.
-unsafe impl Send for GeneratorRenderer {}
-
 impl GeneratorRenderer {
     pub fn new(
-        device: &GpuDevice,
+        device: Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -168,16 +167,16 @@ impl GeneratorRenderer {
         // Avoids pre-allocating large textures that may never be used.
         let available_rts = Vec::with_capacity(8);
 
-        let uniform_arena = UniformArena::new(device);
+        let uniform_arena = UniformArena::new(&device);
 
         let registry = GeneratorRegistry::new(format);
         // Pre-compile all generator pipelines into the binary archive.
         // Generators are created and immediately dropped — compiled Metal pipeline
         // binaries persist in the archive. Eliminates first-use stutter.
-        registry.prewarm_all(device);
+        registry.prewarm_all(&device);
 
         Self {
-            device_ptr: device as *const GpuDevice,
+            device,
             width,
             height,
             format,
@@ -327,13 +326,9 @@ impl GeneratorRenderer {
             .unwrap_or_default()
     }
 
-    pub fn set_device(&mut self, device: &GpuDevice) {
-        self.device_ptr = device as *const GpuDevice;
-    }
-
     /// Get a reference to the GpuDevice.
     fn device(&self) -> &GpuDevice {
-        unsafe { &*self.device_ptr }
+        &self.device
     }
 
     /// Internal: acquire a clip with generator type and layer identity.
@@ -754,9 +749,11 @@ impl GeneratorRenderer {
     pub fn resize_gpu(&mut self, width: u32, height: u32, _output_width: u32, _output_height: u32) {
         self.width = width;
         self.height = height;
-        // Safety: device_ptr points to GpuDevice owned by ContentPipeline,
-        // which outlives GeneratorRenderer. No aliasing with active_clips/generators.
-        let device = unsafe { &*self.device_ptr };
+        // Clone the Arc (cheap refcount bump) so `device` doesn't borrow
+        // `self` — otherwise the immutable self-borrow would conflict with
+        // the mutable active_clips/generators borrows below.
+        let device = Arc::clone(&self.device);
+        let device = &*device;
         for active in self.active_clips.values_mut() {
             active.render_target.resize(device, width, height);
         }
@@ -771,7 +768,8 @@ impl GeneratorRenderer {
     /// Reset all generator simulation state to initial conditions.
     /// Called after export warmup re-seek.
     pub fn reset_all_generator_state(&mut self) {
-        let device = unsafe { &*self.device_ptr };
+        let device = Arc::clone(&self.device);
+        let device = &*device;
         for layer_state in self.layer_generators.values_mut() {
             layer_state.generator.reset_state(device);
         }
@@ -898,7 +896,7 @@ impl GeneratorRenderer {
         // sweeps consult `built_watched` to re-instantiate when it toggles.
         let is_watched = self.preview_layer.as_ref() == Some(&layer_id);
         let Some(generator) = self.registry.create_with_override(
-            self.device(),
+            Arc::clone(&self.device),
             &gen_type,
             override_def,
             self.width,
@@ -969,7 +967,7 @@ impl GeneratorRenderer {
             .is_none_or(|t| t.gen_type != gen_type);
         if needs_create {
             let runtime = self.registry.create_with_override(
-                self.device(),
+                Arc::clone(&self.device),
                 &gen_type,
                 None,
                 THUMB_W,
@@ -1277,7 +1275,7 @@ mod tests {
         let host_h: u32 = 720;
 
         let mut renderer = GeneratorRenderer::new(
-            &device,
+            device.arc(),
             host_w,
             host_h,
             GpuTextureFormat::Rgba16Float,
@@ -1421,7 +1419,7 @@ mod tests {
     #[test]
     fn effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode() {
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(&device, 256, 256, GpuTextureFormat::Rgba16Float, 0);
+        let mut renderer = GeneratorRenderer::new(device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0);
         let layer_id = LayerId::new("trigger-count-layer");
         let gen_type = PresetTypeId::new("TrivialPassthrough");
 

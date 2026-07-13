@@ -26,7 +26,7 @@ impl GeneratorRegistry {
     /// Pre-compile all generator pipelines into the binary archive.
     /// Creates and immediately drops each generator — the compiled Metal pipeline
     /// binaries persist in the archive. Call at startup before `save_pipeline_archive()`.
-    pub fn prewarm_all(&self, device: &GpuDevice) {
+    pub fn prewarm_all(&self, device: &std::sync::Arc<GpuDevice>) {
         let json_count = bundled_preset_type_ids(PresetKind::Generator).count();
         log::info!("Pre-warming {json_count} JSON generator pipelines...");
         // Pre-warm JSON-defined generators. We need a default
@@ -39,7 +39,7 @@ impl GeneratorRegistry {
                 && let Err(e) = PresetRuntime::from_json_str_with_device(
                     &json,
                     &registry,
-                    device,
+                    std::sync::Arc::clone(device),
                     256,
                     256,
                     self.target_format,
@@ -86,7 +86,7 @@ impl GeneratorRegistry {
     /// sized for a sub-rect of the real canvas).
     pub fn create(
         &self,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         gen_type: &manifold_core::PresetTypeId,
         width: u32,
         height: u32,
@@ -114,7 +114,7 @@ impl GeneratorRegistry {
     /// can be loaded.
     pub fn create_with_override(
         &self,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         gen_type: &manifold_core::PresetTypeId,
         override_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
         width: u32,
@@ -165,7 +165,7 @@ impl GeneratorRegistry {
             match PresetRuntime::from_def_with_device(
                 render_def,
                 &registry,
-                device,
+                std::sync::Arc::clone(&device),
                 width,
                 height,
                 self.target_format,

@@ -323,7 +323,7 @@ mod gpu_tests {
             (HYPERCUBE_VERTEX_COUNT as u64) * std::mem::size_of::<Vec4Vertex>() as u64;
         let vert_buf = device.create_buffer_shared(vert_bytes);
 
-        let mut backend = MetalBackend::new(&device, 1, 1, format);
+        let mut backend = MetalBackend::new(device.arc(), 1, 1, format);
         let vert_slot = backend.pre_bind_array(r_verts, vert_buf);
 
         let mut native_enc = device.create_encoder("hypercube-vertices-test");

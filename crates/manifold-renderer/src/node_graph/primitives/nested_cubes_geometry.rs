@@ -498,7 +498,7 @@ mod gpu_tests {
         let r_out = output_resource(&plan, geom, "out");
         let r_row = output_resource(&plan, cycler, "row");
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         let out_target = RenderTarget::new(&device, w, h, format, "nested-cubes-geometry-out");
         let out_slot = backend.pre_bind_texture_2d(r_out, out_target);
         // Pre-allocate the intermediate Array<f32> wire (cycler → geom).

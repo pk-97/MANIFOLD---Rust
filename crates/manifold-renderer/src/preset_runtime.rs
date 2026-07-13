@@ -2752,7 +2752,7 @@ impl PresetRuntime {
     pub fn from_json_str_with_device(
         json: &str,
         registry: &PrimitiveRegistry,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -2768,7 +2768,7 @@ impl PresetRuntime {
     pub fn from_def_with_device(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
-        device: &GpuDevice,
+        device: std::sync::Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -2777,7 +2777,7 @@ impl PresetRuntime {
         let mut g = Self::from_def(doc, registry, manifest)?;
         g.width = width;
         g.height = height;
-        let mut backend = MetalBackend::new(device, width, height, format);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
         let PresetIo::Generate {
             final_output_input_resource,
             ..
@@ -2789,7 +2789,7 @@ impl PresetRuntime {
         // exists across frames; `install_target` swaps in the host's real target
         // via `replace_texture_2d` each render call.
         let placeholder =
-            RenderTarget::new(device, 1, 1, format, "preset_runtime_target_owner");
+            RenderTarget::new(&device, 1, 1, format, "preset_runtime_target_owner");
         let slot = backend.pre_bind_texture_2d(final_output_input_resource, placeholder);
         if let PresetIo::Generate {
             final_output_slot, ..
@@ -2802,7 +2802,7 @@ impl PresetRuntime {
         // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
-        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, device, &mut backend)
+        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
             .map_err(generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
@@ -5555,7 +5555,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5573,7 +5573,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5599,7 +5599,7 @@ mod generator_runtime_tests {
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5618,7 +5618,7 @@ mod generator_runtime_tests {
         let mut g = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5681,7 +5681,7 @@ mod generator_runtime_tests {
         let mut g = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
-            &device,
+            device.arc(),
             1920,
             1080,
             GpuTextureFormat::Rgba16Float,
@@ -5756,7 +5756,7 @@ mod generator_runtime_tests {
             let mut g = PresetRuntime::from_json_str_with_device(
                 json,
                 &PrimitiveRegistry::with_builtin(),
-                &device,
+                device.arc(),
                 w,
                 h,
                 GpuTextureFormat::Rgba16Float,

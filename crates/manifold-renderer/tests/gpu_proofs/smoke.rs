@@ -48,7 +48,7 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
         let mut generator = PresetRuntime::from_json_str_with_device(
             &json,
             &registry,
-            &h.device,
+            std::sync::Arc::clone(&h.device),
             h.width,
             h.height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,

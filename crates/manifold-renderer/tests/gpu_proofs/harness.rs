@@ -176,7 +176,8 @@ impl ParityHarness {
         let zeros = vec![f16::from_f32(0.0); (self.width * self.height * 4) as usize];
         let transparent = self.upload_f16_rgba("alpha-probe-transparent", &zeros);
 
-        let mut backend = MetalBackend::new(&self.device, self.width, self.height, self.format);
+        let mut backend =
+            MetalBackend::new(Arc::clone(&self.device), self.width, self.height, self.format);
         let mut copy_enc = self.device.create_encoder("alpha-probe-copy-in");
         let mut rts: Vec<RenderTarget> = Vec::with_capacity(sources.len());
         {

@@ -358,7 +358,7 @@ mod tests {
 
             let src_target =
                 RenderTarget::new(&device, w, h, format, "first-frame-test-src");
-            let mut backend = MetalBackend::new(&device, w, h, format);
+            let mut backend = MetalBackend::new(device.arc(), w, h, format);
             backend.pre_bind_texture_2d(r_src, src_target);
 
             let mut exec = Executor::new(Box::new(backend));
@@ -625,7 +625,7 @@ mod tests {
         // Pre-bind the source texture. Intermediate textures (the
         // affine output) get auto-allocated by MetalBackend.
         let r_src = output_resource(&plan, src, "out");
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
 
         let mut exec = Executor::new(Box::new(backend));
@@ -811,7 +811,7 @@ mod tests {
             .map(|(_, id)| *id)
             .expect("source resource");
 
-        let mut backend = MetalBackend::new(&device, w, h, canvas_format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, canvas_format);
 
         // Source: photo → CPU_UPLOAD staging (replaceRegion needs
         // host-visible storage; RenderTarget::new allocates private),

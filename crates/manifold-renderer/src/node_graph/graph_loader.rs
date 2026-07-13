@@ -1584,7 +1584,7 @@ mod tests {
         use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let mut graph = Graph::new();
         let seed = graph.add_node(Box::new(SeedParticles::new()));
         let step = graph.add_node(Box::new(EulerStepParticles::new()));
@@ -1596,7 +1596,7 @@ mod tests {
         // Construct a backend but deliberately skip the Array<T>
         // pre-allocation; only run the audit directly so it has to
         // catch the dangling resources on its own.
-        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
         let err = audit_array_resource_bindings(&graph, &plan, &backend)
             .expect_err("audit must reject plan with unbound Array<T> resource");
 
@@ -1625,12 +1625,12 @@ mod tests {
         use crate::node_graph::primitives::SeedParticles;
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let mut graph = Graph::new();
         graph.add_node(Box::new(SeedParticles::new()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
-        let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&graph, &plan, &device, &mut backend)
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }

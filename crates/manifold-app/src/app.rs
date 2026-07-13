@@ -1808,7 +1808,7 @@ impl ApplicationHandler for Application {
 
         // Create native Metal GPU context
         let gpu = {
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
 
             // Create native Metal surface for the workspace window.
             // displaySyncEnabled = false: the CVDisplayLink handles vsync
@@ -2137,7 +2137,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // This gives the content thread its OWN MTLCommandQueue, completely separate
             // from the UI thread's queue. Metal interleaves GPU work from both queues,
             // preventing the content thread from starving UI submissions.
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = Arc::new(manifold_gpu::GpuDevice::new());
             // Load pipeline binary archive — subsequent pipeline creation calls
             // automatically use it for near-instant cache hits.
             if let Ok(home) = std::env::var("HOME") {
@@ -2154,7 +2154,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -2167,12 +2167,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // is order-independent, but image stays ahead of it anyway.
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::image_renderer::ImageRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                 )),
                 Box::new(GeneratorRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     gen_format,

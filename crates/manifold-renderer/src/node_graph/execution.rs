@@ -1540,14 +1540,14 @@ mod tests {
         use crate::node_graph::ports::ArrayType;
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
 
         let mut g = Graph::new();
         g.add_node(Box::new(SilentAliasedNode::new(particle_layout)));
         let plan = compile(&g).expect("trivial graph compiles");
 
-        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
         let mut exec = Executor::new(Box::new(backend));
         let mut native_enc = device.create_encoder("aliased-contract-test");
         let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
