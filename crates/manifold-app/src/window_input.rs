@@ -108,6 +108,101 @@ impl Application {
         }
     }
 
+    // ── Text-edit session pointer routing (UI_WIDGET_UNIFICATION P5b/D16) ──
+    // A single `TextInputState` is shared by both windows (`begin_owned`
+    // tags which one), so one gate here covers both — mirrors the keyboard
+    // gate's shape (`self.text_input.active`) rather than duplicating a
+    // second one per window.
+
+    /// Approximate rendered rect of the active text overlay, in the same
+    /// logical-pixel space as `self.cursor_pos` — mirrors
+    /// `app_render::render_text_input_overlay`'s own `bg_w`/`bg_h` sizing
+    /// (single-line fields exactly; multiline uses the anchor height, a
+    /// reasonable approximation — precise multiline geometry needs the live
+    /// line count, which only the renderer computes today).
+    fn text_input_overlay_rect(&self) -> (f32, f32, f32, f32) {
+        let a = self.text_input.anchor;
+        let bg_w = a.width.max(40.0);
+        let bg_h = a
+            .height
+            .max(self.text_input.font_size + crate::text_input::TEXT_INPUT_PAD_V * 2.0);
+        (a.x, a.y, bg_w, bg_h)
+    }
+
+    /// Byte offset under `x` (logical px, relative to the anchor's left
+    /// edge) via the live `UIRenderer`'s own measurer — the same
+    /// `byte_offset_for_x` helper `x_for_byte_offset` inverts for rendering.
+    /// Falls back to the text's end when no renderer is up yet (can't
+    /// happen once a session is active in practice, since the overlay that
+    /// hosts it needs the renderer to draw — belt and suspenders).
+    fn text_input_byte_at_x(&mut self, x: f32) -> usize {
+        let pad_h = crate::text_input::TEXT_INPUT_PAD_H;
+        let rel_x = x - self.text_input.anchor.x - pad_h;
+        let fs = self.text_input.font_size as u16;
+        let text = self.text_input.text().to_string();
+        match self.ui_renderer.as_mut() {
+            Some(r) => manifold_ui::text_edit::byte_offset_for_x(&text, rel_x, &mut |s| {
+                r.measure_text_cached(s, fs, manifold_ui::FontWeight::Medium).x
+            }),
+            None => text.len(),
+        }
+    }
+
+    /// A left-press anywhere while a text session is active. Inside the
+    /// field: places the caret (shift-click extends; a second press within
+    /// the double-click window/radius, I8, selects the word) and starts a
+    /// drag session — returns `true` (consumed, no further dispatch).
+    /// Outside the field: commits the session first (D16 blur-commit), then
+    /// returns `false` so the ORIGINAL press still reaches its normal
+    /// target — a click that both closes a rename box and clicks whatever
+    /// is under it.
+    pub(crate) fn text_input_pointer_down(&mut self, pos: Vec2) -> bool {
+        if !self.text_input.active {
+            return false;
+        }
+        let (rx, ry, rw, rh) = self.text_input_overlay_rect();
+        let inside = pos.x >= rx && pos.x <= rx + rw && pos.y >= ry && pos.y <= ry + rh;
+        if !inside {
+            let (field, text) = self.text_input.commit();
+            self.handle_text_input_commit(field, &text);
+            return false;
+        }
+        let byte = self.text_input_byte_at_x(pos.x);
+        let now = self.time_since_start;
+        let is_double_click = self.text_input.last_press.is_some_and(|(t, px, py)| {
+            (now - t) < manifold_ui::color::DOUBLE_CLICK_TIME_SEC
+                && (pos.x - px).powi(2) + (pos.y - py).powi(2)
+                    < manifold_ui::color::DOUBLE_CLICK_RADIUS_PX.powi(2)
+        });
+        self.text_input.last_press = Some((now, pos.x, pos.y));
+        if is_double_click {
+            self.text_input.select_word_at(byte);
+        } else {
+            self.text_input.caret_to(byte, self.modifiers.shift);
+        }
+        self.text_input.dragging = true;
+        true
+    }
+
+    /// Pointer motion while a text session's drag is armed — extends the
+    /// selection toward the cursor (`drag_to`, anchor held at the press
+    /// position). A no-op (returns `false`) when no drag is in progress, so
+    /// the caller can fall through to normal hover handling.
+    pub(crate) fn text_input_pointer_move(&mut self, pos: Vec2) -> bool {
+        if !self.text_input.active || !self.text_input.dragging {
+            return false;
+        }
+        let byte = self.text_input_byte_at_x(pos.x);
+        self.text_input.drag_to(byte);
+        true
+    }
+
+    /// Ends a text-session drag on release. Idempotent — a no-op if no drag
+    /// was in progress (e.g. the button went up outside a session).
+    pub(crate) fn text_input_pointer_up(&mut self) {
+        self.text_input.dragging = false;
+    }
+
     // ── Dispatchers: the single owner entry per winit input event ──────────
     // `window_event` calls exactly one of these per arm; the primary / editor /
     // output-window split lives here, not in the match.
@@ -120,6 +215,14 @@ impl Application {
         is_graph_editor: bool,
         position: PhysicalPosition<f64>,
     ) {
+        // An active text session's drag claims pointer motion ahead of
+        // everything else (P5b) — but only actually consumes it while a
+        // drag is armed (`text_input_pointer_move` returns `false`
+        // otherwise), so ordinary hover/drag handling is untouched when no
+        // session is open.
+        if self.text_input_pointer_move(self.logical_cursor(window_id, position)) {
+            return;
+        }
         if is_graph_editor {
             self.editor_cursor_moved(window_id, position);
         } else if is_primary {
@@ -136,6 +239,34 @@ impl Application {
         button: MouseButton,
         state: ElementState,
     ) {
+        // An active text session claims the press/release ahead of normal
+        // dispatch (P5b/D16): inside the field it places the caret/word and
+        // consumes the event; outside it commits first and then falls
+        // through so the click still reaches its normal target. `MouseInput`
+        // carries no position (winit), so read it from wherever each window
+        // already tracks it: `self.cursor_pos` for the main window, the
+        // canvas's own tracked cursor for the editor window (same source
+        // `editor_mouse_input`'s picker branch uses, above).
+        if button == MouseButton::Left {
+            let press_pos = if is_graph_editor {
+                self.graph_canvas
+                    .as_ref()
+                    .map(|c| Vec2::new(c.cursor().0, c.cursor().1))
+                    .unwrap_or(Vec2::ZERO)
+            } else {
+                self.cursor_pos
+            };
+            match state {
+                ElementState::Pressed => {
+                    if self.text_input_pointer_down(press_pos) {
+                        return;
+                    }
+                }
+                ElementState::Released => {
+                    self.text_input_pointer_up();
+                }
+            }
+        }
         if is_graph_editor {
             self.editor_mouse_input(window_id, button, state);
         } else {
@@ -1302,7 +1433,7 @@ impl Application {
                 _ => {}
             }
             if filter_changed {
-                let filter = self.text_input.text.trim().to_string();
+                let filter = self.text_input.text().trim().to_string();
                 if let Some(ed) = self.graph_editor.as_mut() {
                     ed.ui_root.browser_popup.set_filter(filter);
                 }
@@ -1344,12 +1475,40 @@ impl Application {
                 }
                 Key::Named(NamedKey::Backspace) => self.text_input.backspace(),
                 Key::Named(NamedKey::Delete) => self.text_input.delete(),
-                Key::Named(NamedKey::ArrowLeft) => self.text_input.move_left(),
-                Key::Named(NamedKey::ArrowRight) => self.text_input.move_right(),
+                Key::Named(NamedKey::ArrowLeft) => {
+                    if self.modifiers.command {
+                        self.text_input.move_home(self.modifiers.shift);
+                    } else {
+                        self.text_input.move_left(self.modifiers.shift, self.modifiers.alt);
+                    }
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    if self.modifiers.command {
+                        self.text_input.move_end(self.modifiers.shift);
+                    } else {
+                        self.text_input.move_right(self.modifiers.shift, self.modifiers.alt);
+                    }
+                }
                 Key::Named(NamedKey::Space) if typing => self.text_input.insert_char(' '),
                 Key::Character(c) => {
                     if c == "a" && self.modifiers.command {
                         self.text_input.select_all_text();
+                    } else if c == "z" && self.modifiers.command {
+                        self.text_input.undo_to_seed();
+                    } else if c == "c" && self.modifiers.command {
+                        let s = self.text_input.copy_selection();
+                        if !s.is_empty() {
+                            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                        }
+                    } else if c == "x" && self.modifiers.command {
+                        let s = self.text_input.cut_selection();
+                        if !s.is_empty() {
+                            crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                        }
+                    } else if c == "v" && self.modifiers.command {
+                        if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
+                            self.text_input.paste(&s);
+                        }
                     } else if typing {
                         for ch in c.chars() {
                             self.text_input.insert_char(ch);
@@ -1364,7 +1523,7 @@ impl Application {
                 && self.text_input.active
                 && let Some(canvas) = self.graph_canvas.as_mut()
             {
-                let q = self.text_input.text.trim().to_string();
+                let q = self.text_input.text().trim().to_string();
                 canvas.set_node_search(&q);
             }
             if let Some(ed) = self.graph_editor.as_mut() {
@@ -1823,11 +1982,19 @@ impl Application {
                         consumed = true;
                     }
                     Key::Named(NamedKey::ArrowLeft) => {
-                        self.text_input.move_left();
+                        if self.modifiers.command {
+                            self.text_input.move_home(self.modifiers.shift);
+                        } else {
+                            self.text_input.move_left(self.modifiers.shift, self.modifiers.alt);
+                        }
                         consumed = true;
                     }
                     Key::Named(NamedKey::ArrowRight) => {
-                        self.text_input.move_right();
+                        if self.modifiers.command {
+                            self.text_input.move_end(self.modifiers.shift);
+                        } else {
+                            self.text_input.move_right(self.modifiers.shift, self.modifiers.alt);
+                        }
                         consumed = true;
                     }
                     // Picker keyboard nav (P2) — only meaningful while the
@@ -1850,6 +2017,22 @@ impl Application {
                         // Cmd+A / Ctrl+A → select all
                         if c == "a" && self.modifiers.command {
                             self.text_input.select_all_text();
+                        } else if c == "z" && self.modifiers.command {
+                            self.text_input.undo_to_seed();
+                        } else if c == "c" && self.modifiers.command {
+                            let s = self.text_input.copy_selection();
+                            if !s.is_empty() {
+                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                            }
+                        } else if c == "x" && self.modifiers.command {
+                            let s = self.text_input.cut_selection();
+                            if !s.is_empty() {
+                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
+                            }
+                        } else if c == "v" && self.modifiers.command {
+                            if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
+                                self.text_input.paste(&s);
+                            }
                         } else {
                             for ch in c.chars() {
                                 self.text_input.insert_char(ch);
@@ -1868,7 +2051,7 @@ impl Application {
                     self.ws
                         .ui_root
                         .browser_popup
-                        .set_filter(self.text_input.text.trim().to_string());
+                        .set_filter(self.text_input.text().trim().to_string());
                     self.needs_rebuild = true;
                 }
                 // Skip normal shortcut processing when text input consumed the key

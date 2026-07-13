@@ -4815,12 +4815,12 @@ pub(crate) fn render_text_input_overlay(
     let bg_y = a.y;
     let bg_w = a.width.max(40.0);
 
+    let text = ti.model.text();
+    let sel = ti.model.selection();
+    let has_selection = ti.model.has_selection();
+
     // For multiline fields, compute height from line count (minimum 3 lines).
-    let line_count = if ti.multiline {
-        ti.text.split('\n').count().max(3)
-    } else {
-        1
-    };
+    let line_count = if ti.multiline { text.split('\n').count().max(3) } else { 1 };
     let bg_h = (line_count as f32 * line_h + pad_v * 2.0).max(a.height.max(fs + pad_v * 2.0));
 
     ui.draw_bordered_rect(
@@ -4834,64 +4834,66 @@ pub(crate) fn render_text_input_overlay(
         manifold_ui::Color32::new(89, 115, 179, 204), // sRGB, was [0.35, 0.45, 0.7, 0.8]
     );
 
-    // Selection highlight (when select_all)
-    if ti.select_all && !ti.text.is_empty() {
-        let text_w = ui
-            .measure_text_cached(&ti.text, fs as u16, FontWeight::Medium)
-            .x;
-        ui.draw_rect(
-            bg_x + pad_h,
-            bg_y + pad_v,
-            text_w.min(bg_w - pad_h * 2.0),
-            line_h,
-            TEXT_INPUT_SELECT_BG,
-        );
-    }
-
     let text_x = bg_x + pad_h;
+    let width = |ui: &mut UIRenderer, s: &str| ui.measure_text_cached(s, fs as u16, FontWeight::Medium).x;
 
     if ti.multiline {
         // Draw each line separately.
-        for (i, line) in ti.text.split('\n').enumerate() {
+        for (i, line) in text.split('\n').enumerate() {
             let ly = bg_y + pad_v + i as f32 * line_h;
+            // This line's byte range within `text` (offsets, not indices).
+            let line_start = text
+                .split('\n')
+                .take(i)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+            let line_end = line_start + line.len();
+            if has_selection && sel.start < line_end && sel.end > line_start {
+                let hl_start = sel.start.max(line_start) - line_start;
+                let hl_end = sel.end.min(line_end) - line_start;
+                let hx = text_x + width(ui, &line[..hl_start]);
+                let hw = width(ui, &line[..hl_end]) - width(ui, &line[..hl_start]);
+                ui.draw_rect(hx, ly, hw.max(2.0), line_h, TEXT_INPUT_SELECT_BG);
+            }
             ui.draw_text(text_x, ly, line, fs, TEXT_INPUT_FG);
         }
 
-        // Blinking cursor — find which line the cursor is on.
-        if !ti.select_all {
+        // Blinking caret — find which line it's on.
+        if !has_selection {
             let elapsed = timer.realtime_since_start();
             let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
             if blink_on {
-                let before = &ti.text[..ti.cursor];
+                let before = &text[..ti.model.caret()];
                 let cursor_line = before.matches('\n').count();
                 let line_start = before.rfind('\n').map_or(0, |p| p + 1);
                 let before_on_line = &before[line_start..];
-                let cursor_x = text_x
-                    + ui.measure_text_cached(before_on_line, fs as u16, FontWeight::Medium)
-                        .x;
+                let cursor_x = text_x + width(ui, before_on_line);
                 let cursor_y = bg_y + pad_v + cursor_line as f32 * line_h;
-                ui.draw_rect(
-                    cursor_x,
-                    cursor_y,
-                    TEXT_INPUT_CURSOR_W,
-                    line_h,
-                    TEXT_INPUT_CURSOR,
-                );
+                ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
             }
         }
     } else {
-        // Single-line rendering (original path).
+        // Single-line rendering.
         let text_y = bg_y + pad_v;
-        ui.draw_text(text_x, text_y, &ti.text, fs, TEXT_INPUT_FG);
+        if has_selection {
+            let hx = text_x + width(ui, &text[..sel.start]);
+            let hw = width(ui, &text[..sel.end]) - width(ui, &text[..sel.start]);
+            ui.draw_rect(
+                hx,
+                bg_y + pad_v,
+                hw.min(bg_w - pad_h * 2.0).max(2.0),
+                line_h,
+                TEXT_INPUT_SELECT_BG,
+            );
+        }
+        ui.draw_text(text_x, text_y, text, fs, TEXT_INPUT_FG);
 
-        if !ti.select_all {
+        if !has_selection {
             let elapsed = timer.realtime_since_start();
             let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
             if blink_on {
-                let before = &ti.text[..ti.cursor];
-                let cursor_x = text_x
-                    + ui.measure_text_cached(before, fs as u16, FontWeight::Medium)
-                        .x;
+                let before = &text[..ti.model.caret()];
+                let cursor_x = text_x + width(ui, before);
                 ui.draw_rect(
                     cursor_x,
                     bg_y + pad_v,
