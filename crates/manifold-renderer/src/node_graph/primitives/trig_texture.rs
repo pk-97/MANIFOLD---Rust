@@ -298,7 +298,7 @@ mod gpu_tests {
             "trig-ftex-clear",
         );
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_in_src, in_target);
         backend.pre_bind_texture_2d(r_ftex_src, ftex_target);
         let out_slot = backend.pre_bind_texture_2d(r_out, out_target);
@@ -364,7 +364,7 @@ mod gpu_tests {
             "trig-ptex-clear",
         );
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_in_src, in_target);
         backend.pre_bind_texture_2d(r_ptex_src, ptex_target);
         let out_slot = backend.pre_bind_texture_2d(r_out, out_target);

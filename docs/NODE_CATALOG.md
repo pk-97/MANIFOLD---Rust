@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 237 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 238 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -61,10 +61,11 @@ _Generated from the node registry. Do not hand-edit. 237 nodes registered, group
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
-### Blur & Sharpen (8)
+### Blur & Sharpen (9)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Bilateral Blur | `node.bilateral_blur` | Filter | A depth-guided blur that smooths noise without bleeding across depth edges — the standard denoise pass after any per-pixel noisy sampler (ambient occlusion, di… |
 | Blur | `node.blur` | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
 | Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
 | Bokeh Gather | `node.bokeh_gather` | Filter | A true circular-aperture depth-of-field blur: each out-of-focus pixel gathers from a disc of neighbors sized by its own blur amount, and neighbors only contrib… |
@@ -136,7 +137,7 @@ _Generated from the node registry. Do not hand-edit. 237 nodes registered, group
 | CoC Dilate | `node.coc_dilate` | Map | Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a h… |
 | CoC From Depth | `node.coc_from_depth` | Map | Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
-| SSAO From Depth | `node.ssao_from_depth` | Map | Computes contact shadows from scene depth and a physical camera lens — darkens crevices and touching surfaces the way ambient light naturally would. |
+| SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
 ### Composite (7)

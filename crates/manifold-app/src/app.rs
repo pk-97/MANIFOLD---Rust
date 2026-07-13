@@ -141,6 +141,15 @@ pub struct Application {
     /// on an early editor frame.
     pub(crate) show_crash_notice: bool,
 
+    /// Completion channel for the in-flight background video-import probe
+    /// (BUG-133): `import_video_files`' worker thread sends the probe-failure
+    /// messages (codec/container the decoder couldn't open — e.g. `.webm`
+    /// without VP8/VP9, patchy `.avi`) once it finishes the batch. Polled by
+    /// `tick_import_failures` (same drain site as `tick_autosave`) and
+    /// surfaced via the existing `alerts::error` blocking-dialog path —
+    /// never a log-only failure. `None` while no import is in flight.
+    pub(crate) import_failures_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
+
     /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1), phase
     /// P2. Cadence gate — pure logic, ticked from the content-state drain in
     /// both editor and perform mode (unlike autosave, NOT parked in perform
@@ -585,6 +594,7 @@ impl Application {
             suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
             show_crash_notice: false,
+            import_failures_rx: None,
             breadcrumb_cadence: crate::breadcrumb::BreadcrumbCadence::new(),
             breadcrumb_writer: Some(crate::breadcrumb::BreadcrumbWriter::spawn()),
             resume_breadcrumb_path: None,
@@ -1899,7 +1909,7 @@ impl ApplicationHandler for Application {
 
         // Create native Metal GPU context
         let gpu = {
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
 
             // Create native Metal surface for the workspace window.
             // displaySyncEnabled = false: the CVDisplayLink handles vsync
@@ -2228,7 +2238,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // This gives the content thread its OWN MTLCommandQueue, completely separate
             // from the UI thread's queue. Metal interleaves GPU work from both queues,
             // preventing the content thread from starving UI submissions.
-            let native_device = manifold_gpu::GpuDevice::new();
+            let native_device = Arc::new(manifold_gpu::GpuDevice::new());
             // Load pipeline binary archive — subsequent pipeline creation calls
             // automatically use it for near-instant cache hits.
             if let Ok(home) = std::env::var("HOME") {
@@ -2245,7 +2255,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -2258,12 +2268,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // is order-independent, but image stays ahead of it anyway.
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::image_renderer::ImageRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                 )),
                 Box::new(GeneratorRenderer::new(
-                    &native_device,
+                    Arc::clone(&native_device),
                     output_w,
                     output_h,
                     gen_format,

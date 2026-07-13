@@ -112,7 +112,7 @@ fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
 /// Copies `input` into the source slot, runs one frame, copies the bound
 /// output into a fresh target that outlives the backend.
 fn render_graph(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     graph: &mut Graph,
     plan: &ExecutionPlan,
     source_res: ResourceId,
@@ -129,7 +129,7 @@ fn render_graph(
     }
     let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-graph-out");
 
-    let mut backend = MetalBackend::new(device, w, h, FMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
     backend.pre_bind_texture_2d(source_res, src_rt);
     let out_slot = backend.pre_bind_texture_2d(output_res, out_rt);
 
@@ -202,7 +202,7 @@ fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -> Re
 
 /// Build the unfused `Source -> Gain(g1) -> Gain(g2) -> FinalOutput` chain and
 /// render it. Returns (rendered texture, the source ResourceId is internal).
-fn render_unfused_two_gain(device: &GpuDevice, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
+fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
     let mut g = Graph::new();
     let src = g.add_node(Box::new(Source::new()));
     let a = g.add_node(Box::new(Gain::new()));
@@ -227,7 +227,7 @@ fn fused_gain_chain_matches_unfused_within_tolerance() {
     let input = gradient_input(&device, w, h);
     let (g1, g2) = (0.75_f32, 1.2_f32);
 
-    let unfused = render_unfused_two_gain(&device, &input, g1, g2);
+    let unfused = render_unfused_two_gain(&device.arc(), &input, g1, g2);
     let fused = render_fused_gain(&device, &input, g1 * g2);
 
     let differ = TextureDiff::new(&device);
@@ -255,7 +255,7 @@ fn oracle_catches_wrong_fusion() {
     let input = gradient_input(&device, w, h);
     let (g1, g2) = (0.75_f32, 1.2_f32);
 
-    let unfused = render_unfused_two_gain(&device, &input, g1, g2);
+    let unfused = render_unfused_two_gain(&device.arc(), &input, g1, g2);
     // Mis-fuse: product off by 1.5× — a real fusion bug the oracle MUST catch.
     let wrong = render_fused_gain(&device, &input, g1 * g2 * 1.5);
 
@@ -327,7 +327,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     let plan = compile(&graph).expect("compile ColorGrade");
     let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
     let out_res = resource_for_output(&plan, find_node(&graph, "node.clamp"), "out");
-    let unfused = render_graph(&device, &mut graph, &plan, src_res, &input, out_res);
+    let unfused = render_graph(&device.arc(), &mut graph, &plan, src_res, &input, out_res);
 
     // Fused: one kernel.
     let pipeline = colorgrade_pipeline(&device);
@@ -412,7 +412,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let plan_a = compile(&graph_a).expect("compile card A");
     let a_src = resource_for_output(&plan_a, find_node(&graph_a, "system.source"), "out");
     let a_out = resource_for_output(&plan_a, find_node(&graph_a, "node.contrast"), "out");
-    let a_result = render_graph(&device, &mut graph_a, &plan_a, a_src, &input, a_out);
+    let a_result = render_graph(&device.arc(), &mut graph_a, &plan_a, a_src, &input, a_out);
 
     let mut graph_b = card_b.clone().into_graph(&registry).expect("card B graph");
     set_f(&mut graph_b, "node.saturation", "saturation", saturation);
@@ -420,7 +420,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let b_src = resource_for_output(&plan_b, find_node(&graph_b, "system.source"), "out");
     let b_out = resource_for_output(&plan_b, find_node(&graph_b, "node.saturation"), "out");
     let sequential =
-        render_graph(&device, &mut graph_b, &plan_b, b_src, &a_result.texture, b_out);
+        render_graph(&device.arc(), &mut graph_b, &plan_b, b_src, &a_result.texture, b_out);
 
     // ── Fused segment: concat → one region across the seam → one kernel. ──
     let seg = concat_defs(&[&card_a, &card_b]).expect("segment concat builds");
@@ -443,7 +443,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
     let fused_plan = compile(&fused_graph).expect("compile fused segment");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     // Pointwise-only: same budget as the gain-chain proof. The sequential side
@@ -606,8 +606,8 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
             .set_param(fused_node, mode_field, ParamValue::Float(mode as f32))
             .expect("set fused mode");
 
-        let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
-        let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+        let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+        let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
         let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
         // Hard gate: NO divergent NaN/Inf, ever. Plus a discontinuity-aware
@@ -692,7 +692,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
     let u_out =
         resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp"), "out");
-    let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
 
     // ── Auto-fused: region-grow + def-rewrite, then run through the executor. ──
     let FusedDef { def: fused_def, retarget, .. } =
@@ -710,7 +710,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     // Same discontinuity-aware budget as the hand-kernel test, plus an absolute
@@ -798,7 +798,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
     let u_out =
         resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
-    let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
 
     // ── Fused: cam_atom + invert must collapse into ONE node.wgsl_compute,
     // with `cam` surviving as a boundary (a Camera producer never fuses) and
@@ -838,7 +838,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
-    let fused = render_graph(&device, &mut fused_graph, &fused_plan, f_src, &input, f_out);
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
@@ -897,7 +897,7 @@ fn every_fused_preset_executes_one_frame() {
             let plan = compile(&graph).expect("fused graph compiles");
             let r_src = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
             let src_target = RenderTarget::new(&device, w, h, FMT, "fused-smoke-src");
-            let mut backend = MetalBackend::new(&device, w, h, FMT);
+            let mut backend = MetalBackend::new(device.arc(), w, h, FMT);
             backend.pre_bind_texture_2d(r_src, src_target);
             let mut exec = Executor::new(Box::new(backend));
             let mut state = StateStore::new();
@@ -962,7 +962,7 @@ fn fused_source_region_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     // ── Fused: checkerboard + mix collapse into one kernel. ──
     let FusedDef { def: fdef, .. } =
@@ -972,7 +972,7 @@ fn fused_source_region_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -1133,7 +1133,7 @@ fn infrared_preset_black_stays_black() {
     let plan = compile(&graph).expect("compile");
     let src_res = resource_for_output(&plan, src, "out");
     let out_res = resource_for_output(&plan, result.output.0, result.output.1);
-    let img = render_graph(&device, &mut graph, &plan, src_res, &input, out_res);
+    let img = render_graph(&device.arc(), &mut graph, &plan, src_res, &input, out_res);
     let rgb = center_rgb(&device, &img);
 
     eprintln!("Infrared preset (Arctic, black input) centre = {rgb:?}");
@@ -1183,7 +1183,7 @@ fn wireframe_generator_background_is_black() {
         trigger_count: 0,
     };
 
-    let mut generator = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+    let mut generator = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
         .expect("generator builds");
     let target = RenderTarget::new(&device, w, h, FMT, "wz-bg");
     for _ in 0..3 {
@@ -1269,7 +1269,7 @@ fn fused_gather_region_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the gather region fuses");
@@ -1278,7 +1278,7 @@ fn fused_gather_region_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -1327,7 +1327,7 @@ fn fused_warp_region_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.remap"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the warp region fuses");
@@ -1336,7 +1336,7 @@ fn fused_warp_region_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -1425,7 +1425,7 @@ fn stencil_checkpoint_diff(
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the stencil region fuses");
@@ -1442,7 +1442,7 @@ fn stencil_checkpoint_diff(
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-3, 1.0e-3)
@@ -1532,7 +1532,7 @@ fn fused_variable_width_blur_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the specialized blur fuses");
@@ -1555,7 +1555,7 @@ fn fused_variable_width_blur_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 2.0e-3, 1.0e-3);
@@ -1621,7 +1621,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the warp-chain region fuses");
@@ -1638,7 +1638,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 2.0e-3, 1.0e-3);
@@ -1661,7 +1661,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
 /// (feedback loops warm up across frames), source pre-bound to `input`, and
 /// return the texture feeding `final_output` after the last frame.
 fn render_effect_frames_with_state(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     registry: &PrimitiveRegistry,
     def: &EffectGraphDef,
     input: &GpuTexture,
@@ -1687,7 +1687,7 @@ fn render_effect_frames_with_state(
         e.commit_and_wait_completed();
     }
     let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-fb-out");
-    let mut backend = MetalBackend::new(device, w, h, FMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
     backend.pre_bind_texture_2d(src_res, src_rt);
     let out_slot = backend.pre_bind_texture_2d(out_res, out_rt);
     crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
@@ -1748,8 +1748,8 @@ fn watercolor_inloop_chain_fusion_matches_unfused() {
         "the warp must be absorbed into the diffuse blur's fetch"
     );
 
-    let u_img = render_effect_frames_with_state(&device, &registry, def, &input, 8);
-    let f_img = render_effect_frames_with_state(&device, &registry, &fused, &input, 8);
+    let u_img = render_effect_frames_with_state(&device.arc(), &registry, def, &input, 8);
+    let f_img = render_effect_frames_with_state(&device.arc(), &registry, &fused, &input, 8);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-3, 1.0e-2);
@@ -1819,7 +1819,7 @@ fn linear_blur_pair_matches_legacy_blur_node() {
     let l_plan = compile(&l_graph).expect("compile legacy");
     let l_src = resource_for_output(&l_plan, find_node(&l_graph, "system.source"), "out");
     let l_out = resource_for_output(&l_plan, find_node(&l_graph, "node.blur"), "out");
-    let l_img = render_graph(&device, &mut l_graph, &l_plan, l_src, &input, l_out);
+    let l_img = render_graph(&device.arc(), &mut l_graph, &l_plan, l_src, &input, l_out);
 
     let p_def: EffectGraphDef = serde_json::from_str(pair).unwrap();
     let mut p_graph = p_def.into_graph(&registry).expect("pair graph");
@@ -1834,7 +1834,7 @@ fn linear_blur_pair_matches_legacy_blur_node() {
             .expect("blur_v present");
         resource_for_output(&p_plan, blur_v, "out")
     };
-    let p_img = render_graph(&device, &mut p_graph, &p_plan, p_src, &input, p_out);
+    let p_img = render_graph(&device.arc(), &mut p_graph, &p_plan, p_src, &input, p_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &l_img.texture, &p_img.texture, 1.0e-3, 1.0e-3);
@@ -1968,7 +1968,7 @@ fn every_fused_generator_executes_one_frame() {
             let mut g = PresetRuntime::from_def_with_device(
                 fused_def.clone(),
                 &registry,
-                &device,
+                device.arc(),
                 w,
                 h,
                 FMT,
@@ -2060,7 +2060,7 @@ fn fused_generator_renders_like_unfused() {
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g =
-            PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
                 .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-gen-out");
         let mut enc = device.create_encoder("freeze-gen");
@@ -2138,7 +2138,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     };
     // Warm up a few frames (instance/particle buffers populate), then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
             .expect("generator builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-dp-out");
         for i in 0..6u32 {
@@ -2323,7 +2323,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
         trigger_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
             .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-fusion");
         for i in 0..8u32 {
@@ -2419,7 +2419,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
         trigger_count: 0,
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
             .expect("FluidSim3D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid3d-fusion");
         for i in 0..8u32 {
@@ -2499,7 +2499,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     // Warm the feedback loop a handful of frames so any frame-0 divergence has
     // time to amplify through the density→force→position loop, then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
-        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
             .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-determinism");
         for i in 0..8u32 {
@@ -2537,7 +2537,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
 fn render_generator_8_frames(
     def: EffectGraphDef,
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     w: u32,
     h: u32,
 ) -> RenderTarget {
@@ -2558,7 +2558,7 @@ fn render_generator_8_frames(
         anim_progress: 0.0,
         trigger_count: 0,
     };
-    let mut g = PresetRuntime::from_def_with_device(def, registry, device, w, h, FMT, None)
+    let mut g = PresetRuntime::from_def_with_device(def, registry, std::sync::Arc::clone(device), w, h, FMT, None)
         .expect("preset builds");
     let target = RenderTarget::new(device, w, h, FMT, "freeze-gen-fusion");
     for i in 0..8u32 {
@@ -2644,10 +2644,10 @@ fn particletext_seed_gate_matches_ungated() {
             .expect("final_output fed")
     };
     let (g, gd) =
-        render_def_capture_node_host(&gated, &registry, &device, w, h, 8, &pick_final, true)
+        render_def_capture_node_host(&gated, &registry, &device.arc(), w, h, 8, &pick_final, true)
             .expect("gated renders");
     let (u, ud) =
-        render_def_capture_node_host(&ungated, &registry, &device, w, h, 8, &pick_final, true)
+        render_def_capture_node_host(&ungated, &registry, &device.arc(), w, h, 8, &pick_final, true)
             .expect("ungated renders");
     assert_eq!(gd, ud, "gated/ungated dims match");
     let differ = TextureDiff::new(&device);
@@ -2700,9 +2700,9 @@ fn feedback_pingpong_matches_copy_path() {
     // sequentially within one thread; the env var is read per-frame by
     // `Feedback::run`, so each render sees a stable value.
     unsafe { std::env::set_var("MANIFOLD_FEEDBACK_PINGPONG", "0") };
-    let copy = render_def_capture_node_host(&def, &registry, &device, w, h, 8, &pick_tail, true);
+    let copy = render_def_capture_node_host(&def, &registry, &device.arc(), w, h, 8, &pick_tail, true);
     unsafe { std::env::remove_var("MANIFOLD_FEEDBACK_PINGPONG") };
-    let pp = render_def_capture_node_host(&def, &registry, &device, w, h, 8, &pick_tail, true);
+    let pp = render_def_capture_node_host(&def, &registry, &device.arc(), w, h, 8, &pick_tail, true);
     let (copy, cd) = copy.expect("copy path renders");
     let (pp, pd) = pp.expect("ping-pong renders");
     assert_eq!(cd, pd, "composite dims match");
@@ -2769,11 +2769,11 @@ fn oilyfluid_inloop_f16_fusion_matches_unfused() {
     };
     for frames in [1u32, 8] {
         let (u, ud) = render_def_capture_node_host(
-            &def, &registry, &device, w, h, frames, &pick_tail, true,
+            &def, &registry, &device.arc(), w, h, frames, &pick_tail, true,
         )
         .expect("unfused renders");
         let (f, fd) = render_def_capture_node_host(
-            &fused, &registry, &device, w, h, frames, &pick_tail, true,
+            &fused, &registry, &device.arc(), w, h, frames, &pick_tail, true,
         )
         .expect("fused renders");
         assert_eq!(ud, fd, "composite dims match (frames={frames})");
@@ -2850,11 +2850,11 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
     };
     for frames in [1u32, 8] {
         let (u, ud) = render_def_capture_node_host(
-            &def, &registry, &device, w, h, frames, &pick_unfused, true,
+            &def, &registry, &device.arc(), w, h, frames, &pick_unfused, true,
         )
         .expect("unfused renders");
         let (f, fd) = render_def_capture_node_host(
-            &fused, &registry, &device, w, h, frames, &pick_fused, true,
+            &fused, &registry, &device.arc(), w, h, frames, &pick_fused, true,
         )
         .expect("fused renders");
         assert_eq!(ud, fd, "region output dims match (frames={frames})");
@@ -2946,9 +2946,9 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
     };
     for frames in [1u32, 8] {
         let (u, ud) =
-            render_def_capture_node(&def, &registry, &device, w, h, frames, &by_unfused)
+            render_def_capture_node(&def, &registry, &device.arc(), w, h, frames, &by_unfused)
                 .expect("unfused captures");
-        let (f, fd) = render_def_capture_node(&fused, &registry, &device, w, h, frames, &by_fused)
+        let (f, fd) = render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &by_fused)
             .expect("fused captures");
         assert_eq!(ud, fd, "fused region must resolve to the member's grid (frames={frames})");
         let differ = TextureDiff::new(&device);
@@ -3058,7 +3058,7 @@ fn shrink_particle_pool(def: &mut EffectGraphDef, cap: i32) {
 fn render_def_capture_node(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     w: u32,
     h: u32,
     frames: u32,
@@ -3075,7 +3075,7 @@ fn render_def_capture_node(
 fn render_def_capture_node_host(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     w: u32,
     h: u32,
     frames: u32,
@@ -3105,7 +3105,7 @@ fn render_def_capture_node_host(
         .find(|n| n.type_id == "system.generator_input")
         .and_then(|n| inst.id_map.get(&n.id).copied());
 
-    let mut backend = MetalBackend::new(device, w, h, FMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
     pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
     let mut exec = Executor::new(Box::new(backend));
     exec.set_preview_target(Some(target_inst));
@@ -3156,7 +3156,7 @@ fn render_def_capture_node_host(
 fn render_def_capture_array(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     w: u32,
     h: u32,
     frames: u32,
@@ -3179,7 +3179,7 @@ fn render_def_capture_array(
     let plan = compile(&graph).ok()?;
     let target_inst = *inst.id_map.get(&pick(def))?;
 
-    let mut backend = MetalBackend::new(device, w, h, FMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
     pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
     let mut exec = Executor::new(Box::new(backend));
     let mut state = StateStore::new();
@@ -3265,7 +3265,7 @@ fn particletext_production_region_diag() {
         .unwrap_or(8);
     println!("frames: {frames}");
     let run = |d: EffectGraphDef| -> (PresetRuntime, RenderTarget) {
-        let mut g = PresetRuntime::from_def_with_device(d, &registry, &device, w, h, FMT, None)
+        let mut g = PresetRuntime::from_def_with_device(d, &registry, device.arc(), w, h, FMT, None)
             .expect("preset builds");
         let target = RenderTarget::new(&device, w, h, FMT, "prod-diag");
         for i in 0..frames {
@@ -3369,10 +3369,10 @@ fn particletext_raw_composite_diag() {
     for host_params in [false, true] {
         for frames in [1u32, 8] {
             let u = render_def_capture_node_host(
-                &def, &registry, &device, w, h, frames, &pick_tail, host_params,
+                &def, &registry, &device.arc(), w, h, frames, &pick_tail, host_params,
             );
             let f = render_def_capture_node_host(
-                &fused, &registry, &device, w, h, frames, &pick_tail, host_params,
+                &fused, &registry, &device.arc(), w, h, frames, &pick_tail, host_params,
             );
             match (u, f) {
                 (Some((u, ud)), Some((f, fd))) if ud == fd => {
@@ -3421,8 +3421,8 @@ fn particletext_buffer_region_diag() {
             .expect("array_feedback")
     };
     for frames in [1u32, 2, 8] {
-        let u = render_def_capture_array(&def, &registry, &device, w, h, frames, &pick_loop);
-        let f = render_def_capture_array(&fused, &registry, &device, w, h, frames, &pick_loop);
+        let u = render_def_capture_array(&def, &registry, &device.arc(), w, h, frames, &pick_loop);
+        let f = render_def_capture_array(&fused, &registry, &device.arc(), w, h, frames, &pick_loop);
         match (u, f) {
             (Some(u), Some(f)) => {
                 if u.len() != f.len() {
@@ -3477,8 +3477,8 @@ fn particletext_canonical_fused_diag() {
         crate::node_graph::freeze::install::fuse_generator_def(&def, &registry).expect("fuses");
 
     // Composite, canonical def: fused vs unfused.
-    let u = render_generator_8_frames(def.clone(), &registry, &device, w, h);
-    let f = render_generator_8_frames(fused.clone(), &registry, &device, w, h);
+    let u = render_generator_8_frames(def.clone(), &registry, &device.arc(), w, h);
+    let f = render_generator_8_frames(fused.clone(), &registry, &device.arc(), w, h);
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-3, 1.0e-2);
     println!(
@@ -3499,8 +3499,8 @@ fn particletext_canonical_fused_diag() {
         }
         d
     };
-    let u2 = render_generator_8_frames(strip(def.clone()), &registry, &device, w, h);
-    let f2 = render_generator_8_frames(strip(fused.clone()), &registry, &device, w, h);
+    let u2 = render_generator_8_frames(strip(def.clone()), &registry, &device.arc(), w, h);
+    let f2 = render_generator_8_frames(strip(fused.clone()), &registry, &device.arc(), w, h);
     let r2 = differ.compare(&device, &u2.texture, &f2.texture, 1.0e-3, 1.0e-2);
     println!(
         "canonical composite, bindings stripped: max_abs={} over={}/{} ({:.4})",
@@ -3531,13 +3531,13 @@ fn particletext_canonical_fused_diag() {
     };
     for frames in [1u32, 8] {
         let Some((ut, ud)) =
-            render_def_capture_node(&def, &registry, &device, w, h, frames, &pick_unfused)
+            render_def_capture_node(&def, &registry, &device.arc(), w, h, frames, &pick_unfused)
         else {
             println!("frames={frames}: unfused text capture failed");
             continue;
         };
         let Some((ft, fd)) =
-            render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_fused)
+            render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &pick_fused)
         else {
             println!("frames={frames}: fused text capture failed");
             continue;
@@ -3591,7 +3591,7 @@ fn particletext_fp32_region_output_diag() {
 
     for frames in [1u32, 8] {
         let (u, ud) = render_def_capture_node(
-            &def, &registry, &device, w, h, frames, &by_handle("grad_rotate"),
+            &def, &registry, &device.arc(), w, h, frames, &by_handle("grad_rotate"),
         )
         .expect("unfused captures");
         // The flow-field region fused as the region containing grad_rotate —
@@ -3608,7 +3608,7 @@ fn particletext_fp32_region_output_diag() {
                 .expect("fused flow-field region")
         };
         let (f, fd) =
-            render_def_capture_node(&fused, &registry, &device, w, h, frames, &pick_fused)
+            render_def_capture_node(&fused, &registry, &device.arc(), w, h, frames, &pick_fused)
                 .expect("fused captures");
         println!("frames={frames}: unfused dims={ud:?} fused dims={fd:?}");
         if ud != fd {
@@ -3655,8 +3655,8 @@ fn fluidsim3d_seed_gate_matches_ungated() {
     let mut ungated = gated.clone();
     strip_reset_wire(&mut ungated, "seed_pattern");
 
-    let g = render_generator_8_frames(gated, &registry, &device, w, h);
-    let u = render_generator_8_frames(ungated, &registry, &device, w, h);
+    let g = render_generator_8_frames(gated, &registry, &device.arc(), w, h);
+    let u = render_generator_8_frames(ungated, &registry, &device.arc(), w, h);
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &g.texture, &u.texture, 1.0e-3, 1.0e-2);
     assert!(
@@ -3675,7 +3675,7 @@ fn fluidsim3d_seed_gate_matches_ungated() {
 /// element-space the producer actually writes (e.g. a quarter-res chain below a
 /// downsample), so a fused node that failed to inherit that scale would mismatch.
 fn render_graph_at(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     graph: &mut Graph,
     plan: &ExecutionPlan,
     source_res: ResourceId,
@@ -3693,7 +3693,7 @@ fn render_graph_at(
     }
     let out_rt = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-out");
 
-    let mut backend = MetalBackend::new(device, sw, sh, FMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), sw, sh, FMT);
     backend.pre_bind_texture_2d(source_res, src_rt);
     let out_slot = backend.pre_bind_texture_2d(output_res, out_rt);
 
@@ -3757,7 +3757,7 @@ fn fused_quarter_res_chain_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph_at(&device, &mut unfused, &u_plan, u_src, &input, u_out, qw, qh);
+    let u_img = render_graph_at(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out, qw, qh);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the quarter-res chain fuses");
@@ -3766,7 +3766,7 @@ fn fused_quarter_res_chain_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph_at(&device, &mut fused, &f_plan, f_src, &input, f_out, qw, qh);
+    let f_img = render_graph_at(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out, qw, qh);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -3819,7 +3819,7 @@ fn fused_control_wired_param_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the control-wired region fuses");
@@ -3828,7 +3828,7 @@ fn fused_control_wired_param_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, f_node, "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -3887,7 +3887,7 @@ fn fused_fanout_region_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the fan-out region fuses");
@@ -3895,7 +3895,7 @@ fn fused_fanout_region_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.mix"), "out");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
@@ -3952,7 +3952,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
-    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+    let u_img = render_graph(&device.arc(), &mut unfused, &u_plan, u_src, &input, u_out);
 
     // Fused: {gain, fragment, invert} collapse into one node.wgsl_compute.
     let FusedDef { def: fdef, .. } =
@@ -3965,7 +3965,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.wgsl_compute"), "dst");
-    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+    let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);

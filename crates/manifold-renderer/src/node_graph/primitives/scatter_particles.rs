@@ -506,7 +506,7 @@ mod gpu_tests {
         // dims come from the wired `width` / `height` value sources
         // above — both must agree with WIDTH × HEIGHT for the test
         // to operate on a buffer of the expected layout.
-        let mut backend = MetalBackend::new(&device, WIDTH, HEIGHT, format);
+        let mut backend = MetalBackend::new(device.arc(), WIDTH, HEIGHT, format);
         let _in_slot = backend.pre_bind_array(r_in, in_buf);
         let accum_slot = backend.pre_bind_array(r_accum, accum_buf);
 

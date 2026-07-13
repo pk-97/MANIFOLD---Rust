@@ -240,8 +240,8 @@ pub struct NodeInstantiation {
 /// the overwhelmingly common already-current document — every bundled
 /// preset, every project saved since its last rename — passes through
 /// borrowed rather than cloned.
-fn migrate_def_type_ids(def: &EffectGraphDef) -> Option<EffectGraphDef> {
-    fn migrate_nodes(nodes: &mut [EffectGraphNode], changed: &mut bool) {
+fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Option<EffectGraphDef> {
+    fn migrate_nodes(nodes: &mut [EffectGraphNode], registry: &PrimitiveRegistry, changed: &mut bool) {
         for n in nodes {
             let old_id = n.type_id.clone();
             let new_id = manifold_core::type_id_migration::migrate_type_id(&old_id);
@@ -259,16 +259,30 @@ fn migrate_def_type_ids(def: &EffectGraphDef) -> Option<EffectGraphDef> {
                         }
                     }
                 }
+                // A rename is not always port/param-identical (e.g.
+                // node.ssao_from_depth -> node.ssao_gtao, CINEMATIC_POST
+                // D9: `bias` has no successor). A param key the new node
+                // doesn't declare would otherwise hit
+                // `GraphBuildError::UnknownParam` below and hard-fail the
+                // load of every pre-rename project/preset that still
+                // carries it. Drop params the successor doesn't declare —
+                // per the round-trip gate (DESIGN_DOC_STANDARD §5), a
+                // migrated load must succeed, not merely a fresh save.
+                if let Some(new_node) = registry.construct(new_id) {
+                    let known: ahash::AHashSet<&str> =
+                        new_node.parameters().iter().map(|p| p.name.as_ref()).collect();
+                    n.params.retain(|k, _| known.contains(k.as_str()));
+                }
             }
             if let Some(group) = &mut n.group {
-                migrate_nodes(&mut group.nodes, changed);
+                migrate_nodes(&mut group.nodes, registry, changed);
             }
         }
     }
 
     let mut changed = false;
     let mut owned = def.clone();
-    migrate_nodes(&mut owned.nodes, &mut changed);
+    migrate_nodes(&mut owned.nodes, registry, &mut changed);
     changed.then_some(owned)
 }
 
@@ -304,7 +318,7 @@ pub fn instantiate_def(
     // resaved once) passes through as a borrow, matching the group-flatten
     // pattern just below.
     let migrated;
-    let def = match migrate_def_type_ids(def) {
+    let def = match migrate_def_type_ids(def, registry) {
         Some(owned) => {
             migrated = owned;
             &migrated
@@ -1584,7 +1598,7 @@ mod tests {
         use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let mut graph = Graph::new();
         let seed = graph.add_node(Box::new(SeedParticles::new()));
         let step = graph.add_node(Box::new(EulerStepParticles::new()));
@@ -1596,7 +1610,7 @@ mod tests {
         // Construct a backend but deliberately skip the Array<T>
         // pre-allocation; only run the audit directly so it has to
         // catch the dangling resources on its own.
-        let backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
         let err = audit_array_resource_bindings(&graph, &plan, &backend)
             .expect_err("audit must reject plan with unbound Array<T> resource");
 
@@ -1625,12 +1639,12 @@ mod tests {
         use crate::node_graph::primitives::SeedParticles;
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
         let mut graph = Graph::new();
         graph.add_node(Box::new(SeedParticles::new()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
-        let mut backend = MetalBackend::new(&device, 256, 256, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&graph, &plan, &device, &mut backend)
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }
@@ -1709,6 +1723,7 @@ mod tests {
     /// leave the inner node's id stale and fail the `assert_eq!`.
     #[test]
     fn migrate_def_type_ids_matches_new_id_twin_including_group_bodies() {
+        let registry = PrimitiveRegistry::with_builtin();
         let old_def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None,
@@ -1733,12 +1748,12 @@ mod tests {
         };
 
         let migrated =
-            migrate_def_type_ids(&old_def).expect("old ids present, migration must produce Some");
+            migrate_def_type_ids(&old_def, &registry).expect("old ids present, migration must produce Some");
         assert_eq!(migrated, new_twin);
 
         // A document already on current ids needs no migration at all —
         // the cheap-clone-free common-case path `instantiate_def` relies on.
-        assert!(migrate_def_type_ids(&new_twin).is_none());
+        assert!(migrate_def_type_ids(&new_twin, &registry).is_none());
     }
 
     /// docs/NODE_VOCABULARY_AUDIT.md §7.1: the retired `node.rotate_vec2_90`
@@ -1749,6 +1764,7 @@ mod tests {
     /// top-level one (same recursion the plain id-rewrite uses).
     #[test]
     fn migrate_def_type_ids_seeds_params_for_legacy_fold() {
+        let registry = PrimitiveRegistry::with_builtin();
         let old_def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None,
@@ -1761,7 +1777,7 @@ mod tests {
             wires: vec![],
         };
 
-        let migrated = migrate_def_type_ids(&old_def)
+        let migrated = migrate_def_type_ids(&old_def, &registry)
             .expect("old id present, migration must produce Some");
 
         let top = &migrated.nodes[0];
@@ -1788,6 +1804,7 @@ mod tests {
     /// `migrate_def_type_ids`).
     #[test]
     fn migrate_def_type_ids_seed_does_not_overwrite_existing_param() {
+        let registry = PrimitiveRegistry::with_builtin();
         let mut node = bare_node(0, "node.rotate_vec2_90");
         node.params.insert(
             "angle".to_string(),
@@ -1802,7 +1819,7 @@ mod tests {
             wires: vec![],
         };
 
-        let migrated = migrate_def_type_ids(&old_def)
+        let migrated = migrate_def_type_ids(&old_def, &registry)
             .expect("old id present, migration must produce Some");
         assert_eq!(
             migrated.nodes[0].params.get("angle"),
@@ -1818,6 +1835,7 @@ mod tests {
     /// `PARAM_SEED_MIGRATIONS` entries matching.
     #[test]
     fn migrate_def_type_ids_plain_rename_seeds_no_params() {
+        let registry = PrimitiveRegistry::with_builtin();
         let old_def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None,
@@ -1826,7 +1844,7 @@ mod tests {
             nodes: vec![bare_node(0, "node.fluid_project_scatter_2d")],
             wires: vec![],
         };
-        let migrated = migrate_def_type_ids(&old_def)
+        let migrated = migrate_def_type_ids(&old_def, &registry)
             .expect("old id present, migration must produce Some");
         assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
         assert!(migrated.nodes[0].params.is_empty());
@@ -1865,5 +1883,77 @@ mod tests {
             BoundaryHandling::Standalone,
         )
         .expect("system.* boundary ids are unaffected by migration and always construct");
+    }
+
+    /// `docs/CINEMATIC_POST_DESIGN.md` P5/I8: a saved graph carrying the
+    /// retired `node.ssao_from_depth` type id loads through the real
+    /// `instantiate_def` entry point, resolves to `node.ssao_gtao`, and its
+    /// `radius`/`intensity` params carry over untouched — the round-trip
+    /// gate (DESIGN_DOC_STANDARD §5) for the D9(b) seam. The old fixture
+    /// also carries `bias` (every project saved before this rename has it),
+    /// proving `migrate_def_type_ids`'s new "drop params the successor
+    /// doesn't declare" step — without it this load would hard-fail with
+    /// `GraphBuildError::UnknownParam` on every pre-rename project.
+    #[test]
+    fn ssao_from_depth_migrates_to_gtao() {
+        let json = r#"{
+            "version": 1,
+            "name": "test",
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                {
+                    "id": 1,
+                    "typeId": "node.ssao_from_depth",
+                    "handle": "ssao",
+                    "params": {
+                        "radius": { "type": "Float", "value": 0.75 },
+                        "intensity": { "type": "Float", "value": 1.25 },
+                        "bias": { "type": "Float", "value": 0.025 }
+                    }
+                },
+                { "id": 2, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).expect("parse");
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+        )
+        .expect("old id + stale `bias` param must still load after the D9(b) rename");
+
+        let ssao_id = graph.node_id_by_handle("ssao").expect("ssao handle present");
+        let inst = graph.get_node(ssao_id).expect("node exists");
+        assert_eq!(inst.node.type_id().as_str(), "node.ssao_gtao", "resolves to the new atom");
+
+        assert!(
+            inst.node.parameters().iter().any(|p| p.name == "radius"),
+            "radius param declared"
+        );
+        assert_eq!(
+            inst.params.get("radius"),
+            Some(&ParamValue::Float(0.75)),
+            "radius carries the OLD document's stored value, not the descriptor default"
+        );
+        assert_eq!(
+            inst.params.get("intensity"),
+            Some(&ParamValue::Float(1.25)),
+            "intensity carries over unchanged"
+        );
+        assert!(
+            !inst.node.parameters().iter().any(|p| p.name == "bias"),
+            "node.ssao_gtao declares no `bias` param (D9(b))"
+        );
+        assert!(
+            !inst.params.contains_key("bias"),
+            "the stale `bias` value from the old document must be dropped, not just \
+             unreferenced by the descriptor — see migrate_def_type_ids's params.retain"
+        );
     }
 }

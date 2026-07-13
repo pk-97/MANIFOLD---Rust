@@ -326,7 +326,7 @@ fn fluid3d_force_bias_bisection() {
         let mut runtime = PresetRuntime::from_json_str_with_device(
             &json,
             &registry,
-            &device,
+            std::sync::Arc::clone(&device),
             W,
             H,
             GpuTextureFormat::Rgba16Float,

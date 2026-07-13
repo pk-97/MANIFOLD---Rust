@@ -90,8 +90,12 @@ struct FilmstripState {
 
 /// Native video renderer implementing the ClipRenderer trait.
 pub struct VideoRenderer {
-    /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
-    device_ptr: *const GpuDevice,
+    /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc` clone
+    /// instead of a cached raw pointer means the device's backing allocation
+    /// never moves out from under this renderer, regardless of how
+    /// `ContentPipeline`/`ContentThread` themselves get moved during
+    /// construction (BUG-054).
+    device: Arc<GpuDevice>,
     width: u32,
     height: u32,
     format: GpuTextureFormat,
@@ -115,13 +119,9 @@ pub struct VideoRenderer {
     clip_ids_scratch: Vec<ClipId>,
 }
 
-// Safety: device_ptr points to GpuDevice on the content thread.
-// VideoRenderer is only used on the content thread.
-unsafe impl Send for VideoRenderer {}
-
 impl VideoRenderer {
     pub fn new(
-        device: &GpuDevice,
+        device: Arc<GpuDevice>,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -136,7 +136,7 @@ impl VideoRenderer {
         let available_rts = Vec::with_capacity(8);
 
         Self {
-            device_ptr: device as *const GpuDevice,
+            device,
             width,
             height,
             format,
@@ -152,16 +152,8 @@ impl VideoRenderer {
         }
     }
 
-    /// Set the device pointer after the GpuDevice has been moved to its
-    /// final location (inside ContentPipeline). Must be called before resize
-    /// or pool-exhaustion triggers new texture creation.
-    pub fn set_device(&mut self, device: &GpuDevice) {
-        self.device_ptr = device as *const GpuDevice;
-    }
-
-    /// Safety: device_ptr is valid for the lifetime of ContentPipeline.
     fn device(&self) -> &GpuDevice {
-        unsafe { &*self.device_ptr }
+        &self.device
     }
 
     /// Get the texture for a rendered clip.
@@ -855,8 +847,10 @@ impl ClipRenderer for VideoRenderer {
         self.width = w;
         self.height = h;
 
-        // Safety: device_ptr is valid for the lifetime of ContentPipeline.
-        let device = unsafe { &*self.device_ptr };
+        // Clone the Arc (cheap refcount bump) instead of borrowing `self`
+        // so the loop below can still take `&mut self.active_clips`.
+        let device = Arc::clone(&self.device);
+        let device = &*device;
         let fmt = self.format;
 
         // Drop old pool RTs (wrong size), start fresh. New RTs will be
@@ -890,10 +884,30 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn flush_pending_decodes(&mut self) {
+        // Defense-in-depth backstop (BUG-127): the worker protocol now always
+        // replies to a submitted job (see decode_scheduler.rs), so this should
+        // never actually time out. But `decode_pending` invariant is load-bearing
+        // for export (see content_export.rs::export_one_frame), so a future
+        // protocol violation must not be able to wedge the export loop forever —
+        // bound the total wait instead of blocking unconditionally.
+        const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + FLUSH_TIMEOUT;
+
         while self.active_clips.values().any(|c| c.decode_pending) {
-            let results = self.scheduler.recv_results_blocking();
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                log::error!(
+                    "[VideoRenderer] flush_pending_decodes timed out after {FLUSH_TIMEOUT:?} \
+                     with clips still pending — clearing to avoid wedging the caller"
+                );
+                for clip in self.active_clips.values_mut() {
+                    clip.decode_pending = false;
+                }
+                break;
+            }
+            let results = self.scheduler.recv_results_timeout(remaining);
             if results.is_empty() {
-                break; // Channel disconnected
+                break; // Timed out or channel disconnected
             }
             self.process_decode_results(results);
         }

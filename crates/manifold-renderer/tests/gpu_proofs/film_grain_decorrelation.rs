@@ -144,7 +144,7 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
         .expect("final_output has a bound `in`");
     let grain_out = output_resource(&plan, grain_mono_id, "out").expect("grain_mono has an `out` resource");
 
-    let mut backend = MetalBackend::new(device, w, h, format);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, format);
     let input_target = build_gradient_input(device, w, h, format);
     let source_slot = backend.pre_bind_texture_2d(source_out, input_target);
     let output_slot = if final_in == source_out {

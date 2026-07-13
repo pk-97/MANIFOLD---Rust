@@ -1970,11 +1970,9 @@ mod tests {
             !wants_shafts(&Atmosphere::default()),
             "shaft_intensity 0 (default) must not want shafts"
         );
-        let mut hot = Atmosphere::default();
-        hot.shaft_intensity = 1.0;
+        let hot = Atmosphere { shaft_intensity: 1.0, ..Atmosphere::default() };
         assert!(wants_shafts(&hot), "shaft_intensity > 0 must want shafts");
-        let mut still_off = Atmosphere::default();
-        still_off.shaft_intensity = 0.0;
+        let still_off = Atmosphere { shaft_intensity: 0.0, ..Atmosphere::default() };
         assert!(!wants_shafts(&still_off));
 
         let scene = RenderScene::new();

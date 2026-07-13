@@ -438,7 +438,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,
@@ -770,7 +770,7 @@ fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
             let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
             let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
             let a = f16::from_le_bytes([px[6], px[7]]).to_f32().clamp(0.0, 1.0);
-            let checker = if ((x / tile) + (y / tile)) % 2 == 0 { 0.25f32 } else { 0.35f32 };
+            let checker = if ((x / tile) + (y / tile)).is_multiple_of(2) { 0.25f32 } else { 0.35f32 };
             let comp = [r + checker * (1.0 - a), g + checker * (1.0 - a), b + checker * (1.0 - a)];
             for v in comp {
                 let mapped = (v / (1.0 + v)).clamp(0.0, 1.0);

@@ -181,6 +181,14 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     // node.fluid_project_scatter_2d -> node.draw_particles_camera:
     // port-identical (verified §7.2), plain rename, no param seed needed.
     ("node.fluid_project_scatter_2d", "node.draw_particles_camera"),
+    // --- CINEMATIC_POST D9 (docs/CINEMATIC_POST_DESIGN.md P5): GTAO replaces
+    // SSAO --- node.ssao_gtao is a deleted-not-paralleled replacement, not a
+    // label-only rename: `radius`/`intensity` carry over unchanged (same
+    // names, same defaults), `bias` has no successor param (the GTAO range
+    // check subsumes it) and is silently dropped by the loader's ordinary
+    // "seed only params the target declares" param-copy semantics — no
+    // PARAM_SEED_MIGRATIONS entry needed since there is nothing to seed.
+    ("node.ssao_from_depth", "node.ssao_gtao"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

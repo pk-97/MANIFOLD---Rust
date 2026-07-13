@@ -238,7 +238,7 @@ mod gpu_tests {
             );
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, src_target);
         let mut exec = Executor::new(Box::new(backend));
 
@@ -302,7 +302,7 @@ mod gpu_tests {
             );
 
             let mut backend =
-                MetalBackend::new(&device, w, h, format);
+                MetalBackend::new(device.arc(), w, h, format);
             backend.pre_bind_texture_2d(r_src, src_target);
             let mut exec = Executor::new(Box::new(backend));
 
