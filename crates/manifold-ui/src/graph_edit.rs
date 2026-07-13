@@ -136,6 +136,22 @@ pub enum GraphEditCommand {
         current: String,
         anchor: (f32, f32, f32, f32),
     },
+    /// Open the inline numeric type-in for a ranged param on the node face
+    /// (UI_WIDGET_UNIFICATION P5d — the contract's `(ValueCell, DoubleClick)
+    /// -> EditValue` row's last dead stop). `outer_param_id` mirrors the
+    /// scrub-commit parity rule (D4/D6): `Some` means this is a group-face
+    /// mirror row, so commit must write through `SetOuterParam`, never
+    /// `SetGraphNodeParam`, on the SAME node the scrub would have.
+    EditGraphNodeNumericParam {
+        node_id: u32,
+        param_name: String,
+        current: f32,
+        min: f32,
+        max: f32,
+        whole_numbers: bool,
+        outer_param_id: Option<String>,
+        anchor: (f32, f32, f32, f32),
+    },
     /// Open the inline numeric editor over one cell of a `Table` param's grid.
     /// `rows` + `(row, col)` are stashed so commit rebuilds the one edited cell
     /// into a full `Table` value through `SetGraphNodeParamCommand`.
