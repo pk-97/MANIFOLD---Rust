@@ -1485,7 +1485,7 @@ reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by th
 dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
 
 ### BUG-137 — `node.variable_blur` has no CoC dilation; hard cutoff at depth discontinuities — MED (CINEMATIC_POST DoF)
-**Status:** OPEN
+**Status:** OPEN — `node.coc_dilate` (fixed 3x3 neighborhood-max, `crates/manifold-renderer/src/node_graph/primitives/coc_dilate.rs`) built and wired into `CinematicScene` (`coc_from_depth.out -> coc_dilate.in -> variable_blur_h/v.width`, replacing the direct `coc_from_depth -> variable_blur` wires) 2026-07-13 (Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`). Gate green (I1 generated-vs-hand parity + flat-field no-op gpu_tests, full `manifold-renderer --features gpu-proofs` sweep 1456 passed, focused nextest 1146 passed, scoped clippy clean, `check_presets` 57/57, I5 load-smoke + generator-sweep smoke). Left OPEN pending Peter's look-pass (no PNG render run this phase per the design doc's separation of concerns — the orchestrating session renders and judges) and pending BUG-138 (blockiness), which this fix does not address.
 
 **Root cause** — `node.variable_blur` picks its per-pixel gather radius from *only the center
 pixel's own* CoC (`step_size = center_coc * max_radius + 1.0`,

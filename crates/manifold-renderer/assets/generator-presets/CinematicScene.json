@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CinematicScene",
-  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> variable_blur(H) -> variable_blur(V) gather, and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 adds the motion-blur tail.",
+  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> coc_dilate -> variable_blur(H) -> variable_blur(V) gather (coc_dilate fixes BUG-137's hard cutoff at depth discontinuities by spreading the max CoC into neighboring pixels before the gather reads it), and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 adds the motion-blur tail; BUG-137 added the coc_dilate stage.",
   "presetMetadata": {
     "id": "CinematicScene",
     "displayName": "Cinematic Scene",
@@ -331,6 +331,13 @@
       }
     },
     {
+      "id": 15,
+      "typeId": "node.coc_dilate",
+      "nodeId": "coc_dilate",
+      "handle": "coc_dilate",
+      "title": "CoC Dilate"
+    },
+    {
       "id": 14,
       "typeId": "node.motion_blur",
       "nodeId": "motion_blur",
@@ -363,9 +370,10 @@
     { "fromNode": 8, "fromPort": "color", "toNode": 13, "toPort": "a" },
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "b" },
     { "fromNode": 13, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "width" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 10, "toPort": "width" },
     { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "width" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 11, "toPort": "width" },
     { "fromNode": 11, "fromPort": "out", "toNode": 14, "toPort": "in" },
     { "fromNode": 8, "fromPort": "velocity", "toNode": 14, "toPort": "velocity" },
     { "fromNode": 14, "fromPort": "out", "toNode": 99, "toPort": "in" }

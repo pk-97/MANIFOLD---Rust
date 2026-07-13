@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 235 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 236 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -126,12 +126,13 @@ _Generated from the node registry. Do not hand-edit. 235 nodes registered, group
 | — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
-### Mask (6)
+### Mask (7)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Chroma Key | `node.chroma_key` | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
 | Circle Mask | `node.circle_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
+| CoC Dilate | `node.coc_dilate` | Map | Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a h… |
 | CoC From Depth | `node.coc_from_depth` | Map | Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | SSAO From Depth | `node.ssao_from_depth` | Map | Computes contact shadows from scene depth and a physical camera lens — darkens crevices and touching surfaces the way ambient light naturally would. |
