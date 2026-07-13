@@ -558,7 +558,7 @@ def test_chat_claim_applies_to_worker_when_flag_enabled():
             d is not None and 'move="mechanical/ungrounded-chat-claim"' in d.get("reason", ""),
             out,
         )
-        check("the ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+        check("the ack sentence names this worker's agent_id", d and f" --agent-id {agent} " in d.get("reason", ""), d)
     with_temp_verdicts(run)
 
 
@@ -849,7 +849,7 @@ def test_done_claim_applies_to_worker_when_flag_enabled():
             d is not None and 'move="mechanical/unverified-done-claim"' in d.get("reason", ""),
             out,
         )
-        check("the ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+        check("the ack sentence names this worker's agent_id", d and f" --agent-id {agent} " in d.get("reason", ""), d)
     with_temp_verdicts(run)
 
 
@@ -881,7 +881,7 @@ def test_agent_id_routes_to_agent_mailbox():
         # DESIGN.md §2h.4: build_block's supervised ack must carry this
         # worker's agent_id too, since (session_id, seq) alone collides
         # across workers (RUNBOOK.md step 2).
-        check("delivered ack sentence names this worker's agent_id", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+        check("delivered ack sentence names this worker's agent_id", d and f" --agent-id {agent} " in d.get("reason", ""), d)
     with_temp_verdicts(run)
 
 
@@ -1449,7 +1449,7 @@ def test_worker_grade_backstop_fires_for_own_attributed_fires():
         d = json.loads(out) if out else None
         check("a worker's own ungraded gradeable fire trips its own backstop", d is not None and d.get("decision") == "block", out)
         check("reason names the backstop move", d and 'move="mechanical/grade-backstop"' in d.get("reason", ""), d)
-        check("reason tells the worker to include agent_id on its grade line", d and f'"agent_id": "{agent}"' in d.get("reason", ""), d)
+        check("reason tells the worker to include agent_id on its grade line", d and f" --agent-id {agent} " in d.get("reason", ""), d)
         check(
             "worker gets its own per-(session, agent_id) sentinel",
             os.path.exists(os.path.join(td, f"{session}.{agent}.grade-backstop-fired")),

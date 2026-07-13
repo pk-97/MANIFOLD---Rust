@@ -138,8 +138,10 @@ def build_block(flag, agent_id=None):
     # PostToolUse and Stop route through here regardless of agent_id) — a
     # worker's grade line needs "agent_id" alongside "seq", or (session_id,
     # seq) alone collides across workers (RUNBOOK.md step 2). Only this
-    # clause varies with the mailbox; the rest of the sentence is frozen.
-    agent_note = f', "agent_id": "{agent_id}"' if agent_id else ""
+    # flag varies with the mailbox; the rest of the sentence is frozen.
+    # 2026-07-13 (Peter): grading is one shot via log_grade.py — sessions no
+    # longer read RUNBOOK step 2 for the record format; the script owns it.
+    agent_flag = f" --agent-id {agent_id}" if agent_id else ""
     return (
         f'<daemon move="{move_id}">\n'
         f"{payload}"
@@ -148,10 +150,10 @@ def build_block(flag, agent_id=None):
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
         f'message — one sentence, e.g. "daemon nudged me about {move_id} — '
         f'checking" — so Peter can judge whether the nudge was right. Before the '
-        f"session ends, also append one self-grade line per fire (this fire: "
-        f"seq {seq}) to .claude/daemon/eval/live_grades.session.jsonl "
-        f"(gitignored, so it never dirties the shared tree) — format in "
-        f'RUNBOOK.md step 2, with "grader": "session" and "seq": {seq}{agent_note}; '
+        f"session ends, also log one self-grade per fire, one shot: "
+        f"python3 .claude/daemon/log_grade.py {seq} {move_id} "
+        f'<correct y/n> <effective y/n> "<one-sentence evidence>"{agent_flag} '
+        f"— it owns the format and lands in the gitignored session grades file; "
         f"the sleep pass reads these as provisional and may override.)\n"
         f"</daemon>"
     )

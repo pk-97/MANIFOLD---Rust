@@ -683,9 +683,8 @@ def _grade_backstop_reason(ungraded_count, oldest_events_ago, agent_id=None):
     # clause varies with the mailbox; the rest of the sentence is frozen
     # (same invariant-5 precedent as the seq numeral elsewhere).
     agent_note = (
-        f' Since this fire belongs to a worker, also include "agent_id": '
-        f'"{agent_id}" on its line — (session_id, seq) alone collides across '
-        f"workers."
+        f" Since this fire belongs to a worker, also pass --agent-id {agent_id} "
+        f"— (session_id, seq) alone collides across workers."
         if agent_id
         else ""
     )
@@ -694,11 +693,11 @@ def _grade_backstop_reason(ungraded_count, oldest_events_ago, agent_id=None):
         f"This session delivered {ungraded_count} gradeable daemon fire(s) "
         f"(anchor/coaching/escalate) with no self-grade recorded yet, and the "
         f"oldest is {oldest_events_ago} tool events old. Before the session "
-        f"ends, append one self-grade line per ungraded fire to "
-        f".claude/daemon/eval/live_grades.session.jsonl — canonical "
-        f"correct/effective values and format in RUNBOOK.md step 2, and "
-        f'include each fire\'s own "seq" so the sleep pass can join the grade '
-        f"back to the exact fire it belongs to.{agent_note}\n"
+        f"ends, log one self-grade per ungraded fire, one shot each: "
+        f"python3 .claude/daemon/log_grade.py <seq> <move_id> "
+        f'<correct y/n> <effective y/n> "<one-sentence evidence>" — use each '
+        f"fire's own seq so the sleep pass can join the grade back to the "
+        f"exact fire it belongs to.{agent_note}\n"
         f"</daemon>"
     )
 

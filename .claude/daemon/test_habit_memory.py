@@ -167,15 +167,15 @@ def test_build_block_supervised_ack_names_the_fires_own_seq():
     # seq — the sleep pass couldn't join the grade back to the fire.
     flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 7}
     block = valve.build_block(flag)
-    check("ack sentence names this fire's seq", "this fire: seq 7" in block, block)
-    check('grade-line instruction includes "seq": 7 verbatim', '"seq": 7' in block, block)
+    # since 2026-07-13 the seq rides as log_grade.py's first argument
+    check("ack sentence names this fire's seq", "log_grade.py 7 anchor/verify-claim" in block, block)
 
 
 def test_build_block_supervised_ack_seq_varies_with_the_flag():
     block5 = valve.build_block({"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 5})
     block12 = valve.build_block({"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 12})
-    check("seq 5 fire names seq 5, not another", "this fire: seq 5" in block5 and "this fire: seq 12" not in block5, block5)
-    check("seq 12 fire names seq 12, not another", "this fire: seq 12" in block12 and "this fire: seq 5" not in block12, block12)
+    check("seq 5 fire names seq 5, not another", "log_grade.py 5 " in block5 and "log_grade.py 12 " not in block5, block5)
+    check("seq 12 fire names seq 12, not another", "log_grade.py 12 " in block12 and "log_grade.py 5 " not in block12, block12)
 
 
 # ---- DESIGN.md §2h.4: build_block's supervised ack must reach worker
@@ -187,16 +187,16 @@ def test_build_block_supervised_ack_seq_varies_with_the_flag():
 def test_build_block_worker_ack_includes_agent_id():
     flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 9}
     block = valve.build_block(flag, agent_id="worker-abc")
-    check("worker ack still names this fire's own seq", "this fire: seq 9" in block, block)
-    check('worker ack grade-line schema includes "agent_id"', '"agent_id": "worker-abc"' in block, block)
+    check("worker ack still names this fire's own seq", "log_grade.py 9 anchor/verify-claim" in block, block)
+    check("worker ack grade command includes --agent-id", " --agent-id worker-abc " in block, block)
 
 
 def test_build_block_main_ack_omits_agent_id_field():
     flag = {"move_id": "anchor/verify-claim", "confidence": 0.9, "seq": 9}
     block_default = valve.build_block(flag)
     block_explicit_none = valve.build_block(flag, agent_id=None)
-    check("no agent_id in the main-session ack (default call)", '"agent_id"' not in block_default, block_default)
-    check("no agent_id in the main-session ack (explicit agent_id=None)", '"agent_id"' not in block_explicit_none, block_explicit_none)
+    check("no agent_id in the main-session ack (default call)", "--agent-id" not in block_default, block_default)
+    check("no agent_id in the main-session ack (explicit agent_id=None)", "--agent-id" not in block_explicit_none, block_explicit_none)
 
 
 def test_build_block_advice_kind_never_carries_agent_id():
