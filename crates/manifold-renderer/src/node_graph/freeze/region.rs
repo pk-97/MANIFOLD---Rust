@@ -952,9 +952,13 @@ pub(crate) fn classify_node(
     }
 
     // Every param must lay out as a scalar uniform field — the fused codegen
-    // ([`super::codegen::generate_fused`]) can only carry scalars. Vec3/Table/
-    // string params keep the atom standalone (a boundary) until the fused path
-    // grows those layouts.
+    // ([`super::codegen::generate_fused`]) can only carry scalars. Vec3/Vec4/
+    // Color/Table/string params keep the atom standalone (a boundary) until
+    // the fused path grows those layouts. (2026-07-14, P3 wave 2: Vec4/Color
+    // gained STANDALONE codegen support in `codegen.rs` — reassembled as
+    // vec4<f32> — but `param_wgsl_type` still rejects them here on purpose,
+    // so a `color`-param shading atom stays a region cut even though it now
+    // runs on the codegen path solo.)
     for p in n.parameters() {
         if param_wgsl_type(p).is_err() {
             return NodeClass::Boundary;
@@ -2655,6 +2659,104 @@ mod tests {
             vec![1, 2]
         );
         assert!(regions[0].virtual_chains.is_empty());
+    }
+
+    /// P3 wave 2 (2026-07-14): `node.shininess`/`node.rim_light`/
+    /// `node.matcap_two_tone` (OilyFluid), `node.brightness` (MetallicGlass)
+    /// and `node.channel_mixer` (StarField) all converted onto the freeze
+    /// codegen path this wave — `fusion_kind() == Pointwise` with a real
+    /// `wgsl_body` — but every one of them carries a Color/Vec3/Vec4 param,
+    /// which `classify_node`'s scalar-only cut rule (the comment above, "every
+    /// param must lay out as a scalar uniform field") rejects. This is the
+    /// REAL finding on shipped content, not a synthetic claim: none of these
+    /// five atoms is ever a member of any region in the preset that actually
+    /// ships them, in three different bundled presets. `graph_tool fusion`
+    /// confirms the same per-node verdict interactively.
+    #[test]
+    fn wave2_color_param_atoms_stay_boundary_in_shipped_presets() {
+        let registry = registry();
+        let cases: &[(&str, &[&str])] = &[
+            ("OilyFluid", &["node.shininess", "node.rim_light", "node.matcap_two_tone"]),
+            ("MetallicGlass", &["node.brightness"]),
+            ("StarField", &["node.channel_mixer"]),
+        ];
+        for (preset_name, type_ids) in cases {
+            let type_id = manifold_core::PresetTypeId::new(preset_name);
+            let json = crate::node_graph::bundled_presets::bundled_preset_json(&type_id)
+                .unwrap_or_else(|| panic!("{preset_name}: no bundled JSON"));
+            let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
+            let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+
+            let fused_doc_ids: std::collections::HashSet<u32> = partition_regions(&def, &registry)
+                .iter()
+                .flat_map(|r| r.members.iter().map(|m| m.doc_id))
+                .collect();
+
+            for &type_id_str in *type_ids {
+                let hits: Vec<u32> = def
+                    .nodes
+                    .iter()
+                    .filter(|n| n.type_id == type_id_str)
+                    .map(|n| n.id)
+                    .collect();
+                assert!(!hits.is_empty(), "{preset_name}: expected {type_id_str} to appear");
+                for doc_id in hits {
+                    assert!(
+                        !fused_doc_ids.contains(&doc_id),
+                        "{preset_name}: {type_id_str} (doc_id={doc_id}) unexpectedly joined a region \
+                         — its Color/Vec3/Vec4 param should keep it a standalone dispatch"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `node.tone_map` and `node.gradient_map` ship no bundled preset today
+    /// (unlike the other five wave-2 atoms), so the real-preset proof above
+    /// can't cover them — this minimal synthetic graph (`node.contrast`, the
+    /// doc's own worked scalar-param example, feeding the target atom) covers
+    /// each instead, per the task's documented fallback. The two behave
+    /// OPPOSITELY, both genuinely (not forced):
+    ///
+    /// - `node.tone_map` has ZERO non-scalar params (exposure/paper_white/
+    ///   max_nits are Float, curve/mode are Enum->u32) — it's exactly as
+    ///   scalar-clean as `node.contrast`, so it DOES join the region. This
+    ///   is the wave's one real multi-node-fusion win, just not provable on
+    ///   shipped content yet.
+    /// - `node.gradient_map` carries two Color params (`color_a`/`color_b`)
+    ///   — same scalar-only cut as the five real-preset atoms above — so it
+    ///   stays a standalone dispatch.
+    #[test]
+    fn tone_map_fuses_gradient_map_stays_boundary_next_to_a_fusable_neighbor() {
+        let registry = registry();
+        for (type_id, in_port, should_fuse) in
+            [("node.tone_map", "in", true), ("node.gradient_map", "source", false)]
+        {
+            let json = format!(
+                r#"{{
+                    "version": 1, "name": "pair", "nodes": [
+                        {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+                        {{ "id": 1, "typeId": "node.contrast", "nodeId": "contrast" }},
+                        {{ "id": 2, "typeId": "{type_id}", "nodeId": "target" }},
+                        {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+                    ], "wires": [
+                        {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }},
+                        {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "{in_port}" }},
+                        {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+                    ]
+                }}"#
+            );
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let regions = partition_regions(&def, &registry);
+            let fused_doc_ids: std::collections::HashSet<u32> =
+                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            assert_eq!(
+                fused_doc_ids.contains(&2),
+                should_fuse,
+                "{type_id}: region-membership next to a fusable neighbour (contrast) \
+                 didn't match expectation (fuse={should_fuse})"
+            );
+        }
     }
 
     /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,

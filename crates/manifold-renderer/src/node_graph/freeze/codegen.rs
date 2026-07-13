@@ -80,14 +80,20 @@ pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError
 /// is untouched). The fused path namespaces fields as `n{i}_<name>`, which is
 /// never reserved, so only the standalone Params struct needs this.
 /// How many 4-byte words a param occupies in the merged scalar uniform. Vec3
-/// expands to 3 consecutive f32 fields (`<name>_x/_y/_z`) — matching how the
-/// hand atoms already pack a colour as three scalars (e.g. chroma_key's
-/// key_r/g/b) — and the body receives it reassembled as a `vec3<f32>`.
+/// expands to 3 consecutive f32 fields (`<name>_x/_y/_z`); Vec4/Color expand
+/// to four (`<name>_x/_y/_z/_w`) — matching how the hand atoms already pack a
+/// colour as scalars (e.g. chroma_key's key_r/g/b) — and the body receives it
+/// reassembled as a `vec3<f32>`/`vec4<f32>` (2026-07-14, P3 wave 2: the
+/// shading-family atoms' `color` params are the first standalone-path users
+/// of Vec4/Color; still `param_wgsl_type`-unsupported, so an atom with one of
+/// these params stays a `region.rs` cut — the fused MULTI-node path still
+/// only carries pure scalar uniform fields).
 pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
     match p.ty {
         ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok(1),
         ParamType::Int | ParamType::Bool | ParamType::Enum => Ok(1),
         ParamType::Vec3 => Ok(3),
+        ParamType::Vec4 | ParamType::Color => Ok(4),
         other => Err(CodegenError::UnsupportedParam {
             name: crate::node_graph::intern_name(&p.name),
             ty: other,
@@ -439,6 +445,13 @@ pub fn generate_standalone_ext(
                 writeln!(out, "    {f}_x: f32,").unwrap();
                 writeln!(out, "    {f}_y: f32,").unwrap();
                 writeln!(out, "    {f}_z: f32,").unwrap();
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                // A vec4/color param expands to four consecutive f32 fields,
+                // reassembled as a vec4<f32> at the body call site below.
+                writeln!(out, "    {f}_x: f32,").unwrap();
+                writeln!(out, "    {f}_y: f32,").unwrap();
+                writeln!(out, "    {f}_z: f32,").unwrap();
+                writeln!(out, "    {f}_w: f32,").unwrap();
             } else {
                 let ty = param_wgsl_type(p)?;
                 writeln!(out, "    {f}: {ty},").unwrap();
@@ -673,6 +686,10 @@ pub fn generate_standalone_ext(
         let f = wgsl_safe_field(p.name.as_ref());
         if p.ty == ParamType::Vec3 {
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
+        } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+            args.push(format!(
+                "vec4<f32>(params.{f}_x, params.{f}_y, params.{f}_z, params.{f}_w)"
+            ));
         } else {
             args.push(format!("params.{f}"));
         }
@@ -2821,6 +2838,95 @@ mod dispatch_contract_tests {
                  vec3<f32>(params.cam_pos_x, params.cam_pos_y, params.cam_pos_z));"
             ),
             "body call must pass derived fields after params, vec3 reassembled:\n{generated}"
+        );
+    }
+
+    /// P3 wave 2 (2026-07-14): a `ParamType::Color` param (the shading-family
+    /// atoms' `color`/`color_a`/`color_x_low`/... tint) now lays out on the
+    /// standalone codegen path exactly like Vec3 does — four consecutive f32
+    /// fields (`<name>_x/_y/_z/_w`), reassembled at the body call as a
+    /// `vec4<f32>`. `ParamType::Vec4` shares the same branch (color.rs's
+    /// channel_mixer `row0..row3`). This proves the mechanism generically; the
+    /// real atoms (blinn_specular, fresnel_rim, matcap_two_tone, color.rs) each
+    /// carry their own gpu_tests parity proof against the hand shader.
+    #[test]
+    fn generate_standalone_ext_expands_color_param_to_vec4() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::ports::PortKind;
+        use std::borrow::Cow;
+
+        let inputs = [NodeInput {
+            name: Cow::Borrowed("in"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Input,
+            required: true,
+        }];
+        let outputs = [NodeOutput {
+            name: Cow::Borrowed("out"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Output,
+            required: false,
+        }];
+        let params = [
+            ParamDef {
+                name: Cow::Borrowed("intensity"),
+                label: "Intensity",
+                ty: ParamType::Float,
+                default: ParamValue::Float(1.0),
+                range: Some((0.0, 1.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: Cow::Borrowed("tint"),
+                label: "Tint",
+                ty: ParamType::Color,
+                default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
+                range: None,
+                enum_values: &[],
+            },
+        ];
+        let body = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32, tint: vec4<f32>) -> vec4<f32> {\n    return c * intensity * tint;\n}";
+
+        let generated = generate_standalone_ext(
+            FusionKind::Pointwise,
+            body,
+            &inputs,
+            &params,
+            &[],
+            &[],
+            &outputs,
+            false,
+            &[],
+        )
+        .expect("color-param atom must generate");
+
+        assert!(
+            naga::front::wgsl::parse_str(&generated).is_ok(),
+            "generated kernel must parse through naga:\n{generated}"
+        );
+
+        // intensity (1 word) + tint (4 words) = 5 → pad to 8.
+        let expected_params_struct = "struct Params {\n    \
+            intensity: f32,\n    \
+            tint_x: f32,\n    \
+            tint_y: f32,\n    \
+            tint_z: f32,\n    \
+            tint_w: f32,\n    \
+            _pad0: u32,\n    \
+            _pad1: u32,\n    \
+            _pad2: u32,\n\
+            }\n";
+        assert!(
+            generated.contains(expected_params_struct),
+            "Color param must expand to four consecutive f32 fields, padded to 8 words:\n{generated}"
+        );
+
+        assert!(
+            generated.contains(
+                "let result = body(c_in, uv, vec2<f32>(dims), params.intensity, \
+                 vec4<f32>(params.tint_x, params.tint_y, params.tint_z, params.tint_w));"
+            ),
+            "body call must reassemble the Color param as vec4<f32>:\n{generated}"
         );
     }
 }

@@ -179,16 +179,9 @@ pub enum BoundaryReason {
 /// converting it is not permitted (the meta-test below checks both
 /// directions).
 pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
-    "node.shininess",           // blinn_specular
-    "node.rim_light",           // fresnel_rim
-    "node.matcap_two_tone",     // matcap_two_tone
-    "node.tone_map",            // tone_map
     "node.rotate_coordinates",  // rotate_2d
     "node.sine_wave",           // sin_term
     "node.watercolor",          // watercolor
-    "node.brightness",          // color.rs — P2b triage: single pure per-element kernel, no barriers
-    "node.channel_mixer",       // color.rs — P2b triage: single pure per-element kernel, no barriers
-    "node.gradient_map",        // color.rs — P2b triage: single pure per-element kernel, no barriers
 ];
 
 impl InputAccess {
@@ -506,6 +499,43 @@ mod tests {
                 .construct(type_id)
                 .unwrap_or_else(|| panic!("registry missing {type_id}"));
             assert_eq!(node.fusion_kind(), kind, "{type_id} fusion_kind");
+            let body = node
+                .wgsl_body()
+                .unwrap_or_else(|| panic!("{type_id} has no wgsl_body"));
+            assert!(body.contains("fn body"), "{type_id} body must define `fn body`");
+        }
+    }
+
+    /// P3 wave 2 (2026-07-14): the seven shading-family + color.rs atoms
+    /// converted off `ConversionDebt` this wave are all `Pointwise` with a
+    /// real `wgsl_body`, and none declare a `BoundaryReason` any more (the
+    /// meta-test `every_boundary_atom_declares_its_reason` also proves the
+    /// ledger no longer names them). Six of the seven carry a Color/Vec3/Vec4
+    /// param — `region.rs`'s scalar-only cut rule means they stay
+    /// individually-fusable rather than joining a multi-node region; see
+    /// `region::tests::wave2_color_param_atoms_stay_boundary_in_shipped_presets`
+    /// for the real-preset proof of that finding, and
+    /// `region::tests::tone_map_fuses_gradient_map_stays_boundary_next_to_a_fusable_neighbor`
+    /// for the seventh (`node.tone_map` has no non-scalar params at all, so
+    /// it's the one atom this wave that DOES join a multi-node region).
+    #[test]
+    fn wave2_conversion_debt_atoms_are_now_pointwise() {
+        use crate::node_graph::PrimitiveRegistry;
+        let registry = PrimitiveRegistry::with_builtin();
+        for type_id in [
+            "node.shininess",
+            "node.rim_light",
+            "node.matcap_two_tone",
+            "node.tone_map",
+            "node.brightness",
+            "node.channel_mixer",
+            "node.gradient_map",
+        ] {
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            assert_eq!(node.fusion_kind(), FusionKind::Pointwise, "{type_id} fusion_kind");
+            assert!(node.boundary_reason().is_none(), "{type_id} must not declare a BoundaryReason");
             let body = node
                 .wgsl_body()
                 .unwrap_or_else(|| panic!("{type_id} has no wgsl_body"));

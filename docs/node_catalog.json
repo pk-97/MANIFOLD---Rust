@@ -2095,13 +2095,15 @@
     {
       "aliases": [
         "brightness",
-        "Level TOP"
+        "luma",
+        "grayscale",
+        "desaturate"
       ],
       "category": "Color & Tone",
       "examples": [
         "MetallicGlass"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "source",
@@ -2125,10 +2127,10 @@
           "type": "vec3"
         }
       ],
-      "purpose": "Pixel-local brightness multiply: out.rgb = in.rgb * brightness, alpha passes through.",
+      "purpose": "RGB -> weighted grayscale (luma) via per-channel weights. Defaults are BT.709 luma coefficients, so the default behaviour is desaturate-to-luminance.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Multiplies the image brightness up or down. A plain brightness control.",
+      "summary": "Collapses colour to a single brightness value using per-channel weights — the default weighting matches how the eye perceives luminance.",
       "type_id": "node.brightness"
     },
     {
@@ -2649,9 +2651,8 @@
       "aliases": [
         "channel mixer",
         "channel mix",
-        "matrix",
         "swizzle",
-        "Channel Mix TOP"
+        "matrix"
       ],
       "category": "Color & Tone",
       "examples": [
@@ -2659,7 +2660,7 @@
         "StarField",
         "StrangeAttractor"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "source",
@@ -2704,10 +2705,10 @@
           "type": "vec4"
         }
       ],
-      "purpose": "4x4 RGBA matrix transform: each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
+      "purpose": "Per-pixel 4x4 RGBA matrix transform: out = M . in, where M's rows are the four Vec4 params (row0=R, row1=G, row2=B, row3=A). Identity matrix is the param default — output = input.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
+      "summary": "Remaps RGBA channels through a 4x4 matrix — swap, isolate, or blend channels into each other.",
       "type_id": "node.channel_mixer"
     },
     {
@@ -7846,11 +7847,11 @@
         "gradient map",
         "color ramp",
         "duotone",
-        "Lookup TOP"
+        "lookup"
       ],
       "category": "Color & Tone",
       "examples": [],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "source",
@@ -7881,10 +7882,10 @@
           "type": "color"
         }
       ],
-      "purpose": "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
+      "purpose": "Maps input luminance to a two-stop gradient (color_a at luma 0 -> color_b at luma 1). The gradient-map atom (Blender ColorRamp / TD Lookup with two stops). For richer multi-stop palettes (thermal, etc.) use node.lut1d with a supplied LUT texture.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
+      "summary": "Recolours an image by mapping its brightness onto a two-colour gradient — dark areas become one colour, bright areas another.",
       "type_id": "node.gradient_map"
     },
     {
@@ -9890,7 +9891,7 @@
       "examples": [
         "OilyFluid"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "normal",
@@ -14114,7 +14115,7 @@
       "examples": [
         "OilyFluid"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "normal",
@@ -15183,7 +15184,7 @@
       "examples": [
         "OilyFluid"
       ],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "normal",
@@ -17646,7 +17647,7 @@
       ],
       "category": "Color & Tone",
       "examples": [],
-      "fusion": "boundary:conversion_debt",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
