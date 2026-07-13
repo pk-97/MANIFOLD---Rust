@@ -884,10 +884,30 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn flush_pending_decodes(&mut self) {
+        // Defense-in-depth backstop (BUG-127): the worker protocol now always
+        // replies to a submitted job (see decode_scheduler.rs), so this should
+        // never actually time out. But `decode_pending` invariant is load-bearing
+        // for export (see content_export.rs::export_one_frame), so a future
+        // protocol violation must not be able to wedge the export loop forever —
+        // bound the total wait instead of blocking unconditionally.
+        const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + FLUSH_TIMEOUT;
+
         while self.active_clips.values().any(|c| c.decode_pending) {
-            let results = self.scheduler.recv_results_blocking();
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                log::error!(
+                    "[VideoRenderer] flush_pending_decodes timed out after {FLUSH_TIMEOUT:?} \
+                     with clips still pending — clearing to avoid wedging the caller"
+                );
+                for clip in self.active_clips.values_mut() {
+                    clip.decode_pending = false;
+                }
+                break;
+            }
+            let results = self.scheduler.recv_results_timeout(remaining);
             if results.is_empty() {
-                break; // Channel disconnected
+                break; // Timed out or channel disconnected
             }
             self.process_decode_results(results);
         }

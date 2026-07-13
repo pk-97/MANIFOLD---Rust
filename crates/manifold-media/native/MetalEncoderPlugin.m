@@ -20,6 +20,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
+#import "ColorTransferFunctions.h"
 
 // -- Error codes --------------------------------------------------------------
 
@@ -41,19 +42,25 @@
 // in shader space is all that's needed -- no manual channel swizzle.
 // Works for both BGRA8Unorm (SDR) and RGBA16Float (HDR) destinations.
 
-// SDR: apply linear → sRGB gamma (compositor outputs linear light;
-// CAMetalLayer applies gamma for display, but export needs it baked in).
-static NSString* const kCopyShaderSDR =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "kernel void copy_texture(\n"
+// SDR: apply the true piecewise sRGB OETF (compositor outputs linear light;
+// CAMetalLayer applies the sRGB transfer function for display, but export
+// needs it baked in). BUG-128: this used to be a plain pow(1/2.2) curve,
+// which diverges from what the display and the still exporter actually show
+// (worst in the shadows). `manifold_srgb_encode` (ColorTransferFunctions.h)
+// is the one shared definition, ported from the tested Rust reference —
+// still_exporter.rs's `linear_to_srgb`. Built by concatenating
+// kManifoldColorTransferFunctionsMSL with this kernel body in
+// MetalEncoder_CreateInternal (NSString literals can't be spliced at
+// compile time, so the include+function-def preamble lives there).
+static NSString* const kCopyShaderSDRBody =
+    @"kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
-     "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
+     "    c.rgb = half3(manifold_srgb_encode(float3(max(c.rgb, half3(0.0h)))));\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
@@ -83,16 +90,28 @@ typedef struct
     AVAssetWriterInputPixelBufferAdaptor*   adaptor;
     int                                     width;
     int                                     height;
-    int                                     fpsNum;     // fps as integer for CMTime
+    // BUG-129: fpsNum/fpsDen are the EXACT rational frame rate (fps ==
+    // fpsNum / fpsDen, e.g. 30000/1001 for 29.97 fps) computed Rust-side by
+    // `manifold_media::frame_rate::fps_to_rational` and passed across the
+    // FFI boundary undistorted. Frame N's CMTime presentation time is
+    // `N * fpsDen / fpsNum` seconds -- exact, never rounded. fpsApprox is a
+    // SEPARATE rounded-to-nearest-integer fps used only for bitrate/GOP
+    // sizing heuristics (AVFoundation's frame-rate hint keys and the
+    // bits-per-pixel bitrate estimate don't need or want sub-frame
+    // precision; passing the raw rational there, e.g. 30000, would wreck
+    // the bitrate math).
+    int                                     fpsNum;
+    int                                     fpsDen;
+    int                                     fpsApprox;
     int                                     frameCount; // frames encoded so far
     BOOL                                    isHDR;      // HDR mode: HEVC + RGBA16Float
 } MetalEncoderState;
 
 // -- Forward declarations -----------------------------------------------------
 
-static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, float fps,
-                                                       const char* outputPath, BOOL hdr,
-                                                       id<MTLDevice> externalDevice);
+static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int fpsNum,
+                                                       int fpsDen, const char* outputPath,
+                                                       BOOL hdr, id<MTLDevice> externalDevice);
 
 // -- IsAvailable --------------------------------------------------------------
 
@@ -117,44 +136,48 @@ int MetalEncoder_IsHDRAvailable(void)
 }
 
 // -- Create (SDR) -------------------------------------------------------------
+// BUG-129: fpsNum/fpsDen replace the old rounded `float fps` parameter --
+// the exact rational frame rate computed Rust-side, so CMTime presentation
+// timestamps never drift off the true frame rate. See the MetalEncoderState
+// doc comment above.
 
-void* MetalEncoder_Create(int width, int height, float fps, const char* outputPath)
+void* MetalEncoder_Create(int width, int height, int fpsNum, int fpsDen, const char* outputPath)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, NO, nil);
+    return MetalEncoder_CreateInternal(width, height, fpsNum, fpsDen, outputPath, NO, nil);
 }
 
 // -- CreateHDR ----------------------------------------------------------------
 
-void* MetalEncoder_CreateHDR(int width, int height, float fps, const char* outputPath)
+void* MetalEncoder_CreateHDR(int width, int height, int fpsNum, int fpsDen, const char* outputPath)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, YES, nil);
+    return MetalEncoder_CreateInternal(width, height, fpsNum, fpsDen, outputPath, YES, nil);
 }
 
 // -- Create (with external device) --------------------------------------------
 
-void* MetalEncoder_CreateWithDevice(int width, int height, float fps,
+void* MetalEncoder_CreateWithDevice(int width, int height, int fpsNum, int fpsDen,
                                      const char* outputPath, void* devicePtr)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, NO,
+    return MetalEncoder_CreateInternal(width, height, fpsNum, fpsDen, outputPath, NO,
                                        (__bridge id<MTLDevice>)devicePtr);
 }
 
-void* MetalEncoder_CreateHDRWithDevice(int width, int height, float fps,
+void* MetalEncoder_CreateHDRWithDevice(int width, int height, int fpsNum, int fpsDen,
                                         const char* outputPath, void* devicePtr)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, YES,
+    return MetalEncoder_CreateInternal(width, height, fpsNum, fpsDen, outputPath, YES,
                                        (__bridge id<MTLDevice>)devicePtr);
 }
 
 // -- Create (internal) --------------------------------------------------------
 
-static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, float fps,
-                                                       const char* outputPath, BOOL hdr,
-                                                       id<MTLDevice> externalDevice)
+static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, int fpsNum,
+                                                       int fpsDen, const char* outputPath,
+                                                       BOOL hdr, id<MTLDevice> externalDevice)
 {
     @autoreleasepool
     {
-        if (outputPath == NULL || width <= 0 || height <= 0 || fps <= 0.0f)
+        if (outputPath == NULL || width <= 0 || height <= 0 || fpsNum <= 0 || fpsDen <= 0)
             return NULL;
 
         id<MTLDevice> device = externalDevice ? externalDevice : MTLCreateSystemDefaultDevice();
@@ -169,8 +192,14 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         state->device = device;
         state->width = width;
         state->height = height;
-        state->fpsNum = (int)(fps + 0.5f);
-        if (state->fpsNum < 1) state->fpsNum = 30;
+        // BUG-129: store the exact rational untouched -- CMTime stamping
+        // (below, in EncodeFrame) uses fpsNum/fpsDen directly, never a
+        // rounded value. fpsApprox is a nearest-integer rounding used only
+        // for bitrate/GOP heuristics that don't need sub-frame precision.
+        state->fpsNum = fpsNum;
+        state->fpsDen = fpsDen;
+        state->fpsApprox = (int)((double)fpsNum / (double)fpsDen + 0.5);
+        if (state->fpsApprox < 1) state->fpsApprox = 30;
         state->frameCount = 0;
         state->isHDR = hdr;
 
@@ -182,9 +211,14 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
             return NULL;
         }
 
-        // Compile texture copy compute shader from source
+        // Compile texture copy compute shader from source. SDR splices the
+        // shared sRGB OETF (ColorTransferFunctions.h) ahead of the kernel
+        // body — see kCopyShaderSDRBody above (BUG-128).
         NSError* shaderError = nil;
-        NSString* shaderSrc = hdr ? kCopyShaderHDR : kCopyShaderSDR;
+        NSString* shaderSrc = hdr
+            ? kCopyShaderHDR
+            : [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n%@\n%@",
+                                          kManifoldColorTransferFunctionsMSL, kCopyShaderSDRBody];
         id<MTLLibrary> library = [device newLibraryWithSource:shaderSrc
                                                       options:nil
                                                         error:&shaderError];
@@ -251,12 +285,12 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         // and constant motion across the full frame, requiring significantly
         // more bits than natural video to avoid macroblocking.
         // Clamped to 20-400 Mbps to avoid absurd values at extreme resolutions.
-        int targetBps = (int)((double)width * height * state->fpsNum * 0.6);
+        int targetBps = (int)((double)width * height * state->fpsApprox * 0.6);
         if (targetBps < 20000000) targetBps = 20000000;     // 20 Mbps min
         if (targetBps > 400000000) targetBps = 400000000;   // 400 Mbps max
 
         NSLog(@"[MetalEncoder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
-              targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
+              targetBps, targetBps / 1000000.0, width, height, state->fpsApprox);
 
         if (hdr)
         {
@@ -264,8 +298,8 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
             // Average bitrate with peak headroom for complex frames.
             compressionProps = @{
                 AVVideoAverageBitRateKey:             @(targetBps),
-                AVVideoExpectedSourceFrameRateKey:    @(state->fpsNum),
-                AVVideoMaxKeyFrameIntervalKey:        @(state->fpsNum),  // 1 GOP/second
+                AVVideoExpectedSourceFrameRateKey:    @(state->fpsApprox),
+                AVVideoMaxKeyFrameIntervalKey:        @(state->fpsApprox),  // 1 GOP/second
                 AVVideoAllowFrameReorderingKey:       @NO,
                 AVVideoProfileLevelKey:               @"HEVC_Main10_AutoLevel",
             };
@@ -292,8 +326,8 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
             compressionProps = @{
                 AVVideoAverageBitRateKey:             @(targetBps),
                 AVVideoProfileLevelKey:              AVVideoProfileLevelH264HighAutoLevel,
-                AVVideoExpectedSourceFrameRateKey:   @(state->fpsNum),
-                AVVideoMaxKeyFrameIntervalKey:       @(state->fpsNum),  // 1 GOP/second
+                AVVideoExpectedSourceFrameRateKey:   @(state->fpsApprox),
+                AVVideoMaxKeyFrameIntervalKey:       @(state->fpsApprox),  // 1 GOP/second
                 AVVideoAllowFrameReorderingKey:      @NO,
             };
 
@@ -310,6 +344,15 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         state->videoInput = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeVideo
                                                            outputSettings:videoSettings];
         state->videoInput.expectsMediaDataInRealTime = NO; // offline export -- maximize quality
+        // BUG-129: without this, AVAssetWriter falls back to its own default
+        // media timescale (600, observed) for the track's mdhd/stts atoms --
+        // coarse enough that a fractional CMTime like 1001/30000s per frame
+        // rounds to the nearest 1/600s tick (20/600 = exactly 1/30s), quietly
+        // re-introducing the same rounding this fix is supposed to remove.
+        // Setting mediaTimeScale to the exact rational's numerator means
+        // every frame's CMTime (N * fpsDen, fpsNum) is already expressed in
+        // the track's own timescale and needs no further rounding.
+        state->videoInput.mediaTimeScale = state->fpsNum;
 
         // Pixel buffer adaptor -- source attributes match the CVPixelBuffer format
         NSDictionary* sourceAttrs = @{
@@ -346,7 +389,7 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         [state->assetWriter startSessionAtSourceTime:kCMTimeZero];
 
         NSLog(@"[MetalEncoder] Created %s encoder %dx%d @ %d fps",
-              hdr ? "HDR (HEVC 10-bit)" : "SDR (H.264)", width, height, state->fpsNum);
+              hdr ? "HDR (HEVC 10-bit)" : "SDR (H.264)", width, height, state->fpsApprox);
 
         return (void*)state;
     }
@@ -464,8 +507,12 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
             return ME_ERR_BLIT_FAILED;
         }
 
-        // Append the pixel buffer to the video writer with precise frame timing
-        CMTime presentTime = CMTimeMake(frameIndex, state->fpsNum);
+        // Append the pixel buffer to the video writer with precise frame timing.
+        // BUG-129: frame N's presentation time is exactly N * fpsDen / fpsNum
+        // seconds -- a rational CMTime, not an approximation from a rounded
+        // integer fps. (frameIndex * fpsDen) as the CMTime value with fpsNum
+        // as the timescale gives exactly that quotient.
+        CMTime presentTime = CMTimeMake((int64_t)frameIndex * state->fpsDen, state->fpsNum);
         BOOL appended = [state->adaptor appendPixelBuffer:pixelBuffer
                                      withPresentationTime:presentTime];
 

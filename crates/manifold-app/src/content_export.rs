@@ -174,6 +174,31 @@ impl ContentThread {
                 )
             });
 
+        // BUG-130: resolve FFmpeg presence up front, before rendering a single
+        // frame. `session.finalize()` used to be the only place this was
+        // checked, which meant a machine without ffmpeg installed burned a
+        // full (potentially multi-minute) render only to fail at the very
+        // last step. Fail fast instead — and reuse the resolved path at
+        // finalize time so it isn't re-resolved (and can't disagree).
+        let ffmpeg_path = match Self::ffmpeg_preflight(export_config.has_audio(), || {
+            AudioMuxer::resolve_ffmpeg("")
+        }) {
+            Ok(path) => path,
+            Err(reason) => {
+                log::error!(
+                    "[ContentThread] {reason} — aborting export before rendering any frames"
+                );
+                let _ = std::fs::remove_file(&mix_wav_path);
+                self.send_export_finished(
+                    state_tx,
+                    false,
+                    format!("Export failed: {reason}"),
+                    &export_config.output_path,
+                );
+                return;
+            }
+        };
+
         // Detect generator-only projects: no video clips means no decode
         // backpressure needed, enabling faster-than-realtime export.
         // Matches Unity's IsGeneratorOnlyProject() → Time.captureFramerate path.
@@ -356,8 +381,8 @@ impl ContentThread {
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
             let _ = std::fs::remove_file(&temp_video);
         } else {
-            // Resolve FFmpeg for audio muxing
-            let ffmpeg_path = AudioMuxer::resolve_ffmpeg("");
+            // FFmpeg was already resolved (and its presence verified when
+            // audio muxing is needed) before the frame loop started — BUG-130.
             match session.finalize(ffmpeg_path.as_deref()) {
                 Ok(result) => {
                     log::info!(
@@ -646,5 +671,64 @@ impl ContentThread {
         if let Err(e) = state_tx.send(state) {
             log::error!("[ContentThread] Export finished channel disconnected: {e}");
         }
+    }
+
+    /// BUG-130: decide whether an export can proceed to frame 0.
+    ///
+    /// When the export needs audio muxing, ffmpeg must be resolvable — if
+    /// it's not, the export must abort now, before any frame is rendered or
+    /// encoded, rather than discovering the absence at `finalize()` after a
+    /// full (potentially multi-minute) render.
+    ///
+    /// `resolve` is injected (rather than calling `AudioMuxer::resolve_ffmpeg`
+    /// directly) so this decision is unit-testable without depending on
+    /// which ffmpeg installs happen to exist on the machine running the test.
+    fn ffmpeg_preflight(
+        has_audio: bool,
+        resolve: impl FnOnce() -> Option<String>,
+    ) -> Result<Option<String>, &'static str> {
+        if !has_audio {
+            return Ok(None);
+        }
+        match resolve() {
+            Some(path) => Ok(Some(path)),
+            None => Err("ffmpeg not found (required to mux audio into the export)"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BUG-130 (a): when the export needs audio muxing, missing ffmpeg must
+    // be caught before frame 0 — not discovered only at finalize after a
+    // full render.
+
+    #[test]
+    fn ffmpeg_preflight_passes_through_when_no_audio() {
+        // No audio in this export -> ffmpeg's presence is irrelevant, and the
+        // resolver must not even be consulted.
+        let mut resolver_called = false;
+        let result = ContentThread::ffmpeg_preflight(false, || {
+            resolver_called = true;
+            None
+        });
+        assert_eq!(result, Ok(None));
+        assert!(!resolver_called, "resolver should be skipped when there's no audio to mux");
+    }
+
+    #[test]
+    fn ffmpeg_preflight_aborts_before_frame_0_when_audio_needs_missing_ffmpeg() {
+        let result = ContentThread::ffmpeg_preflight(true, || None);
+        assert!(result.is_err(), "must abort, not silently proceed to render frames");
+        let reason = result.unwrap_err();
+        assert!(reason.contains("ffmpeg not found"), "reason should be clear: {reason}");
+    }
+
+    #[test]
+    fn ffmpeg_preflight_proceeds_when_audio_needs_resolvable_ffmpeg() {
+        let result = ContentThread::ffmpeg_preflight(true, || Some("/opt/homebrew/bin/ffmpeg".to_string()));
+        assert_eq!(result, Ok(Some("/opt/homebrew/bin/ffmpeg".to_string())));
     }
 }

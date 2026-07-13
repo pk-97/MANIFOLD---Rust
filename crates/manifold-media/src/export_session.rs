@@ -67,6 +67,25 @@ impl From<EncoderError> for ExportError {
     }
 }
 
+/// On an audio-mux failure, don't discard the fully-encoded video-only file —
+/// rename it to a clearly-marked path next to the intended output (BUG-130).
+/// A long render must survive a muxing failure instead of being silently
+/// orphaned under an internal-looking `.video_only.mp4` name, or lost
+/// entirely.
+///
+/// Pulled out of `ExportSession::finalize` (which requires a real Metal
+/// encoder, macOS-only) so the rename-on-failure behavior is unit-testable
+/// on any host with nothing but plain files.
+fn preserve_video_and_fail(encoder_output: &str, output_path: &str, reason: String) -> ExportError {
+    let preserved_path = format!("{output_path}.video-only-audio-mux-failed.mp4");
+    match std::fs::rename(encoder_output, &preserved_path) {
+        Ok(()) => ExportError::AudioMux(format!("{reason}; video preserved at {preserved_path}")),
+        Err(rename_err) => ExportError::AudioMux(format!(
+            "{reason}; additionally failed to preserve video-only file at {encoder_output}: {rename_err}"
+        )),
+    }
+}
+
 /// Manages the state of an in-progress video export.
 ///
 /// Created with a config and tempo map, calculates frame counts and timing,
@@ -341,22 +360,40 @@ impl ExportSession {
         // Finalize the encoder (writes MP4 trailer)
         self.encoder.end_session()?;
 
-        // Post-mux audio if needed
+        // Post-mux audio if needed.
+        //
+        // BUG-130: a mux failure must not lose the (fully-encoded, possibly
+        // multi-minute) video. Instead of leaving the temp `.video_only.mp4`
+        // sitting under its internal-looking name, rename it to a clearly
+        // marked path next to the intended output so the render survives the
+        // failure and is easy to find.
         if config.has_audio() {
             let audio_path = config.audio_path.as_ref().unwrap();
-            let ffmpeg =
-                ffmpeg_path.ok_or_else(|| ExportError::AudioMux("ffmpeg not found".to_string()))?;
 
-            crate::audio_muxer::AudioMuxer::mux(
+            let Some(ffmpeg) = ffmpeg_path else {
+                return Err(preserve_video_and_fail(
+                    &encoder_output,
+                    &config.output_path,
+                    "ffmpeg not found".to_string(),
+                ));
+            };
+
+            if let Err(e) = crate::audio_muxer::AudioMuxer::mux(
                 ffmpeg,
                 &encoder_output,
                 audio_path,
                 &config.output_path,
                 audio_offset,
-            )
-            .map_err(|e| ExportError::AudioMux(e.to_string()))?;
+            ) {
+                return Err(preserve_video_and_fail(
+                    &encoder_output,
+                    &config.output_path,
+                    format!("audio mux failed: {e}"),
+                ));
+            }
 
-            // Clean up temp video-only file
+            // Mux succeeded — config.output_path now holds video+audio, so
+            // the video-only temp file is redundant.
             let _ = std::fs::remove_file(&encoder_output);
         }
 
@@ -389,5 +426,85 @@ impl ExportSession {
 
     pub fn start_beat(&self) -> f32 {
         self.config.start_beat
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BUG-130 (b): a mux failure must not lose the fully-encoded video —
+    // the temp video-only file gets renamed to a clearly-marked path, not
+    // deleted.
+
+    #[test]
+    fn preserve_video_and_fail_renames_temp_video_on_mux_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "manifold_export_session_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let encoder_output = dir.join("out.mp4.video_only.mp4");
+        let output_path = dir.join("out.mp4");
+        std::fs::write(&encoder_output, b"fake video bytes").unwrap();
+
+        let err = preserve_video_and_fail(
+            encoder_output.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+            "audio mux failed: ffmpeg exited with code 1".to_string(),
+        );
+
+        // The temp file must be gone from its old path...
+        assert!(
+            !encoder_output.exists(),
+            "encoder_output should have been renamed away, not left in place"
+        );
+        // ...and preserved (not deleted) at the marked path.
+        let preserved_path = format!("{}.video-only-audio-mux-failed.mp4", output_path.display());
+        assert!(
+            std::path::Path::new(&preserved_path).exists(),
+            "preserved video file should exist at {preserved_path}"
+        );
+        assert_eq!(
+            std::fs::read(&preserved_path).unwrap(),
+            b"fake video bytes",
+            "preserved file must have the original video content, not be truncated/corrupted"
+        );
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("audio mux failed"),
+            "error should surface the original mux failure reason: {msg}"
+        );
+        assert!(
+            msg.contains(&preserved_path),
+            "error should tell the caller where the video was preserved: {msg}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preserve_video_and_fail_reports_rename_failure_without_panicking() {
+        // encoder_output doesn't exist -> rename fails; must not panic and
+        // must surface both the original reason and the rename failure.
+        let dir = std::env::temp_dir().join(format!(
+            "manifold_export_session_test_norename_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing_encoder_output = dir.join("does_not_exist.video_only.mp4");
+        let output_path = dir.join("out.mp4");
+
+        let err = preserve_video_and_fail(
+            missing_encoder_output.to_str().unwrap(),
+            output_path.to_str().unwrap(),
+            "ffmpeg not found".to_string(),
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("ffmpeg not found"));
+        assert!(msg.contains("failed to preserve video-only file"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -15,7 +15,89 @@ use crate::content_command::ContentCommand;
 
 use crate::project_io::ProjectIOAction;
 use crate::window_registry::{WindowRole, WindowState};
-use manifold_core::Seconds;
+use manifold_core::{LayerId, Seconds};
+
+/// Pure worker-thread logic for one video-import batch: probes each path and
+/// builds either a playable `AddClipCommand` (+ `VideoClip` library entry) or
+/// a human-readable failure message (BUG-133) for files the decoder can't
+/// open — e.g. `.webm`/`.avi` files AVFoundation has no codec for. Extracted
+/// from `import_video_files`'s spawned thread so the probe-fail path is
+/// unit-testable without a live `Application`/content-thread.
+fn build_video_import_batch(
+    paths: &[std::path::PathBuf],
+    bpm: f32,
+    insert_beat: f32,
+    layer_id: &LayerId,
+) -> (
+    Vec<manifold_core::video::VideoClip>,
+    Vec<ContentCommand>,
+    Vec<String>,
+) {
+    let spb = 60.0 / bpm;
+    let mut beat = insert_beat;
+    let mut video_clips: Vec<manifold_core::video::VideoClip> = Vec::new();
+    let mut commands: Vec<ContentCommand> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for path in paths {
+        let path_str = path.to_string_lossy().to_string();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let meta = manifold_media::metadata::probe_video_metadata(&path_str);
+        let (duration_secs, res_w, res_h) = match meta {
+            Some(m) => (m.duration, m.width, m.height),
+            None => {
+                log::warn!("[Import] Probe failed: {path_str}");
+                failures.push(format!(
+                    "{file_name} — codec/container not supported by MANIFOLD's \
+                     decoder (AVFoundation). Re-encode to H.264/HEVC in an .mp4 \
+                     or .mov and re-import."
+                ));
+                continue;
+            }
+        };
+
+        let video_clip_id = manifold_core::short_id();
+        let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+
+        video_clips.push(manifold_core::video::VideoClip {
+            id: video_clip_id.clone(),
+            file_path: path_str.clone(),
+            relative_file_path: None,
+            file_name: file_name.clone(),
+            duration: duration_secs,
+            resolution_width: res_w,
+            resolution_height: res_h,
+            file_size,
+            last_modified_ticks: 0,
+        });
+
+        let duration_beats = (duration_secs / spb).max(0.25);
+
+        let clip = manifold_core::clip::TimelineClip::new_video(
+            video_clip_id,
+            manifold_core::Beats::from_f32(beat),
+            manifold_core::Beats::from_f32(duration_beats),
+            manifold_core::Seconds::ZERO,
+        );
+
+        commands.push(ContentCommand::Execute(Box::new(
+            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone(), spb),
+        )));
+
+        log::warn!(
+            "[Import] Added '{file_name}' at beat {beat:.1} \
+             ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
+        );
+
+        beat += duration_beats;
+    }
+
+    (video_clips, commands, failures)
+}
 
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
@@ -339,69 +421,23 @@ impl Application {
 
         let paths = paths.to_vec();
 
+        // BUG-133: the file-dialog filter deliberately stays broad (mp4/mov/
+        // webm/avi) — trimming it was considered and rejected. AVFoundation
+        // (the only decoder) generally can't open webm (no VP8/VP9) and has
+        // patchy avi support, so the probe below is the real gate: a
+        // probe-failing file must reject the import with a clear message,
+        // never just a log line the user never sees (no-silent-fallbacks).
+        let (failure_tx, failure_rx) = std::sync::mpsc::channel::<Vec<String>>();
+        self.import_failures_rx = Some(failure_rx);
+
         std::thread::spawn(move || {
-            let spb = 60.0 / bpm;
-            let mut beat = insert_beat;
-            let mut video_clips: Vec<manifold_core::video::VideoClip> = Vec::new();
-            let mut commands: Vec<ContentCommand> = Vec::new();
-
-            for path in &paths {
-                let path_str = path.to_string_lossy().to_string();
-                let file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                let meta = manifold_media::metadata::probe_video_metadata(&path_str);
-                let (duration_secs, res_w, res_h) = match meta {
-                    Some(m) => (m.duration, m.width, m.height),
-                    None => {
-                        log::warn!("[Import] Probe failed: {path_str}");
-                        continue;
-                    }
-                };
-
-                let video_clip_id = manifold_core::short_id();
-                let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
-
-                video_clips.push(manifold_core::video::VideoClip {
-                    id: video_clip_id.clone(),
-                    file_path: path_str.clone(),
-                    relative_file_path: None,
-                    file_name: file_name.clone(),
-                    duration: duration_secs,
-                    resolution_width: res_w,
-                    resolution_height: res_h,
-                    file_size,
-                    last_modified_ticks: 0,
-                });
-
-                let duration_beats = (duration_secs / spb).max(0.25);
-
-                let clip = manifold_core::clip::TimelineClip::new_video(
-                    video_clip_id,
-                    manifold_core::Beats::from_f32(beat),
-                    manifold_core::Beats::from_f32(duration_beats),
-                    manifold_core::Seconds::ZERO,
-                );
-
-                commands.push(ContentCommand::Execute(Box::new(
-                    manifold_editing::commands::clip::AddClipCommand::new(
-                        clip,
-                        layer_id.clone(),
-                        spb,
-                    ),
-                )));
-
-                log::warn!(
-                    "[Import] Added '{file_name}' at beat {beat:.1} \
-                     ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
-                );
-
-                beat += duration_beats;
-            }
+            let (video_clips, commands, failures) =
+                build_video_import_batch(&paths, bpm, insert_beat, &layer_id);
 
             if video_clips.is_empty() {
+                // Every file in this batch failed to probe — nothing to add,
+                // but the caller still needs to know (never a silent no-op).
+                let _ = failure_tx.send(failures);
                 return;
             }
 
@@ -417,7 +453,45 @@ impl Application {
             for cmd in commands {
                 let _ = content_tx.send(cmd);
             }
+
+            // Surface any partial-batch probe failures alongside the
+            // successful imports (BUG-133) — never dropped just because
+            // some files in the same drop/dialog batch succeeded.
+            if !failures.is_empty() {
+                let _ = failure_tx.send(failures);
+            }
         });
+    }
+
+    /// Poll the in-flight video-import probe-failure channel (BUG-133) and
+    /// surface any failures via the same blocking `alerts::error` dialog used
+    /// for save/load/autosave failures — ticked alongside `tick_autosave`
+    /// from the content-state drain (editor mode only; imports don't happen
+    /// in perform mode).
+    pub(crate) fn tick_import_failures(&mut self) {
+        let Some(rx) = self.import_failures_rx.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(failures) => {
+                self.import_failures_rx = None;
+                if !failures.is_empty() {
+                    log::error!("[Import] {} file(s) failed to import: {failures:?}", failures.len());
+                    crate::alerts::error(
+                        "Couldn't Import Video",
+                        &format!(
+                            "MANIFOLD couldn't import {} file(s):\n\n{}",
+                            failures.len(),
+                            failures.join("\n\n")
+                        ),
+                    );
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.import_failures_rx = None;
+            }
+        }
     }
 
     /// Drop a still image onto the timeline as an image clip. Image clips are
@@ -1319,5 +1393,98 @@ fn friendly_timestamp(iso: &str) -> String {
         format!("{} {} UTC", &iso[..10], &iso[11..16])
     } else {
         iso.to_string()
+    }
+}
+
+#[cfg(test)]
+mod bug_133_import_probe_rejection_tests {
+    use super::build_video_import_batch;
+
+    /// BUG-133: `SUPPORTED_EXTENSIONS` deliberately still lists `.webm`/`.avi`
+    /// (Peter rejected trimming the list) — the probe is the real gate. A
+    /// file with a `.webm` extension that AVFoundation can't actually decode
+    /// (here: garbage bytes, standing in for a VP8/VP9 webm with no matching
+    /// codec) must be REJECTED with a clear message, never silently dropped
+    /// with only a log line.
+    #[test]
+    fn probe_failing_webm_file_yields_a_rejection_message_not_a_silent_drop() {
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-bug133-test-{}-{}",
+            std::process::id(),
+            manifold_core::short_id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let fake_webm = dir.join("not_actually_a_video.webm");
+        std::fs::write(&fake_webm, b"this is not video data, just plain bytes")
+            .expect("write fixture file");
+
+        let layer_id = manifold_core::LayerId::new("test-layer");
+        let (video_clips, commands, failures) =
+            build_video_import_batch(&[fake_webm.clone()], 120.0, 0.0, &layer_id);
+
+        // Not a silent success: no clip, no library entry, no AddClipCommand.
+        assert!(
+            video_clips.is_empty(),
+            "a probe-failing file must not produce a VideoClip library entry"
+        );
+        assert!(
+            commands.is_empty(),
+            "a probe-failing file must not produce an AddClipCommand"
+        );
+
+        // Not silently dropped: exactly one clear, user-facing rejection.
+        assert_eq!(
+            failures.len(),
+            1,
+            "a probe-failing file must yield exactly one rejection message, got: {failures:?}"
+        );
+        assert!(
+            failures[0].contains("not_actually_a_video.webm"),
+            "rejection message must name the file: {}",
+            failures[0]
+        );
+        assert!(
+            failures[0].to_lowercase().contains("codec")
+                || failures[0].to_lowercase().contains("not supported"),
+            "rejection message must explain it's a codec/support issue, not a mystery: {}",
+            failures[0]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A batch with both a good and a bad file must reject the bad one and
+    /// still import the good one — a partial-batch failure is not silent
+    /// either (the whole point of routing failures through their own
+    /// channel send after the successful-import send).
+    #[test]
+    fn probe_failure_does_not_swallow_the_rest_of_the_batch() {
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-bug133-test-mixed-{}-{}",
+            std::process::id(),
+            manifold_core::short_id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let fake_webm = dir.join("garbage.webm");
+        std::fs::write(&fake_webm, b"not video").expect("write fixture file");
+        let also_missing = dir.join("does_not_exist.avi");
+
+        let layer_id = manifold_core::LayerId::new("test-layer");
+        let (video_clips, commands, failures) = build_video_import_batch(
+            &[fake_webm, also_missing],
+            120.0,
+            0.0,
+            &layer_id,
+        );
+
+        assert!(video_clips.is_empty());
+        assert!(commands.is_empty());
+        assert_eq!(
+            failures.len(),
+            2,
+            "every probe-failing file in the batch must be individually rejected: {failures:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
