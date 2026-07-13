@@ -232,7 +232,7 @@ pub fn validate_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     kind: ValidateKind,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
 ) -> ValidationReport {
     let mut report = ValidationReport::default();
 
@@ -273,7 +273,7 @@ pub fn validate_def(
         && let Err(e) = PresetRuntime::from_def_with_device(
             def.clone(),
             registry,
-            device,
+            std::sync::Arc::clone(device),
             VALIDATE_CANVAS_W,
             VALIDATE_CANVAS_H,
             VALIDATE_FORMAT,
@@ -646,7 +646,7 @@ mod tests {
     fn every_bundled_preset_validates_clean() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
 
         let mut total = 0usize;
         let mut failures: Vec<(std::path::PathBuf, ValidationReport)> = Vec::new();
@@ -703,7 +703,7 @@ mod tests {
     fn bundled_preset_card_warning_counts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = GpuDevice::new();
+        let device = std::sync::Arc::new(GpuDevice::new());
 
         for (subdir, kind) in ASSET_SUBDIRS {
             let dir = manifest_dir.join(subdir);

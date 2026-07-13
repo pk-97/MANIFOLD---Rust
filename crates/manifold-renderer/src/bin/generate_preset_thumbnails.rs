@@ -29,7 +29,7 @@ const ASSET_SUBDIRS: &[(&str, PresetKind)] = &[
 
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
 
     let mut total = 0usize;
     let mut written = 0usize;
@@ -75,7 +75,7 @@ fn main() {
 }
 
 fn render_one(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     kind: PresetKind,
     json_path: &Path,
     id: &str,

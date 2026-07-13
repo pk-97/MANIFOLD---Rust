@@ -131,7 +131,7 @@ fn run_validate(args: &[String]) -> ExitCode {
     };
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
     let report = validate_def(&def, &registry, kind, &device);
 
     if json_output {

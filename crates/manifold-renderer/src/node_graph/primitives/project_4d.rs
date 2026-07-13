@@ -385,7 +385,7 @@ mod gpu_tests {
             in_buf.write(0, bytemuck::cast_slice(verts));
         }
 
-        let mut backend = MetalBackend::new(&device, 1, 1, format);
+        let mut backend = MetalBackend::new(device.arc(), 1, 1, format);
         let _in_slot = backend.pre_bind_array(r_in, in_buf);
         let out_slot = backend.pre_bind_array(r_out, out_buf);
 

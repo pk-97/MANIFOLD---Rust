@@ -86,9 +86,11 @@ struct ActiveImageClip {
 
 /// Static-image renderer implementing the ClipRenderer trait.
 pub struct ImageRenderer {
-    /// Cached pointer to the GpuDevice owned by ContentPipeline (same
-    /// thread, same lifetime) — mirrors `VideoRenderer`.
-    device_ptr: *const GpuDevice,
+    /// Shared handle to the GpuDevice owned by ContentPipeline — mirrors
+    /// `VideoRenderer`. An `Arc` clone instead of a cached raw pointer means
+    /// this survives any future move of `ContentPipeline`/`ContentThread`
+    /// (BUG-054).
+    device: Arc<GpuDevice>,
     width: u32,
     height: u32,
     active_clips: AHashMap<ClipId, ActiveImageClip>,
@@ -96,28 +98,17 @@ pub struct ImageRenderer {
     result_rx: Receiver<DecodeResult>,
 }
 
-// Safety: device_ptr points to GpuDevice on the content thread.
-// ImageRenderer is only used on the content thread. The background decode
-// threads never touch the device — they only read a path and build a Vec.
-unsafe impl Send for ImageRenderer {}
-
 impl ImageRenderer {
-    pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+    pub fn new(device: Arc<GpuDevice>, width: u32, height: u32) -> Self {
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         Self {
-            device_ptr: device as *const GpuDevice,
+            device,
             width: width.max(1),
             height: height.max(1),
             active_clips: AHashMap::new(),
             result_tx,
             result_rx,
         }
-    }
-
-    /// Reset the device pointer after the GpuDevice has been moved to its
-    /// final location (inside ContentPipeline). Mirrors `VideoRenderer`.
-    pub fn set_device(&mut self, device: &GpuDevice) {
-        self.device_ptr = device as *const GpuDevice;
     }
 
     /// Get the texture for a loaded image clip. `None` until decode lands.
@@ -213,10 +204,11 @@ impl ImageRenderer {
         if res.target_w != self.width || res.target_h != self.height {
             return;
         }
-        // Copy the raw pointer so `device` borrows the GpuDevice, not `self`
-        // — otherwise the immutable self-borrow would conflict with the
-        // mutable `active_clips` borrow below.
-        let device: &GpuDevice = unsafe { &*self.device_ptr };
+        // Clone the Arc (cheap refcount bump) so `device` doesn't borrow
+        // `self` — otherwise the immutable self-borrow would conflict with
+        // the mutable `active_clips` borrow below.
+        let device: Arc<GpuDevice> = Arc::clone(&self.device);
+        let device: &GpuDevice = &device;
         let Some(clip) = self.active_clips.get_mut(res.clip_id.as_str()) else {
             return; // clip stopped while decoding
         };

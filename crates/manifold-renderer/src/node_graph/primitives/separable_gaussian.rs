@@ -388,7 +388,7 @@ mod gpu_tests {
             fill_input(&mut gpu, &in_target);
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, in_target);
         let out_slot = Slot(backend.slot_count());
 
@@ -552,7 +552,7 @@ mod gpu_tests {
             fill_input(&mut gpu, &in_target);
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(r_src, in_target);
         let out_slot = Slot(backend.slot_count());
 

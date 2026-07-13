@@ -79,20 +79,24 @@ use crate::content_thread::ContentThread;
 /// `engine` only). Every field is genuinely inert-defaultable; nothing here
 /// required a parallel mini-pipeline (the forbidden move this phase names).
 pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
-    let native_device = manifold_gpu::GpuDevice::new();
+    let native_device = Arc::new(manifold_gpu::GpuDevice::new());
     let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
     let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
         Box::new(manifold_media::video_renderer::VideoRenderer::new(
-            &native_device,
+            Arc::clone(&native_device),
             w,
             h,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             8,
         )),
-        Box::new(manifold_media::image_renderer::ImageRenderer::new(&native_device, w, h)),
+        Box::new(manifold_media::image_renderer::ImageRenderer::new(
+            Arc::clone(&native_device),
+            w,
+            h,
+        )),
         Box::new(manifold_renderer::generator_renderer::GeneratorRenderer::new(
-            &native_device,
+            Arc::clone(&native_device),
             w,
             h,
             gen_format,
@@ -161,53 +165,6 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
     }
 }
 
-/// GeneratorRenderer/VideoRenderer/ImageRenderer each cache a raw `*const
-/// GpuDevice` pointer (`device_ptr`, generator_renderer.rs:126,180) set at
-/// construction time. Every move of the `GpuDevice`/`ContentPipeline` value
-/// after that (return-by-value out of a constructor, insertion into a struct
-/// literal, `Box`ing) relocates it, so the pointer must be repointed at its
-/// TRUE FINAL resting place — after every move is done, never before.
-/// `ContentThread::run()` does exactly this fixup once at startup
-/// (content_thread.rs:300-328, "after all moves into ContentThread are
-/// complete... targets the final heap location inside content_pipeline") —
-/// note it runs on the ALREADY-SPAWNED thread, i.e. after the very last move
-/// (the closure capture into `thread::Builder::spawn`).
-///
-/// This harness never calls `run()` (only `run_export` directly, per this
-/// phase's contract), so it repeats the SAME fixup — against the SAME
-/// renderer instances via the SAME public `set_device` methods — but on `ct`
-/// itself once it has reached ITS final resting place (a local binding never
-/// moved again before `run_export` takes it by `&mut`). Calling this inside
-/// `headless_content_thread` before the struct literal is even assembled was
-/// the exact bug this comment now documents: the pointer got repointed at a
-/// stack slot that was itself about to move again (return-by-value), so the
-/// first render still dereferenced garbage — first as an ObjC nil-receiver
-/// panic, then (once caught earlier) as a straight segfault. Not a parallel
-/// implementation: this is the one piece of `run()`'s startup the harness
-/// must replicate, because skipping — or mistiming — it leaves the real
-/// renderers pointed somewhere no real invocation of `run_export` ever sees.
-pub(crate) fn rebind_gpu_device_pointers(ct: &mut ContentThread) {
-    let native_device_ref = ct.content_pipeline.native_device().expect("native device was just set");
-    for renderer in ct.engine.renderers_mut().iter_mut() {
-        if let Some(gen_renderer) = renderer
-            .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
-        {
-            gen_renderer.set_device(native_device_ref);
-        }
-        if let Some(vid_renderer) =
-            renderer.as_any_mut().downcast_mut::<manifold_media::video_renderer::VideoRenderer>()
-        {
-            vid_renderer.set_device(native_device_ref);
-        }
-        if let Some(img_renderer) =
-            renderer.as_any_mut().downcast_mut::<manifold_media::image_renderer::ImageRenderer>()
-        {
-            img_renderer.set_device(native_device_ref);
-        }
-    }
-}
-
 /// Drive one real export through the production path: build a headless
 /// content thread, call the real `ContentThread::run_export` (never a
 /// reimplementation), and return the finished output path.
@@ -224,9 +181,6 @@ pub(crate) fn rebind_gpu_device_pointers(ct: &mut ContentThread) {
 /// `run_export`'s own borrow of `state_tx`.
 fn run_headless_export(project: Project, cfg: ExportConfig) -> Result<PathBuf, String> {
     let mut ct = headless_content_thread(project, cfg.width, cfg.height);
-    // `ct` is now in its final resting place (a local binding never moved
-    // again before `run_export` borrows it) — safe to repoint device_ptr.
-    rebind_gpu_device_pointers(&mut ct);
 
     let (cmd_tx, cmd_rx): (Sender<ContentCommand>, Receiver<ContentCommand>) =
         crossbeam_channel::unbounded();

@@ -39,7 +39,7 @@ fn main() {
 
     // Initialise once; reuse across all generator presets. Device
     // creation is ~50ms; reusing it saves that per preset.
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
 
     let mut total = 0usize;
     let mut failures: Vec<(PathBuf, ValidationReport)> = Vec::new();
@@ -112,7 +112,7 @@ fn main() {
 fn parse_and_validate(
     path: &Path,
     registry: &PrimitiveRegistry,
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     kind: ValidateKind,
 ) -> Result<ValidationReport, String> {
     let bytes = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
