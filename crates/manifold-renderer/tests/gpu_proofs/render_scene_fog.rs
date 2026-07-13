@@ -787,12 +787,19 @@ fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
 /// canvas) — 128x128 is fine for the numeric proofs above but too small for
 /// a look-pass PNG a reviewer actually looks at (L2).
 fn render_readback_hires(json: &str, w: u32, h: u32) -> Vec<u8> {
-    let device = GpuDevice::new();
+    let device = std::sync::Arc::new(GpuDevice::new());
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
-    let mut runtime =
-        PresetRuntime::from_json_str_with_device(json, &registry, &device, w, h, format, None)
-            .expect("night-garden hires scene graph must build");
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        json,
+        &registry,
+        std::sync::Arc::clone(&device),
+        w,
+        h,
+        format,
+        None,
+    )
+    .expect("night-garden hires scene graph must build");
     let target = RenderTarget::new(&device, w, h, format, "p3-night-garden-hires");
     for frame in 0..3 {
         let ctx = PresetContext {
