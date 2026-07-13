@@ -686,7 +686,18 @@ fn build_import_graph(
     // God Rays card has a live node to bind — an import looks unchanged
     // until that slider moves.
     let atmosphere_id = fresh_id();
-    nodes.push(plain_node(atmosphere_id, "atmosphere", "node.atmosphere", "atmosphere"));
+    let mut atmosphere_node =
+        plain_node(atmosphere_id, "atmosphere", "node.atmosphere", "atmosphere");
+    // Fog color BLACK, not the atom's grey-blue default: an import sits in a
+    // black void, and grey fog mixes the model toward a colour that exists
+    // nowhere in the scene — reads as a cut-out sticker over the void
+    // (BUG-149 follow-up, Peter 2026-07-14). Black fog fades the model's far
+    // side into the same black as the background (depth cueing, no seam),
+    // and the haze look comes from the shaft march lighting the air instead.
+    atmosphere_node.params.insert("fog_color_r".to_string(), float(0.0));
+    atmosphere_node.params.insert("fog_color_g".to_string(), float(0.0));
+    atmosphere_node.params.insert("fog_color_b".to_string(), float(0.0));
+    nodes.push(atmosphere_node);
 
     // SSAO contact-occlusion arm, packaged as the same "ao" node group
     // CinematicScene ships (CINEMATIC_POST D9): ssao_gtao → bilateral_blur
@@ -1295,6 +1306,20 @@ mod tests {
             fog_binding.scale,
             cam_dist.default_value
         );
+        // Imports sit in a black void: fog colour must be black (fade into
+        // the void, no grey cut-out wash), not the atom's grey-blue default.
+        let atmo = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.atmosphere")
+            .expect("import graph has an atmosphere node");
+        for c in ["fog_color_r", "fog_color_g", "fog_color_b"] {
+            assert_eq!(
+                atmo.params.get(c),
+                Some(&float(0.0)),
+                "atmosphere `{c}` must default to black for void imports"
+            );
+        }
         for gone in [
             "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
             "motion_blur_px", "mb_shutter", "ssao_bias",
