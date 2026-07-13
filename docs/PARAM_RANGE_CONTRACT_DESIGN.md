@@ -1,6 +1,6 @@
 # Param Range Contract — real boundaries are contracts, everything else is a hint
 
-**Status:** PROPOSED · 2026-07-13 · Fable (design session with Peter; direction ruled by Peter same day)
+**Status:** APPROVED design, in execution · 2026-07-13 · Fable (design session with Peter; approved by Peter same day: "Go")
 **Prerequisites:** GRAPH_TOOLING_DESIGN (SHIPPED 2026-07-13) — the card lints, `validate_def`, and the `boundary_reason` declared-excuse pattern this design reuses.
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 
