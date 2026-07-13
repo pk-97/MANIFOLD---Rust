@@ -1485,7 +1485,7 @@ reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by th
 dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
 
 ### BUG-137 — `node.variable_blur` has no CoC dilation; hard cutoff at depth discontinuities — MED (CINEMATIC_POST DoF)
-**Status:** OPEN — `node.coc_dilate` (fixed 3x3 neighborhood-max, `crates/manifold-renderer/src/node_graph/primitives/coc_dilate.rs`) built and wired into `CinematicScene` (`coc_from_depth.out -> coc_dilate.in -> variable_blur_h/v.width`, replacing the direct `coc_from_depth -> variable_blur` wires) 2026-07-13 (Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`). Gate green (I1 generated-vs-hand parity + flat-field no-op gpu_tests, full `manifold-renderer --features gpu-proofs` sweep 1456 passed, focused nextest 1146 passed, scoped clippy clean, `check_presets` 57/57, I5 load-smoke + generator-sweep smoke). Left OPEN pending Peter's look-pass (no PNG render run this phase per the design doc's separation of concerns — the orchestrating session renders and judges) and pending BUG-138 (blockiness), which this fix does not address.
+**Status:** FIXED 2026-07-13, pending Peter's confirmation on a real depth-discontinuity scene — `node.coc_dilate` (fixed 3x3 neighborhood-max, `crates/manifold-renderer/src/node_graph/primitives/coc_dilate.rs`) built and wired into `CinematicScene` (`coc_from_depth.out -> coc_dilate.in -> bokeh_gather.width`, replacing the direct `coc_from_depth -> variable_blur` wires, then re-pointed at `bokeh_gather` when P4 landed the same session) 2026-07-13 (Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`). Gate green (I1 generated-vs-hand parity + flat-field no-op gpu_tests, full `manifold-renderer --features gpu-proofs` sweep, focused nextest, scoped clippy clean, `check_presets` 57/57, I5 load-smoke). Orchestrator PNG look-pass confirmed the silhouette-bleed halo is visibly gone post-fix (see the note below) — but `CinematicScene`'s test geometry (one flat mesh) has no real foreground/background depth split, so Peter's own look at a richer scene (`SceneLadders.manifold` or similar) is still the real exit per the amended demo rule.
 
 **Root cause** — `node.variable_blur` picks its per-pixel gather radius from *only the center
 pixel's own* CoC (`step_size = center_coc * max_radius + 1.0`,
@@ -1518,9 +1518,18 @@ BUG-137 fix above) — per this same note's own prediction, P4 does not obsolete
 the wiring confirms it still feeds the gather. Gate green (I1 generated-vs-CPU-reference +
 generated-vs-hand parity, I2 zero-CoC pass-through, full `manifold-renderer --features gpu-proofs`
 sweep 1463 passed, focused nextest 1150 passed, scoped clippy clean, `check_presets` 57/57, I5
-load-smoke `bundled_cinematic_scene_loads_and_compiles`). Still left OPEN pending Peter's
-before/after PNG look-pass (per the amended CINEMATIC_POST demo rule) confirming the hard depth-edge
-seam is actually gone with bokeh_gather in place — this session did not render or judge the PNG.
+load-smoke `bundled_cinematic_scene_loads_and_compiles`).
+
+**Orchestrator PNG look-pass (2026-07-13, Sonnet 5):** rendered `CinematicScene` before/after via
+`render-generator-preset` (1280x720, 90 frames) at the wire state immediately before vs. after the
+`bokeh_gather` swap. Visible difference: the pre-swap render shows a soft glow/halo bleeding
+outward from the plane's silhouette into the black background; the post-swap render's silhouette
+is crisp with no bleed — consistent with D5's occlusion-aware `step()` weighting suppressing
+cross-edge contribution. This is a real, looked-at improvement, but the test scene (`CinematicScene`'s
+single flat mesh) has no foreground/background depth split, so it does not exercise BUG-137's
+literal "in-focus subject against blurred background" seam scenario end-to-end. **Status downgraded
+to FIXED, pending Peter's own confirmation on a richer scene** (same posture as BUG-119 in the
+`scene-ladder-state` memory) rather than closed outright.
 
 ### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
 **Status:** OPEN
