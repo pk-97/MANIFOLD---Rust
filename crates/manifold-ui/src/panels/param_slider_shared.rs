@@ -11,6 +11,7 @@ use super::param_card::ParamInfo;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction};
 use crate::chrome::{Theme, View};
 use crate::color;
+use crate::drag::DragController;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
@@ -660,49 +661,116 @@ impl ParamModState {
 }
 
 // ── Shared drag state ───────────────────────────────────────────
+// P7.1 (docs/UI_WIDGET_UNIFICATION_DESIGN.md, D8/D10): the six formerly
+// parallel `Option`/sentinel slots below fold into one `DragController`
+// payload enum. Single-active is enforced at the type level — a fresh grab
+// always wins (drag.rs) — which only forbids states that were already bugs
+// (two slots armed at once was never a feature, D8).
 
-/// Drag tracking state for the unified `ParamCardPanel` (both kinds).
+/// What a `ParamDragState` drag is targeting, captured at grab time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ParamDragTarget {
+    /// A plain param-slider drag. Was `dragging_param: i32` (−1 idle).
+    Param { index: usize },
+    /// The active modulator trim-range drag: which modulator
+    /// ([`TrimKind`] — driver/Ableton/audio share one path), the param
+    /// index, and which edge. Was `dragging_trim`.
+    Trim {
+        kind: TrimKind,
+        index: usize,
+        is_min: bool,
+    },
+    /// The envelope target (orange handle / `target_normalized`) on the
+    /// track. Was `dragging_target_param: i32`.
+    EnvTarget { index: usize },
+    /// The envelope decay slider (`decay_beats`) in the drawer. Was
+    /// `dragging_decay_param: i32`.
+    EnvDecay { index: usize },
+    /// An audio shaping slider drag in the drawer. A trigger-gate row's
+    /// Amount/Attack/Release sliders ride this SAME path (§9 unified the
+    /// drawer) — no separate trigger-mod drag target. Was
+    /// `dragging_audio_shape: Option<(usize, AudioShapeParam)>`.
+    AudioShape {
+        index: usize,
+        param: crate::panels::AudioShapeParam,
+    },
+    /// The Step-Amount slider drag, only ever built while Action=Step
+    /// (PARAM_STEP_ACTIONS D8) — `amount` lives on `TriggerAction::Step`,
+    /// not `AudioModShape`, so `AudioShapeParam` doesn't apply here. Was
+    /// `dragging_step_amount: Option<usize>`.
+    StepAmount { index: usize },
+}
+
+/// Drag tracking state for the unified `ParamCardPanel` (both kinds). A thin
+/// wrapper over [`DragController`] — the six accessors below let the ~49
+/// call sites convert from the old sentinel fields one-for-one.
 pub(crate) struct ParamDragState {
-    pub(crate) dragging_param: i32,
-    /// The active modulator trim-range drag, if any: `(kind, param_index,
-    /// is_min)`. The three formerly parallel driver/Ableton/audio drag slots
-    /// are one slot now — only one trim handle is ever dragged at a time, and
-    /// [`TrimKind`] records which modulator's range it is.
-    pub(crate) dragging_trim: Option<(TrimKind, usize, bool)>,
-    /// The envelope target (orange handle / `target_normalized`) on the track.
-    pub(crate) dragging_target_param: i32,
-    /// The envelope decay slider (`decay_beats`) in the drawer.
-    pub(crate) dragging_decay_param: i32,
-    /// An audio shaping slider drag in the drawer: `(param_index, which scalar)`.
-    /// A trigger-gate row's Amount/Attack/Release sliders ride this SAME path
-    /// (§9 unified the drawer) — no separate trigger-mod drag state.
-    pub(crate) dragging_audio_shape: Option<(usize, crate::panels::AudioShapeParam)>,
-    /// The Step-Amount slider drag (param index), only ever built while
-    /// Action=Step (PARAM_STEP_ACTIONS D8). Its own slot — `amount` lives on
-    /// `TriggerAction::Step`, not `AudioModShape`, so `AudioShapeParam`
-    /// doesn't apply here.
-    pub(crate) dragging_step_amount: Option<usize>,
+    drag: DragController<ParamDragTarget>,
 }
 
 impl ParamDragState {
     pub(crate) fn new() -> Self {
         Self {
-            dragging_param: -1,
-            dragging_trim: None,
-            dragging_target_param: -1,
-            dragging_decay_param: -1,
-            dragging_audio_shape: None,
-            dragging_step_amount: None,
+            drag: DragController::new(),
         }
     }
 
     pub(crate) fn is_dragging(&self) -> bool {
-        self.dragging_param >= 0
-            || self.dragging_trim.is_some()
-            || self.dragging_target_param >= 0
-            || self.dragging_decay_param >= 0
-            || self.dragging_audio_shape.is_some()
-            || self.dragging_step_amount.is_some()
+        self.drag.is_active()
+    }
+
+    /// Begin a drag. `pos` is the real pointer position already in scope at
+    /// the `handle_pointer_down` call site — never a synthesized geometry.
+    pub(crate) fn begin(&mut self, target: ParamDragTarget, pos: Vec2) {
+        self.drag.start(target, pos);
+    }
+
+    /// Release — hands back the target that was active, if any, as the
+    /// signal to emit a commit.
+    pub(crate) fn end(&mut self) -> Option<ParamDragTarget> {
+        self.drag.release()
+    }
+
+    pub(crate) fn param_index(&self) -> Option<usize> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::Param { index }) => Some(*index),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn trim(&self) -> Option<(TrimKind, usize, bool)> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::Trim { kind, index, is_min }) => Some((*kind, *index, *is_min)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn env_target_index(&self) -> Option<usize> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::EnvTarget { index }) => Some(*index),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn env_decay_index(&self) -> Option<usize> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::EnvDecay { index }) => Some(*index),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn audio_shape(&self) -> Option<(usize, crate::panels::AudioShapeParam)> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::AudioShape { index, param }) => Some((*index, *param)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn step_amount(&self) -> Option<usize> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::StepAmount { index }) => Some(*index),
+            _ => None,
+        }
     }
 }
 

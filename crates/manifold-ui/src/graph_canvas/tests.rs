@@ -406,15 +406,17 @@ fn apply_live_values_skips_the_actively_scrubbed_param() {
     canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
     // Mid-scrub on this exact (node, param): the drag stays the source of
     // truth, so the live feed must not overwrite it.
-    canvas.drag_mode = DragMode::ParamScrub {
-        node_id: 1,
-        param_name: "amount".to_string(),
-        range: (0.0, 1.0),
-        start_value: 0.25,
-        is_int: false,
-        press_origin_x: 0.0,
-        outer_param_id: None,
-    };
+    canvas.drag.start(
+        CanvasDrag::ParamScrub {
+            node_id: 1,
+            param_name: "amount".to_string(),
+            range: (0.0, 1.0),
+            start_value: 0.25,
+            is_int: false,
+            outer_param_id: None,
+        },
+        crate::node::Vec2::ZERO,
+    );
     let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
     canvas.apply_live_values(&live);
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
@@ -741,7 +743,7 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
     let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
     canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
     // A numeric row starts a scrub, not an expose.
-    assert!(matches!(canvas.drag_mode, DragMode::ParamScrub { .. }));
+    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
     assert!(
         canvas
             .drain_edits()
@@ -954,7 +956,7 @@ fn pressing_a_color_channel_starts_a_vec_scrub() {
     let g = canvas.vec_editor.as_ref().unwrap().channel_rect(1); // G
     canvas.on_left_button_down(vp, g.x + g.w * 0.3, g.y + g.h * 0.5, 0.0, false);
     assert!(
-        matches!(canvas.drag_mode, DragMode::VecScrub { channel: 1, .. }),
+        matches!(canvas.drag.payload(), Some(CanvasDrag::VecScrub { channel: 1, .. })),
         "channel press starts a scrub on that channel"
     );
     // Starting the scrub is not itself a value edit.
@@ -1059,7 +1061,7 @@ fn pressing_inside_vec_editor_header_swallows_and_stays_open() {
     canvas.on_left_button_down(vp, sw.x + sw.w * 0.5, sw.y + sw.h * 0.5, 0.0, false);
     assert!(canvas.vec_editor.is_some(), "header press keeps it open");
     assert!(
-        !matches!(canvas.drag_mode, DragMode::VecScrub { .. }),
+        !matches!(canvas.drag.payload(), Some(CanvasDrag::VecScrub { .. })),
         "header press starts no scrub"
     );
 }
@@ -1862,7 +1864,7 @@ fn wire_driven_row_is_read_only_no_scrub() {
     // It selects the node but starts no scrub and emits nothing.
     assert_eq!(canvas.selected_ids(), vec![1], "still selects");
     assert!(
-        matches!(canvas.drag_mode, DragMode::None),
+        !canvas.drag.is_active(),
         "wire-driven row starts no scrub"
     );
     assert!(canvas.drain_edits().is_empty(), "and emits no command");
@@ -1894,7 +1896,7 @@ fn outer_routing_marks_param_outer_driven_but_editable() {
     let row = canvas.param_row_rect(vp, 1, 0).unwrap();
     canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
     assert!(
-        matches!(canvas.drag_mode, DragMode::ParamScrub { .. }),
+        matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })),
         "outer-driven row is still scrubbable"
     );
 }
@@ -1929,7 +1931,7 @@ fn removing_the_wire_reclaims_the_param() {
 #[test]
 fn marquee_fades_in_while_dragging_and_out_after_release() {
     let mut canvas = GraphCanvas::new();
-    canvas.drag_mode = DragMode::Marquee { origin_screen: (10.0, 10.0) };
+    canvas.drag.start(CanvasDrag::Marquee, crate::node::Vec2::new(10.0, 10.0));
     canvas.cursor = (50.0, 40.0);
 
     assert!(canvas.tick(16.0), "still animating toward alpha 1");
@@ -1946,9 +1948,9 @@ fn marquee_fades_in_while_dragging_and_out_after_release() {
     }
     assert_eq!(canvas.marquee_alpha.value(), 1.0, "fully faded in");
 
-    // Release: drag_mode resets to None (mirroring on_left_button_up), but the
+    // Release: the drag resets to idle (mirroring on_left_button_up), but the
     // rect must survive so the fade-OUT frames have something to draw.
-    canvas.drag_mode = DragMode::None;
+    canvas.drag.cancel();
     assert!(canvas.tick(16.0), "now easing back toward 0");
     assert!(canvas.marquee_alpha.value() < 1.0, "fading out");
     assert!(canvas.marquee_last_rect.is_some(), "rect held onto through the fade-out");
@@ -1998,7 +2000,10 @@ fn dropping_a_wire_on_empty_canvas_fires_error_shake() {
     canvas.set_snapshot(&snap);
     let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
 
-    canvas.drag_mode = DragMode::WireFrom { from_node: 1, from_port: "out".into() };
+    canvas.drag.start(
+        CanvasDrag::WireFrom { from_node: 1, from_port: "out".into() },
+        crate::node::Vec2::ZERO,
+    );
     canvas.on_left_button_up(vp, 9999.0, 9999.0); // far off any node/port
     assert!(canvas.error_shake.progress().is_some(), "invalid drop shakes");
     assert!(canvas.connect_pop.progress().is_none());
@@ -2018,7 +2023,10 @@ fn wire_magnet_eases_the_ghost_endpoint_onto_a_nearby_input_port() {
 
     // Drag from node 2's output, cursor placed exactly on node 1's input —
     // well within `port_under`'s hit radius.
-    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.drag.start(
+        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        crate::node::Vec2::ZERO,
+    );
     canvas.cursor = (in_sx, in_sy);
     canvas.tick_wire_magnet(vp);
     assert!(canvas.wire_magnet_live);
@@ -2041,7 +2049,10 @@ fn wire_magnet_tracks_the_cursor_directly_when_no_port_is_near() {
     canvas.set_snapshot(&wire_driven_snapshot(false));
     let vp = Rect::new(0.0, 0.0, 2000.0, 2000.0);
 
-    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.drag.start(
+        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        crate::node::Vec2::ZERO,
+    );
     canvas.cursor = (1900.0, 1900.0); // far from every port
     canvas.tick_wire_magnet(vp);
     let (ex, ey) = canvas.wire_ghost_endpoint();
@@ -2077,7 +2088,10 @@ fn connecting_a_wire_end_to_end_fires_the_flow_pulse_with_real_port_geometry() {
     let (in_gx, in_gy) = canvas.find_node(1).unwrap().input_port_pos_graph(0);
     let (in_sx, in_sy) = canvas.to_screen(vp, in_gx, in_gy);
 
-    canvas.drag_mode = DragMode::WireFrom { from_node: 2, from_port: "out".into() };
+    canvas.drag.start(
+        CanvasDrag::WireFrom { from_node: 2, from_port: "out".into() },
+        crate::node::Vec2::ZERO,
+    );
     canvas.on_left_button_up(vp, in_sx, in_sy);
 
     assert!(canvas.wire_flow_pulse.progress().is_some(), "connect fires the pulse");
@@ -2280,8 +2294,8 @@ fn group_face_scrub_emits_set_outer_param_matching_card_value() {
     let px = row.x + row.w * 0.7;
     canvas.on_left_button_down(vp, px, row.y + row.h * 0.5, 0.0, false);
     assert!(
-        matches!(canvas.drag_mode, DragMode::ParamScrub { outer_param_id: Some(_), .. }),
-        "the row's DragMode carries the outer_param_id marker"
+        matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { outer_param_id: Some(_), .. })),
+        "the row's CanvasDrag carries the outer_param_id marker"
     );
     // +120px on a (0,1)-range Float, same PARAM_SCRUB_FULL_RANGE_PX math the
     // inner node's own row scrub uses: 0.25 → 0.75.
