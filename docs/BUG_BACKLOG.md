@@ -56,13 +56,6 @@ or human can read it, and it needs no external tool.
 | BUG-141 | **import-graph-fused-region-linearize-depth-parse-fail** | glb import card logs `[freeze] fused region 0 failed to parse: no definition in scope for identifier: linearize_depth` and silently renders unfused — fusion win lost on heavy scene cards. Suspect: codegen doesn't prepend the shared `depth.wgsl` helper header for inlined bodies that call `linearize_depth` (ssao_from_depth / coc_from_depth). Output correct, perf-only. LOW-MED. |
 | BUG-136 | **cinematic-post-motion-blur-no-visible-effect-despite-correct-wiring** | Peter (`SceneLadders.manifold`, glb auto-import wiring): orbiting the camera with `lens.shutter_angle=181` and `motion_blur.max_blur_px=128` shows no visible blur. Statically verified correct — not yet observed at runtime: the graph wiring is right (`camera` → `lens` → `render`, `lens.out` also feeds `motion_blur.camera`, `render.velocity` → `motion_blur.velocity`, `motion_blur` sits last before `final`, confirmed via `project.json`/`wires`), and `render_scene.rs`'s `prev_view_proj` frame-to-frame diff (the velocity source) only resets on a structural rebuild (`rebuild()`, object/light count change), not on an ordinary param edit like dragging Orbit — so camera-orbit motion should register. Root cause UNKNOWN pending runtime observation. Suspects: (a) the UI param-edit path may not be live-propagating slider drags into the running content-thread graph in real time (the codebase's known `ui-state-sync-path` bug class); (b) `node.motion_blur`'s fused-vs-standalone codegen routing may be silently mis-selecting a stale/pass-through kernel, same failure family as BUG-135's fused `wgsl_includes` gap; (c) the render loop may not be ticking continuously while scrubbing outside playback, collapsing `prev`/`current` camera state to the same value per redraw. Fix shape: reproduce live, add temporary `println!`s in `render_scene.rs`'s velocity computation and `motion_blur`'s `evaluate()`/derived-uniform recompute to confirm both are seeing nonzero values at runtime, then narrow. MED-HIGH — a shipped P3 feature with no observable effect. |
 | BUG-134 | **bug-status-py-tail-boundary-hides-entries-past-the-appendix** | `bug_status.py`'s `parse()` stops entry-scanning at the first `## ` heading past `## Fixed` (the "Checked and safe" appendix) and copies the rest of the file verbatim — any `### BUG-NNN` entry appended after that point (BUG-094/095/096/097/103/126, this session) is invisible to `--check`. Concretely hid a real duplicate `BUG-097` id (one FIXED, one OPEN) and a `derive_status()` false positive (`\bFIXED\b` matches inside "found not fixed" — BUG-126). Fix shape: continue the entry scan across every appendix heading, or make an entry-outside-Open/Fixed a hard check failure; separately tighten the FIXED regex to exclude a preceding not/never. LOW (tooling only). |
-| BUG-133 | **video-extension-list-overpromises-webm-avi** | `metadata::SUPPORTED_EXTENSIONS` includes `.webm`/`.avi` but the decoder is AVFoundation, which generally can't open them — import accepts the file, failure surfaces later as a per-clip decode error instead of at the import gate. Fix shape: trim the list to what AVFoundation decodes, or probe at import and reject with a message. LOW. |
-| BUG-132 | **video-decode-nearest-neighbor-scaling** | The NV12→RGBA convert shader samples with `read()` at a truncated coordinate — nearest-neighbor — while also doing the aspect-fit scale, so any source whose resolution ≠ canvas is scaled unfiltered (blocky upscale, shimmering downscale). Fix shape: bilinear tap in the shader (sample Y/CbCr with a linear sampler or manual 4-tap). LOW-MED visual. |
-| BUG-131 | **video-decode-hardcodes-bt709-video-range** | `MetalVideoDecoderPlugin.m`'s convert shader applies the BT.709 matrix + video-range expansion + `pow(2.2)` unconditionally — BT.601 (SD) and BT.2020 sources decode with a wrong matrix (visible hue shift); the pixel buffer's actual colorimetry attachments are never read. Fix shape: read `CVImageBuffer` color attachments and select the matrix (function constants or a small matrix uniform). LOW-MED. |
-| BUG-130 | **export-audio-mux-fails-late-and-leaks-temp** | `run_export` resolves ffmpeg only at finalize — an audio export encodes every frame, then fails at the very last step when ffmpeg is missing; and `ExportSession::finalize` deletes the `.video_only.mp4` temp only on mux *success* (mux failure leaves it behind). Fix shape: resolve ffmpeg before frame 0 and fail fast; delete (or explicitly keep-and-report) the temp on the mux-error path. MED for the release flow. |
-| BUG-129 | **export-fractional-fps-silently-rounds** | `MetalEncoderState.fpsNum = (int)(fps + 0.5)` and `CMTimeMake(frameIndex, fpsNum)` — a 23.976/29.97 project exports with integer-fps frame timing, so duration is wrong and the muxed audio drifts (~0.1%/1.5s per minute at 29.97→30). Fix shape: rational CMTime (e.g. 24000/1001) or reject non-integer fps at config time. LOW-MED. |
-| BUG-128 | **sdr-video-export-gamma-diverges-from-display-and-stills** | The SDR export copy shader bakes `pow(1/2.2)` while the display scanout and the still exporter apply the true piecewise sRGB OETF — the same frame renders with three subtly different tones (worst in shadows); video round-trips are self-consistent (decode applies `pow(2.2)`) but all video diverges from the show. Fix shape: true sRGB OETF in the encoder shader (and matching EOTF in the decoder shader), one shared definition. MED — visual fidelity of the primary release deliverable. |
-| BUG-127 | **decode-worker-silent-drop-wedges-export-flush** | A decode worker receiving `Prepare`/`Seek`/`DecodeNext` for a clip-id with no handle (e.g. its `Open` failed) sends NO result back; the renderer's `decode_pending` stays true forever, and `flush_pending_decodes` — called every export frame (`content_export.rs:458`) — blocks in `recv_results_blocking` until it clears. A missing/corrupt video file plus one seek = wedged export loop on the content thread; in live playback the clip just stalls black. Fix shape: workers always answer (send `Error("no handle")` on the missing-handle arms) + optionally a flush timeout. MED-HIGH — it can hang an export mid-render. |
 | BUG-125 | **preset-runtime-generator-picks-first-final-output-nondeterministically** | A generator JSON with two `system.final_output` nodes has `PresetRuntime::from_def`'s tracked output picked via `graph.nodes().find(...)` over an unordered `AHashMap` — nondeterministic per process, and `render()`'s `replace_texture_2d` can silently overwrite whichever one loses with the canvas's format, up to a real GPU command-buffer fault. No shipped preset does this today. Fix shape: reject >1 `system.final_output` at load, or design a keyed multi-output surface. LOW today, real trap. |
 | BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | ~~BUG-123~~ FIXED | **mesh-edges-capacity-vs-active-count** | FIXED @ `1b854d45` — optional `active_count` scalar input mirroring `node.range` overrides the buffer-capacity-derived vertex count. |
@@ -166,61 +159,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 2. **`derive_status()` false positive** — its `FIXED` classifier is `re.search(r"\bFIXED\b", heading.upper())`, which matches the word "FIXED" inside "found **not** **fixed**" (BUG-126's own heading: "...LOW, found not fixed 2026-07-12..."). Because BUG-126 has no explicit `**Status:` line and sat past `tail_i`, this misclassification was silent; had it been in the checked region it would have wrongly filed a still-open bug under `## Fixed`. Manually confirmed OPEN and left untouched in this session's archive-split (not moved).
 
 **Fix shape** — two independent, small fixes: (a) extend `parse()`'s entry-scan to continue past every `## ` heading in the appendix region instead of stopping at the first one (or: require all `### BUG-NNN` entries to live within the Open/Fixed span as a `--check` invariant, and fail loudly if one is found in the tail); (b) tighten `FIXED`'s regex to exclude a preceding "not"/"never" within a few words (e.g. negative lookbehind or an explicit `NOT\s+FIXED` exclusion checked first). Neither touched this session — logged per the archive-split's own audit, out of scope for a doc-reorg change.
-
-### BUG-127 (decode-worker-silent-drop-wedges-export-flush) — missing-handle decode jobs get no reply, `decode_pending` never clears, export flush blocks forever — MED-HIGH
-**Status:** OPEN — found 2026-07-12 during the MEDIA_EXPORT_MAP.md mapping pass (full read of `manifold-media`). See that map §12 for the pipeline context of BUG-127..133.
-
-**Symptom** — `decode_scheduler.rs` worker arms for `Prepare`/`Seek`/`DecodeNext` are `if let Some(handle) = active.get_mut(&clip_id) { ... }` with no else — a job for a clip the worker doesn't hold (its `Open` failed on a missing/corrupt file, since `start_clip` inserts the `ActiveVideoClip` eagerly and submits `Open`+`Prepare` back-to-back) is dropped with no result sent. App-side `decode_pending` (set true at submit) then never clears. `VideoRenderer::flush_pending_decodes` loops on `recv_results_blocking()` until no clip is pending — and `ContentThread::export_one_frame` calls it every export frame (`content_export.rs:458`). Failed-open clip + one `Seek` (a scrub, a loop restart, export warmup) = the export loop wedges on the content thread with no way out (there is also no cancel-export UI). In live playback the same state just leaves the clip permanently black (no flush, so no hang).
-
-**Root cause (known)** — the worker protocol has no "job refused" reply; the `decode_pending` invariant assumes every submitted job produces exactly one result.
-
-**Fix shape** — make the missing-handle arms send `DecodeResultStatus::Error("no handle for <job>")` so the pending flag always resolves; consider a bounded wait in `flush_pending_decodes` as a second fence. Small, contained in `decode_scheduler.rs`.
-
-### BUG-128 (sdr-video-export-gamma-diverges-from-display-and-stills) — export bakes `pow(1/2.2)`, display/stills use true sRGB — MED (release deliverable fidelity)
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass. Full transfer-function table: MEDIA_EXPORT_MAP.md §7.
-
-**Symptom** — the SDR encoder copy shader (`MetalEncoderPlugin.m`, `kCopyShaderSDR`) applies a plain 2.2 power curve to the linear compositor output; the live display applies the true piecewise sRGB function at scanout, and `still_exporter::linear_f16_rgba_to_srgb8` applies the true function too. The same frame therefore has three subtly different tones — video export darkest in the shadows (2.2 vs sRGB diverge most below ~0.04 linear). The decoder's inverse (`pow(2.2)` in `MetalVideoDecoderPlugin.m`) makes video→export→import self-consistent, but everything video diverges from what Peter sees on stage and in stills.
-
-**Root cause (known)** — approximate gamma chosen in both native shaders; stills got the correct function later (still_exporter is documented and tested against sRGB) and the video shaders were never aligned.
-
-**Fix shape** — one shared sRGB OETF/EOTF definition used by both native shaders (piecewise, matching `still_exporter.rs`); EDR handling stays hard-clip unless the still exporter's rolloff is wanted for parity. Behavior change is subtle-but-visible: worth one before/after export Peter can eyeball.
-
-### BUG-129 (export-fractional-fps-silently-rounds) — integer CMTime timebase mistimes 23.976/29.97 exports — LOW-MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `MetalEncoder_CreateInternal` stores `fpsNum = (int)(fps + 0.5)` and stamps frames `CMTimeMake(frameIndex, fpsNum)`. `ProjectSettings::frame_rate` accepts any f32 ≥ 1.0, so a 29.97 project exports at a 30 fps timebase: frame count is computed from the true fps (`ExportSession`), but presentation times use the rounded one — duration shrinks ~0.1% and the ffmpeg-muxed audio (correct wall-clock) drifts ~60 ms/min against picture.
-
-**Fix shape** — rational timebase (`CMTimeMake(frameIndex * 1001, 30000)`-style, derived from the f32), or clamp/validate `frame_rate` to integers at the settings layer and say so in the UI. Decide which; don't leave the silent mismatch.
-
-### BUG-130 (export-audio-mux-fails-late-and-leaks-temp) — ffmpeg resolved only at finalize; temp video left behind on mux failure — MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `run_export` calls `AudioMuxer::resolve_ffmpeg` only in the finalize block, after every frame has been encoded: a machine without ffmpeg renders a full multi-minute export and then fails at the last step. Separately, `ExportSession::finalize` deletes the `<output>.video_only.mp4` intermediate only after a *successful* mux — on `MuxError` the temp stays on disk next to the (absent) final file.
-
-**Root cause (known)** — fail-fast check missing at export start; cleanup only on the happy path.
-
-**Fix shape** — resolve ffmpeg before frame 0 when `config.has_audio()` and abort with a clear error; on mux failure either delete the temp or (better for a failed long render) rename it to the output path with a "video-only, mux failed: <reason>" report so the render isn't lost. The second half is a product call — flag to Peter.
-
-### BUG-131 (video-decode-hardcodes-bt709-video-range) — one YCbCr matrix for every source — LOW-MED
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — the NV12→RGBA shader in `MetalVideoDecoderPlugin.m` applies BT.709 video-range constants unconditionally. BT.601-tagged SD sources (old footage, some phone/web encodes) and BT.2020 sources get a visible hue/saturation shift (601-vs-709 green/magenta skew). The CVPixelBuffer's colorimetry attachments (`kCVImageBufferYCbCrMatrixKey` etc.) are never read. Unverified secondary: full-range sources — the reader requests video-range NV12, so VideoToolbox probably normalizes; confirm with a full-range fixture before trusting it.
-
-**Fix shape** — read the attachments on the decoded buffer and pick 601/709/2020 constants (function-constant variants or a matrix uniform). A 601-tagged fixture clip is the proof.
-
-### BUG-132 (video-decode-nearest-neighbor-scaling) — unfiltered scale in the convert shader — LOW-MED visual
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — the convert shader does the FitInside scale with `texture.read()` at a truncated source coordinate: nearest-neighbor. Any resolution mismatch between source and canvas (1080p file on a 4K canvas, 4K file on a 1080p canvas) gets blocky upscaling or shimmering downscaling — on the live rig's portrait towers most video content is resolution-mismatched, so this is the common case, not the edge.
-
-**Fix shape** — bilinear: sample Y and CbCr planes with a linear sampler (or manual 4-tap around the fractional coordinate). One shader change; eyeball a mismatched-resolution clip before/after.
-
-### BUG-133 (video-extension-list-overpromises-webm-avi) — import gate accepts what the decoder can't open — LOW
-**Status:** OPEN — found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
-
-**Symptom** — `metadata::SUPPORTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".avi"]`, but decode is AVFoundation, which has no VP8/VP9 and patchy AVI support: the import gate accepts the file, then `VideoDecoder_Open`/probe fails per-clip later, surfacing as a mystery-black clip instead of an import-time rejection.
-
-**Fix shape** — either trim the list to `.mp4`/`.mov` (honest), or keep the broader list and make `import_video_clip`'s existing probe failure reject the import with a "codec not supported" message (better). One-file change either way.
 
 ### BUG-142 (fire-meter-capture-bench-flakes-under-parallel-load) — a hard µs/tick ceiling on fire-meter capture cost fails under contention, same class as BUG-113 — LOW (flaky-gate)
 **Status:** OPEN — found 2026-07-13 landing the `mechbugs` wave (BUG-123/037/038/079/076), rerunning `cargo nextest run --workspace` immediately after a fetch+merge of `origin/main`.
@@ -1390,6 +1328,61 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-127 (decode-worker-silent-drop-wedges-export-flush) — missing-handle decode jobs get no reply, `decode_pending` never clears, export flush blocks forever — MED-HIGH
+**Status:** FIXED @ `450f01c4` — missing-handle arms now reply `DecodeResultStatus::Error`, plus a bounded-wait backstop in `flush_pending_decodes`. Found 2026-07-12 during the MEDIA_EXPORT_MAP.md mapping pass (full read of `manifold-media`). See that map §12 for the pipeline context of BUG-127..133.
+
+**Symptom** — `decode_scheduler.rs` worker arms for `Prepare`/`Seek`/`DecodeNext` are `if let Some(handle) = active.get_mut(&clip_id) { ... }` with no else — a job for a clip the worker doesn't hold (its `Open` failed on a missing/corrupt file, since `start_clip` inserts the `ActiveVideoClip` eagerly and submits `Open`+`Prepare` back-to-back) is dropped with no result sent. App-side `decode_pending` (set true at submit) then never clears. `VideoRenderer::flush_pending_decodes` loops on `recv_results_blocking()` until no clip is pending — and `ContentThread::export_one_frame` calls it every export frame (`content_export.rs:458`). Failed-open clip + one `Seek` (a scrub, a loop restart, export warmup) = the export loop wedges on the content thread with no way out (there is also no cancel-export UI). In live playback the same state just leaves the clip permanently black (no flush, so no hang).
+
+**Root cause (known)** — the worker protocol has no "job refused" reply; the `decode_pending` invariant assumes every submitted job produces exactly one result.
+
+**Fix shape** — make the missing-handle arms send `DecodeResultStatus::Error("no handle for <job>")` so the pending flag always resolves; consider a bounded wait in `flush_pending_decodes` as a second fence. Small, contained in `decode_scheduler.rs`.
+
+### BUG-128 (sdr-video-export-gamma-diverges-from-display-and-stills) — export bakes `pow(1/2.2)`, display/stills use true sRGB — MED (release deliverable fidelity)
+**Status:** FIXED @ `63937590` (encode side `b692bb9a`) — shared `manifold_srgb_encode`/`manifold_srgb_decode` in `ColorTransferFunctions.h`, ported literally from `still_exporter.rs`'s tested constants, now used by both the SDR export shader and the decoder's linearization. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass. Full transfer-function table: MEDIA_EXPORT_MAP.md §7.
+
+**Symptom** — the SDR encoder copy shader (`MetalEncoderPlugin.m`, `kCopyShaderSDR`) applies a plain 2.2 power curve to the linear compositor output; the live display applies the true piecewise sRGB function at scanout, and `still_exporter::linear_f16_rgba_to_srgb8` applies the true function too. The same frame therefore has three subtly different tones — video export darkest in the shadows (2.2 vs sRGB diverge most below ~0.04 linear). The decoder's inverse (`pow(2.2)` in `MetalVideoDecoderPlugin.m`) makes video→export→import self-consistent, but everything video diverges from what Peter sees on stage and in stills.
+
+**Root cause (known)** — approximate gamma chosen in both native shaders; stills got the correct function later (still_exporter is documented and tested against sRGB) and the video shaders were never aligned.
+
+**Fix shape** — one shared sRGB OETF/EOTF definition used by both native shaders (piecewise, matching `still_exporter.rs`); EDR handling stays hard-clip unless the still exporter's rolloff is wanted for parity. Behavior change is subtle-but-visible: worth one before/after export Peter can eyeball.
+
+### BUG-129 (export-fractional-fps-silently-rounds) — integer CMTime timebase mistimes 23.976/29.97 exports — LOW-MED
+**Status:** FIXED @ `8a814c23` — Option A (Peter's call): exact rational timebase. `fps_to_rational()` maps f32 fps to (num, den), passed across FFI instead of a rounded int; `AVAssetWriter`'s track `mediaTimeScale` also had to be set explicitly (it silently re-rounded to 600 otherwise) — verified end-to-end with a real export + `ffprobe` showing `r_frame_rate=30000/1001`. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `MetalEncoder_CreateInternal` stores `fpsNum = (int)(fps + 0.5)` and stamps frames `CMTimeMake(frameIndex, fpsNum)`. `ProjectSettings::frame_rate` accepts any f32 ≥ 1.0, so a 29.97 project exports at a 30 fps timebase: frame count is computed from the true fps (`ExportSession`), but presentation times use the rounded one — duration shrinks ~0.1% and the ffmpeg-muxed audio (correct wall-clock) drifts ~60 ms/min against picture.
+
+**Fix shape** — rational timebase (`CMTimeMake(frameIndex * 1001, 30000)`-style, derived from the f32), or clamp/validate `frame_rate` to integers at the settings layer and say so in the UI. Decide which; don't leave the silent mismatch.
+
+### BUG-130 (export-audio-mux-fails-late-and-leaks-temp) — ffmpeg resolved only at finalize; temp video left behind on mux failure — MED
+**Status:** FIXED @ `2c829eaf` — `ffmpeg_preflight` runs before frame 0 when audio is present and aborts immediately if ffmpeg is missing; on mux failure the temp video is renamed to `<output>.video-only-audio-mux-failed.mp4` (preserved, not deleted) with the failure reason surfaced. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `run_export` calls `AudioMuxer::resolve_ffmpeg` only in the finalize block, after every frame has been encoded: a machine without ffmpeg renders a full multi-minute export and then fails at the last step. Separately, `ExportSession::finalize` deletes the `<output>.video_only.mp4` intermediate only after a *successful* mux — on `MuxError` the temp stays on disk next to the (absent) final file.
+
+**Root cause (known)** — fail-fast check missing at export start; cleanup only on the happy path.
+
+**Fix shape** — resolve ffmpeg before frame 0 when `config.has_audio()` and abort with a clear error; on mux failure either delete the temp or (better for a failed long render) rename it to the output path with a "video-only, mux failed: <reason>" report so the render isn't lost. The second half is a product call — flag to Peter.
+
+### BUG-131 (video-decode-hardcodes-bt709-video-range) — one YCbCr matrix for every source — LOW-MED
+**Status:** FIXED @ `87427ec0` — reads `kCVImageBufferYCbCrMatrixKey` (via `CVBufferCopyAttachment`) to select 601/709/2020 coefficients per-frame, falling back to the SD/HD height convention when untagged; verified against ffmpeg-generated 601/709/2020-tagged fixtures in-session (instrumented smoke test, then removed as a one-off manual check, not a permanent gate). Full-range-vs-video-range sources remain an unverified secondary, unchanged from the original bug note. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — the NV12→RGBA shader in `MetalVideoDecoderPlugin.m` applies BT.709 video-range constants unconditionally. BT.601-tagged SD sources (old footage, some phone/web encodes) and BT.2020 sources get a visible hue/saturation shift (601-vs-709 green/magenta skew). The CVPixelBuffer's colorimetry attachments (`kCVImageBufferYCbCrMatrixKey` etc.) are never read. Unverified secondary: full-range sources — the reader requests video-range NV12, so VideoToolbox probably normalizes; confirm with a full-range fixture before trusting it.
+
+**Fix shape** — read the attachments on the decoded buffer and pick 601/709/2020 constants (function-constant variants or a matrix uniform). A 601-tagged fixture clip is the proof.
+
+### BUG-132 (video-decode-nearest-neighbor-scaling) — unfiltered scale in the convert shader — LOW-MED visual
+**Status:** FIXED @ `2b3e15e1` — manual 4-tap bilinear blend (`bilinear_read_r`/`bilinear_read_rg`) replaces truncated-coordinate nearest-neighbor sampling on Y and CbCr planes independently. Code-verified (shader compiles, exercised by decoder tests); pixel-level before/after on a resolution-mismatched clip is **Peter-owed** (no GPU readback harness for this path in-crate). Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — the convert shader does the FitInside scale with `texture.read()` at a truncated source coordinate: nearest-neighbor. Any resolution mismatch between source and canvas (1080p file on a 4K canvas, 4K file on a 1080p canvas) gets blocky upscaling or shimmering downscaling — on the live rig's portrait towers most video content is resolution-mismatched, so this is the common case, not the edge.
+
+**Fix shape** — bilinear: sample Y and CbCr planes with a linear sampler (or manual 4-tap around the fractional coordinate). One shader change; eyeball a mismatched-resolution clip before/after.
+
+### BUG-133 (video-extension-list-overpromises-webm-avi) — import gate accepts what the decoder can't open — LOW
+**Status:** FIXED @ `5711f65c` — Peter's call: extension list stays broad; the existing probe-failure path (previously `log::warn!` + silent skip) now routes through the same `alerts::error` dialog used for other import/save/load failures, naming the file and the codec problem. Found 2026-07-12, MEDIA_EXPORT_MAP.md pass.
+
+**Symptom** — `metadata::SUPPORTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".avi"]`, but decode is AVFoundation, which has no VP8/VP9 and patchy AVI support: the import gate accepts the file, then `VideoDecoder_Open`/probe fails per-clip later, surfacing as a mystery-black clip instead of an import-time rejection.
+
+**Fix shape** — either trim the list to `.mp4`/`.mov` (honest), or keep the broader list and make `import_video_clip`'s existing probe failure reject the import with a "codec not supported" message (better). One-file change either way.
 
 ### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
 **Status:** FIXED @ `d73b3e36` — `EffectSlot::card_prefix` (`c{i}.` for a segment member, `""` otherwise) threads through a new `BoundGraph::apply_inner_overrides_prefixed`, translating both the `node_map` lookup (surviving nodes) and the `fused_retarget` lookup (fused-away nodes) into the segment's prefixed namespace; the segment slot's `bound.fused_retarget` is now also populated from `SegmentView::retarget` at build time. New gpu-proofs test `fused_segment_inner_override_reaches_live_kernel` (`preset_runtime.rs`) proves it on a real 2-card fused ColorGrade segment — independently reconfirmed red (`over=0/65536`) on the pre-fix code path and green with the fix restored.
