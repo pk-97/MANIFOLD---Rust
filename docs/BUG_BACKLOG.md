@@ -1483,6 +1483,59 @@ motion nodes removed from the import graph), so a fresh import has no motion_blu
 reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by the
 dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
 
+**Runtime-probe addendum (2026-07-13, Sonnet 5, dof-polish worktree) — ESCALATION, not
+fixed. Both of the addendum's two probe values check out clean across the whole shipped
+pipeline; the bug does not reproduce in `CinematicScene` headlessly.** Method: temporary
+`eprintln!`s in `node.motion_blur`'s `run()` (standalone path) and its D7 fused-recompute
+closure (`motion_blur.rs`), plus a temporary GPU readback of `node.render_scene`'s velocity
+resolve target added inline in `evaluate()` (`render_scene.rs`, immediately after
+`ctx.outputs.texture_2d("velocity")`); rendered via `render-generator-preset` against a
+throwaway copy of `CinematicScene.json` (`CinematicSceneProbe.json`, deleted after the probe,
+never committed) with one extra wire, `system.generator_input.time -> cam.orbit`, so the camera
+actually moves frame-to-frame (the shipped preset's `orbit_camera` has no time input and is
+otherwise static — not itself a bug, see below) — `cargo run -p manifold-renderer --bin
+render-generator-preset -- CinematicSceneProbe --size 320x180 --frames 30 --param
+shutter_angle=181.05` (Peter's own repro value). Printed evidence, representative frames:
+```
+BUG136-RS view_proj_delta_sum=0.073722 velocity_wired=true
+BUG136-RS velocity_center_texel=(9.25e-5, 5.16e-5) nonzero_texels=7103 max_mag=0.0102 max_at=(97,130)
+BUG136-MB run() shutter_angle=181.05
+```
+— repeated every frame, 30/30. `shutter_angle` is nonzero from frame 1 onward (probe (a)
+clean); the velocity buffer has thousands of nonzero texels with realistic magnitude away from
+the orbit's look-at point (probe (b) clean — the near-zero *center* texel is correct physics,
+not a bug: `orbit_camera`'s target is the world origin, so a vertex at screen-center sits on the
+rotation axis and legitimately has ~zero NDC velocity; off-center texels show the real motion).
+`node.motion_blur` ran via its **standalone codegen path 30/30 frames, 0 calls to the D7 fused
+recompute closure** — confirms the shipped `CinematicScene` never routes this atom through the
+fusion mechanism at all (consistent with D7's own honest-scope note: a Gather atom's input can
+never fuse with its producer, so `motion_blur`/`variable_blur`/`bokeh_gather` are always
+standalone in practice), which rules out suspect 2 (fused-vs-standalone routing) outright for
+this preset. Closing the loop past the two committed probes: diffed two full headless renders at
+640x360/30 frames, `shutter_angle=0` vs `shutter_angle=181.05`, everything else identical —
+`ImageChops.difference` bbox `(188,116,478,293)`, max channel delta 7/255, nonzero mean —
+a real, if subtle (the synthetic 1 rad/sec orbit rate is far slower than a live drag), visual
+delta produced by the actual shipped shader dispatch, not just the uniform pack.
+
+**Conclusion: the graph wiring, the shader math, the prev-matrix bookkeeping, the
+derived-uniform packing, AND the velocity buffer are now ALL runtime-confirmed correct on the
+exact path `CinematicScene` ships. The symptom does not reproduce headlessly.** This pushes the
+remaining suspect space outside what a headless graph-execution probe can observe, onto the live
+app's interactive/scheduling layer — the two original suspects this addendum could not exonerate:
+(1) whether a dragged card slider's value (`shutter_angle`, or whatever drives the camera orbit
+live) reaches the content-thread graph on every frame vs. only on drag-end/batched (the
+`ui-state-sync-path` bug class named in the original entry) — our probe drove params through the
+same `ParamManifest`/binding mechanism the UI card path uses, which somewhat weakens this
+suspect but cannot rule out a UI-thread-specific propagation gap our headless harness has no
+analog for; (2) whether the content-thread render loop ticks continuously (and thus keeps
+`prev_view_proj` current) while scrubbing/orbiting outside active transport playback, or only on
+discrete redraw requests — untestable without the live app. Escalating: this needs either a live
+repro session (watch the actual param/frame traffic while Peter orbits) or a design decision on
+which of (1)/(2) to instrument permanently, neither of which is a shallow code fix inside this
+worktree. Status stays OPEN; not changed to FIXED. No code changes shipped this phase — all
+temporary instrumentation and the scratch preset were removed before commit (`git status`
+clean).
+
 ### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
 **Status:** OPEN
 
