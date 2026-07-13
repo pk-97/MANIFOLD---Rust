@@ -31,7 +31,7 @@ use manifold_core::project::Project;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::TickContext;
 
-use crate::journey_proof::{headless_content_thread, rebind_gpu_device_pointers, star_field_generator_layer};
+use crate::journey_proof::{headless_content_thread, star_field_generator_layer};
 
 /// 320×180 keeps the render cheap — this harness is about the clip-atlas
 /// persist path, not render cost. 96 beats at 120 BPM covers ~96s of
@@ -68,9 +68,6 @@ fn bug035_clip_atlas_persist_drives_900_frames() {
     let (project, clip_id) = atlas_persist_project();
 
     let mut ct = headless_content_thread(project, 320, 180);
-    // `ct` is now in its final resting place (see `rebind_gpu_device_pointers`'s
-    // doc comment in journey_proof.rs) — safe to repoint device_ptr.
-    rebind_gpu_device_pointers(&mut ct);
 
     // `journey_proof`'s headless construction deliberately skips every
     // IOSurface bridge/surface (export never reads them) — but the clip-atlas

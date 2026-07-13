@@ -535,7 +535,7 @@ mod gpu_tests {
             gpu.clear_texture(&source_target.texture, 0.5, 0.5, 0.5, 1.0);
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(source_res, source_target);
 
         let mut exec = Executor::new(Box::new(backend));
@@ -666,7 +666,7 @@ mod gpu_tests {
         // the feedback persistent slot opens in a separate fp32 bucket
         // without colliding with regular 16f slots.
         let mut backend =
-            MetalBackend::new(&device, w, h, GpuTextureFormat::Rgba16Float);
+            MetalBackend::new(device.arc(), w, h, GpuTextureFormat::Rgba16Float);
         backend.pre_bind_texture_2d(source_res, source_target);
 
         let mut exec = Executor::new(Box::new(backend));
@@ -764,7 +764,7 @@ mod gpu_tests {
             gpu.clear_texture(&seed_target.texture, 0.7, 0.3, 0.1, 1.0);
         }
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(in_res, in_target);
         backend.pre_bind_texture_2d(seed_res, seed_target);
         let out_slot = Slot(backend.slot_count());

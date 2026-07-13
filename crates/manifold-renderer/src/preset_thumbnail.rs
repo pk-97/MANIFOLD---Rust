@@ -42,7 +42,7 @@ pub const THUMBNAIL_SIZE: u32 = 256;
 /// time UI action, not a hot path — the caller logs and moves on, it never
 /// blocks the save itself).
 pub fn render_preset_thumbnail(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     kind: PresetKind,
     def: &EffectGraphDef,
     size: u32,
@@ -58,7 +58,7 @@ pub fn render_preset_thumbnail(
 /// — the shape every call site actually wants (write a `<Name>.png` beside a
 /// preset's JSON).
 pub fn render_preset_thumbnail_to_file(
-    device: &GpuDevice,
+    device: &std::sync::Arc<GpuDevice>,
     kind: PresetKind,
     def: &EffectGraphDef,
     size: u32,
@@ -118,14 +118,18 @@ pub fn factory_thumbnail_path(kind: PresetKind, id: &str) -> Option<PathBuf> {
 // Generator render — bare, default params, t=0 (CLIP_THUMBNAILS P2c precedent)
 // ---------------------------------------------------------------------------
 
-fn render_generator(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Result<Vec<u8>, String> {
+fn render_generator(
+    device: &std::sync::Arc<GpuDevice>,
+    def: &EffectGraphDef,
+    size: u32,
+) -> Result<Vec<u8>, String> {
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
     let mut runtime =
         PresetRuntime::from_def_with_device(
             def.clone(),
             &registry,
-            device,
+            std::sync::Arc::clone(device),
             size,
             size,
             format,
@@ -241,7 +245,11 @@ fn output_resource(plan: &crate::node_graph::ExecutionPlan, node: NodeInstanceId
     None
 }
 
-fn render_effect(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Result<Vec<u8>, String> {
+fn render_effect(
+    device: &std::sync::Arc<GpuDevice>,
+    def: &EffectGraphDef,
+    size: u32,
+) -> Result<Vec<u8>, String> {
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
 
@@ -272,7 +280,7 @@ fn render_effect(device: &GpuDevice, def: &EffectGraphDef, size: u32) -> Result<
         .map(|(_, r)| *r)
         .ok_or_else(|| "system.final_output has no bound `in`".to_string())?;
 
-    let mut backend = MetalBackend::new(device, size, size, format);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), size, size, format);
     let input_target = build_gradient_input(device, size, size, format);
     let source_slot = backend.pre_bind_texture_2d(source_out, input_target);
     // A degenerate passthrough graph (Source wired straight to FinalOutput,
@@ -426,7 +434,7 @@ mod tests {
     fn render_effect_thumbnail_produces_non_trivial_png() {
         let device = crate::test_device();
         let def = bloom_def();
-        let png = render_preset_thumbnail(&device, PresetKind::Effect, &def, 64)
+        let png = render_preset_thumbnail(&device.arc(), PresetKind::Effect, &def, 64)
             .expect("effect thumbnail render");
         assert!(!png.is_empty(), "PNG bytes must be non-empty");
 
@@ -450,7 +458,7 @@ mod tests {
     fn render_generator_thumbnail_produces_non_trivial_png() {
         let device = crate::test_device();
         let def = blackhole_def();
-        let png = render_preset_thumbnail(&device, PresetKind::Generator, &def, 64)
+        let png = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 64)
             .expect("generator thumbnail render");
         assert!(!png.is_empty());
         let decoded = image::load_from_memory(&png).expect("decode produced PNG").to_rgba8();

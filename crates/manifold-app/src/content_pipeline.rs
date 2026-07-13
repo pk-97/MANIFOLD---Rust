@@ -822,9 +822,14 @@ pub struct ContentPipeline {
     #[cfg(feature = "profiling")]
     gpu_poll_ms: f64,
     /// Native Metal GPU device from manifold-gpu (macOS only).
-    /// Owns GpuDevice (Metal device + command queue) for native encoding.
+    /// Shared handle (Metal device + command queue) for native encoding. An
+    /// `Arc` — not an owned `GpuDevice` — so the renderers built against it
+    /// before `ContentPipeline` reaches its final resting place (see
+    /// `Application::resumed()` in app.rs) hold clones of the SAME
+    /// allocation rather than a raw pointer that would dangle across the
+    /// subsequent moves (BUG-054).
     #[cfg(target_os = "macos")]
-    native_device: Option<manifold_gpu::GpuDevice>,
+    native_device: Option<std::sync::Arc<manifold_gpu::GpuDevice>>,
     /// Native Metal shared event for frame completion (macOS only).
     #[cfg(target_os = "macos")]
     native_event: Option<manifold_gpu::GpuEvent>,
@@ -1055,7 +1060,7 @@ impl ContentPipeline {
     /// Used when the device must exist before the content pipeline (e.g. for
     /// compositor native pipeline creation).
     #[cfg(target_os = "macos")]
-    pub fn set_native_gpu(&mut self, device: manifold_gpu::GpuDevice) {
+    pub fn set_native_gpu(&mut self, device: std::sync::Arc<manifold_gpu::GpuDevice>) {
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);
@@ -1287,7 +1292,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// Reference to the native GPU device (if initialized).
     #[cfg(target_os = "macos")]
     pub fn native_device(&self) -> Option<&manifold_gpu::GpuDevice> {
-        self.native_device.as_ref()
+        self.native_device.as_deref()
     }
 
     /// Raw Metal device pointer for FFI interop (encoder sharing).

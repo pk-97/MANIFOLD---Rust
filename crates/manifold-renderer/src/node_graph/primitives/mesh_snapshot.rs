@@ -133,7 +133,7 @@ fn render_pbr_cube(w: u32, h: u32) -> Vec<u8> {
     let r_color = output_resource(&plan, render, "color");
     let r_vertices = output_resource(&plan, cube, "vertices");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
 
     // Readback target for the rendered color texture.
     let color_target = RenderTarget::new(&device, w, h, format, "mesh-snap-color");
@@ -471,7 +471,7 @@ fn render_mesh_scene(
     let r_color = output_resource(&plan, render, "color");
     let r_mesh = output_resource(&plan, mesh, "out");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "m6-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
@@ -774,7 +774,7 @@ fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
     let r_cube0 = output_resource(&plan, cube0, "vertices");
     let r_cube1 = output_resource(&plan, cube1, "vertices");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "render-scene-occlusion-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
     pre_bind_cube_output(&device, &mut backend, r_cube0);
@@ -892,7 +892,7 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
     let r_color = output_resource(&plan, render, "color");
     let r_mesh = output_resource(&plan, mesh, "out");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "render-scene-multilight-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
@@ -1017,7 +1017,7 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     let r_cube0 = output_resource(&plan, cube0, "vertices");
     let r_cube1 = output_resource(&plan, cube1, "vertices");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "render-scene-two-cubes-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
     pre_bind_cube_output(&device, &mut backend, r_cube0);
@@ -1141,7 +1141,7 @@ fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]
     let r_mesh = output_resource(&plan, mesh, "out");
     let r_map = output_resource(&plan, src, "out");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "render-scene-bcmap-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
@@ -1552,7 +1552,7 @@ fn azalea_glb_renders_lit_through_render_scene() {
     let r_color = output_resource(&plan, render, "color");
     let r_mesh = output_resource(&plan, mesh, "out");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "azalea-render-scene-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
@@ -1753,7 +1753,7 @@ fn gltf_mesh_source_renders_azalea_to_png() {
     let r_color = output_resource(&plan, render, "color");
     let r_vertices = output_resource(&plan, src, "vertices");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "gltf-mesh-source-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 
@@ -1980,7 +1980,7 @@ fn gltf_textured_azalea_renders_through_render_scene_to_png() {
     let r_color = output_resource(&plan, render, "color");
     let r_vertices = output_resource(&plan, src, "vertices");
 
-    let mut backend = MetalBackend::new(&device, w, h, format);
+    let mut backend = MetalBackend::new(device.arc(), w, h, format);
     let color_target = RenderTarget::new(&device, w, h, format, "gltf-textured-color");
     let color_slot = backend.pre_bind_texture_2d(r_color, color_target);
 

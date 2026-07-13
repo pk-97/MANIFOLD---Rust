@@ -51,7 +51,7 @@ use manifold_core::types::LayerType;
 use manifold_core::{Beats, Bpm, PresetTypeId, Seconds};
 use manifold_playback::engine::TickContext;
 
-use crate::journey_proof::{headless_content_thread, rebind_gpu_device_pointers};
+use crate::journey_proof::headless_content_thread;
 
 /// 640×360 — cheap enough to isolate the pipeline-compile stall from
 /// resolution-driven render cost, big enough that `render_scene`'s MSAA
@@ -96,9 +96,6 @@ fn bug037_blossom_field_first_render_drives_120_frames() {
     let project = blossom_field_project();
 
     let mut ct = headless_content_thread(project, W, H);
-    // `ct` is now in its final resting place (see `rebind_gpu_device_pointers`'s
-    // doc comment in journey_proof.rs) — safe to repoint device_ptr.
-    rebind_gpu_device_pointers(&mut ct);
 
     ct.engine.play();
 

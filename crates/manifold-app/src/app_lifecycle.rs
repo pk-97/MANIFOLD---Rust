@@ -541,7 +541,7 @@ impl Application {
         // or a load failure far from the cause. Never a silent partial
         // import — errors here are fatal to the drop, not warnings.
         let validation_registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-        let validation_device = manifold_gpu::GpuDevice::new();
+        let validation_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
         let validation = manifold_renderer::node_graph::validate_def(
             &graph,
             &validation_registry,

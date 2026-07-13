@@ -321,7 +321,7 @@ mod array_accessor_tests {
     #[test]
     fn inputs_array_resolves_pre_bound_buffer_by_port_name() {
         let device = crate::test_device();
-        let mut backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
         let buffer = device.create_buffer(2048);
         let expected_size = buffer.size;
 
@@ -337,7 +337,7 @@ mod array_accessor_tests {
     #[test]
     fn outputs_array_resolves_pre_bound_buffer_by_port_name() {
         let device = crate::test_device();
-        let mut backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
+        let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
         let buffer = device.create_buffer(4096);
         let expected_size = buffer.size;
 

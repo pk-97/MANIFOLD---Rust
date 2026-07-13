@@ -290,7 +290,7 @@ mod gpu_tests {
         let plan = compile(&g).unwrap();
         let r_out = output_resource(&plan, node, "out");
 
-        let mut backend = MetalBackend::new(&device, w, h, format);
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
         let target = RenderTarget::new(&device, w, h, format, "voronoi-out");
         let out_slot = backend.pre_bind_texture_2d(r_out, target);
 

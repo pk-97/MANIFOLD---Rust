@@ -572,7 +572,7 @@ mod gpu_tests {
         g.connect((rt, "out"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
-        let backend = MetalBackend::new(&device, w, h, format);
+        let backend = MetalBackend::new(device.arc(), w, h, format);
         // RenderText's `out` is the first (and only) lazily-allocated
         // Texture2D — capture the slot before exec releases the binding.
         let out_slot = Slot(backend.slot_count());
@@ -648,7 +648,7 @@ mod gpu_tests {
         g.connect((rt, "out"), (out, "in")).unwrap();
         let plan = compile(&g).unwrap();
 
-        let backend = MetalBackend::new(&device, w, h, format);
+        let backend = MetalBackend::new(device.arc(), w, h, format);
         let out_slot = Slot(backend.slot_count());
 
         let mut native_enc = device.create_encoder("render-text-empty");

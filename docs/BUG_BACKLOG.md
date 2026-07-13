@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-144 | **gpu-proofs-prewarm-tests-order-dependent-under-full-suite** | `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` and `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` (both added by BUG-037's fix) fail under `cargo test -p manifold-renderer --features gpu-proofs --lib` (the full in-crate GPU suite) with `before=N after=N` — some earlier test in the same process already warmed the shared pipeline cache, so the assertion "prewarm adds an entry" finds nothing left to add. Both pass standalone and when run together in isolation (`cargo test ... prewarm`). Order-dependent test-hygiene gap, not a functional regression — confirmed twice (BUG-111 and BUG-054 landings, same two tests, same shape). LOW (gate-only). |
 | BUG-143 | **macros-panel-ableton-trim-drag-outside-p7-inventory** | `MacrosPanel`'s Ableton-range trim-bar drag (`dragging_ableton_trim: i32` sentinel + `dragging_ableton_trim_is_min: bool`) is a hand-rolled drag machine — the pre-P7.1 `ParamDragState` shape — found during P7.6's closing `rg 'dragging'` inventory. Not `SliderDragState`-backed, not `DragController`-backed, not in D12's out-list; P7's original audit missed it (it's a distinct gesture from `MacrosPanel`'s per-macro value sliders, which ARE already migrated). Deliberately left unfolded — P7.6's scope is viewport/audio-setup/dock only, "don't invent additional scope" per its own brief. LOW (works correctly today; this is drag-lifecycle-unification debt, not a behavior bug). |
 | BUG-142 | **fire-meter-capture-bench-flakes-under-parallel-load** | `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard µs/tick ceiling on fire-meter capture cost; failed once under `cargo nextest run --workspace` right after a merge-then-rerun (254.54 µs/tick), passed in isolation and on a clean full-workspace rerun immediately after (3192/3192). Same class as BUG-113 (`ParamManifest::get`'s bench) — a wall-clock ceiling assertion inside the default nextest sweep, contention-sensitive by construction. LOW (flaky-gate, not functional). |
 | BUG-141 | **import-graph-fused-region-linearize-depth-parse-fail** | glb import card logs `[freeze] fused region 0 failed to parse: no definition in scope for identifier: linearize_depth` and silently renders unfused — fusion win lost on heavy scene cards. Suspect: codegen doesn't prepend the shared `depth.wgsl` helper header for inlined bodies that call `linearize_depth` (ssao_from_depth / coc_from_depth). Output correct, perf-only. LOW-MED. |
@@ -103,13 +104,13 @@ or human can read it, and it needs no external tool.
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
 | BUG-037 | **glp-first-render-stall** | PARTIAL @ `dea66221`/`7fdf25d0` — `render_scene`/`gltf_texture_source` PSO compiles now prewarmed at startup; live trace shows a real ~37% frame-0 reduction but a large preset (BlossomField) still doesn't clear the 20ms bar. Remaining cost is elsewhere (scatter_on_mesh, mesh upload, shadow pass) — see full entry. (MED) |
 | ~~BUG-038~~ FIXED | **ableton-log-spam** | FIXED @ `06bfd879` — throttled: warn once, then debug until reconnect, which logs once at info. |
-| BUG-111 | **fused-segment-inner-override-noop** | in-place inner-param edits on a fused SEGMENT card never reach the live kernel — segment node_map is `c{i}.`-prefixed, per-card def isn't, so both surviving and fused-away nodes miss (MED) |
+| ~~BUG-111~~ FIXED | **fused-segment-inner-override-noop** | FIXED @ `d73b3e36` — `EffectSlot::card_prefix` translates both the `node_map` and `fused_retarget` lookups into the segment's `c{i}.`-prefixed namespace. |
 | BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
 | ~~BUG-060~~ FIXED | **inspector-footer-overpaint** | FIXED @ `39836352` (landed `cc4eeb37`, rig-verified by Peter 2026-07-10, re-confirmed solved by Peter 2026-07-12; class-killed — clip bound per command at enqueue). History: REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
 | BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
-| BUG-054 | **renderer-device-ptr-dangles** | renderers cache `*const GpuDevice` only `ContentThread::run()` repoints — any other consumer segfaults (MED, latent) |
+| ~~BUG-054~~ FIXED | **renderer-device-ptr-dangles** | FIXED @ `d447ec8d` — `Arc<GpuDevice>` replaces the cached raw pointer end-to-end (`GeneratorRenderer`/`VideoRenderer`/`ImageRenderer`/`MetalBackend`); `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted as structurally unneeded. `rg '\*const GpuDevice' crates/` — zero code hits. |
 | BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
 | BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
 | BUG-012 | **tex-rename-corrupt** | fragment `tex_` port-rename corrupts `tex_*` scalars (LOW) |
@@ -229,6 +230,15 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause (known, by analogy)** — same shape as BUG-113: a wall-clock micro-benchmark with a hard ceiling, run inside the normal correctness sweep, sensitive to CPU contention from nextest's parallel thread pool and whatever else the machine was doing (this session had just finished a `cargo clippy --workspace` compile moments before). `crates/manifold-core/src/audio_trigger.rs` was not touched by this session's changes.
 
 **Fix shape** — same remedy BUG-113 names: give the ceiling real margin under parallel/loaded conditions, retry once before asserting, or move wall-clock ceiling assertions out of the default nextest sweep entirely (a dedicated feature/bin, same convention as `gpu-proofs`). Worth fixing both BUG-113 and this one together since they're the same underlying gate-design gap, not two unrelated bugs.
+
+### BUG-144 (gpu-proofs-prewarm-tests-order-dependent-under-full-suite) — two BUG-037 prewarm tests fail under the full in-crate GPU suite but pass standalone — LOW (gate-only)
+**Status:** OPEN — found 2026-07-13 landing the `mechbugs` wave, gating both the BUG-111 and BUG-054 fixes.
+
+**Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib` fails two tests added by BUG-037's prewarm fix: `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` (`before=368 after=368`) and `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` (`before=17 after=17`) — the assertion "prewarm adds a cache entry" finds nothing left to add. Both pass cleanly when run standalone or together in isolation (`cargo test -p manifold-renderer --features gpu-proofs --lib prewarm`). Reproduced identically twice, independently, landing two different unrelated fixes (BUG-111, BUG-054) in the same session — not a fluke.
+
+**Root cause (known)** — the two tests assert against a process-wide shared pipeline cache (the same cache `GeneratorRegistry::prewarm_all` populates at real startup). Under the full in-crate test binary, some earlier test in the same process already exercises the code path that populates this cache before these two run, so by the time they check "before vs after" the entry is already there — an order-dependency the tests don't guard against (no reset of the shared cache between tests, no isolation of the specific pipeline key they check).
+
+**Fix shape** — either reset/isolate the specific cache entry the test checks (a fresh, uniquely-keyed pipeline variant that no other test could plausibly warm first), or check for "entry exists after" instead of "count increased by exactly one" (a weaker but order-independent assertion), or move these two under `--test-threads=1`-adjacent isolation the way `test_device()` already serializes GPU access. Small, contained to these two tests.
 
 ### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
 **Status:** OPEN — found 2026-07-12 during REALTIME_3D_DESIGN §11 (P9 PCSS) landing, while scoping clippy for that phase.
@@ -375,30 +385,6 @@ can't express variable arity.
 coincident inputs as `0u` use flags per FREEZE_COMPILER_MAP §4 region gates), body selects/sums
 over the wired flags. If the spike shows dynamic ports can't square with the static spec, growing
 dynamic-arity codegen support becomes a design decision for Peter — flag it, don't improvise.
-
-### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
-**Status:** OPEN — found 2026-07-11 while fixing BUG-006 (freeze bug-wave lane A).
-
-**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
-from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
-(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
-preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
-So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
-map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
-segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
-too), and even a prefixed retarget wouldn't cover the surviving-node miss.
-
-**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
-never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
-class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
-fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
-
-**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
-prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
-translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
-apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
-fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
-but over a 2-card segment would pin it.
 
 ### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
@@ -738,27 +724,6 @@ requiring many small real-time-gated ticks; or (b) expose a
 `skip_to_settled()`/`finish_all()` on `ParamCardPanel` the driver calls
 unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
 gap for every future script that arms something mid-flow, not just this one.
-
-### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
-**Status:** OPEN
-
-**Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
-drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
-`ImageRenderer` cache a raw device pointer set at construction
-(`generator_renderer.rs:126,180`); it dangles as soon as the owning `ContentPipeline` moves.
-The running app is safe only because `ContentThread::run()` repoints every renderer once,
-after all moves are complete (`content_thread.rs:300-328`) — a load-bearing, undocumented
-ordering invariant. Any new consumer (headless export/journey harness, future preview
-contexts, tests) that constructs a `ContentThread` and calls methods without replicating that
-exact repoint gets an ObjC nil-receiver panic or a straight segfault, as the P3 build did
-twice before finding the correct point. **Workaround shipped:** `journey_proof.rs`
-`rebind_gpu_device_pointers` runs after the struct reaches its final binding — correct but a
-second copy of the invariant. **Fix shape (root):** remove the self-referential raw pointer —
-either pass `&GpuDevice` per render call (renderers already receive per-call context), or
-hold the device behind a stable heap indirection owned above the pipeline so moves can't
-invalidate it. Blast radius: renderer call signatures; no behavior change. Until then, any
-brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
-step.
 
 ### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
 **Status:** OPEN
@@ -1425,6 +1390,51 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-111 — In-place inner-param edits on a fused SEGMENT card never reach the live kernel — MED
+**Status:** FIXED @ `d73b3e36` — `EffectSlot::card_prefix` (`c{i}.` for a segment member, `""` otherwise) threads through a new `BoundGraph::apply_inner_overrides_prefixed`, translating both the `node_map` lookup (surviving nodes) and the `fused_retarget` lookup (fused-away nodes) into the segment's prefixed namespace; the segment slot's `bound.fused_retarget` is now also populated from `SegmentView::retarget` at build time. New gpu-proofs test `fused_segment_inner_override_reaches_live_kernel` (`preset_runtime.rs`) proves it on a real 2-card fused ColorGrade segment — independently reconfirmed red (`over=0/65536`) on the pre-fix code path and green with the fix restored.
+
+**Root cause** — the fused-segment build path (preset_runtime.rs ~977–1064) builds one `node_map`
+from the concatenated segment def, whose node ids carry the `c{i}.` per-card prefix
+(`freeze::segment::card_prefix`). The per-frame in-place override (`run` → `apply_inner_overrides`,
+preset_runtime.rs ~1863) passes each card's OWN def (`fx.graph`), whose node ids are UNPREFIXED.
+So `apply_inner_param_overrides` misses every node: a surviving node `foo` is `c{i}.foo` in the
+map, and a fused-away node isn't there at all. The BUG-006 retarget fix doesn't help — the
+segment's `EffectSlot.bound.fused_retarget` is left empty (the segment retarget map is prefix-keyed
+too), and even a prefixed retarget wouldn't cover the surviving-node miss.
+
+**Symptom** — a value/position edit to a card that is part of a fused segment (multi-card fusion)
+never lands in place; the old value keeps rendering until an unrelated rebuild. Same silent-stale
+class as BUG-006 but scoped to segments. Narrower than BUG-006 (needs a multi-card segment that
+fused), hence MED. Stateless-only cards today (segment eligibility), so no state-loss compounding.
+
+**Fix shape** — populate the segment slot's `bound.fused_retarget` from the segment view's
+prefix-keyed retarget with the `c{i}.` prefix normalized to the per-card def's key space, AND
+translate surviving-node overrides by prefixing the def node id before the `node_map` lookup (or
+apply overrides against a per-card-prefixed view of the def). Pair the two so both surviving and
+fused-away nodes resolve. A focused test mirroring `inner_override_routes_fused_away_node_through_retarget`
+but over a 2-card segment would pin it.
+
+### BUG-054 (renderer-device-ptr-dangles) — renderers cache a raw `*const GpuDevice` that only `ContentThread::run()` repoints — MED (latent; every new headless/embedded consumer of ContentThread hits it)
+**Status:** FIXED @ `d447ec8d` — `Arc<GpuDevice>` (approved sharing, device is internally synchronized, no `Arc<Mutex<_>>` introduced) replaces the cached raw pointer end-to-end: `ContentPipeline` and the UI-thread `GpuContext` own it from construction; every renderer clones it. Beyond the three renderers named above, `MetalBackend` also cached the same raw pointer and needed the same migration — threaded through `PresetRuntime`'s constructors, `GeneratorRegistry`, preset-thumbnail/graph-tool/freeze-profile/render-generator-preset bins, and the freeze GPU-parity test harness. `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted — the invariant they existed to paper over no longer exists. Negative gate: `rg '\*const GpuDevice' crates/` — zero code hits (one doc-comment mention narrating the fix). Full workspace nextest (3250/3250), full workspace clippy, and the full `gpu-proofs` suite (1488/1490 — the 2 failures are BUG-144, a pre-existing order-dependent flake, confirmed unrelated) all independently reverified by the orchestrator, not just the worker.
+
+**Found 2026-07-07 by the OFFLINE_AUDIO_REACTIVE_EXPORT P3 harness (first code path ever to
+drive `run_export` outside the app's thread spawn).** `GeneratorRenderer` / `VideoRenderer` /
+`ImageRenderer` cache a raw device pointer set at construction
+(`generator_renderer.rs:126,180`); it dangles as soon as the owning `ContentPipeline` moves.
+The running app is safe only because `ContentThread::run()` repoints every renderer once,
+after all moves are complete (`content_thread.rs:300-328`) — a load-bearing, undocumented
+ordering invariant. Any new consumer (headless export/journey harness, future preview
+contexts, tests) that constructs a `ContentThread` and calls methods without replicating that
+exact repoint gets an ObjC nil-receiver panic or a straight segfault, as the P3 build did
+twice before finding the correct point. **Workaround shipped:** `journey_proof.rs`
+`rebind_gpu_device_pointers` runs after the struct reaches its final binding — correct but a
+second copy of the invariant. **Fix shape (root):** remove the self-referential raw pointer —
+either pass `&GpuDevice` per render call (renderers already receive per-call context), or
+hold the device behind a stable heap indirection owned above the pipeline so moves can't
+invalidate it. Blast radius: renderer call signatures; no behavior change. Until then, any
+brief that constructs `ContentThread` outside `Application::resumed()` must name the repoint
+step.
 
 ### BUG-123 (mesh-edges-capacity-vs-active-count) — node.mesh_edges emits edges for the full buffer capacity, not the loaded vertex count — LOW visual artifact, tracked v1 limitation
 **Status:** FIXED @ `1b854d45` — added an optional `active_count` scalar input (port-shadow, mirrors `node.range`'s convention) that overrides the buffer-capacity-derived vertex count when wired; unwired graphs are unaffected. 5 new tests in `edges_from_mesh.rs`.

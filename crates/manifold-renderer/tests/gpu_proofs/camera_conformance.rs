@@ -180,7 +180,7 @@ fn render_readback(json: &str) -> Vec<u8> {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,

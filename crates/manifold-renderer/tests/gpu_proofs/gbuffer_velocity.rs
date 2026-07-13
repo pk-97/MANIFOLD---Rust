@@ -163,7 +163,7 @@ fn gbuffer_velocity_two_frame_conformance() {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,
@@ -313,7 +313,7 @@ fn gbuffer_velocity_unwired_scene_bundled_smoke_stays_finite() {
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         &registry,
-        &h.device,
+        std::sync::Arc::clone(&h.device),
         h.width,
         h.height,
         GpuTextureFormat::Rgba16Float,
