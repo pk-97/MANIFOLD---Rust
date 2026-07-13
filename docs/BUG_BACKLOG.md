@@ -51,7 +51,6 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-141 | **import-graph-fused-region-linearize-depth-parse-fail** | glb import card logs `[freeze] fused region 0 failed to parse: no definition in scope for identifier: linearize_depth` and silently renders unfused — fusion win lost on heavy scene cards. Suspect: codegen doesn't prepend the shared `depth.wgsl` helper header for inlined bodies that call `linearize_depth` (ssao_from_depth / coc_from_depth). Output correct, perf-only. LOW-MED. |
-| BUG-138 | **variable-blur-fixed-tap-count-blocky-at-large-coc-radius** | `node.variable_blur`'s Gaussian kernel is a fixed 9/17/25 taps, but tap *spacing* scales directly with the per-pixel CoC (`step_size = center_coc * max_radius + 1.0`, `gaussian_blur_variable_width_body.wgsl:77`) — at a large blur radius (e.g. `CinematicScene`'s DoF Blur Radius=64) the fixed tap count spans a wide area with real gaps between samples, so large-CoC areas look like discrete rings, not a smooth blur. Fix shape: P4's `node.bokeh_gather` (true 32-tap 2D disc gather, already designed) likely fixes this; alternatively scale tap count with radius. LOW-MED visual, CINEMATIC_POST. |
 | BUG-136 | **cinematic-post-motion-blur-no-visible-effect-despite-correct-wiring** | Peter (`SceneLadders.manifold`, glb auto-import wiring): orbiting the camera with `lens.shutter_angle=181` and `motion_blur.max_blur_px=128` shows no visible blur. Statically verified correct — not yet observed at runtime: the graph wiring is right (`camera` → `lens` → `render`, `lens.out` also feeds `motion_blur.camera`, `render.velocity` → `motion_blur.velocity`, `motion_blur` sits last before `final`, confirmed via `project.json`/`wires`), and `render_scene.rs`'s `prev_view_proj` frame-to-frame diff (the velocity source) only resets on a structural rebuild (`rebuild()`, object/light count change), not on an ordinary param edit like dragging Orbit — so camera-orbit motion should register. Root cause UNKNOWN pending runtime observation. Suspects: (a) the UI param-edit path may not be live-propagating slider drags into the running content-thread graph in real time (the codebase's known `ui-state-sync-path` bug class); (b) `node.motion_blur`'s fused-vs-standalone codegen routing may be silently mis-selecting a stale/pass-through kernel, same failure family as BUG-135's fused `wgsl_includes` gap; (c) the render loop may not be ticking continuously while scrubbing outside playback, collapsing `prev`/`current` camera state to the same value per redraw. Fix shape: reproduce live, add temporary `println!`s in `render_scene.rs`'s velocity computation and `motion_blur`'s `evaluate()`/derived-uniform recompute to confirm both are seeing nonzero values at runtime, then narrow. MED-HIGH — a shipped P3 feature with no observable effect. |
 | BUG-134 | **bug-status-py-tail-boundary-hides-entries-past-the-appendix** | `bug_status.py`'s `parse()` stops entry-scanning at the first `## ` heading past `## Fixed` (the "Checked and safe" appendix) and copies the rest of the file verbatim — any `### BUG-NNN` entry appended after that point (BUG-094/095/096/097/103/126, this session) is invisible to `--check`. Concretely hid a real duplicate `BUG-097` id (one FIXED, one OPEN) and a `derive_status()` false positive (`\bFIXED\b` matches inside "found not fixed" — BUG-126). Fix shape: continue the entry scan across every appendix heading, or make an entry-outside-Open/Fixed a hard check failure; separately tighten the FIXED regex to exclude a preceding not/never. LOW (tooling only). |
 | BUG-133 | **video-extension-list-overpromises-webm-avi** | `metadata::SUPPORTED_EXTENSIONS` includes `.webm`/`.avi` but the decoder is AVFoundation, which generally can't open them — import accepts the file, failure surfaces later as a per-clip decode error instead of at the import gate. Fix shape: trim the list to what AVFoundation decodes, or probe at import and reject with a message. LOW. |
@@ -1536,8 +1535,10 @@ worktree. Status stays OPEN; not changed to FIXED. No code changes shipped this 
 temporary instrumentation and the scratch preset were removed before commit (`git status`
 clean).
 
-### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
-**Status:** OPEN
+## Fixed
+
+### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — FIXED 2026-07-13 (CINEMATIC_POST DoF)
+**Status:** FIXED @ 8659c11a (2026-07-13, Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`)
 
 **Root cause** — the Gaussian kernel is a fixed 9/17/25 taps (`QUALITY_LEVEL` specialization,
 `gaussian_blur_variable_width_body.wgsl`), but tap *spacing* scales directly with the per-pixel
@@ -1564,7 +1565,40 @@ describes is actually resolved is a look-pass question, not a gate question (the
 proves the atom matches its own committed D5 spec, not that it looks better than the old kernel)
 — left OPEN pending Peter's before/after PNG look-pass, same as BUG-137's update above.
 
-## Fixed
+**2026-07-13 fix (dof-polish lane tail, `node.variable_blur` atom itself):** Built the literal
+fallback named above — tap count now scales with the per-pixel CoC radius instead of holding
+fixed. `gaussian_blur_variable_width_body.wgsl` and its hand parity oracle
+`gaussian_blur_variable_width.wgsl` both changed identically: each of the fixed 9/17/25 logical
+taps now densifies into up to 4 evenly-spaced sub-samples filling the gap back toward the previous
+tap (`vbw_subtap_count(step_size)`, weight split evenly across the sub-samples) once `step_size`
+exceeds an 8px threshold; below that threshold — including the documented `max_radius = 6.0` DoF
+parity setting (`step_size` ≤ 7px there) — the kernel is byte-identical to the original
+single-sample-per-tap arithmetic, so the "matches legacy DoF blur byte-for-byte" claim in
+`composition_notes` still holds. At the bug's own 64px repro (High quality), effective tap count
+goes from the old fixed 25 to 97 (25 → 4× density, capped). **§2.5-equivalent audit finding worth
+recording:** `node.gaussian_blur` (`separable_gaussian_body.wgsl`'s `sg_blur_linear`) already ships
+an adaptive-radius, runtime-loop, analytically-weighted Gaussian on the same codegen path — a
+different (fancier) shape than the literal "scale tap count with radius" fix asked for here; it
+was surveyed and deliberately NOT reused wholesale because `variable_blur` carries per-tap CoC
+weighting (`WEIGHTING_MODE`/`coc_weight`) that `sg_blur_linear` doesn't have, and re-deriving
+per-tap Gaussian weights analytically would have been the "fancier invented algorithm" the task
+explicitly said to avoid — the fixed-table + sub-sample-densification shape stays closest to the
+bug's own literal fix note. Cost tradeoff stated explicitly (not hidden): worst-case per-pixel tap
+count is capped at 4× the original (SUBTAP_CAP=4) — this reduces but does not fully eliminate
+visible banding at extreme radii (65px spacing → ~16px worst-case gap); a full elimination would
+need a disc-gather redesign at `variable_blur`'s own granularity, which is exactly what
+`bokeh_gather` already is for `CinematicScene` and is out of scope for this atom-level fix. Low
+tiers (Low/Medium quality) are unaffected at their own default radii — the fix only escalates cost
+when `step_size` is genuinely large, never degrades a tier to cheapen another. Gate green: 6 new
++existing unit tests (`gaussian_blur_variable_width.rs` `tests` module, including 3 new BUG-138
+numeric proofs), `generated_gaussian_blur_variable_width_matches_original` (I4 generated-vs-hand
+parity) green at the new algorithm, `fused_variable_width_blur_matches_unfused` green, full
+`manifold-renderer --features gpu-proofs` sweep green, `cargo nextest run -p manifold-renderer
+--lib` 1153 passed, scoped clippy clean, `check-presets` 57/57 (unchanged param shape —
+`DepthOfField.json`, the remaining user-facing preset using `node.variable_blur`, still loads with
+its existing defaults). No PNG look-pass required this phase (numeric-gated atom, not wired into
+any gated demo chain per the CINEMATIC_POST precedent) — `variable_blur` is no longer in
+`CinematicScene`'s chain (moved to `bokeh_gather`), so there is no look-pass gate for this atom.
 
 ### BUG-137 — `node.variable_blur` has no CoC dilation; hard cutoff at depth discontinuities — MED (CINEMATIC_POST DoF)
 **Status:** FIXED 2026-07-13, pending Peter's confirmation on a real depth-discontinuity scene — `node.coc_dilate` (fixed 3x3 neighborhood-max, `crates/manifold-renderer/src/node_graph/primitives/coc_dilate.rs`) built and wired into `CinematicScene` (`coc_from_depth.out -> coc_dilate.in -> bokeh_gather.width`, replacing the direct `coc_from_depth -> variable_blur` wires, then re-pointed at `bokeh_gather` when P4 landed the same session) 2026-07-13 (Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`). Gate green (I1 generated-vs-hand parity + flat-field no-op gpu_tests, full `manifold-renderer --features gpu-proofs` sweep, focused nextest, scoped clippy clean, `check_presets` 57/57, I5 load-smoke). Orchestrator PNG look-pass confirmed the silhouette-bleed halo is visibly gone post-fix (see the note below) — but `CinematicScene`'s test geometry (one flat mesh) has no real foreground/background depth split, so Peter's own look at a richer scene (`SceneLadders.manifold` or similar) is still the real exit per the amended demo rule.
