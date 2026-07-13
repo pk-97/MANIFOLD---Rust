@@ -27,10 +27,10 @@
 //! before this phase began (`ui_state.rs`: "Drag/trim lifecycle ... lives on
 //! InteractionOverlay — the single owner"), so that item in the five-machine
 //! list above is historical, not a live fifth machine. Migrated onto
-//! `DragController<T>` so far: `AudioTriggerSection::dragging_shape` (one of
-//! the per-panel `dragging` bools). Still open: the remaining per-panel ad
-//! hoc drag state (`param_slider_shared::ParamDragState`'s six drag slots),
-//! `InteractionOverlay::DragMode`, and `graph_canvas::DragMode`.
+//! `DragController<T>` so far: `AudioTriggerSection::dragging_shape` (P7.0),
+//! `param_slider_shared::ParamDragState` (P7.1), `graph_canvas::DragMode` →
+//! `CanvasDrag` (P7.2), `InteractionOverlay`'s automation gestures (P7.3 —
+//! `Move`/`TrimLeft`/`TrimRight`/`RegionSelect` fold in P7.4/P7.5).
 
 use crate::node::Vec2;
 
@@ -96,6 +96,14 @@ impl<T> DragController<T> {
         self.session.as_ref().map(|s| &s.payload)
     }
 
+    /// Mutable payload access — for handlers that update per-frame fields
+    /// inside the payload (e.g. a "last value" the commit reads back) without
+    /// touching the session's grab/current geometry.
+    #[inline]
+    pub fn payload_mut(&mut self) -> Option<&mut T> {
+        self.session.as_mut().map(|s| &mut s.payload)
+    }
+
     /// Begin a drag. Replaces any in-flight session (a fresh grab always wins).
     pub fn start(&mut self, payload: T, pos: Vec2) {
         self.session = Some(DragSession {
@@ -123,6 +131,14 @@ impl<T> DragController<T> {
     /// `release`, this does not signal a commit.
     pub fn cancel(&mut self) {
         self.session = None;
+    }
+
+    /// Take the whole in-flight session — payload plus grab/current geometry
+    /// — with NO commit signal (unlike `release`, whose return is the
+    /// caller's cue to emit a commit). For a cancel-with-rollback that needs
+    /// to read the payload (e.g. to clear a live preview) before dropping it.
+    pub fn take_session(&mut self) -> Option<DragSession<T>> {
+        self.session.take()
     }
 }
 
@@ -200,5 +216,42 @@ mod tests {
         assert!(!d.is_active());
         // a release after cancel signals nothing
         assert!(d.release().is_none());
+    }
+
+    #[test]
+    fn payload_mut_edits_in_place_without_ending_the_drag() {
+        #[derive(Debug, PartialEq, Clone, Copy)]
+        struct Counter {
+            last: i32,
+        }
+        let mut d: DragController<Counter> = DragController::new();
+        d.start(Counter { last: 0 }, Vec2::ZERO);
+
+        if let Some(p) = d.payload_mut() {
+            p.last = 7;
+        }
+        assert!(d.is_active(), "payload_mut must not end the drag");
+        assert_eq!(d.payload(), Some(&Counter { last: 7 }));
+
+        // idle controller: no payload to mutate
+        let mut idle: DragController<Counter> = DragController::new();
+        assert!(idle.payload_mut().is_none());
+    }
+
+    #[test]
+    fn take_session_returns_full_session_with_no_commit_signal() {
+        let mut d: DragController<u32> = DragController::new();
+        d.start(5, Vec2::new(1.0, 2.0));
+        d.track(Vec2::new(4.0, 6.0));
+
+        let session = d.take_session().expect("session was active");
+        assert_eq!(session.payload, 5);
+        assert_eq!(session.start, Vec2::new(1.0, 2.0));
+        assert_eq!(session.current, Vec2::new(4.0, 6.0));
+        assert!(!d.is_active(), "take_session must end the drag");
+
+        // idle controller: nothing to take
+        let mut idle: DragController<u32> = DragController::new();
+        assert!(idle.take_session().is_none());
     }
 }
