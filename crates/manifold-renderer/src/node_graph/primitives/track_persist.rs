@@ -72,6 +72,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["track persist", "identity", "tracking", "id smoothing"],
+    boundary_reason: NonGpu,
     extra_fields: {
         tracked: Vec<TrackedItem> = Vec::new(),
         tracked_count: usize = 0,

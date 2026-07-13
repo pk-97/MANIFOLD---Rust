@@ -107,6 +107,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["depth map", "depth estimate midas", "midas", "depth", "ai depth"],
+    boundary_reason: IoBridge,
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         depth_worker: Option<BackgroundWorker<DepthRequest, DepthResponse>> = None,

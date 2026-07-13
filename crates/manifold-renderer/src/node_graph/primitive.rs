@@ -91,6 +91,15 @@ pub trait PrimitiveSpec: Send {
     const FUSION_KIND: crate::node_graph::freeze::classify::FusionKind =
         crate::node_graph::freeze::classify::FusionKind::Boundary;
 
+    /// Why this primitive stays a fusion Boundary (design doc D4,
+    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default — required to
+    /// stay `None` for every fusable (`FUSION_KIND != Boundary`) primitive,
+    /// and required (exactly one reason) for every Boundary primitive
+    /// ([`freeze::classify`](crate::node_graph::freeze::classify) — enforced
+    /// by `every_boundary_atom_declares_its_reason`). Set via the macro's
+    /// `boundary_reason:` field.
+    const BOUNDARY_REASON: Option<crate::node_graph::freeze::classify::BoundaryReason> = None;
+
     /// PURE primitive: `run()`'s output depends ONLY on its param values and
     /// its wired inputs — no frame time/beat/delta, no `StateStore`, no
     /// randomness, no CPU/FFI side effects, no canvas-dims dependence beyond
@@ -638,6 +647,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
         P::FUSION_KIND
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        P::BOUNDARY_REASON
+    }
     fn is_pure(&self) -> bool {
         P::PURE
     }
@@ -795,6 +807,7 @@ macro_rules! primitive {
         $( aliases: [ $($alias:literal),* $(,)? ], )?
         $( pure: $pure:literal, )?
         $( fusion_kind: $fusion_kind:ident, )?
+        $( boundary_reason: $boundary_reason:ident, )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
         $( stencil_fetch: $stencil:literal, )?
@@ -850,6 +863,8 @@ macro_rules! primitive {
             $( const PURE: bool = $pure; )?
             $( const FUSION_KIND: $crate::node_graph::freeze::classify::FusionKind =
                 $crate::node_graph::freeze::classify::FusionKind::$fusion_kind; )?
+            $( const BOUNDARY_REASON: Option<$crate::node_graph::freeze::classify::BoundaryReason> =
+                Some($crate::node_graph::freeze::classify::BoundaryReason::$boundary_reason); )?
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?

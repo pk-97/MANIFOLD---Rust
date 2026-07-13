@@ -96,6 +96,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw markers", "hud", "overlay", "brackets", "crosshair", "tracking marker"],
+    boundary_reason: Blocked,
 }
 
 const MARKERS_SHADER: &str = r#"

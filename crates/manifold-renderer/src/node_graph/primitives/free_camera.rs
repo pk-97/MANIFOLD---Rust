@@ -115,6 +115,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["free camera", "fps camera", "euler camera", "dolly camera"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for FreeCamera {

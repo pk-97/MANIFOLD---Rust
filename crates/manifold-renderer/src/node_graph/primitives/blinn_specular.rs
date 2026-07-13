@@ -116,6 +116,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Filter,
     aliases: ["specular", "shininess", "blinn specular", "highlight", "blinn"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for BlinnSpecular {

@@ -79,6 +79,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["grid points", "generate grid uv", "uv grid", "parametric"],
+    boundary_reason: NonGpu,
 }
 
 /// Read `grid_size` from the params bag, clamped to the valid range.

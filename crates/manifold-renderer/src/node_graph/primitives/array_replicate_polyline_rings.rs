@@ -67,6 +67,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["repeat outline", "array replicate polyline rings", "rings", "concentric", "replicate"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for ArrayReplicatePolylineRings {

@@ -79,6 +79,24 @@ struct NodeRow {
     inputs: Vec<PortRow>,
     outputs: Vec<PortRow>,
     params: Vec<ParamRow>,
+    /// Fusion classification (design doc D3, `docs/GRAPH_TOOLING_DESIGN.md`):
+    /// `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+    /// `"boundary:<reason_snake_case>"`. Computed from the live instance's
+    /// `fusion_kind()`/`boundary_reason()` — never hand-maintained, so it
+    /// can't drift from the registry. `"boundary:undeclared"` must never
+    /// appear in the shipped catalog — the meta-test
+    /// (`every_boundary_atom_declares_its_reason`) fails any registered
+    /// Boundary primitive without a declared reason before the catalog
+    /// could pick it up.
+    fusion: String,
+}
+
+/// Render a node's fusion classification for the catalog (design doc D3).
+/// Thin alias — the actual rendering lives in
+/// `freeze::classify::fusion_kind_str` (shared with `graph_tool fusion`,
+/// design D2/D10, so the catalog and the CLI verb can never disagree).
+fn fusion_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
+    crate::node_graph::freeze::classify::fusion_kind_str(node)
 }
 
 struct PortRow {
@@ -148,6 +166,7 @@ fn collect_rows() -> Vec<NodeRow> {
         .map(|f| {
             let node = (f.create)();
             let desc: Option<&NodeDescriptor> = descriptor_for(f.type_id);
+            let fusion = fusion_str(node.as_ref());
             NodeRow {
                 type_id: f.type_id,
                 label: f.picker.map(|p| p.label),
@@ -161,6 +180,7 @@ fn collect_rows() -> Vec<NodeRow> {
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs: node.outputs().iter().map(port_row).collect(),
                 params: node.parameters().iter().map(param_row).collect(),
+                fusion,
             }
         })
         .collect();
@@ -331,6 +351,7 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
         "purpose": r.purpose,
         "aliases": r.aliases,
         "examples": r.examples,
+        "fusion": r.fusion,
         "inputs": inputs,
         "outputs": outputs,
         "params": params,

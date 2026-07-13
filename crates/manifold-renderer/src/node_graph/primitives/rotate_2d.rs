@@ -61,6 +61,7 @@ crate::primitive! {
     category: FieldsAndCoordinates,
     role: Map,
     aliases: ["rotate coordinates", "rotate 2d", "rotate field", "spin"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for Rotate2D {

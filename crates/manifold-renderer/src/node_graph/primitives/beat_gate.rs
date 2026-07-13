@@ -78,6 +78,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["beat gate", "strobe", "tempo gate", "chop"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for BeatGate {

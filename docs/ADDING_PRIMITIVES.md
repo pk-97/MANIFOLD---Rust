@@ -130,6 +130,12 @@ name which one when you claim an exemption:
 Non-GPU primitives (control-rate `value`/`math`/`lfo`, DNN/FFI/CPU atoms) are outside
 the rule entirely.
 
+Machine-check the classification you just declared: `graph_tool fusion <preset.json>`
+prints every node's `fusion_kind`/`boundary_reason` and which region (if any) it
+actually joined, over the real `partition_regions` pass — faster than wiring the
+primitive into a preset and eyeballing the freeze debug output. See
+`docs/GRAPH_TOOLING_DESIGN.md`.
+
 ## Skeleton
 
 The skeleton below is a per-element texture atom, so it is on the codegen path per

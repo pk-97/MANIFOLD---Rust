@@ -116,6 +116,7 @@ crate::primitive! {
     category: Particles2D,
     role: Source,
     aliases: ["explosion force", "radial burst force field", "radial burst", "blast", "force field"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for RadialBurstForceField {

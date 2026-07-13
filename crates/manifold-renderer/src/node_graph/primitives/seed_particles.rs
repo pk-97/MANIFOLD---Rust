@@ -103,6 +103,7 @@ crate::primitive! {
     category: Particles2D,
     role: Source,
     aliases: ["spawn particles", "seed particles", "seed", "emit", "birth"],
+    boundary_reason: BarrieredReduction,
 }
 
 /// Persistent state for `seed_mode = OnceOnReset` — tracks whether

@@ -93,6 +93,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["camera lens", "lens", "aperture", "exposure", "depth of field", "dof", "f-stop", "shutter angle"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for CameraLens {

@@ -77,6 +77,7 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["remove drift", "balance forces", "zero mean force", "conserve momentum", "center forces", "drift correction"],
+    boundary_reason: BarrieredReduction,
     extra_fields: {
         // The macro-provided `pipeline` field holds partial_main; these hold
         // the other two entry points of the three-pass dispatch.

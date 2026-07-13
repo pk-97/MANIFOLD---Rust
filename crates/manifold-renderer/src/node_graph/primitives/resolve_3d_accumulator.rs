@@ -79,6 +79,7 @@ crate::primitive! {
     role: Filter,
     aliases: ["resolve scatter 3d", "resolve 3d accumulator", "accumulator", "volume read back"],
     fusion_kind: Boundary,
+    boundary_reason: BarrieredReduction,
     wgsl_body: include_str!("shaders/resolve_3d_accumulator_body.wgsl"),
 }
 

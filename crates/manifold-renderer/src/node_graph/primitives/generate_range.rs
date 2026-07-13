@@ -84,6 +84,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Source,
     aliases: ["range", "generate range", "linspace", "series", "Pattern CHOP"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for GenerateRange {

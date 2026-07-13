@@ -286,6 +286,9 @@ impl EffectNode for Watercolor {
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
+    }
     fn inputs(&self) -> &[NodeInput] {
         &WATERCOLOR_INPUTS
     }

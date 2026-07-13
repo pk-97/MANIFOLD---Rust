@@ -57,6 +57,7 @@ crate::primitive! {
     category: Routing,
     role: Filter,
     aliases: ["switch", "mux", "mux array", "selector"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for MuxArray {

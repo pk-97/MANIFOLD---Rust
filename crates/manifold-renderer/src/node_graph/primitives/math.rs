@@ -75,6 +75,7 @@ crate::primitive! {
     role: Control,
     aliases: ["math", "calculate", "Math CHOP"],
     pure: true,
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for Math {

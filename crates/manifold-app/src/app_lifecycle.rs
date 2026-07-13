@@ -533,6 +533,32 @@ impl Application {
                 }
             };
 
+        // The assembler is code and has bugs (GRAPH_TOOLING_DESIGN D6): run its
+        // output through the same validate_def pipeline the runtime loader
+        // takes BEFORE it reaches the project, and abort on the existing
+        // import-error path (log + return, same as the parse-failure branch
+        // above) rather than let a malformed def surface later as wrong pixels
+        // or a load failure far from the cause. Never a silent partial
+        // import — errors here are fatal to the drop, not warnings.
+        let validation_registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+        let validation_device = manifold_gpu::GpuDevice::new();
+        let validation = manifold_renderer::node_graph::validate_def(
+            &graph,
+            &validation_registry,
+            manifold_renderer::node_graph::ValidateKind::Generator,
+            &validation_device,
+        );
+        if !validation.is_valid() {
+            let messages: Vec<String> =
+                validation.errors.iter().map(|issue| issue.message.clone()).collect();
+            log::warn!(
+                "[Import] glTF import failed for {}: assembled graph failed validation: {}",
+                path.display(),
+                messages.join("; ")
+            );
+            return;
+        }
+
         let Some(meta) = graph.preset_metadata.as_ref() else {
             log::warn!("[Import] assembled glTF graph carries no preset metadata — aborting");
             return;
