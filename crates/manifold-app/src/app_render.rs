@@ -698,6 +698,10 @@ impl Application {
         // D5 "autosave timer parks" behavior.
         self.tick_autosave();
 
+        // 1a0b. Video-import probe-failure surfacing (BUG-133) — same
+        // drain-site cadence as autosave; see `tick_import_failures`.
+        self.tick_import_failures();
+
         // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching
         // call in `tick_perform_mode` (perform_mode/render.rs) for that path.
