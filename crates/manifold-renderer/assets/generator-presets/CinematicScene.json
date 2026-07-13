@@ -312,13 +312,39 @@
               "mode": { "type": "Enum", "value": 4 }
             }
           },
-          { "id": 3, "typeId": "system.group_output" }
+          { "id": 3, "typeId": "system.group_output" },
+          {
+            "id": 4,
+            "typeId": "node.bilateral_blur",
+            "handle": "bilat_h",
+            "title": "Bilateral Blur H",
+            "params": {
+              "axis": { "type": "Enum", "value": 0 },
+              "depth_sigma": { "type": "Float", "value": 0.1 }
+            }
+          },
+          {
+            "id": 5,
+            "typeId": "node.bilateral_blur",
+            "handle": "bilat_v",
+            "title": "Bilateral Blur V",
+            "params": {
+              "axis": { "type": "Enum", "value": 1 },
+              "depth_sigma": { "type": "Float", "value": 0.1 }
+            }
+          }
         ],
         "wires": [
           { "fromNode": 0, "fromPort": "depth", "toNode": 1, "toPort": "depth" },
           { "fromNode": 0, "fromPort": "camera", "toNode": 1, "toPort": "camera" },
           { "fromNode": 0, "fromPort": "color", "toNode": 2, "toPort": "a" },
-          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+          { "fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "in" },
+          { "fromNode": 0, "fromPort": "depth", "toNode": 4, "toPort": "depth" },
+          { "fromNode": 0, "fromPort": "camera", "toNode": 4, "toPort": "camera" },
+          { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+          { "fromNode": 0, "fromPort": "depth", "toNode": 5, "toPort": "depth" },
+          { "fromNode": 0, "fromPort": "camera", "toNode": 5, "toPort": "camera" },
+          { "fromNode": 5, "fromPort": "out", "toNode": 2, "toPort": "b" },
           { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "out" }
         ]
       }

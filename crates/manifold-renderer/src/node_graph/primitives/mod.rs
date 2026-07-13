@@ -21,6 +21,7 @@ mod array_unpack_vec2;
 mod beat_gate;
 mod beat_ramp;
 mod bend_mesh;
+mod bilateral_blur;
 mod blob_detect_ffi;
 mod blob_overlay_render;
 mod block_displace_field;
