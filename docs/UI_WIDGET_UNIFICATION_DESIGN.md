@@ -1,6 +1,6 @@
 # UI Widget Unification — one widget vocabulary, two hosts
 
-**Status: APPROVED design, not built · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded**
+**Status: IN PROGRESS · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded · AMENDED 2026-07-13 (Fable, P7 design pass): P7 expanded to P7.1–P7.6 with D8–D12, per Peter's mandate to "unify all of the graph and timeline widgets, UI, and interaction surfaces even if they have not had any bugs raised previously". P7.0 (AudioTriggerSection) LANDED on main `6917c0ea`; P1–P6 execution in flight on `feat/widget-unification`.**
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -114,6 +114,83 @@ legitimately uses different label/value widths than cards (graph_canvas/mod.rs:1
 `zones()` takes the metrics; each host passes its own. What unifies is the *shape logic*
 (which zone is where, given widths), not the numbers.
 
+**D8 — One drag-lifecycle owner; per-gesture state folds INTO the payload variant.**
+(Added 2026-07-13, P7 design pass — verified against code that day.) Every remaining
+ad-hoc drag machine migrates onto `DragController<T>`, and the state each gesture carries
+moves into that gesture's variant of the payload enum — never into parallel fields beside
+the controller. The disease shared by every remaining machine is a discriminant plus
+parallel per-gesture state that must agree by discipline: `InteractionOverlay`'s
+`drag_mode` + six `Option<…State>` fields (interaction_overlay.rs:345, :381–390),
+`ParamDragState`'s six slots (param_slider_shared.rs:665–706), the viewport's
+`ViewportDragMode` + `marker_drag_id`/`marker_drag_start_beat` (viewport.rs:253,
+viewport/interaction.rs:125–133), the canvas's `DragMode` + `drag_anchor`/`drag_pan_start`
+(graph_canvas/mod.rs:435–436). Folding makes the desync unrepresentable.
+*Accepted behavior delta, stated honestly:* today, arming gesture B while gesture A's slot
+is still `Some` leaves both armed — a latent bug (one pointer, one gesture), never a
+feature. The controller's documented "a fresh grab always wins" (drag.rs:99) replaces
+that. Any call site that turns out to RELY on two simultaneously-armed slots is an
+escalation, never an adaptation; the 2026-07-13 audit found none.
+*Rejected: one `DragController` per slot/field* — preserves the multi-armed bug class and
+the parallel-state disease P7 exists to kill; it is the migration-shaped shortcut, not the
+migration.
+
+**D9 — Canvas `DragMode`: all six variants migrate; session geometry replaces the
+per-variant position fields.** (Answers open question 1 from the P7.0 handoff.) The
+apparent misfit dissolves on inspection: `ParamScrub`/`VecScrub`'s `press_origin_x` IS
+`session.start.x` (the scrub math at interaction.rs:506/:545 is `sx - press_origin_x`,
+i.e. `current.x - start.x`); `Marquee`'s `origin_screen` IS `session.start`; `Pan`'s
+`drag_anchor` IS `session.start` with `drag_pan_start` as grab-time payload. Migrating
+*deletes* three position fields rather than adding an unused one. The scrubs reading only
+the x component of `current` is not dead weight — the pointer genuinely has a y; the
+variant just doesn't consume it, and nothing is stored that wasn't already.
+*Rejected: scrub position kept outside the controller* — that keeps a second
+position-tracking source of truth beside the lifecycle owner, which is exactly the
+duplication this phase deletes.
+
+**D10 — `ParamDragState`: single-active is enforced at type level, in this migration.**
+(Answers open question 2; engineering call made at design time, not Peter's product
+surface — reversible if he objects, but the reasoning: ) (a) `DragController<enum>`
+cannot represent two active slots — building a shape that still could (six controllers)
+would be deliberate extra work to preserve a bug class; (b) only-one-active is already
+the informal contract, so no observed behavior changes — the invariant only forbids
+states that are bugs today; (c) Peter's mandate is explicitly proactive
+("even if they have not had any bugs raised"). The type keeps its name and grows
+per-category accessors so the ~49 call sites convert one-for-one (P7.1 seam brief).
+
+**D11 — `InteractionOverlay`: internal truth becomes `DragController<TimelineDrag>`;
+the public `DragMode` enum survives as a derived discriminant.** External consumers
+(auto-scroll polling, drag readout, snap, input routing — ui_state.rs, viewport,
+input.rs, dock.rs et al. read `drag_mode()`/`is_dragging()`) keep their exact API:
+`drag_mode()` returns the same Copy enum, now computed via `TimelineDrag::kind()`. The
+three `AnimF32` fields (`lift_anim`, `ghost_alpha`, `settle_dx`,
+interaction_overlay.rs:405–415) stay OUTSIDE the controller — they deliberately keep
+easing after release against `drag_visual_clip_ids` (:416–424), so their lifetime is
+longer than the drag's; their per-frame targets re-read their predicates through the
+controller instead of the old field. The fold is staged over three landings
+(automation → trim/region → move) with exactly ONE lifecycle owner at every commit —
+a parallel old machine kept alive beside the controller is the forbidden move.
+*Rejected: folding everything in one landing* — the Move fold alone deletes 11 loose
+fields on the live timeline's show-critical gesture; risk isolation is worth three
+sessions. *Rejected: migrating only the automation variants and leaving Move/Trim loose
+fields forever* — that's the half-done state D8 forbids; the staging is a schedule, not
+a scope.
+
+**D12 — Sweep scope: the long tail is in, the input recognizer is out.** Peter,
+2026-07-13: *"unify all of the graph and timeline widgets, UI, and interaction surfaces
+even if they have not had any bugs raised previously — this is critical infra work."*
+Accordingly P7 also covers the three further machines the design-pass audit found beyond
+the P7.0 handoff's list: `TimelineViewportPanel`'s `ViewportDragMode` (+ its parallel
+`marker_drag_id`/`marker_drag_start_beat` fields), `AudioSetupPanel`'s
+`dragging_band`/`calibration_drag` pair (audio_setup_panel.rs:375, :383), and `dock.rs`'s
+divider-edge drag (its hit→begin→drag→end triad at dock.rs:162–194 is a hand-rolled
+`DragController<Edge>`). Named OUT, with reasons: **input.rs's drag recognizer**
+(input.rs:387–419 — the platform layer that decides a drag EXISTS at all and feeds every
+machine; it is upstream of `DragController`, not parallel to it);
+**`scroll_container::drag_to_scroll`** (stateless position→fraction mapping, no
+lifecycle); **every `SliderDragState`-backed panel** (clip_chrome, macros_panel,
+layer_chrome, layer_header, master_chrome — already `DragController`-backed via
+`SliderDragState`; don't touch).
+
 ## 3. The contract (committed shapes)
 
 All in `manifold-ui/src/slider.rs` — the widget's one home, next to `build` and `draw`.
@@ -184,6 +261,8 @@ deleted.
 | I2 — Chrome and canvas resolve the same intent for the same (zone, gesture) | Unit test in `slider.rs` pinning the full contract table, plus a canvas-side test asserting Track+RightClick on a node param row produces the D4 command (pattern: `macros_panel.rs:589`) |
 | I3 — Zone geometry has one owner | `build` and `draw` call `zones()`; geometry-equivalence test: `zones().track` == the track node rect `build` produces for identical inputs |
 | I4 — Wire-driven rows expose no intents on any surface | Canvas unit test (extends the `:762` guard); chrome N/A (wire-driven params don't build sliders) ⚠ VERIFY-AT-IMPL: confirm via `rg -n 'wire_driven' crates/manifold-ui/src/panels` |
+| I5 — `DragController<T>` is the only drag-lifecycle owner in manifold-ui (post-P7.6) | Negative gates, landed with P7.6: `rg -n 'enum ViewportDragMode' crates/manifold-ui/src` → zero; `rg -n 'drag_mode: DragMode' crates/manifold-ui/src` → zero stored-field hits (the overlay stores `DragController<TimelineDrag>`; `DragMode` survives only as the derived return type of `drag_mode()`); no payload enum carries a `None`/idle variant — idle is the controller's `None` session; plus each P7.x phase's own deletion gate |
+| I6 — One in-flight gesture per surface, by construction | The type itself: `DragController`'s `Option<DragSession<T>>` makes two simultaneously-armed gestures unrepresentable (D8/D10); pinned per migration by that phase's pinning tests |
 
 ## 5. Phasing
 
@@ -254,25 +333,283 @@ widget-declared contracts anyway, so a future canvas appearance (or any new host
 free and I1's "no hand-registered gestures" gate can go repo-wide. Mechanical;
 schedule after P4/P5 or interleave with release-push bricks.
 
-**P7 — drag lifecycle onto `DragController<T>` (added 2026-07-13, Peter).**
-D5 stands — drags stay OUT of the intent contract (no `Gesture` drag variants) — but
-the lifecycle plumbing is quintuplicated: `drag.rs`'s own module doc names five drag
-state machines sharing one shape (`SliderDragState` — already migrated as the proof
-consumer; per-panel `dragging` bools; `UIState` timeline drag;
-`InteractionOverlay::DragMode`; canvas `DragMode`). Deliverables: migrate the four
-remaining machines onto `DragController<T>`, one landing each, behavior pinned by a
-test per migration before the switch. Entry step: also inventory drag *value* math
-(sensitivity, fine-modifier scaling, snap) across hosts — if duplicated, fold it into
-the widget's home module in the same pass; if genuinely host-specific (camera-zoom
-delta scaling is), leave it and record why. Gate: `-p manifold-ui --lib` per landing.
+**P7 — drag lifecycle onto `DragController<T>` (added 2026-07-13, Peter; expanded
+2026-07-13, Fable design pass — D8–D12 govern everything below).**
+D5 stands — drags stay OUT of the intent contract (no `Gesture` drag variants); P7
+unifies the lifecycle plumbing. **Corrected inventory (verified 2026-07-13):** drag.rs's
+module doc named five machines, but `UIState`'s timeline-drag copy was already folded
+into `InteractionOverlay` before P7 began (ui_state.rs comment near :640; drag.rs module
+doc records this), and the design-pass audit found three MORE machines the original list
+missed (viewport scrubs, audio-setup panel, dock dividers — D12). The real remaining
+set, in migration order, is the six sub-phases below. **P7.0 — LANDED 2026-07-13:**
+`AudioTriggerSection::dragging_shape` → `DragController<(usize, AudioShapeParam)>`,
+main `6917c0ea` (migration commit `b8537171`), pinned by 4 pre-migration tests in
+`audio_trigger_section::tests` — the worked precedent every sub-phase copies.
+
+Shared rules for every sub-phase (in addition to the §5-wide forbidden list):
+**pin before you switch** — pinning tests are written against the CURRENT machine,
+run green, and only then does the fold happen (P7.0's pattern); **compiler-driven** —
+delete the old fields/enum first and let the build errors be the exhaustive call-site
+checklist (DESIGN_DOC_STANDARD §6); **never arm the controller with fake geometry** —
+every `start(payload, pos)` passes the real pointer position already in scope at the
+begin site; a begin site with no position in scope is an escalation, never
+`Vec2::ZERO`; **command emission stays byte-identical** — these are lifecycle swaps;
+any change to what commands are emitted, or in what order, is a red flag to stop on;
+**one lifecycle owner at every commit** — no phase leaves both the old machine and the
+controller alive.
+
+**P7.1 — `ParamDragState` → `DragController<ParamDragTarget>` (one session).**
+Entry: re-run `rg -n 'dragging_param\b|dragging_trim\b|dragging_target_param\b|dragging_decay_param\b|dragging_audio_shape\b|dragging_step_amount\b'
+crates/manifold-ui/src/panels/param_card.rs crates/manifold-ui/src/panels/param_slider_shared.rs`
+— 49 hits 2026-07-13; a different count → stop and list before touching anything.
+Read-back: D8/D10, drag.rs whole, `ParamDragState` (param_slider_shared.rs:665–707).
+Committed shape (param_slider_shared.rs, replacing the six slots):
+
+```rust
+pub(crate) enum ParamDragTarget {
+    Param { index: usize },                                   // was dragging_param: i32 (−1 idle)
+    Trim { kind: TrimKind, index: usize, is_min: bool },      // was dragging_trim
+    EnvTarget { index: usize },                               // was dragging_target_param
+    EnvDecay { index: usize },                                // was dragging_decay_param
+    AudioShape { index: usize, param: AudioShapeParam },      // was dragging_audio_shape
+    StepAmount { index: usize },                              // was dragging_step_amount
+}
+pub(crate) struct ParamDragState { drag: DragController<ParamDragTarget> }
+```
+
+`ParamDragState` keeps its name and grows accessors so the ~49 sites convert 1:1:
+`begin(target, pos)`, `end() -> Option<ParamDragTarget>`, `is_dragging()`, and one
+projection per category (`param_index()`, `trim()`, `env_target_index()`,
+`env_decay_index()`, `audio_shape()`, `step_amount()`, each `-> Option<…>`). Worked
+examples per call-site category — *begin:* `self.drag.dragging_trim = Some((kind, pi,
+is_min))` (param_card.rs:3742) → `self.drag.begin(ParamDragTarget::Trim { kind, index:
+pi, is_min }, pos)`; *read:* `if let Some((kind, pi, is_min)) = self.drag.dragging_trim`
+(:4022) → `… = self.drag.trim()`; *end:* the sequential per-slot `.take()` /
+sentinel-reset chains in the end-of-drag handler (:4108–4135) collapse into ONE
+`match self.drag.end()`. Deliverables: the enum + accessors; the six fields deleted;
+one pinning test per category (six), written pre-switch against the current struct
+(pattern: `audio_trigger_section::tests`, `b8537171`), re-run green post-switch.
+Gate: `cargo test -p manifold-ui --lib` + `cargo clippy -p manifold-ui -- -D warnings`;
+negative: the entry `rg` above → zero hits. Demo: none — L1 (a lifecycle-only swap with
+zero pixel or command-shape change; the six pinning tests are the behavior record).
+Performer gesture: drag a modulator trim handle on a param card — the Trim pinning test
+exercises its begin→track→commit path.
+
+**P7.2 — canvas `DragMode` → `DragController<CanvasDrag>` (one session).**
+Entry: re-verify anchors — enum graph_canvas/interaction.rs:10; loose fields
+`drag_anchor`/`drag_pan_start` graph_canvas/mod.rs:435–436; move dispatch
+interaction.rs:464; release dispatch :1182; `rg -n 'DragMode'
+crates/manifold-ui/src/graph_canvas` for the full site list. Read-back: D8/D9, D4/D6
+parity notes in the variant doc comments (interaction.rs:28–61).
+Committed shape (graph_canvas/interaction.rs; a `DragController<CanvasDrag>` field on
+`GraphCanvas` replaces `drag_mode` + `drag_anchor` + `drag_pan_start`):
+
+```rust
+pub(crate) enum CanvasDrag {
+    Pan { pan_at_grab: (f32, f32) },                          // was field drag_pan_start
+    WireFrom { from_node: u32, from_port: String },
+    NodeMove { node_id: u32, anchor_offset: (f32, f32) },
+    ParamScrub { node_id: u32, param_name: String, range: (f32, f32),
+                 start_value: f32, is_int: bool, outer_param_id: Option<String> },
+    VecScrub  { node_id: u32, param_name: String,
+                kind: crate::graph_view::ParamSnapshotKind, channel: usize,
+                base: [f32; 4], range: (f32, f32) },
+    Marquee,                                                  // origin = session.start
+}
+```
+
+Field mapping (seam brief): `DragMode::None` → controller idle (no variant);
+`press_origin_x` → `session.start.x` (scrub delta at :506/:545 becomes
+`session.current.x - session.start.x`; feed `track()` from `on_pointer_move`);
+`Marquee.origin_screen` → `session.start`; Pan's `drag_anchor` → `session.start`.
+`self.cursor` STAYS — hover, the ghost wire, and the live marquee rect read it outside
+the drag lifecycle (:485–488). `debug_label` moves onto `CanvasDrag` plus an idle case
+at the readout call site. The rename (`DragMode` → `CanvasDrag`) is deliberate: it
+proves the compiler-driven sweep touched every site. Deliverables: the enum; the three
+deleted fields; pinning tests pre-switch for the value-math paths (`ParamScrub` px→value
+mapping incl. `is_int` rounding + clamp; `VecScrub` channel-overwrite emitting the full
+vector; marquee rect selection; pan math) — canvas-side test precedent per I2.
+Gate: `-p manifold-ui --lib` + clippy; negative: `rg -n
+'press_origin_x|drag_pan_start|drag_anchor' crates/manifold-ui/src/graph_canvas` → zero;
+`rg -n 'enum DragMode' crates/manifold-ui/src/graph_canvas` → zero. Demo: **L2** —
+`ui-snap gltfeditor` before/after PNG pair plus a scrub-emitted `SetGraphNodeParam` in
+the run log (P1's demo precedent; the script driver has no canvas wiring, per the P1
+landing note). Performer gesture: scrub a node param on the canvas mid-set-build; the
+value must move exactly as before (same px-per-range feel).
+
+**P7.3 — overlay stage 1: introduce the controller, fold the automation variants (one
+session).** Entry: re-verify anchors — enum interaction_overlay.rs:143; the six
+`Option<…State>` fields :381–390; `AnimF32`s :405–415; `poll_drag` :652;
+`on_begin_drag` :1460; `on_drag` :1561; `on_end_drag` :1607; `cancel_drag` :1805;
+re-derive `rg -c 'drag_mode' crates/manifold-ui/src/interaction_overlay.rs` (57 on
+2026-07-13). Read-back: D8/D11 and the AnimF32 field docs (:392–431) — the visual layer
+is deliberately NOT migrating.
+Deliverables, part 1 — drag.rs API additions (committed, with unit tests in
+`drag::tests`):
+
+```rust
+impl<T> DragController<T> {
+    /// Mutable payload access — the automation handlers update
+    /// last_beat/last_value-style fields each frame.
+    pub fn payload_mut(&mut self) -> Option<&mut T>;
+    /// Whole session out, NO commit signal — cancel-with-rollback reads the
+    /// payload to clear previews before dropping it (overlay cancel_drag).
+    pub fn take_session(&mut self) -> Option<DragSession<T>>;
+}
+```
+
+Deliverables, part 2 — interaction_overlay.rs:
+
+```rust
+enum TimelineDrag {                       // private to the module
+    Move,                                 // unit here; folds in P7.5
+    TrimLeft, TrimRight,                  // unit here; fold in P7.4
+    RegionSelect,                         // unit here; folds in P7.4
+    AutomationPoint(AutomationDragState),
+    AutomationSegmentBend(AutomationSegmentBendState),
+    AutomationSegmentDrag(AutomationSegmentDragState),
+    AutomationMarquee,                    // press corner = session.start;
+                                          // AutomationMarqueeState is deleted
+    AutomationGroupMove(AutomationGroupDragState),
+    AutomationDraw(AutomationDrawState),
+}
+impl TimelineDrag { fn kind(&self) -> DragMode { /* 1:1 */ } }
+```
+
+The stored field `drag_mode: DragMode` is REPLACED by `drag:
+DragController<TimelineDrag>`; the public API is unchanged: `drag_mode() -> DragMode`
+now derives via `kind()` (idle → `DragMode::None`), `is_dragging()` =
+`drag.is_active()`. The six `Option` fields are deleted; every automation handler reads
+its state via `payload()`/`payload_mut()` — the existing as-ref-then-call-host-then-
+as-mut discipline (:1151/:1179 pattern) maps 1:1. `tick()`'s predicates
+(`drag_mode == Move`, :493–505) become `matches!(self.drag.payload(),
+Some(TimelineDrag::Move))` — behavior unchanged (`duplicate_on_release` stays a loose
+field until P7.5). `cancel_drag` uses `take_session()`. Pinning tests: per automation
+gesture, begin→preview→commit against the in-file `TestHost`/`GestureTestHost`
+(:2466/:2862), written pre-switch where the P4-unit suites don't already cover the
+path. Gate: `-p manifold-ui --lib` + clippy; negative: `rg -n
+'automation_drag:|automation_segment_bend:|automation_segment_drag:|automation_marquee:|automation_group_drag:|automation_draw:'
+crates/manifold-ui/src/interaction_overlay.rs` → zero field declarations. Demo: **L3**
+— re-run `scripts/ui-flows/drag-automation-point.json` green. Performer gesture: drag
+an automation breakpoint and watch the param preview live — the flow drives exactly
+this.
+
+**P7.4 — overlay stage 2: fold trim + region (one session).**
+Entry: P7.3 landed (`TimelineDrag` exists); re-verify `begin_trim` :614,
+`capture_trim_selection` :624, trim handlers :2002/:2056, `update_region_drag` :2311.
+Committed shapes:
+
+```rust
+struct TrimDrag {
+    clip_id: ClipId,                       // was field trim_clip_id
+    original_start_beat: Beats,            // was trim_original_start_beat
+    original_duration_beats: Beats,        // was trim_original_duration_beats
+    original_in_point: Seconds,            // was trim_original_in_point
+    originals: Vec<TrimOriginal>,          // was trim_originals
+}
+struct RegionDrag { start_beat: Beats, start_layer: usize }
+// variants become TrimLeft(TrimDrag), TrimRight(TrimDrag), RegionSelect(RegionDrag)
+```
+
+`begin_trim`/`capture_trim_selection` become `TrimDrag` constructors; the six loose
+fields above plus `region_drag_start_beat`/`region_drag_start_layer` are deleted.
+Pinning tests pre-switch: trim-left and trim-right fan-over-selection incl. the batched
+undo entry and locked-clip skip; `drag_readout_clip_id` during a trim; region-select
+extents. Gate: `-p manifold-ui --lib` + clippy; negative: `rg -n
+'trim_clip_id|trim_original_|trim_originals|region_drag_start_'
+crates/manifold-ui/src/interaction_overlay.rs` → zero. Demo: **L3 if** the flow driver
+exposes a clip-edge surface target (verify by reading `scripts/ui-flows/drag-clip.json`
++ `ui_snapshot/script.rs` target vocabulary — a trim flow is authored in this phase if
+so); **else L2**: before/after PNG of a scripted-position trim plus the commit command
+sequence in the run log. Performer gesture: grab a clip's right edge and pull it out a
+bar — the selection fans, the undo is one entry.
+
+**P7.5 — overlay stage 3: fold Move (one session — the live timeline's show-critical
+gesture; highest stakes in all of P7).**
+Entry: P7.4 landed. Additional entry proof: `rg -n 'DragMode::Move'
+crates/manifold-ui/src/interaction_overlay.rs` and confirm every arm that ARMS `Move`
+also sets an anchor clip — the `poll_drag` guard `Move if
+drag_anchor_clip_id.is_some()` (:660) must be proven vacuous before the fold makes the
+anchor non-optional; if any path arms Move anchor-less, STOP and escalate (never
+synthesize a placeholder `ClipId`). Committed shape:
+
+```rust
+struct MoveDrag {
+    anchor_clip_id: ClipId,                 // was drag_anchor_clip_id: Option<ClipId>
+    start_layer_index: usize,               // was drag_start_layer_index
+    snapshots: Vec<DragSnapshot>,           // was drag_snapshots
+    snapshot_clip_ids: HashSet<ClipId>,     // was drag_snapshot_clip_ids
+    selection_min_start_beat: Beats,        // was drag_selection_min_start_beat
+    selection_min_layer: usize,             // was drag_selection_min_layer
+    selection_max_layer: usize,             // was drag_selection_max_layer
+    layer_blocked: bool,                    // was drag_layer_blocked
+    duplicate_on_release: bool,             // was the loose bool
+    start_beat: Beats,                      // was drag_start_beat (anchor start at grab)
+    offset_beats: Beats,                    // was drag_offset_beats
+}
+// variant becomes Move(MoveDrag); begin_move() becomes its constructor
+```
+
+Eleven loose fields deleted. AnimF32 wiring (D11): `tick()`'s move predicate matches
+`Move(_)`; the ghost predicate reads `duplicate_on_release` through `payload()`;
+`drag_visual_clip_ids`, `settle_dx`, `landing_flash*`, `error_shake`,
+`was_layer_blocked` STAY loose — they ease/fire past release, after the payload is
+gone, by design (:416–424). `finalize_move_snap` and `cancel_drag` take what they need
+via `take_session()` before the state drops. Pinning tests pre-switch: move
+begin→track→commit (multi-clip); opt-duplicate leaves copies; blocked-layer rising edge
+fires `error_shake` exactly once; snap-settle seeding on release. Gate: `-p manifold-ui
+--lib` + clippy; negative: `rg -n
+'drag_anchor_clip_id|drag_start_layer_index|drag_snapshots|drag_snapshot_clip_ids|drag_selection_|drag_layer_blocked|duplicate_on_release: bool|drag_start_beat|drag_offset_beats'
+crates/manifold-ui/src/interaction_overlay.rs` → hits only inside `MoveDrag` and tests.
+Demo: **L3** — re-run `scripts/ui-flows/drag-clip.json` green (it asserts the moved
+rect on the real input path). Performer gesture: grab a clip mid-set and move it two
+bars — exactly what the flow drives; this is the gesture "a timing bug becomes the
+show" is about, which is why it folds last, alone, fully pinned.
+
+**P7.6 — long-tail sweep: viewport scrubs, audio-setup, dock dividers + the closing
+inventory (one session — D12).**
+Entry inventory (re-derive, don't trust): `rg -n 'ViewportDragMode|marker_drag'
+crates/manifold-ui/src/panels/viewport.rs crates/manifold-ui/src/panels/viewport/interaction.rs`;
+`rg -n 'dragging_band|calibration_drag' crates/manifold-ui/src/panels/audio_setup_panel.rs`;
+`rg -n 'drag' crates/manifold-ui/src/dock.rs`. Deliverables:
+- **Viewport:** `DragController<ViewportDrag>` replacing `ViewportDragMode` (viewport.rs:253)
+  + `marker_drag_id` + `marker_drag_start_beat`, with `enum ViewportDrag { RulerScrub,
+  OverviewScrub, MarkerDrag { marker_id: ⚠, start_beat: Beats }, ScrollbarHDrag { ⚠ } }`
+  — ⚠ VERIFY-AT-IMPL: the `marker_id` field type and whatever grab-state the scrollbar
+  drag tracks are read from the field declarations in viewport.rs at execution time
+  (this pass verified the machine's existence and shape, not every field type).
+- **Audio Setup:** ONE `DragController<AudioSetupDrag>` with `enum AudioSetupDrag {
+  Band(BandDivider), Calibration(CalibrationDrag) }` replacing the `dragging_band` +
+  `calibration_drag` pair (audio_setup_panel.rs:375/:383; the either-is-some guard at
+  :1918 becomes `is_active()`).
+- **Dock:** the divider-edge `Option` inside dock.rs's hit→begin→drag→end triad
+  (:162–194) becomes `DragController<Edge>`; its existing unit tests (:343–357) are the
+  pins.
+- **Closing inventory (the phase that ENDS the hunt):** `rg -n 'dragging'
+  crates/manifold-ui/src/panels/*.rs crates/manifold-ui/src/*.rs` — every remaining hit
+  must be `SliderDragState`-backed (done), `DragController`-backed, or named in D12's
+  out-list; anything else → stop and list in the landing report before touching it.
+- **Value-math inventory (P7's original entry step, still owed):** the rg-and-read pass
+  over drag sensitivity / fine-modifier scaling / snap math across hosts. Expected
+  outcome per the P7.0 handoff: genuinely host-specific (px→normalized-param on cards
+  and canvas vs px→beats on the timeline) → leave it, record why in the landing report.
+  That expectation is a hypothesis to verify by reading, not a finding to transcribe.
+- I5's repo-wide negative gates (see §4) land here, by name.
+Gate: `-p manifold-ui --lib` + clippy; the I5 gates. Demo: **L2** — before/after PNG of
+the timeline ruler scrub position via `ui-snap`, plus the dock/audio-setup pinning
+tests. Performer gesture: scrub the timeline ruler to relocate during a build-up.
 
 Phasing-completeness walk: contract both surfaces → P1; stepper/fader reset → P2; full
 slider derivation → P3; dual-surface twins (dropdown, color/vec, node-face toggles) →
 P4; canvas text entry → P5 (was Deferred, rescheduled 2026-07-13); chrome-only widgets
 → P6 (was Deferred); drag lifecycle consolidation → P7 (was Deferred — D5's
-"emission is parity-true" claim was correct but incomplete: five lifecycle machines
-share one shape, `DragController<T>` already exists with one migrated consumer). No
-body-committed affordance is unphased.
+"emission is parity-true" claim was correct but incomplete: the lifecycle machines
+share one shape, `DragController<T>` already exists with migrated consumers). Within
+P7 (walk re-done 2026-07-13): audio-trigger shape → P7.0 (landed); param-card slots →
+P7.1; canvas → P7.2; overlay automation → P7.3; overlay trim/region → P7.4; overlay
+move → P7.5; viewport/audio-setup/dock + closing inventory + value-math read → P7.6;
+input recognizer / scroll container / SliderDragState panels → D12 out-list (Deferred
+with reasons). No body-committed affordance is unphased.
 
 ## 6. Decided — do not reopen
 
@@ -286,6 +623,19 @@ body-committed affordance is unphased.
 5. Slider first, then bricks — no dedicated conversion window (D6, Peter's sequencing).
 6. Zone geometry parameterized by per-host metrics; the node face's 72/84 widths are
    correct and stay (D7).
+7. Per-gesture drag state folds INTO the `DragController` payload variant — never
+   parallel `Option` fields beside the controller; "fresh grab wins" replaces the
+   multi-armed latent-bug states (D8).
+8. All six canvas `DragMode` variants migrate; `press_origin_x`/`origin_screen`/
+   `drag_anchor` are the session's start position, not separate fields; scrubs reading
+   only x is fine (D9).
+9. `ParamDragState` enforces single-active at type level in the same migration (D10).
+10. Overlay: public `DragMode` survives as the derived discriminant; the three
+    `AnimF32`s stay outside the controller; three staged folds, one lifecycle owner at
+    every commit (D11).
+11. The sweep covers viewport scrubs, audio-setup band/calibration, and dock dividers;
+    input.rs's drag recognizer, `scroll_container`, and the `SliderDragState`-backed
+    panels are out, with reasons (D12).
 
 ## 7. Deferred
 
@@ -298,3 +648,14 @@ Peter's call: unify by design, don't wait for bugs.)
   plumbing (`DragController<T>`), not the gesture contract.
 - **Graph-editor sidebar** — already on `IntentRegistry<GraphEditCommand>`; no work. Noted
   so nobody "unifies" it twice.
+- **input.rs's drag recognizer** (threshold/arming, input.rs:387–419) — the platform
+  layer that decides a drag EXISTS and feeds every machine; upstream of
+  `DragController`, not parallel to it (D12). Revive only if a second recognizer ever
+  appears.
+- **`scroll_container::drag_to_scroll`** — stateless position→fraction mapping; no
+  lifecycle to unify (D12).
+- **`AudioSetupPanel` `IntentRegistry` derivation** — the P2 landing's scope note: the
+  panel routes gestures through its own `UIEvent` match, not the registry; converting
+  it is a panel-wide *dispatch* migration, a different unification axis than P7's drag
+  lifecycle. Revive as its own phase if a second non-registry panel appears or the
+  panel grows more contract widgets.
