@@ -1470,6 +1470,20 @@ in `node.motion_blur`'s `evaluate()`/derived-uniform recompute path to confirm b
 seeing nonzero `shutter_angle` and nonzero velocity per frame at runtime; narrow from whichever
 one is flat when it shouldn't be.
 
+**Static-read addendum (2026-07-13, Fable)** — also verified correct, NOT the cause: the atom's
+smear math itself (`motion_blur_body.wgsl:62-72` — exact D4 formula; the clip-vs-texture y-sign
+mismatch is provably invariant under the symmetric ±smear/2 tap layout, per the shader's header
+note), and the prev-matrix bookkeeping (`render_scene.rs:1024-1025` stores prev_view_proj every
+evaluate; camera-only orbit IS a valid velocity source — moving the model is not required).
+Load-bearing design fact: `shutter_angle = 0` makes the shader an EXACT no-op (every tap
+collapses onto the same texel), so a zero silently arriving anywhere in the chain produces
+precisely this symptom with no error. The three suspects above therefore reduce to two runtime
+values to probe: (a) `shutter_angle` at uniform-pack time, (b) one velocity texel during an
+orbit. Retest caveat: glb auto-import is SSAO-only since `72135693` (2026-07-12 — lens/DoF/
+motion nodes removed from the import graph), so a fresh import has no motion_blur node at all;
+reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by the
+dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
+
 ### BUG-137 — `node.variable_blur` has no CoC dilation; hard cutoff at depth discontinuities — MED (CINEMATIC_POST DoF)
 **Status:** OPEN
 
@@ -1489,9 +1503,12 @@ mode.
 (e.g. one tile) outward before the two `variable_blur` passes consume it — the standard technique
 used by most real-time DoF implementations to get soft depth-edge blending from an otherwise
 naive per-pixel-radius gather. New primitive, `Gather`-family input access, CPU-reference
-testable like every other atom this wave. Needs a short scoping decision (a standalone atom vs.
-folding the dilation into `coc_from_depth` itself) before a build session — same shape as the P5
-GTAO follow-up already noted in `CINEMATIC_POST_DESIGN.md`.
+testable like every other atom this wave. **Scoping decision COMMITTED 2026-07-13 (Fable, design
+session): a standalone atom (`node.coc_dilate`, neighborhood max of the CoC texture) — folding a
+neighborhood read into `coc_from_depth` would change that atom's Pointwise fusion classification
+and cost its fusability, so the fold option is dead.** The dilated CoC feeds whichever gather
+consumes it: the shipped `variable_blur` pair today, `node.bokeh_gather` after CINEMATIC_POST P4
+(which needs the dilation equally — P4 does not make this bug obsolete).
 
 ### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
 **Status:** OPEN
@@ -1508,7 +1525,10 @@ true 32-tap 2D disc gather rather than a sparse separable 9/17/25-tap kernel) wi
 this substantially just by construction, though it hasn't been built or verified against this
 specific symptom. It will NOT fix BUG-137's dilation/bleeding gap on its own — that's a separate
 mechanism. If P4 alone doesn't resolve the blockiness, the fallback is scaling tap count with
-radius rather than holding it fixed.
+radius rather than holding it fixed. **Demoted to secondary 2026-07-13:** P4 is escalated to the
+DoF root fix (CINEMATIC_POST status amendment) and `CinematicScene` stops using the gaussian pair
+once it lands — the tap-scaling fix then only matters for the still-user-wireable
+`variable_blur` atom itself, at the dof-polish lane's tail.
 
 ## Fixed
 
