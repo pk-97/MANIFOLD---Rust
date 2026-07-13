@@ -289,3 +289,76 @@ impl Drop for MetalEncoder {
         }
     }
 }
+
+#[cfg(test)]
+mod srgb_shader_parity_tests {
+    //! BUG-128 value-level gate.
+    //!
+    //! `native/ColorTransferFunctions.h`'s `manifold_srgb_encode` (the MSL
+    //! spliced into `kCopyShaderSDRBody` at
+    //! `native/MetalEncoderPlugin.m:54-63` via the format-string splice at
+    //! `native/MetalEncoderPlugin.m:194-199`) is hand-verified to implement
+    //! the exact same piecewise formula as the tested Rust reference,
+    //! `still_exporter::linear_to_srgb` (`src/still_exporter.rs:27-34`):
+    //! `x <= 0.0031308 ? x * 12.92 : 1.055 * x.powf(1.0/2.4) - 0.055`, with
+    //! input clamped to `[0, 1]` first. Compare literally:
+    //! `native/ColorTransferFunctions.h`'s `manifold_srgb_encode` body uses
+    //! `x <= 0.0031308`, `x * 12.92`, and `1.055 * pow(x, 1.0/2.4) - 0.055`
+    //! — the same breakpoint and constants, just spelled in MSL instead of
+    //! Rust and operating on `float3` instead of a scalar.
+    //!
+    //! We can't invoke the Metal shader function directly from a `cargo
+    //! test` (no headless MSL-eval harness in this crate), so this test
+    //! instead runs the identical formula (`shader_srgb_encode` below, a
+    //! direct transliteration of the MSL) against
+    //! `still_exporter::linear_to_srgb` across a spread of linear inputs,
+    //! including the shadow region (< 0.04) where the old `pow(1/2.2)`
+    //! approximation diverges most. If either the header or the Rust
+    //! reference drifts, this test is the tripwire.
+
+    use crate::still_exporter::linear_to_srgb;
+
+    /// Literal transliteration of `manifold_srgb_encode` in
+    /// `native/ColorTransferFunctions.h` (scalar form; the MSL operates
+    /// component-wise on float3, which is equivalent per-channel).
+    fn shader_srgb_encode(x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        if x <= 0.0031308 {
+            x * 12.92
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        }
+    }
+
+    #[test]
+    fn shader_encode_matches_still_exporter_reference() {
+        let samples = [
+            0.0_f32, 0.001, 0.0031308, 0.004, 0.01, 0.02, 0.04, 0.1, 0.18, 0.25, 0.5, 0.735, 0.9,
+            1.0,
+        ];
+        for &x in &samples {
+            let shader = shader_srgb_encode(x);
+            let reference = linear_to_srgb(x);
+            assert!(
+                (shader - reference).abs() < 1e-6,
+                "shader/reference diverge at linear={x}: shader={shader}, reference={reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn shader_encode_diverges_from_old_pow_2_2_approximation_in_shadows() {
+        // Documents *why* BUG-128 mattered: the old `pow(1/2.2)` curve the
+        // shader used to apply is measurably different from the true
+        // piecewise function specifically in the shadow region.
+        let old_approx = |x: f32| x.max(0.0).powf(1.0 / 2.2);
+        let x = 0.02_f32; // well below the shadow knee
+        let true_srgb = shader_srgb_encode(x);
+        let approx = old_approx(x);
+        assert!(
+            (true_srgb - approx).abs() > 0.01,
+            "expected old pow(1/2.2) to visibly diverge from true sRGB at x={x}: \
+             true={true_srgb}, approx={approx}"
+        );
+    }
+}

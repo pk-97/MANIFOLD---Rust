@@ -20,6 +20,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
+#import "ColorTransferFunctions.h"
 
 // -- Error codes --------------------------------------------------------------
 
@@ -41,19 +42,25 @@
 // in shader space is all that's needed -- no manual channel swizzle.
 // Works for both BGRA8Unorm (SDR) and RGBA16Float (HDR) destinations.
 
-// SDR: apply linear → sRGB gamma (compositor outputs linear light;
-// CAMetalLayer applies gamma for display, but export needs it baked in).
-static NSString* const kCopyShaderSDR =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "kernel void copy_texture(\n"
+// SDR: apply the true piecewise sRGB OETF (compositor outputs linear light;
+// CAMetalLayer applies the sRGB transfer function for display, but export
+// needs it baked in). BUG-128: this used to be a plain pow(1/2.2) curve,
+// which diverges from what the display and the still exporter actually show
+// (worst in the shadows). `manifold_srgb_encode` (ColorTransferFunctions.h)
+// is the one shared definition, ported from the tested Rust reference —
+// still_exporter.rs's `linear_to_srgb`. Built by concatenating
+// kManifoldColorTransferFunctionsMSL with this kernel body in
+// MetalEncoder_CreateInternal (NSString literals can't be spliced at
+// compile time, so the include+function-def preamble lives there).
+static NSString* const kCopyShaderSDRBody =
+    @"kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
-     "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
+     "    c.rgb = half3(manifold_srgb_encode(float3(max(c.rgb, half3(0.0h)))));\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
@@ -182,9 +189,14 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
             return NULL;
         }
 
-        // Compile texture copy compute shader from source
+        // Compile texture copy compute shader from source. SDR splices the
+        // shared sRGB OETF (ColorTransferFunctions.h) ahead of the kernel
+        // body — see kCopyShaderSDRBody above (BUG-128).
         NSError* shaderError = nil;
-        NSString* shaderSrc = hdr ? kCopyShaderHDR : kCopyShaderSDR;
+        NSString* shaderSrc = hdr
+            ? kCopyShaderHDR
+            : [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n%@\n%@",
+                                          kManifoldColorTransferFunctionsMSL, kCopyShaderSDRBody];
         id<MTLLibrary> library = [device newLibraryWithSource:shaderSrc
                                                       options:nil
                                                         error:&shaderError];
