@@ -14,6 +14,7 @@ use crate::anim::{AnimF32, Transient};
 use crate::automation_hit_tester::{self, AutomationHit};
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
 use crate::color;
+use crate::drag::DragController;
 use crate::input::Modifiers;
 use crate::node::Vec2;
 use crate::panels::viewport::TimelineViewportPanel;
@@ -137,7 +138,10 @@ fn select_clip_range_to(target_clip_id: &str, ui_state: &mut UIState, host: &dyn
 }
 
 // ── DragMode ────────────────────────────────────────────────────
-// Unity InteractionOverlay line 37.
+// Unity InteractionOverlay line 37. Public discriminant, kept for external
+// consumers (D11) — the real internal truth is `InteractionOverlay::drag`
+// (`DragController<TimelineDrag>`); `drag_mode()` derives this via
+// `TimelineDrag::kind()`. `TimelineDrag` is private to this module.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragMode {
@@ -148,27 +152,27 @@ pub enum DragMode {
     RegionSelect,
     /// Dragging an existing automation breakpoint (P4 Unit A,
     /// `docs/AUTOMATION_LANES_DESIGN.md` §7). State lives in
-    /// `InteractionOverlay::automation_drag`, mirroring how `Move`'s state
-    /// lives in `drag_snapshots`/`drag_start_beat`.
+    /// `TimelineDrag::AutomationPoint`'s payload (P7.3).
     AutomationPoint,
     /// Alt-dragging a segment into a curve bend (P4 Unit B, §7's
-    /// "modifier-drag a segment"). State in `automation_segment_bend`.
+    /// "modifier-drag a segment"). State in `TimelineDrag::AutomationSegmentBend`.
     AutomationSegmentBend,
     /// Plain (no-Alt) vertical drag of a segment — both endpoints move by the
     /// same value delta (P4 Unit B, §7's "drag a segment"). State in
-    /// `automation_segment_drag`.
+    /// `TimelineDrag::AutomationSegmentDrag`.
     AutomationSegmentDrag,
     /// Rubber-band selecting automation breakpoints (P4 Unit B, §7's
-    /// "Marquee-select multiple dots"). State in `automation_marquee`.
+    /// "Marquee-select multiple dots"). No payload — the press corner is the
+    /// controller session's own `start` (P7.3, D9-style).
     AutomationMarquee,
     /// Dragging a marquee-selected GROUP of breakpoints together (grabbed one
     /// of the selected dots while the marquee set has 2+ members). State in
-    /// `automation_group_drag`.
+    /// `TimelineDrag::AutomationGroupMove`.
     AutomationGroupMove,
     /// Pencil/draw mode stroke (P4 Unit B, §7's "Draw mode") — active
     /// whenever `UIState::automation_draw_mode` is on and the press lands in
     /// a lane strip, overriding dot/segment/marquee routing entirely. State
-    /// in `automation_draw`.
+    /// in `TimelineDrag::AutomationDraw`.
     AutomationDraw,
 }
 
@@ -235,17 +239,11 @@ struct AutomationSegmentDragState {
     last_right_value: f32,
 }
 
-// ── AutomationMarqueeState / AutomationGroupDragState / AutomationDrawState
-// ────────────────────────────────────────────────────────────────────────
-// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): marquee-select, group
-// move of the marquee-selected set, and pencil/draw mode.
-
-/// Rubber-band marquee in progress — just the press corner; the current
-/// corner is always the live `pos` passed to `on_drag`.
-#[derive(Debug, Clone, Copy)]
-struct AutomationMarqueeState {
-    start: Vec2,
-}
+// ── AutomationGroupDragState / AutomationDrawState ──────────────────────
+// P4 Unit B (`docs/AUTOMATION_LANES_DESIGN.md` §7): group move of the
+// marquee-selected set, and pencil/draw mode. The marquee's own state
+// (P7.3, D9-style) is just the drag controller session's `start` — no
+// separate `AutomationMarqueeState` struct.
 
 /// One marquee-selected point's captured geometry for a group move. Each
 /// point keeps its OWN param range (points can span multiple lanes/params at
@@ -309,6 +307,50 @@ fn apply_draw_point(points: &mut Vec<(Beats, f32, UiSegmentShape)>, beat: Beats,
     }
 }
 
+// ── TimelineDrag (P7.3, D8/D11) ────────────────────────────────────
+// The single lifecycle-owner payload for `InteractionOverlay`'s drag
+// controller. `Move`/`TrimLeft`/`TrimRight`/`RegionSelect` stay unit
+// variants here — their state still lives in the loose fields below
+// (`drag_snapshots`, `trim_originals`, `region_drag_start_*`) until P7.4
+// (trim/region) and P7.5 (move) fold it in. The six automation variants
+// carry their state now (P7.3's fold).
+
+#[derive(Debug, Clone)]
+enum TimelineDrag {
+    Move,
+    TrimLeft,
+    TrimRight,
+    RegionSelect,
+    AutomationPoint(AutomationDragState),
+    AutomationSegmentBend(AutomationSegmentBendState),
+    AutomationSegmentDrag(AutomationSegmentDragState),
+    /// Rubber-band marquee — the press corner is the controller session's
+    /// own `start`, so no separate state struct is needed (D9-style: the
+    /// session geometry IS the state; `AutomationMarqueeState` is deleted).
+    AutomationMarquee,
+    AutomationGroupMove(AutomationGroupDragState),
+    AutomationDraw(AutomationDrawState),
+}
+
+impl TimelineDrag {
+    /// 1:1 projection onto the public discriminant every external consumer
+    /// (auto-scroll polling, drag readout, snap, input routing) still reads.
+    fn kind(&self) -> DragMode {
+        match self {
+            TimelineDrag::Move => DragMode::Move,
+            TimelineDrag::TrimLeft => DragMode::TrimLeft,
+            TimelineDrag::TrimRight => DragMode::TrimRight,
+            TimelineDrag::RegionSelect => DragMode::RegionSelect,
+            TimelineDrag::AutomationPoint(_) => DragMode::AutomationPoint,
+            TimelineDrag::AutomationSegmentBend(_) => DragMode::AutomationSegmentBend,
+            TimelineDrag::AutomationSegmentDrag(_) => DragMode::AutomationSegmentDrag,
+            TimelineDrag::AutomationMarquee => DragMode::AutomationMarquee,
+            TimelineDrag::AutomationGroupMove(_) => DragMode::AutomationGroupMove,
+            TimelineDrag::AutomationDraw(_) => DragMode::AutomationDraw,
+        }
+    }
+}
+
 // ── DragSnapshot ────────────────────────────────────────────────
 // Unity InteractionOverlay lines 49-54.
 
@@ -342,7 +384,11 @@ pub struct InteractionOverlay {
     clip_vertical_padding: f32,
 
     // Drag state (Unity lines 37-73) — EXCLUSIVELY owned here
-    drag_mode: DragMode,
+    // P7.3 (D8/D11): the lifecycle + the six automation gestures' state fold
+    // onto this one controller. `Move`/`TrimLeft`/`TrimRight`/`RegionSelect`
+    // stay unit variants — their state is still the loose fields below,
+    // until P7.4/P7.5 fold those in too.
+    drag: DragController<TimelineDrag>,
     drag_anchor_clip_id: Option<ClipId>,
     drag_start_layer_index: usize,
     drag_snapshots: Vec<DragSnapshot>,
@@ -375,19 +421,6 @@ pub struct InteractionOverlay {
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
-
-    // P4 Unit A automation-point drag state (`docs/AUTOMATION_LANES_DESIGN.md`
-    // §7) — `Some` only while `drag_mode == DragMode::AutomationPoint`.
-    automation_drag: Option<AutomationDragState>,
-    // P4 Unit B segment-gesture state — `Some` only while `drag_mode` is the
-    // matching `AutomationSegmentBend`/`AutomationSegmentDrag` variant.
-    automation_segment_bend: Option<AutomationSegmentBendState>,
-    automation_segment_drag: Option<AutomationSegmentDragState>,
-    // P4 Unit B marquee / group-move / draw-mode state — `Some` only while
-    // `drag_mode` is the matching variant.
-    automation_marquee: Option<AutomationMarqueeState>,
-    automation_group_drag: Option<AutomationGroupDragState>,
-    automation_draw: Option<AutomationDrawState>,
 
     // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
     // Purely visual drag feedback — the model already moves/snaps instantly
@@ -442,7 +475,7 @@ impl InteractionOverlay {
     pub fn new(clip_vertical_padding: f32) -> Self {
         Self {
             clip_vertical_padding,
-            drag_mode: DragMode::None,
+            drag: DragController::new(),
             drag_anchor_clip_id: None,
             drag_start_layer_index: 0,
             drag_snapshots: Vec::with_capacity(8),
@@ -462,12 +495,6 @@ impl InteractionOverlay {
             trim_original_in_point: Seconds::ZERO,
             trim_originals: Vec::with_capacity(8),
             modifiers: Modifiers::NONE,
-            automation_drag: None,
-            automation_segment_bend: None,
-            automation_segment_drag: None,
-            automation_marquee: None,
-            automation_group_drag: None,
-            automation_draw: None,
             lift_anim: AnimF32::new(0.0, color::MOTION_MED_MS),
             ghost_alpha: AnimF32::new(1.0, color::MOTION_MED_MS),
             settle_dx: AnimF32::new(0.0, color::MOTION_MED_MS),
@@ -490,7 +517,7 @@ impl InteractionOverlay {
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
 
-        let dragging_move = self.drag_mode == DragMode::Move;
+        let dragging_move = matches!(self.drag.payload(), Some(TimelineDrag::Move));
         if dragging_move {
             self.drag_visual_clip_ids.clear();
             self.drag_visual_clip_ids
@@ -574,12 +601,13 @@ impl InteractionOverlay {
 
     /// True while any drag is in progress. Unity: IsDragging property.
     pub fn is_dragging(&self) -> bool {
-        self.drag_mode != DragMode::None
+        self.drag.is_active()
     }
 
     /// Current drag mode (read-only, for external queries like auto-scroll).
+    /// Derived from the controller's payload (D11) — idle maps to `None`.
     pub fn drag_mode(&self) -> DragMode {
-        self.drag_mode
+        self.drag.payload().map(TimelineDrag::kind).unwrap_or(DragMode::None)
     }
 
     /// B13 — the clip whose position/length the live readout should report,
@@ -588,7 +616,7 @@ impl InteractionOverlay {
     /// `ClipId` wraps `Arc<str>`, so this clone is a refcount bump, not an
     /// allocation.
     pub fn drag_readout_clip_id(&self) -> Option<ClipId> {
-        match self.drag_mode {
+        match self.drag_mode() {
             DragMode::Move => self.drag_anchor_clip_id.clone(),
             DragMode::TrimLeft | DragMode::TrimRight => self.trim_clip_id.clone(),
             _ => None,
@@ -656,7 +684,7 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &mut TimelineViewportPanel,
     ) {
-        match self.drag_mode {
+        match self.drag_mode() {
             DragMode::Move if self.drag_anchor_clip_id.is_some() => {
                 self.handle_move_drag(mouse_screen_pos, host, ui_state, viewport);
             }
@@ -924,15 +952,15 @@ impl InteractionOverlay {
 
                 let value =
                     lane.param_min + dot.value_norm.clamp(0.0, 1.0) * (lane.param_max - lane.param_min);
-                self.automation_drag = Some(AutomationDragState {
+                let state = AutomationDragState {
                     target: lane.target.clone(),
                     param_id: lane.param_id.clone(),
                     original: (dot.beat, value, dot.shape),
                     last_beat: dot.beat,
                     last_value: value,
-                });
+                };
                 ui_state.selected_automation_point = Some(point_ref);
-                self.drag_mode = DragMode::AutomationPoint;
+                self.drag.start(TimelineDrag::AutomationPoint(state), press_pos);
                 host.set_cursor(TimelineCursor::Move);
                 true
             }
@@ -941,9 +969,8 @@ impl InteractionOverlay {
                 true
             }
             AutomationHit::Strip { .. } => {
-                self.automation_marquee = Some(AutomationMarqueeState { start: press_pos });
                 ui_state.selected_automation_points.clear();
-                self.drag_mode = DragMode::AutomationMarquee;
+                self.drag.start(TimelineDrag::AutomationMarquee, press_pos);
                 true
             }
         }
@@ -994,13 +1021,13 @@ impl InteractionOverlay {
         if points.is_empty() {
             return;
         }
-        self.automation_group_drag = Some(AutomationGroupDragState {
+        let state = AutomationGroupDragState {
             grab_target: grab_lane.target.clone(),
             grab_param_id: grab_lane.param_id.clone(),
             grab_norm,
             points,
-        });
-        self.drag_mode = DragMode::AutomationGroupMove;
+        };
+        self.drag.start(TimelineDrag::AutomationGroupMove(state), press_pos);
         host.set_cursor(TimelineCursor::Move);
     }
 
@@ -1021,14 +1048,14 @@ impl InteractionOverlay {
         let lane = &lanes[lane_index];
         let old_points = host.automation_lane_points(&lane.target, &lane.param_id);
         let working = old_points.clone().unwrap_or_default();
-        self.automation_draw = Some(AutomationDrawState {
+        let state = AutomationDrawState {
             target: lane.target.clone(),
             param_id: lane.param_id.clone(),
             new_point_shape: if lane.whole_numbers { UiSegmentShape::Hold } else { UiSegmentShape::Linear },
             old_points,
             working,
-        });
-        self.drag_mode = DragMode::AutomationDraw;
+        };
+        self.drag.start(TimelineDrag::AutomationDraw(state), press_pos);
         host.set_cursor(TimelineCursor::Move);
         // Falls through to the shared per-frame writer so the press itself
         // draws a point immediately, not just subsequent movement.
@@ -1045,7 +1072,7 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some(state) = self.automation_draw.as_ref() else {
+        let Some(TimelineDrag::AutomationDraw(state)) = self.drag.payload() else {
             return;
         };
         let (target, param_id) = (state.target.clone(), state.param_id.clone());
@@ -1058,7 +1085,7 @@ impl InteractionOverlay {
         let norm = (1.0 - (pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON)).clamp(0.0, 1.0);
         let value = lane.param_min + norm * (lane.param_max - lane.param_min);
 
-        let Some(state) = self.automation_draw.as_mut() else {
+        let Some(TimelineDrag::AutomationDraw(state)) = self.drag.payload_mut() else {
             return;
         };
         apply_draw_point(&mut state.working, beat, value, state.new_point_shape);
@@ -1068,10 +1095,7 @@ impl InteractionOverlay {
 
     /// Commit a finished draw stroke as one undo entry — no-op if the
     /// working list ended up identical to the pre-stroke set.
-    fn commit_automation_draw(&mut self, host: &mut dyn TimelineEditingHost) {
-        let Some(state) = self.automation_draw.take() else {
-            return;
-        };
+    fn commit_automation_draw(&mut self, state: AutomationDrawState, host: &mut dyn TimelineEditingHost) {
         let unchanged = state.old_points.as_deref() == Some(state.working.as_slice())
             || (state.old_points.is_none() && state.working.is_empty());
         if !unchanged {
@@ -1104,7 +1128,7 @@ impl InteractionOverlay {
                 UiSegmentShape::Curved(c) => c,
                 _ => 0.0,
             };
-            self.automation_segment_bend = Some(AutomationSegmentBendState {
+            let state = AutomationSegmentBendState {
                 target: lane.target.clone(),
                 param_id: lane.param_id.clone(),
                 left_beat: left.beat,
@@ -1112,12 +1136,12 @@ impl InteractionOverlay {
                 original_shape: left.shape,
                 grab_y: press_pos.y,
                 last_bend: original_bend,
-            });
-            self.drag_mode = DragMode::AutomationSegmentBend;
+            };
+            self.drag.start(TimelineDrag::AutomationSegmentBend(state), press_pos);
         } else {
             let grab_norm = (1.0 - (press_pos.y - lane.strip_rect.y) / lane.strip_rect.height.max(f32::EPSILON))
                 .clamp(0.0, 1.0);
-            self.automation_segment_drag = Some(AutomationSegmentDragState {
+            let state = AutomationSegmentDragState {
                 target: lane.target.clone(),
                 param_id: lane.param_id.clone(),
                 left_beat: left.beat,
@@ -1129,8 +1153,8 @@ impl InteractionOverlay {
                 grab_norm,
                 last_left_value: left_value,
                 last_right_value: right_value,
-            });
-            self.drag_mode = DragMode::AutomationSegmentDrag;
+            };
+            self.drag.start(TimelineDrag::AutomationSegmentDrag(state), press_pos);
         }
         host.set_cursor(TimelineCursor::Move);
     }
@@ -1147,13 +1171,10 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some((target, param_id, from_beat)) = self
-            .automation_drag
-            .as_ref()
-            .map(|d| (d.target.clone(), d.param_id.clone(), d.last_beat))
-        else {
+        let Some(TimelineDrag::AutomationPoint(d)) = self.drag.payload() else {
             return;
         };
+        let (target, param_id, from_beat) = (d.target.clone(), d.param_id.clone(), d.last_beat);
         let lanes = viewport.automation_lane_screens(&[]);
         let Some(lane) = lanes
             .iter()
@@ -1176,18 +1197,15 @@ impl InteractionOverlay {
 
         host.set_automation_point_preview(&target, &param_id, from_beat, to_beat, to_value);
 
-        if let Some(drag) = self.automation_drag.as_mut() {
+        if let Some(TimelineDrag::AutomationPoint(drag)) = self.drag.payload_mut() {
             drag.last_beat = to_beat;
             drag.last_value = to_value;
         }
     }
 
-    /// Commit a finished automation point drag as one undo entry. No-op
-    /// (still clears state) if the point never actually moved.
-    fn commit_automation_drag(&mut self, host: &mut dyn TimelineEditingHost) {
-        let Some(drag) = self.automation_drag.take() else {
-            return;
-        };
+    /// Commit a finished automation point drag as one undo entry. No-op if
+    /// the point never actually moved.
+    fn commit_automation_drag(&mut self, drag: AutomationDragState, host: &mut dyn TimelineEditingHost) {
         let new_point = (drag.last_beat, drag.last_value, drag.original.2);
         let moved = (new_point.0.0 - drag.original.0.0).abs() >= 0.0001
             || (new_point.1 - drag.original.1).abs() > f32::EPSILON;
@@ -1205,7 +1223,7 @@ impl InteractionOverlay {
     /// incrementally), same discipline as every other drag handler here.
     /// Dragging UP (screen Y decreasing) bends positive.
     fn handle_automation_segment_bend_drag(&mut self, pos: Vec2, host: &mut dyn TimelineEditingHost) {
-        let Some(state) = self.automation_segment_bend.as_ref() else {
+        let Some(TimelineDrag::AutomationSegmentBend(state)) = self.drag.payload() else {
             return;
         };
         let mut delta_px = state.grab_y - pos.y;
@@ -1214,7 +1232,7 @@ impl InteractionOverlay {
         }
         let bend = (delta_px / Self::SEGMENT_BEND_PX_RANGE).clamp(-1.0, 1.0);
         host.set_automation_segment_bend_preview(&state.target, &state.param_id, state.left_beat, bend);
-        if let Some(state) = self.automation_segment_bend.as_mut() {
+        if let Some(TimelineDrag::AutomationSegmentBend(state)) = self.drag.payload_mut() {
             state.last_bend = bend;
         }
     }
@@ -1222,10 +1240,7 @@ impl InteractionOverlay {
     /// Commit a finished curve-bend drag as one undo entry — reuses
     /// `commit_automation_point_move` directly: beat and value are
     /// untouched by this gesture, only `shape` differs between old and new.
-    fn commit_automation_segment_bend(&mut self, host: &mut dyn TimelineEditingHost) {
-        let Some(state) = self.automation_segment_bend.take() else {
-            return;
-        };
+    fn commit_automation_segment_bend(&mut self, state: AutomationSegmentBendState, host: &mut dyn TimelineEditingHost) {
         let new_shape = UiSegmentShape::Curved(state.last_bend);
         if new_shape != state.original_shape {
             let old = (state.left_beat, state.left_value, state.original_shape);
@@ -1245,7 +1260,7 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some(state) = self.automation_segment_drag.clone() else {
+        let Some(TimelineDrag::AutomationSegmentDrag(state)) = self.drag.payload().cloned() else {
             return;
         };
         let lanes = viewport.automation_lane_screens(&[]);
@@ -1277,7 +1292,7 @@ impl InteractionOverlay {
             state.right_beat,
             right_value,
         );
-        if let Some(s) = self.automation_segment_drag.as_mut() {
+        if let Some(TimelineDrag::AutomationSegmentDrag(s)) = self.drag.payload_mut() {
             s.last_left_value = left_value;
             s.last_right_value = right_value;
         }
@@ -1286,10 +1301,11 @@ impl InteractionOverlay {
     /// Commit a finished vertical segment drag as ONE undo entry covering
     /// both endpoints (`host.commit_automation_segment_drag` batches them via
     /// `ContentCommand::ExecuteBatch`/`CompositeCommand`).
-    fn commit_automation_segment_value_drag(&mut self, host: &mut dyn TimelineEditingHost) {
-        let Some(state) = self.automation_segment_drag.take() else {
-            return;
-        };
+    fn commit_automation_segment_value_drag(
+        &mut self,
+        state: AutomationSegmentDragState,
+        host: &mut dyn TimelineEditingHost,
+    ) {
         let moved = (state.last_left_value - state.left_original_value).abs() > f32::EPSILON
             || (state.last_right_value - state.right_original_value).abs() > f32::EPSILON;
         if moved {
@@ -1308,14 +1324,19 @@ impl InteractionOverlay {
     }
 
     /// Live-update the marquee selection every frame: rebuild the rect from
-    /// the press corner to the CURRENT position, then re-select every dot
-    /// inside it fresh (never incrementally — the same discipline as every
-    /// other drag handler, and it's cheap: typical scale is tens of lanes).
+    /// the press corner (the controller session's own `start` — D9-style, no
+    /// separate state struct) to the CURRENT position, then re-select every
+    /// dot inside it fresh (never incrementally — the same discipline as
+    /// every other drag handler, and it's cheap: typical scale is tens of
+    /// lanes).
     fn handle_automation_marquee_drag(&mut self, pos: Vec2, ui_state: &mut UIState, viewport: &TimelineViewportPanel) {
-        let Some(marquee) = self.automation_marquee else {
+        let Some(session) = self.drag.session() else {
             return;
         };
-        let rect = automation_hit_tester::marquee_rect(marquee.start, pos);
+        if !matches!(session.payload, TimelineDrag::AutomationMarquee) {
+            return;
+        }
+        let rect = automation_hit_tester::marquee_rect(session.start, pos);
         let lanes = viewport.automation_lane_screens(&[]);
         let hits = automation_hit_tester::dots_in_rect(rect, &lanes);
         ui_state.selected_automation_points = hits
@@ -1340,13 +1361,11 @@ impl InteractionOverlay {
         host: &mut dyn TimelineEditingHost,
         viewport: &TimelineViewportPanel,
     ) {
-        let Some((grab_target, grab_param_id, grab_norm)) = self
-            .automation_group_drag
-            .as_ref()
-            .map(|s| (s.grab_target.clone(), s.grab_param_id.clone(), s.grab_norm))
-        else {
+        let Some(TimelineDrag::AutomationGroupMove(s)) = self.drag.payload() else {
             return;
         };
+        let (grab_target, grab_param_id, grab_norm) =
+            (s.grab_target.clone(), s.grab_param_id.clone(), s.grab_norm);
         let lanes = viewport.automation_lane_screens(&[]);
         let Some(grab_lane) = lanes.iter().find(|l| l.target == grab_target && l.param_id == grab_param_id)
         else {
@@ -1357,7 +1376,7 @@ impl InteractionOverlay {
         .clamp(0.0, 1.0);
         let delta_norm = norm - grab_norm;
 
-        let Some(state) = self.automation_group_drag.as_mut() else {
+        let Some(TimelineDrag::AutomationGroupMove(state)) = self.drag.payload_mut() else {
             return;
         };
         for point in &mut state.points {
@@ -1373,10 +1392,7 @@ impl InteractionOverlay {
     /// point (`host.commit_automation_group_move` batches them via
     /// `ContentCommand::ExecuteBatch`/`CompositeCommand`). No-op if nothing
     /// actually moved.
-    fn commit_automation_group_drag(&mut self, host: &mut dyn TimelineEditingHost) {
-        let Some(state) = self.automation_group_drag.take() else {
-            return;
-        };
+    fn commit_automation_group_drag(&mut self, state: AutomationGroupDragState, host: &mut dyn TimelineEditingHost) {
         let moves: Vec<_> = state
             .points
             .iter()
@@ -1422,7 +1438,7 @@ impl InteractionOverlay {
         }
 
         // Unity lines 248-256: cursor feedback (only when not dragging)
-        if self.drag_mode == DragMode::None {
+        if !self.drag.is_active() {
             if let Some(ref hit) = hit {
                 match hit.region {
                     HitRegion::TrimLeft | HitRegion::TrimRight => {
@@ -1467,7 +1483,7 @@ impl InteractionOverlay {
         if crate::input::input_trace_enabled() {
             eprintln!(
                 "[input-trace] overlay: begin_drag ({:.0},{:.0}) prior mode={:?}",
-                press_pos.x, press_pos.y, self.drag_mode
+                press_pos.x, press_pos.y, self.drag_mode()
             );
         }
         self.drag_layer_blocked = false;
@@ -1485,7 +1501,7 @@ impl InteractionOverlay {
 
         if hit.is_none() {
             // Unity lines 288-291: empty area drag → region selection
-            self.drag_mode = DragMode::RegionSelect;
+            self.drag.start(TimelineDrag::RegionSelect, press_pos);
             // Unity reads Keyboard.current for ctrl/cmd — we use stored modifiers
             let ctrl = self.modifiers.ctrl || self.modifiers.command;
             self.begin_region_drag(press_pos, ctrl, ui_state, viewport);
@@ -1510,7 +1526,7 @@ impl InteractionOverlay {
                     ui_state.select_clip(hit.clip_id.clone(), hit_layer_id.clone());
                     host.on_clip_selected(&hit.clip_id);
                 }
-                self.drag_mode = DragMode::TrimLeft;
+                self.drag.start(TimelineDrag::TrimLeft, press_pos);
                 self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
                     self.begin_trim(&clip);
@@ -1523,7 +1539,7 @@ impl InteractionOverlay {
                     ui_state.select_clip(hit.clip_id.clone(), hit_layer_id);
                     host.on_clip_selected(&hit.clip_id);
                 }
-                self.drag_mode = DragMode::TrimRight;
+                self.drag.start(TimelineDrag::TrimRight, press_pos);
                 self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
                     self.begin_trim(&clip);
@@ -1538,6 +1554,7 @@ impl InteractionOverlay {
                     &hit.clip_id,
                     hit.layer_index,
                     beat,
+                    press_pos,
                     host,
                     ui_state,
                     viewport,
@@ -1546,7 +1563,7 @@ impl InteractionOverlay {
         }
 
         // Unity lines 328-331: reinforce cursor
-        match self.drag_mode {
+        match self.drag_mode() {
             DragMode::TrimLeft | DragMode::TrimRight => {
                 host.set_cursor(TimelineCursor::ResizeHorizontal);
             }
@@ -1565,7 +1582,8 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &mut TimelineViewportPanel,
     ) {
-        match self.drag_mode {
+        self.drag.track(pos);
+        match self.drag_mode() {
             DragMode::Move => {
                 self.handle_move_drag(pos, host, ui_state, viewport);
             }
@@ -1606,83 +1624,90 @@ impl InteractionOverlay {
     /// overlay's own transient state — selection is untouched here.
     pub fn on_end_drag(&mut self, host: &mut dyn TimelineEditingHost) {
         if crate::input::input_trace_enabled() {
-            eprintln!("[input-trace] overlay: end_drag entered (mode={:?})", self.drag_mode);
-        }
-        // Unity lines 358-363: region select → finalize
-        if self.drag_mode == DragMode::RegionSelect {
-            host.invalidate_all_layer_bitmaps();
-            self.drag_mode = DragMode::None;
-            return;
+            eprintln!("[input-trace] overlay: end_drag entered (mode={:?})", self.drag_mode());
         }
 
-        // P4 Unit A: automation point drag → commit one undo entry (already
-        // applied live by `set_automation_point_preview`, mirroring the clip
-        // move path's own "already applied, just record" shape below — but
-        // automation doesn't need the command-batch/enforce-non-overlap
-        // machinery a clip move does, so it commits directly and returns.
-        if self.drag_mode == DragMode::AutomationPoint {
-            self.commit_automation_drag(host);
-            self.drag_mode = DragMode::None;
-            host.mark_dirty();
-            host.set_cursor(TimelineCursor::Default);
-            return;
+        // P7.3 (D8/D11): one `release()` call is the single consuming read of
+        // the drag session — every automation gesture commits directly here
+        // (already applied live by its own preview calls, so it needs none
+        // of the command-batch/enforce-non-overlap machinery a move/trim
+        // does) and returns; `Move`/`TrimLeft`/`TrimRight` fall through to
+        // the existing batch-commit logic below via the two flags captured
+        // here (their own state still lives in the loose fields until
+        // P7.4/P7.5 fold it onto the payload).
+        let ended_move;
+        let ended_trim;
+        match self.drag.release() {
+            // Unity lines 358-363: region select → finalize
+            Some(TimelineDrag::RegionSelect) => {
+                host.invalidate_all_layer_bitmaps();
+                return;
+            }
+            // P4 Unit A: automation point drag → commit one undo entry.
+            Some(TimelineDrag::AutomationPoint(state)) => {
+                self.commit_automation_drag(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            // P4 Unit B: segment gestures commit the same way — already
+            // applied live, just register the undo entry (single command for
+            // a bend, batched pair for a vertical drag).
+            Some(TimelineDrag::AutomationSegmentBend(state)) => {
+                self.commit_automation_segment_bend(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            Some(TimelineDrag::AutomationSegmentDrag(state)) => {
+                self.commit_automation_segment_value_drag(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            // P4 Unit B: marquee selection isn't an edit — just stop
+            // tracking and redraw (the selected set itself stays in
+            // `UIState`, already written live during `on_drag`).
+            Some(TimelineDrag::AutomationMarquee) => {
+                host.invalidate_all_layer_bitmaps();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            // P4 Unit B: group move / draw stroke commit the same way as the
+            // single-point/segment gestures above.
+            Some(TimelineDrag::AutomationGroupMove(state)) => {
+                self.commit_automation_group_drag(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            Some(TimelineDrag::AutomationDraw(state)) => {
+                self.commit_automation_draw(state, host);
+                host.mark_dirty();
+                host.set_cursor(TimelineCursor::Default);
+                return;
+            }
+            Some(TimelineDrag::Move) => {
+                ended_move = true;
+                ended_trim = false;
+            }
+            Some(TimelineDrag::TrimLeft) | Some(TimelineDrag::TrimRight) => {
+                ended_move = false;
+                ended_trim = true;
+            }
+            None => {
+                ended_move = false;
+                ended_trim = false;
+            }
         }
 
-        // P4 Unit B: segment gestures commit the same way — already applied
-        // live, just register the undo entry (single command for a bend,
-        // batched pair for a vertical drag) — and return, same shape as the
-        // automation-point path above.
-        if self.drag_mode == DragMode::AutomationSegmentBend {
-            self.commit_automation_segment_bend(host);
-            self.drag_mode = DragMode::None;
-            host.mark_dirty();
-            host.set_cursor(TimelineCursor::Default);
-            return;
-        }
-        if self.drag_mode == DragMode::AutomationSegmentDrag {
-            self.commit_automation_segment_value_drag(host);
-            self.drag_mode = DragMode::None;
-            host.mark_dirty();
-            host.set_cursor(TimelineCursor::Default);
-            return;
-        }
-
-        // P4 Unit B: marquee selection isn't an edit — just stop tracking
-        // and redraw (the selected set itself stays in `UIState`, already
-        // written live during `on_drag`).
-        if self.drag_mode == DragMode::AutomationMarquee {
-            self.automation_marquee = None;
-            self.drag_mode = DragMode::None;
-            host.invalidate_all_layer_bitmaps();
-            host.set_cursor(TimelineCursor::Default);
-            return;
-        }
-        // P4 Unit B: group move / draw stroke commit the same way as the
-        // single-point/segment gestures above — already applied live, one
-        // undo entry, return.
-        if self.drag_mode == DragMode::AutomationGroupMove {
-            self.commit_automation_group_drag(host);
-            self.drag_mode = DragMode::None;
-            host.mark_dirty();
-            host.set_cursor(TimelineCursor::Default);
-            return;
-        }
-        if self.drag_mode == DragMode::AutomationDraw {
-            self.commit_automation_draw(host);
-            self.drag_mode = DragMode::None;
-            host.mark_dirty();
-            host.set_cursor(TimelineCursor::Default);
-            return;
-        }
-
-        let ended_move = self.drag_mode == DragMode::Move;
         host.begin_command_batch();
 
         // D15 landing-line flash geometry — leftmost landed beat + layer span
         // of the clips that actually moved, accumulated in the record loop.
         let mut landed: Option<(Beats, usize, usize)> = None;
 
-        if self.drag_mode == DragMode::Move {
+        if ended_move {
             // Unity lines 370-386: record commands. No finalize-snap step —
             // `handle_move_drag` already snapped+clamped this position on the
             // last frame (D5); there is nothing left to reconcile here.
@@ -1725,7 +1750,7 @@ impl InteractionOverlay {
             for snapshot in &self.drag_snapshots {
                 host.enforce_non_overlap(&snapshot.clip_id, &self.drag_snapshot_clip_ids);
             }
-        } else if self.drag_mode == DragMode::TrimLeft || self.drag_mode == DragMode::TrimRight {
+        } else if ended_trim {
             // Unity lines 390-401: record a trim command for every selected clip
             // that actually changed, each with its own pre/post geometry.
             for orig in &self.trim_originals {
@@ -1803,7 +1828,7 @@ impl InteractionOverlay {
     /// P1.4 (D5/D8); callers should only invoke this when `drag_mode()` is
     /// `Move`, `TrimLeft`, or `TrimRight`.
     pub fn cancel_drag(&mut self, host: &mut dyn TimelineEditingHost) {
-        match self.drag_mode {
+        match self.drag_mode() {
             DragMode::Move => {
                 for snapshot in &self.drag_snapshots {
                     host.set_clip_start_beat(&snapshot.clip_id, snapshot.start_beat);
@@ -1839,7 +1864,10 @@ impl InteractionOverlay {
     /// Escape `cancel_drag` — both end the gesture the same way once the
     /// model is settled (committed or restored).
     fn reset_drag_state(&mut self, host: &mut dyn TimelineEditingHost) {
-        self.drag_mode = DragMode::None;
+        // Idempotent: `on_end_drag`'s path already consumed the session via
+        // `release()`; `cancel_drag`'s path has not, so this is where it
+        // drops (no commit signal, per `cancel`'s contract).
+        self.drag.cancel();
         self.drag_snapshots.clear();
         self.drag_snapshot_clip_ids.clear();
         self.drag_anchor_clip_id = None;
@@ -2113,11 +2141,12 @@ impl InteractionOverlay {
         clip_id: &str,
         layer_index: usize,
         mouse_beat: Beats,
+        press_pos: Vec2,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
         _viewport: &TimelineViewportPanel,
     ) {
-        self.drag_mode = DragMode::Move;
+        self.drag.start(TimelineDrag::Move, press_pos);
 
         // Unity lines 598-648: region-partial move
         if let Some(region) = ui_state.current_region().cloned()
@@ -2808,6 +2837,27 @@ mod p1_4_gesture_integrity_tests {
         trim_records: Vec<(ClipId, Beats, Beats, Beats, Beats)>,
         batch_ops: usize,
         committed_batches: Vec<usize>,
+        // P7.3 automation-fold pinning (recorded, not no-op'd, so the tests
+        // below can assert exactly what a gesture committed).
+        automation_point_moves: Vec<(
+            UiGraphTarget,
+            ParamId,
+            (Beats, f32, UiSegmentShape),
+            (Beats, f32, UiSegmentShape),
+        )>,
+        automation_segment_drag_commits: Vec<(
+            UiGraphTarget,
+            ParamId,
+            (Beats, f32, f32, UiSegmentShape),
+            (Beats, f32, f32, UiSegmentShape),
+        )>,
+        automation_group_move_commits: Vec<Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>>,
+        automation_draw_commits: Vec<(
+            UiGraphTarget,
+            ParamId,
+            Vec<(Beats, f32, UiSegmentShape)>,
+            Option<Vec<(Beats, f32, UiSegmentShape)>>,
+        )>,
     }
 
     impl GestureTestHost {
@@ -2829,6 +2879,10 @@ mod p1_4_gesture_integrity_tests {
                 trim_records: Vec::new(),
                 batch_ops: 0,
                 committed_batches: Vec::new(),
+                automation_point_moves: Vec::new(),
+                automation_segment_drag_commits: Vec::new(),
+                automation_group_move_commits: Vec::new(),
+                automation_draw_commits: Vec::new(),
             }
         }
 
@@ -3017,11 +3071,13 @@ mod p1_4_gesture_integrity_tests {
         }
         fn commit_automation_point_move(
             &mut self,
-            _target: &UiGraphTarget,
-            _param_id: &ParamId,
-            _old: (Beats, f32, UiSegmentShape),
-            _new: (Beats, f32, UiSegmentShape),
+            target: &UiGraphTarget,
+            param_id: &ParamId,
+            old: (Beats, f32, UiSegmentShape),
+            new: (Beats, f32, UiSegmentShape),
         ) {
+            self.automation_point_moves
+                .push((target.clone(), param_id.clone(), old, new));
         }
         fn remove_automation_point(&mut self, _target: &UiGraphTarget, _param_id: &ParamId, _beat: Beats) {}
         fn set_automation_segment_bend_preview(
@@ -3044,16 +3100,19 @@ mod p1_4_gesture_integrity_tests {
         }
         fn commit_automation_segment_drag(
             &mut self,
-            _target: &UiGraphTarget,
-            _param_id: &ParamId,
-            _left: (Beats, f32, f32, UiSegmentShape),
-            _right: (Beats, f32, f32, UiSegmentShape),
+            target: &UiGraphTarget,
+            param_id: &ParamId,
+            left: (Beats, f32, f32, UiSegmentShape),
+            right: (Beats, f32, f32, UiSegmentShape),
         ) {
+            self.automation_segment_drag_commits
+                .push((target.clone(), param_id.clone(), left, right));
         }
         fn commit_automation_group_move(
             &mut self,
-            _moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
+            moves: Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>,
         ) {
+            self.automation_group_move_commits.push(moves);
         }
         fn automation_lane_points(
             &self,
@@ -3071,11 +3130,13 @@ mod p1_4_gesture_integrity_tests {
         }
         fn commit_automation_draw_stroke(
             &mut self,
-            _target: &UiGraphTarget,
-            _param_id: &ParamId,
-            _new_points: Vec<(Beats, f32, UiSegmentShape)>,
-            _old_points: Option<Vec<(Beats, f32, UiSegmentShape)>>,
+            target: &UiGraphTarget,
+            param_id: &ParamId,
+            new_points: Vec<(Beats, f32, UiSegmentShape)>,
+            old_points: Option<Vec<(Beats, f32, UiSegmentShape)>>,
         ) {
+            self.automation_draw_commits
+                .push((target.clone(), param_id.clone(), new_points, old_points));
         }
     }
 
@@ -3118,6 +3179,213 @@ mod p1_4_gesture_integrity_tests {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         panel.build(&mut tree, &layout);
         panel
+    }
+
+    // ── P7.3 automation-fold pinning ────────────────────────────────────
+    // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.3: prove the six automation
+    // gestures' begin→track→commit behavior is byte-identical now that their
+    // state lives on `TimelineDrag`'s payload instead of six parallel
+    // `Option<...State>` fields. One real lane ("Mirror: amount") with two
+    // points `[(4.0, 0.5, Linear), (8.0, 0.8, Linear)]`, param range 0..1 —
+    // enough geometry for point/segment/marquee/group/draw gestures to all
+    // have real targets. Built through the REAL `Panel::build` +
+    // `set_automation_lanes` so strip/dot screen geometry matches production.
+    fn build_viewport_with_automation() -> TimelineViewportPanel {
+        use crate::panels::viewport::ViewportAutomationLane;
+        use crate::view::{UiAutomationLane, UiAutomationPoint};
+        use manifold_foundation::EffectId;
+
+        let mut tree = UITree::new();
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(vec![TrackInfo::default()]);
+        panel.set_clips(vec![]);
+        panel.rebuild_mapper_layout(&[UiLayer {
+            layer_id: LayerId::new("layer-0"),
+            parent_layer_id: None,
+            layer_type: LayerType::Video,
+            is_collapsed: false,
+            automation_lane_count: 1,
+        }]);
+        panel.set_automation_lanes(vec![ViewportAutomationLane {
+            layer_index: 0,
+            lane: UiAutomationLane {
+                effect_id: EffectId::new("fx-mirror"),
+                param_id: ParamId::Borrowed("amount"),
+                target: UiGraphTarget::Effect(EffectId::new("fx-mirror")),
+                label: "Mirror: amount".into(),
+                points: vec![
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                ],
+                param_min: 0.0,
+                param_max: 1.0,
+                whole_numbers: false,
+                placeholder: false,
+            },
+        }]);
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        panel.build(&mut tree, &layout);
+        panel
+    }
+
+    /// Screen position of the lane strip's grabbed dot — reads back through
+    /// the real `automation_lane_screens` geometry rather than recomputing
+    /// pixel math independently, so the test can't silently drift from
+    /// production's own conversion.
+    fn dot_pos(panel: &TimelineViewportPanel, dot_index: usize) -> Vec2 {
+        let lanes = panel.automation_lane_screens(&[]);
+        let dot = lanes[0].dots[dot_index];
+        Vec2::new(
+            panel.beat_to_pixel(dot.beat),
+            lanes[0].strip_rect.y + lanes[0].strip_rect.height * (1.0 - dot.value_norm),
+        )
+    }
+
+    #[test]
+    fn automation_point_drag_begin_track_commit() {
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let press = dot_pos(&panel, 0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationPoint, "grabbing an existing dot must begin a point drag");
+
+        // Drag it up (higher value) and a bit right (later beat).
+        overlay.on_drag(press + Vec2::new(20.0, -30.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(overlay.drag_mode(), DragMode::None, "drag must end");
+        assert_eq!(host.automation_point_moves.len(), 1, "exactly one commit for a moved point");
+        let (_, _, old, new) = &host.automation_point_moves[0];
+        assert_eq!(old.0, Beats::from_f32(4.0), "old beat must be the grabbed point's original beat");
+        assert!(new.1 > old.1, "dragging up must raise the value");
+    }
+
+    #[test]
+    fn automation_marquee_drag_selects_points_and_clears_on_end() {
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        // Press on bare strip (not on a dot) to begin a marquee — top-left
+        // corner, so the rect built by dragging to bottom-right spans both
+        // dots' differing Y (value_norm 0.5 vs 0.8), not just their X.
+        let lanes = panel.automation_lane_screens(&[]);
+        let strip = lanes[0].strip_rect;
+        let press = Vec2::new(strip.x + 2.0, strip.y + 1.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationMarquee);
+
+        // Drag across both dots, full strip height.
+        let far = Vec2::new(panel.tracks_rect().x_max() - 2.0, strip.y + strip.height - 1.0);
+        overlay.on_drag(far, &mut host, &mut ui_state, &mut panel);
+        assert_eq!(
+            ui_state.selected_automation_points.len(),
+            2,
+            "marquee spanning both dots must select both"
+        );
+
+        overlay.on_end_drag(&mut host);
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        // Selection itself isn't cleared by end-drag (it's UIState's, written
+        // live) — only the drag lifecycle ends.
+        assert_eq!(ui_state.selected_automation_points.len(), 2);
+    }
+
+    #[test]
+    fn automation_group_move_drag_moves_every_selected_point() {
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state = UIState::new();
+
+        // Pre-select both points (mirrors a completed marquee) so the next
+        // grab on a selected dot begins a GROUP move, not a single-point drag.
+        let lanes = panel.automation_lane_screens(&[]);
+        ui_state.selected_automation_points = lanes[0]
+            .dots
+            .iter()
+            .map(|d| UiAutomationPointRef {
+                target: lanes[0].target.clone(),
+                param_id: lanes[0].param_id.clone(),
+                beat: d.beat,
+            })
+            .collect();
+
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let press = dot_pos(&panel, 0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationGroupMove, "grabbing a multi-selected dot must begin a group move");
+
+        overlay.on_drag(press + Vec2::new(0.0, -20.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        assert_eq!(host.automation_group_move_commits.len(), 1, "one batched commit for the group move");
+        assert_eq!(
+            host.automation_group_move_commits[0].len(),
+            2,
+            "both selected points must move together"
+        );
+    }
+
+    #[test]
+    fn automation_segment_bend_and_vertical_drag_commit() {
+        // Alt-held: bend the segment between the two points.
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.set_modifiers(Modifiers { alt: true, ..Modifiers::NONE });
+
+        let lanes = panel.automation_lane_screens(&[]);
+        let (d0, d1) = (lanes[0].dots[0], lanes[0].dots[1]);
+        // Midpoint of the ACTUAL segment line (linear interp of screen y, not
+        // a naive average of param values — the two differ whenever the two
+        // dots don't straddle the strip's vertical center).
+        let press = Vec2::new((d0.x + d1.x) / 2.0, (d0.y + d1.y) / 2.0);
+
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationSegmentBend, "Alt-press on a segment must begin a bend");
+        overlay.on_drag(press + Vec2::new(0.0, -20.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        assert_eq!(host.automation_point_moves.len(), 1, "bend commits through the point-move path (shape only)");
+
+        // Plain (no Alt) press on the same segment: vertical value drag.
+        let mut panel2 = build_viewport_with_automation();
+        let mut host2 = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state2 = UIState::new();
+        let mut overlay2 = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay2.on_begin_drag(press, &mut host2, &mut ui_state2, &panel2);
+        assert_eq!(overlay2.drag_mode(), DragMode::AutomationSegmentDrag, "plain press on a segment must begin a vertical drag");
+        overlay2.on_drag(press + Vec2::new(0.0, -20.0), &mut host2, &mut ui_state2, &mut panel2);
+        overlay2.on_end_drag(&mut host2);
+        assert_eq!(overlay2.drag_mode(), DragMode::None);
+        assert_eq!(host2.automation_segment_drag_commits.len(), 1, "one batched commit covering both endpoints");
+    }
+
+    #[test]
+    fn automation_draw_stroke_writes_points_and_commits_on_release() {
+        let mut ui_state = UIState::new();
+        ui_state.automation_draw_mode = true;
+        let mut panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let lanes = panel.automation_lane_screens(&[]);
+        let strip = lanes[0].strip_rect;
+        let press = Vec2::new(strip.x + 10.0, strip.y + strip.height * 0.5);
+
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::AutomationDraw, "pencil mode overrides all other drag routing on a lane strip");
+        overlay.on_drag(press + Vec2::new(40.0, -10.0), &mut host, &mut ui_state, &mut panel);
+        overlay.on_end_drag(&mut host);
+
+        assert_eq!(overlay.drag_mode(), DragMode::None);
+        assert_eq!(host.automation_draw_commits.len(), 1, "one commit per finished stroke");
     }
 
     fn body_pos_for(panel: &TimelineViewportPanel, beat_center: f32) -> Vec2 {
@@ -3526,7 +3794,7 @@ mod motion_tests {
     #[test]
     fn lift_and_ghost_target_zero_and_one_when_idle() {
         let mut ov = overlay();
-        assert_eq!(ov.drag_mode, DragMode::None);
+        assert_eq!(ov.drag_mode(), DragMode::None);
         ov.tick(16.0);
         assert_eq!(ov.lift_amount(), 0.0, "no lift while not dragging");
         assert_eq!(ov.ghost_alpha(), 1.0, "fully solid while not dragging");
@@ -3537,7 +3805,7 @@ mod motion_tests {
     #[test]
     fn move_drag_ramps_lift_up_and_settles_to_one() {
         let mut ov = overlay();
-        ov.drag_mode = DragMode::Move;
+        ov.drag.start(TimelineDrag::Move, Vec2::ZERO);
         ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
 
         ov.tick(16.0);
@@ -3553,7 +3821,7 @@ mod motion_tests {
     #[test]
     fn alt_duplicate_drag_dims_ghost_then_solidifies_on_release() {
         let mut ov = overlay();
-        ov.drag_mode = DragMode::Move;
+        ov.drag.start(TimelineDrag::Move, Vec2::ZERO);
         ov.duplicate_on_release = true;
         ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
 
@@ -3565,7 +3833,7 @@ mod motion_tests {
         );
 
         // Release: drag_mode drops, ghost eases back up ("solidifies").
-        ov.drag_mode = DragMode::None;
+        ov.drag.cancel();
         ov.duplicate_on_release = false;
         ov.tick(color::MOTION_MED_MS);
         assert_eq!(ov.ghost_alpha(), 1.0, "fully solid once settled post-release");
