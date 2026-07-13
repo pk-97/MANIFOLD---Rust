@@ -1,6 +1,6 @@
 # Graph Tooling — validate/fusion CLI for agents + boundary-exemption enforcement
 
-**Status:** APPROVED design, in execution (this session) · 2026-07-13 · Fable (design session with Peter; approved by Peter same day)
+**Status:** SHIPPED — P1–P4 built, gated, and landed 2026-07-13 (same-day design→execution, Fable orchestrating Sonnet workers). Deferred items in §7 remain open.
 **Prerequisites:** none. NODE_VOCABULARY_AUDIT apply pass is SHIPPED (2026-07-03), so the catalog speaks final names. This design deliberately pulls the *validate* slice of MCP_INTERFACE_DESIGN P2 forward as a CLI; the MCP server itself stays where DESIGN_BUILD_ORDER puts it (wave 3, after COMPONENT_LIBRARY).
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before starting any phase.
 
@@ -136,6 +136,7 @@ Landing (per GIT_TREE_DISCIPLINE): batch P1–P4 as one workstream; full clippy+
 
 ## 7. Deferred
 
+- **Composite binding-target lint** — `BindingTarget::Composite` resolves through a runtime `CompositeHandle`, not derivable from the def alone; zero bundled presets use one (verified P4). Trigger: the first preset that does.
 - **`patch_graph`/compat/query verbs** — revive with MCP_INTERFACE execution if the stress-test shows agents need them.
 - **Component tier in the catalog/validator** — rides in with COMPONENT_LIBRARY (its design already amends the surface).
 - **Error-message quality pass** (messages tuned on real agent transcripts) — MCP_INTERFACE P5 owns it; the structured `ValidationIssue` shape here is what makes it cheap.
