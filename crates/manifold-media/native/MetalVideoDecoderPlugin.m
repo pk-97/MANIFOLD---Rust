@@ -28,6 +28,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <stdlib.h>
+#import "ColorTransferFunctions.h"
 
 // -- Error codes --------------------------------------------------------------
 
@@ -46,14 +47,18 @@
 
 // -- Compute shader: NV12 biplanar YCbCr → Rgba16Float -----------------------
 // Reads Y plane (R8Unorm, full res) and CbCr plane (RG8Unorm, half res).
-// Converts BT.709 video-range YCbCr to linear RGB, outputs as Rgba16Float.
+// Converts video-range YCbCr to linear RGB, outputs as Rgba16Float.
 // Threadgroup 16×16, same pattern as encoder's copy_texture shader.
+//
+// BUG-128: linearization used to be a plain pow(2.2) approximation; it now
+// uses `manifold_srgb_decode` (ColorTransferFunctions.h), the same shared
+// EOTF the encoder's `manifold_srgb_encode` inverts, matching the true sRGB
+// transfer function the display and the still exporter use. Built by
+// concatenating kManifoldColorTransferFunctionsMSL with this kernel body in
+// VideoDecoder_CreatePool (see below), same pattern as the encoder plugin.
 
-static NSString* const kYuvToRgbaShaderSource =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "\n"
-     "kernel void yuv_to_rgba(\n"
+static NSString* const kYuvToRgbaShaderBody =
+    @"kernel void yuv_to_rgba(\n"
      "    texture2d<float, access::read>  y_tex    [[texture(0)]],\n"
      "    texture2d<float, access::read>  cbcr_tex [[texture(1)]],\n"
      "    texture2d<float, access::write> out_tex  [[texture(2)]],\n"
@@ -101,8 +106,8 @@ static NSString* const kYuvToRgbaShaderSource =
      "    float g = y - 0.1873 * cb - 0.4681 * cr;\n"
      "    float b = y + 1.8556 * cb;\n"
      "\n"
-     "    // sRGB gamma → linear (approximate)\n"
-     "    float3 linear_rgb = pow(max(float3(r, g, b), 0.0), 2.2);\n"
+     "    // sRGB gamma -> linear (true piecewise EOTF, matches display + still export)\n"
+     "    float3 linear_rgb = manifold_srgb_decode(max(float3(r, g, b), 0.0));\n"
      "\n"
      "    out_tex.write(float4(linear_rgb, 1.0), gid);\n"
      "}\n";
@@ -331,9 +336,13 @@ void* VideoDecoder_CreatePool(void)
             return NULL;
         }
 
-        // Compile NV12→Rgba16Float compute shader
+        // Compile NV12→Rgba16Float compute shader. Splice the shared sRGB
+        // EOTF (ColorTransferFunctions.h) ahead of the kernel body — see
+        // kYuvToRgbaShaderBody above (BUG-128).
         NSError* shaderError = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:kYuvToRgbaShaderSource
+        NSString* shaderSrc = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n%@\n%@",
+                                                           kManifoldColorTransferFunctionsMSL, kYuvToRgbaShaderBody];
+        id<MTLLibrary> library = [device newLibraryWithSource:shaderSrc
                                                       options:nil
                                                         error:&shaderError];
         if (library == nil)
