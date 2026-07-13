@@ -40,7 +40,6 @@ pub mod timeline_input_host;
 pub mod transform;
 pub mod transform2d;
 pub mod tree;
-pub mod trim;
 pub mod types;
 pub mod ui_state;
 pub mod view;

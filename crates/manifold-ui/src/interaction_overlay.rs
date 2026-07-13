@@ -2101,6 +2101,7 @@ impl InteractionOverlay {
                 new_start = new_start.max(orig.start_beat);
             }
             new_start = new_start.min(original_end - min_duration);
+            new_start = new_start.max(Beats::ZERO);
 
             let beat_delta = new_start - orig.start_beat;
             let new_duration = original_end - new_start;
@@ -2898,6 +2899,7 @@ mod p1_4_gesture_integrity_tests {
         duration_beats: Beats,
         in_point: Seconds,
         is_locked: bool,
+        is_generator: bool,
     }
 
     struct GestureTestHost {
@@ -2964,6 +2966,20 @@ mod p1_4_gesture_integrity_tests {
                 duration_beats: Beats::from_f32(duration),
                 in_point: Seconds::ZERO,
                 is_locked: false,
+                is_generator: false,
+            });
+            self
+        }
+
+        fn with_generator_clip(mut self, id: &str, layer_index: usize, start: f32, duration: f32) -> Self {
+            self.clips.push(ClipEntry {
+                id: ClipId::new(id),
+                layer_index,
+                start_beat: Beats::from_f32(start),
+                duration_beats: Beats::from_f32(duration),
+                in_point: Seconds::ZERO,
+                is_locked: false,
+                is_generator: true,
             });
             self
         }
@@ -2976,6 +2992,7 @@ mod p1_4_gesture_integrity_tests {
                 duration_beats: Beats::from_f32(duration),
                 in_point: Seconds::ZERO,
                 is_locked: true,
+                is_generator: false,
             });
             self
         }
@@ -2989,7 +3006,7 @@ mod p1_4_gesture_integrity_tests {
                 layer_index: e.layer_index,
                 layer_id: self.layers[e.layer_index].layer_id.clone(),
                 in_point: e.in_point,
-                is_generator: false,
+                is_generator: e.is_generator,
                 is_locked: e.is_locked,
                 is_looping: false,
             }
@@ -3526,6 +3543,32 @@ mod p1_4_gesture_integrity_tests {
         assert_eq!(host.committed_batches.len(), 1, "one batched undo entry for the whole trim");
         let a = host.find_clip_by_id("clip_a").unwrap();
         assert!(a.start_beat > Beats::ZERO, "clip_a's start must have moved right");
+    }
+
+    #[test]
+    fn trim_left_drag_on_generator_clamps_to_beat_zero() {
+        // BUG: generator clips are allowed to extend their left-trim freely
+        // (unlike video clips, which floor at their own original start), but
+        // that freedom must still stop at beat 0 — dragging far enough left
+        // must not push start_beat negative.
+        let mut panel = build_viewport();
+        let mut host = GestureTestHost::new(&["layer-0"]).with_generator_clip("clip_a", 0, 0.0, 8.0);
+        let mut ui_state = UIState::new();
+        ui_state.select_clips(vec![ClipId::new("clip_a")]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let press = trim_left_pos(&panel, 0.0);
+        overlay.on_begin_drag(press, &mut host, &mut ui_state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::TrimLeft);
+
+        // Drag far left of beat 0 — must clamp at zero, never go negative.
+        overlay.on_drag(Vec2::new(panel.tracks_rect().x - 500.0, press.y), &mut host, &mut ui_state, &mut panel);
+        let mid = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert!(mid >= Beats::ZERO, "start_beat must clamp at zero mid-drag: {mid:?}");
+
+        overlay.on_end_drag(&mut host);
+        let end = host.find_clip_by_id("clip_a").unwrap().start_beat;
+        assert!(end >= Beats::ZERO, "start_beat must clamp at zero at commit: {end:?}");
     }
 
     #[test]
