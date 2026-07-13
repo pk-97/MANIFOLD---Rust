@@ -4,6 +4,9 @@
 **Prerequisites:** none (REALTIME_3D P2 shadows + P3 fog and CAMERA_AND_LENS P2 are shipped and are the substrate; verified in §1)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
+**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-renderer --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES §"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
+
+
 Peter's directives, 2026-07-13, all quoted because each one decides something:
 *"God rays would be amazing!"* · the look: *"a black void filled with haze with
 beams of light shining through"*, with *"the god rays form off the stems or
