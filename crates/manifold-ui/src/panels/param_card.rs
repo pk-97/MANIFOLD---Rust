@@ -5293,6 +5293,45 @@ mod tests {
         assert!(panel.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
     }
 
+    // BUG-076 instrumentation: a card configured for the FIRST time (no prior
+    // "closed" configure — the real "select a layer whose effects already
+    // have armed audio/driver mods" case, not the toggle-open case
+    // `drawer_open_tween_reserves_interpolated_height_clips_then_settles`
+    // above exercises) must report its full settled height immediately —
+    // `build` renders the armed drawer at full height with no "click to
+    // open" step, so `compute_height` must agree without needing a
+    // `tick_drawers` call first.
+    #[test]
+    fn configure_seeds_settled_height_when_drawer_already_armed_on_first_configure() {
+        let mut armed = effect_config();
+        armed.driver_active[0] = true;
+
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&armed); // first-ever configure — drawer_height_anim starts empty
+
+        assert!(
+            !panel.drawer_height_anim[0].is_animating(),
+            "a cold-armed drawer must be snapped, not eased, on first configure"
+        );
+        let full_target = panel.row_drawer_height(0);
+        assert!(full_target > 0.0, "sanity: driver-armed row must reserve nonzero drawer height");
+
+        // The regression this guards: before the fix, `compute_height()`
+        // read `drawer_height_anim[0].value()` (0, since the tween hadn't
+        // ticked) instead of the settled target — undercounting by
+        // `full_target` on the very first frame the card is ever built.
+        let height_before_any_tick = panel.compute_height();
+        for _ in 0..20 {
+            panel.tick_drawers(20.0);
+        }
+        let settled_height = panel.compute_height();
+        assert!(
+            (height_before_any_tick - settled_height).abs() < 0.1,
+            "first-configure height ({height_before_any_tick}) must already equal the fully- \
+             settled height ({settled_height}) — no undercounting before any tick"
+        );
+    }
+
     #[test]
     fn drawer_tween_snaps_on_author_cards() {
         // Author (graph-editor) cards are not ticked by the inspector, so they must
