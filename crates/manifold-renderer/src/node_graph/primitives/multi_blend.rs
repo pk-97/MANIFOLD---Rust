@@ -170,6 +170,21 @@ impl EffectNode for MultiBlend {
         Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
     }
 
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: `num_inputs`
+    /// sizes the live port allocation — `reconfigure` (this file, line 191)
+    /// clamps to `[2, MAX_INPUTS]` before `rebuild_ports` slices the static
+    /// `IN_PORT_NAMES` table.
+    fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
+        match param_name {
+            "num_inputs" => Some(manifold_core::effects::RangeContract {
+                min: Some(2.0),
+                max: Some(MAX_INPUTS as f32),
+                reason: manifold_core::effects::RangeReason::Count,
+            }),
+            _ => None,
+        }
+    }
+
     fn inputs(&self) -> &[NodeInput] {
         &self.inputs
     }
