@@ -658,13 +658,14 @@ impl AudioTriggerSection {
     }
 
     /// Right-click resets on the shaping sliders — the drawer's own
-    /// `slider_resets`, registered exactly as `ParamCardPanel` does.
+    /// `slider_resets`, registered exactly as `ParamCardPanel` does. Walks
+    /// the contract via [`BitmapSlider::register_track_reset`]
+    /// (UI_WIDGET_UNIFICATION_DESIGN.md P1).
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::RightClick;
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                intents.on(sl.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(sl, reset, intents);
             }
         }
     }

@@ -305,14 +305,17 @@ impl GraphCanvas {
     /// canvas alone). A right-click anywhere first dismisses an open
     /// popover.
     ///
-    /// BUG-105: mirrors the card slider's own hit-zone split — a right-click
-    /// on a numeric ranged param row's TRACK zone (right of the label cell,
-    /// same boundary `param_slider_track_x` mirrors from the `render.rs`
-    /// draw call) resets that param to its default in place, exactly like
-    /// every card/panel slider (`chrome/diff.rs`'s `Gesture::RightClick ->
-    /// SliderReset`, which this immediate-mode surface never reaches). The
-    /// LABEL zone is unaffected and keeps falling through to the
-    /// mapping-popover path below. Wire-driven rows are skipped — read-only,
+    /// BUG-105 (now unified via UI_WIDGET_UNIFICATION_DESIGN.md P1's slider
+    /// contract): mirrors the card slider's own hit-zone split — a
+    /// right-click on a numeric ranged param row's TRACK zone (right of the
+    /// label cell, same boundary `param_slider_track_x` sources from
+    /// `BitmapSlider::zones()`) resets that param to its default in place
+    /// (`SliderIntent::ResetToDefault`, resolved via `intent_for`), exactly
+    /// like every card/panel slider (D4: the same absolute-set command shape
+    /// the scrub-commit path emits). The LABEL zone is unaffected and keeps
+    /// falling through to the mapping-popover path below (D3: this host has
+    /// no translation for `OpenMapping` here — the existing popover path
+    /// covers it independently). Wire-driven rows are skipped — read-only,
     /// same guard the scrub uses.
     pub fn on_right_button_down(&mut self, viewport: Rect, sx: f32, sy: f32) -> Option<(u32, usize)> {
         // A right-click outside the open popover dismisses it (and is
@@ -322,12 +325,22 @@ impl GraphCanvas {
         }
         let hit = self.param_row_under(viewport, sx, sy)?;
         let (node_id, pi) = hit;
-        if let Some(track_x) = self.param_slider_track_x(viewport, node_id)
-            && sx >= track_x
+        let track_hit = self.param_slider_track_x(viewport, node_id).is_some_and(|track_x| sx >= track_x);
+        let wants_reset = track_hit
+            && matches!(
+                crate::slider::BitmapSlider::intent_for(
+                    crate::slider::SliderZone::Track,
+                    crate::intent::Gesture::RightClick,
+                ),
+                Some(crate::slider::SliderIntent::ResetToDefault)
+            );
+        if wants_reset
             && let Some(p) = self.find_node(node_id).and_then(|n| n.params.get(pi).cloned())
             && p.scrub.is_some()
             && !p.wire_driven
         {
+            // D4: the same absolute-set command shape the scrub-commit path
+            // emits, carrying `default_value` — undo == a drag to default.
             if let Some(outer_param_id) = p.outer_param_id {
                 self.pending_actions.push(GraphEditCommand::SetOuterParam {
                     outer_param_id,

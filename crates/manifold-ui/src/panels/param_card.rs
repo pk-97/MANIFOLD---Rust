@@ -4181,16 +4181,16 @@ impl ParamCardPanel {
             if let (Some(ids), Some(reset)) =
                 (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
             {
-                intents.on(ids.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
         for cfg in self.envelope_config_ids.iter().flatten() {
-            intents.on(cfg.decay_slider.track, RightClick, cfg.decay_reset.clone());
+            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
         }
         for cfg in self.audio_configs.iter().flatten() {
             let (dids, _) = cfg;
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
-                intents.on(sl.track, RightClick, reset.clone());
+                BitmapSlider::register_track_reset(sl, reset, intents);
             }
         }
 
