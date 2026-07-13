@@ -17,6 +17,14 @@
 //
 // Adapted verbatim from `effects/shaders/fx_depth_of_field_compute.wgsl`'s
 // blur_*tap routines.
+//
+// BUG-138 fix (2026-07-13): see gaussian_blur_variable_width_body.wgsl's
+// header for the full rationale — each logical tap now densifies into
+// `subtap_count(step_size)` sub-samples that fill the gap back toward the
+// previous tap when spacing exceeds GAP_THRESHOLD_PX, so a large per-pixel
+// CoC no longer leaves visible ring gaps. `subtaps == 1` (small/typical
+// radius, including the max_radius = 6.0 DoF-parity setting) reduces to the
+// original single-sample-per-tap arithmetic exactly.
 
 struct BlurUniforms {
     direction: u32,       // 0 = horizontal, 1 = vertical
@@ -32,37 +40,30 @@ struct BlurUniforms {
 @group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;
 
 // 9-tap (sigma ≈ 2.0)
-const K9_0: f32 = 0.16501;
-const K9_1: f32 = 0.15019;
-const K9_2: f32 = 0.11325;
-const K9_3: f32 = 0.07076;
-const K9_4: f32 = 0.03664;
+const K9: array<f32, 5> = array<f32, 5>(
+    0.16501, 0.15019, 0.11325, 0.07076, 0.03664,
+);
 
 // 17-tap (sigma ≈ 4.0)
-const K17_0: f32 = 0.10315;
-const K17_1: f32 = 0.09998;
-const K17_2: f32 = 0.09103;
-const K17_3: f32 = 0.07786;
-const K17_4: f32 = 0.06257;
-const K17_5: f32 = 0.04723;
-const K17_6: f32 = 0.03350;
-const K17_7: f32 = 0.02232;
-const K17_8: f32 = 0.01396;
+const K17: array<f32, 9> = array<f32, 9>(
+    0.10315, 0.09998, 0.09103, 0.07786, 0.06257,
+    0.04723, 0.03350, 0.02232, 0.01396,
+);
 
 // 25-tap (sigma ≈ 6.0)
-const K25_0:  f32 = 0.07087;
-const K25_1:  f32 = 0.06947;
-const K25_2:  f32 = 0.06540;
-const K25_3:  f32 = 0.05917;
-const K25_4:  f32 = 0.05148;
-const K25_5:  f32 = 0.04307;
-const K25_6:  f32 = 0.03465;
-const K25_7:  f32 = 0.02680;
-const K25_8:  f32 = 0.01995;
-const K25_9:  f32 = 0.01428;
-const K25_10: f32 = 0.00983;
-const K25_11: f32 = 0.00651;
-const K25_12: f32 = 0.00415;
+const K25: array<f32, 13> = array<f32, 13>(
+    0.07087, 0.06947, 0.06540, 0.05917, 0.05148,
+    0.04307, 0.03465, 0.02680, 0.01995, 0.01428,
+    0.00983, 0.00651, 0.00415,
+);
+
+const GAP_THRESHOLD_PX: f32 = 8.0;
+const SUBTAP_CAP: i32 = 4;
+
+fn subtap_count(step_size: f32) -> i32 {
+    let raw = i32(ceil(step_size / GAP_THRESHOLD_PX));
+    return clamp(raw, 1, SUBTAP_CAP);
+}
 
 // Scatter-as-gather CoC weight gate. WEIGHTING_MODE = 0 returns 1.0
 // (every neighbor contributes); WEIGHTING_MODE = 1 returns the legacy
@@ -85,6 +86,26 @@ fn sample_tap(uv: vec2<f32>, d: vec2<f32>, sgn: f32, center_coc: f32) -> vec4<f3
     let neighbor_coc = textureSampleLevel(t_width, s_source, p, 0.0).r;
     let w = coc_weight(center_coc, neighbor_coc);
     return vec4<f32>(rgb * w, w);
+}
+
+// Densifies logical tap `i` (weight `weight`) into `subtaps` evenly-spaced
+// sub-samples filling the segment back toward tap `i - 1`, each carrying
+// `weight / subtaps`. `subtaps == 1` collapses to the original single
+// sample per tap per side.
+fn tap_group(uv: vec2<f32>, d: vec2<f32>, i: i32, weight: f32, subtaps: i32, center_coc: f32) -> vec4<f32> {
+    var acc = vec3<f32>(0.0, 0.0, 0.0);
+    var w_acc = 0.0;
+    let fw = weight / f32(subtaps);
+    for (var k: i32 = 0; k < subtaps; k = k + 1) {
+        let frac = f32(i) - f32(k) / f32(subtaps);
+        var s = sample_tap(uv, d, frac, center_coc);
+        acc += s.rgb * fw;
+        w_acc += s.a * fw;
+        s = sample_tap(uv, d, -frac, center_coc);
+        acc += s.rgb * fw;
+        w_acc += s.a * fw;
+    }
+    return vec4<f32>(acc, w_acc);
 }
 
 @compute @workgroup_size(16, 16)
@@ -115,71 +136,38 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         u.direction == 0u,
     );
     let d = dir * step_size;
+    let subtaps = subtap_count(step_size);
 
     var acc: vec3<f32>;
     var w_acc: f32;
-    var s: vec4<f32>;
 
     if QUALITY_LEVEL == 0u {
         // 9-tap
-        acc = center.rgb * K9_0;
-        w_acc = K9_0;
-        s = sample_tap(uv, d, 1.0, center_coc); acc += s.rgb * K9_1; w_acc += s.a * K9_1;
-        s = sample_tap(uv, d, -1.0, center_coc); acc += s.rgb * K9_1; w_acc += s.a * K9_1;
-        s = sample_tap(uv, d, 2.0, center_coc); acc += s.rgb * K9_2; w_acc += s.a * K9_2;
-        s = sample_tap(uv, d, -2.0, center_coc); acc += s.rgb * K9_2; w_acc += s.a * K9_2;
-        s = sample_tap(uv, d, 3.0, center_coc); acc += s.rgb * K9_3; w_acc += s.a * K9_3;
-        s = sample_tap(uv, d, -3.0, center_coc); acc += s.rgb * K9_3; w_acc += s.a * K9_3;
-        s = sample_tap(uv, d, 4.0, center_coc); acc += s.rgb * K9_4; w_acc += s.a * K9_4;
-        s = sample_tap(uv, d, -4.0, center_coc); acc += s.rgb * K9_4; w_acc += s.a * K9_4;
+        acc = center.rgb * K9[0];
+        w_acc = K9[0];
+        for (var i: i32 = 1; i <= 4; i = i + 1) {
+            let g = tap_group(uv, d, i, K9[i], subtaps, center_coc);
+            acc += g.rgb;
+            w_acc += g.a;
+        }
     } else if QUALITY_LEVEL == 2u {
         // 25-tap
-        acc = center.rgb * K25_0;
-        w_acc = K25_0;
-        s = sample_tap(uv, d, 1.0, center_coc); acc += s.rgb * K25_1; w_acc += s.a * K25_1;
-        s = sample_tap(uv, d, -1.0, center_coc); acc += s.rgb * K25_1; w_acc += s.a * K25_1;
-        s = sample_tap(uv, d, 2.0, center_coc); acc += s.rgb * K25_2; w_acc += s.a * K25_2;
-        s = sample_tap(uv, d, -2.0, center_coc); acc += s.rgb * K25_2; w_acc += s.a * K25_2;
-        s = sample_tap(uv, d, 3.0, center_coc); acc += s.rgb * K25_3; w_acc += s.a * K25_3;
-        s = sample_tap(uv, d, -3.0, center_coc); acc += s.rgb * K25_3; w_acc += s.a * K25_3;
-        s = sample_tap(uv, d, 4.0, center_coc); acc += s.rgb * K25_4; w_acc += s.a * K25_4;
-        s = sample_tap(uv, d, -4.0, center_coc); acc += s.rgb * K25_4; w_acc += s.a * K25_4;
-        s = sample_tap(uv, d, 5.0, center_coc); acc += s.rgb * K25_5; w_acc += s.a * K25_5;
-        s = sample_tap(uv, d, -5.0, center_coc); acc += s.rgb * K25_5; w_acc += s.a * K25_5;
-        s = sample_tap(uv, d, 6.0, center_coc); acc += s.rgb * K25_6; w_acc += s.a * K25_6;
-        s = sample_tap(uv, d, -6.0, center_coc); acc += s.rgb * K25_6; w_acc += s.a * K25_6;
-        s = sample_tap(uv, d, 7.0, center_coc); acc += s.rgb * K25_7; w_acc += s.a * K25_7;
-        s = sample_tap(uv, d, -7.0, center_coc); acc += s.rgb * K25_7; w_acc += s.a * K25_7;
-        s = sample_tap(uv, d, 8.0, center_coc); acc += s.rgb * K25_8; w_acc += s.a * K25_8;
-        s = sample_tap(uv, d, -8.0, center_coc); acc += s.rgb * K25_8; w_acc += s.a * K25_8;
-        s = sample_tap(uv, d, 9.0, center_coc); acc += s.rgb * K25_9; w_acc += s.a * K25_9;
-        s = sample_tap(uv, d, -9.0, center_coc); acc += s.rgb * K25_9; w_acc += s.a * K25_9;
-        s = sample_tap(uv, d, 10.0, center_coc); acc += s.rgb * K25_10; w_acc += s.a * K25_10;
-        s = sample_tap(uv, d, -10.0, center_coc); acc += s.rgb * K25_10; w_acc += s.a * K25_10;
-        s = sample_tap(uv, d, 11.0, center_coc); acc += s.rgb * K25_11; w_acc += s.a * K25_11;
-        s = sample_tap(uv, d, -11.0, center_coc); acc += s.rgb * K25_11; w_acc += s.a * K25_11;
-        s = sample_tap(uv, d, 12.0, center_coc); acc += s.rgb * K25_12; w_acc += s.a * K25_12;
-        s = sample_tap(uv, d, -12.0, center_coc); acc += s.rgb * K25_12; w_acc += s.a * K25_12;
+        acc = center.rgb * K25[0];
+        w_acc = K25[0];
+        for (var i: i32 = 1; i <= 12; i = i + 1) {
+            let g = tap_group(uv, d, i, K25[i], subtaps, center_coc);
+            acc += g.rgb;
+            w_acc += g.a;
+        }
     } else {
         // 17-tap (default)
-        acc = center.rgb * K17_0;
-        w_acc = K17_0;
-        s = sample_tap(uv, d, 1.0, center_coc); acc += s.rgb * K17_1; w_acc += s.a * K17_1;
-        s = sample_tap(uv, d, -1.0, center_coc); acc += s.rgb * K17_1; w_acc += s.a * K17_1;
-        s = sample_tap(uv, d, 2.0, center_coc); acc += s.rgb * K17_2; w_acc += s.a * K17_2;
-        s = sample_tap(uv, d, -2.0, center_coc); acc += s.rgb * K17_2; w_acc += s.a * K17_2;
-        s = sample_tap(uv, d, 3.0, center_coc); acc += s.rgb * K17_3; w_acc += s.a * K17_3;
-        s = sample_tap(uv, d, -3.0, center_coc); acc += s.rgb * K17_3; w_acc += s.a * K17_3;
-        s = sample_tap(uv, d, 4.0, center_coc); acc += s.rgb * K17_4; w_acc += s.a * K17_4;
-        s = sample_tap(uv, d, -4.0, center_coc); acc += s.rgb * K17_4; w_acc += s.a * K17_4;
-        s = sample_tap(uv, d, 5.0, center_coc); acc += s.rgb * K17_5; w_acc += s.a * K17_5;
-        s = sample_tap(uv, d, -5.0, center_coc); acc += s.rgb * K17_5; w_acc += s.a * K17_5;
-        s = sample_tap(uv, d, 6.0, center_coc); acc += s.rgb * K17_6; w_acc += s.a * K17_6;
-        s = sample_tap(uv, d, -6.0, center_coc); acc += s.rgb * K17_6; w_acc += s.a * K17_6;
-        s = sample_tap(uv, d, 7.0, center_coc); acc += s.rgb * K17_7; w_acc += s.a * K17_7;
-        s = sample_tap(uv, d, -7.0, center_coc); acc += s.rgb * K17_7; w_acc += s.a * K17_7;
-        s = sample_tap(uv, d, 8.0, center_coc); acc += s.rgb * K17_8; w_acc += s.a * K17_8;
-        s = sample_tap(uv, d, -8.0, center_coc); acc += s.rgb * K17_8; w_acc += s.a * K17_8;
+        acc = center.rgb * K17[0];
+        w_acc = K17[0];
+        for (var i: i32 = 1; i <= 8; i = i + 1) {
+            let g = tap_group(uv, d, i, K17[i], subtaps, center_coc);
+            acc += g.rgb;
+            w_acc += g.a;
+        }
     }
 
     let rgb = acc / max(w_acc, 0.001);

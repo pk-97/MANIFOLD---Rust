@@ -85,7 +85,7 @@ crate::primitive! {
             enum_values: BLUR_VARIABLE_WEIGHTINGS,
         },
     ],
-    composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte.",
+    composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte (step_size stays under the tap-densification threshold at this setting — see BUG-138 below). BUG-138: at step_size (px) > 8.0 each of the fixed 9/17/25 taps densifies into up to 4 sub-samples that fill the gap back toward the previous tap, so large CoC radii (e.g. 64px) no longer leave visible ring gaps between samples; below that threshold the kernel is bit-identical to the original fixed-tap-per-sample behaviour.",
     examples: [],
     picker: { label: "Variable Blur", category: Atom },
     summary: "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
@@ -250,5 +250,61 @@ mod tests {
         let prim = GaussianBlurVariableWidth::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.variable_blur");
+    }
+
+    /// BUG-138 — numeric proof that tap count now scales with radius instead
+    /// of holding fixed. Mirrors `vbw_subtap_count()` /
+    /// `gaussian_blur_variable_width_body.wgsl`'s `VBW_GAP_THRESHOLD_PX` /
+    /// `VBW_SUBTAP_CAP` (kept in sync by hand — this is a test-only oracle,
+    /// never used at runtime; the GPU kernel does the real computation).
+    /// Total effective taps for a quality tier with `n_half` logical
+    /// positions per side is `1 + 2 * n_half * subtaps`.
+    fn vbw_subtap_count(step_size: f32) -> i32 {
+        const GAP_THRESHOLD_PX: f32 = 8.0;
+        const SUBTAP_CAP: i32 = 4;
+        let raw = (step_size / GAP_THRESHOLD_PX).ceil() as i32;
+        raw.clamp(1, SUBTAP_CAP)
+    }
+
+    #[test]
+    fn bug_138_small_radius_stays_at_the_original_fixed_tap_count() {
+        // max_radius = 6.0 DoF-parity setting (composition_notes): at full
+        // CoC, step_size = 1.0 * 6.0 + 1.0 = 7.0, under the 8.0px threshold.
+        let step_size = 1.0f32 * 6.0 + 1.0;
+        assert_eq!(vbw_subtap_count(step_size), 1);
+        let n_half = 12; // High quality, 25-tap
+        let total_taps = 1 + 2 * n_half * vbw_subtap_count(step_size);
+        assert_eq!(total_taps, 25, "DoF-parity radius must stay byte-identical to the original 25-tap kernel");
+    }
+
+    #[test]
+    fn bug_138_large_radius_scales_tap_count_above_the_old_fixed_ceiling() {
+        // The bug's own repro: max_radius = 64px, full CoC.
+        let step_size = 1.0f32 * 64.0 + 1.0;
+        let subtaps = vbw_subtap_count(step_size);
+        assert!(subtaps > 1, "large CoC radius must trigger tap densification");
+        assert_eq!(subtaps, 4, "worst-case subtap multiplier is capped at 4");
+
+        for (n_half, old_fixed_taps) in [(4, 9), (8, 17), (12, 25)] {
+            let total_taps = 1 + 2 * n_half * subtaps;
+            assert!(
+                total_taps > old_fixed_taps,
+                "quality tier with {n_half} half-taps must sample MORE at 64px radius \
+                 than its old fixed count ({old_fixed_taps}); got {total_taps}"
+            );
+        }
+        // High quality goes from the old fixed 25 taps to 97.
+        assert_eq!(1 + 2 * 12 * subtaps, 97);
+    }
+
+    #[test]
+    fn bug_138_subtap_count_is_monotonic_non_decreasing_in_step_size() {
+        let mut prev = vbw_subtap_count(1.0);
+        for step_size_px in [2, 4, 8, 9, 16, 24, 32, 65, 200] {
+            let cur = vbw_subtap_count(step_size_px as f32);
+            assert!(cur >= prev, "subtap count regressed at step_size={step_size_px}");
+            assert!((1..=4).contains(&cur), "subtap count must stay within [1, 4]");
+            prev = cur;
+        }
     }
 }
