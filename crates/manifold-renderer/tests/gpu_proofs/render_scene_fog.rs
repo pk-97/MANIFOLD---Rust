@@ -91,6 +91,89 @@ fn fog_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
     format!(r#"{{"version":2,"name":"RenderSceneFogProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
 }
 
+/// Same ground-plane scene as [`fog_scene_json`], no fog, with a
+/// `node.atmosphere` wired whose ONLY non-default field is `shaft_intensity`
+/// (VOLUMETRIC_LIGHT_DESIGN.md D1/P1). P1 threads the field into
+/// `RenderSceneUniforms` but no shader code reads `shaft_params` yet — no
+/// march kernel exists until P2 — so ANY `shaft_intensity` value must
+/// currently be a pure no-op at the pixel.
+fn shaft_scene_json(shaft_intensity: f32) -> String {
+    let mut nodes = String::from(
+        r#"{"id":0,"typeId":"system.generator_input","nodeId":"input"},
+        {"id":1,"typeId":"node.grid_mesh","nodeId":"ground_grid","params":{
+            "max_capacity":{"type":"Int","value":16384},
+            "resolution_x":{"type":"Int","value":32},
+            "resolution_y":{"type":"Int","value":32},
+            "size_x":{"type":"Float","value":40.0},
+            "size_y":{"type":"Float","value":40.0}}},
+        {"id":2,"typeId":"node.make_triangles","nodeId":"ground_tris","params":{
+            "src_cols":{"type":"Int","value":32},
+            "src_rows":{"type":"Int","value":32}}},
+        {"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{
+            "orbit":{"type":"Float","value":0.0},
+            "tilt":{"type":"Float","value":0.12},
+            "distance":{"type":"Float","value":15.0},
+            "fov_y":{"type":"Float","value":1.0}}},
+        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "ambient":{"type":"Float","value":0.1}}},
+        {"id":30,"typeId":"node.light","nodeId":"sun","params":{
+            "mode":{"type":"Enum","value":0},
+            "pos_x":{"type":"Float","value":0.0},
+            "pos_y":{"type":"Float","value":30.0},
+            "pos_z":{"type":"Float","value":0.0},
+            "aim_x":{"type":"Float","value":0.0},
+            "aim_y":{"type":"Float","value":0.0},
+            "aim_z":{"type":"Float","value":0.0},
+            "color_r":{"type":"Float","value":1.0},
+            "color_g":{"type":"Float","value":1.0},
+            "color_b":{"type":"Float","value":1.0},
+            "intensity":{"type":"Float","value":1.0},
+            "cast_shadows":{"type":"Float","value":0.0}}},
+        {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
+            "objects":{"type":"Int","value":1},
+            "lights":{"type":"Int","value":1}}}"#,
+    );
+    nodes.push_str(&format!(
+        r#",{{"id":40,"typeId":"node.atmosphere","nodeId":"atmo","params":{{
+            "shaft_intensity":{{"type":"Float","value":{shaft_intensity}}}}}}}"#,
+    ));
+    nodes.push_str(r#",{"id":99,"typeId":"system.final_output","nodeId":"out"}"#);
+
+    let wires = r#"{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
+        {"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"},
+        {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
+        {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
+        {"fromNode":30,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":40,"fromPort":"atmosphere","toNode":20,"toPort":"atmosphere"},
+        {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}"#;
+
+    format!(r#"{{"version":2,"name":"RenderSceneShaftProof","nodes":[{nodes}],"wires":[{wires}]}}"#)
+}
+
+#[test]
+fn shafts_off_byte_identical() {
+    // VOLUMETRIC_LIGHT_DESIGN.md V1 (P1): shaft_intensity == 0 (default,
+    // unwired) must render byte-identical to today. P1 has no march kernel
+    // at all yet, so this also proves the stronger P1-local claim: ANY
+    // shaft_intensity value is currently a pixel-level no-op (the field is
+    // threaded into the uniform but no shader code reads it until P2).
+    let (off, _, _) = render_readback(&shaft_scene_json(0.0));
+    let (golden, _, _) = render_readback(&fog_scene_json(None));
+    assert_eq!(
+        off, golden,
+        "shaft_intensity 0 must be byte-identical to no atmosphere at all (the pre-change golden buffer)"
+    );
+
+    let (hot, _, _) = render_readback(&shaft_scene_json(5.0));
+    assert_eq!(
+        hot, golden,
+        "P1 has no march kernel yet: shaft_intensity must be a no-op at the pixel until P2 wires the consumer"
+    );
+}
+
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();

@@ -20,6 +20,11 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// `shaft_quality` enum labels, index = `Atmosphere::shaft_quality`
+/// (VOLUMETRIC_LIGHT_DESIGN.md D1: `0` Low/16 steps, `1` Med/24 (default),
+/// `2` High/32).
+const SHAFT_QUALITIES: &[&str] = &["Low", "Med", "High"];
+
 crate::primitive! {
     name: AtmosphereNode,
     type_id: "node.atmosphere",
@@ -33,6 +38,8 @@ crate::primitive! {
         ambient_tint_r: ScalarF32 optional,
         ambient_tint_g: ScalarF32 optional,
         ambient_tint_b: ScalarF32 optional,
+        shaft_intensity: ScalarF32 optional,
+        shaft_anisotropy: ScalarF32 optional,
     },
     outputs: {
         atmosphere: Atmosphere,
@@ -102,6 +109,30 @@ crate::primitive! {
             range: Some((0.0, 2.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("shaft_intensity"),
+            label: "Shaft Intensity",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("shaft_anisotropy"),
+            label: "Shaft Anisotropy",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.6),
+            range: Some((-0.9, 0.9)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("shaft_quality"),
+            label: "Shaft Quality",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(1),
+            range: Some((0.0, (SHAFT_QUALITIES.len() - 1) as f32)),
+            enum_values: SHAFT_QUALITIES,
+        },
     ],
     composition_notes: "Wire `atmosphere` into render_scene's `atmosphere` input (unwired = fog off, byte-identical to no atmosphere). fog_density is per-world-unit — ~0.05 is a light haze over tens of units, ~0.3 is thick. height_falloff > 0 concentrates fog near y=0 (ground haze). Each param is independently port-shadowed: wire fog_density to a macro/LFO for a live depth-mood fader, leave the rest static.",
     examples: [],
@@ -127,11 +158,20 @@ impl Primitive for AtmosphereNode {
             ctx.scalar_or_param("ambient_tint_b", 1.0),
             1.0,
         ];
+        let max_quality = (SHAFT_QUALITIES.len() - 1) as u32;
+        let shaft_quality = match ctx.params.get("shaft_quality") {
+            Some(ParamValue::Enum(v)) => (*v).min(max_quality),
+            Some(ParamValue::Float(f)) => (f.round().max(0.0) as u32).min(max_quality),
+            _ => 1,
+        };
         let atmosphere = Atmosphere {
             fog_color,
             fog_density: ctx.scalar_or_param("fog_density", 0.0).max(0.0),
             height_falloff: ctx.scalar_or_param("height_falloff", 0.0).max(0.0),
             ambient_tint,
+            shaft_intensity: ctx.scalar_or_param("shaft_intensity", 0.0).max(0.0),
+            shaft_anisotropy: ctx.scalar_or_param("shaft_anisotropy", 0.6).clamp(-0.9, 0.9),
+            shaft_quality,
         };
         ctx.outputs.set_atmosphere("atmosphere", atmosphere);
     }
@@ -160,9 +200,9 @@ mod tests {
     }
 
     #[test]
-    fn declares_eight_port_shadow_scalars_and_atmosphere_output() {
+    fn declares_ten_port_shadow_scalars_and_atmosphere_output() {
         assert_eq!(AtmosphereNode::TYPE_ID, "node.atmosphere");
-        assert_eq!(AtmosphereNode::INPUTS.len(), 8);
+        assert_eq!(AtmosphereNode::INPUTS.len(), 10, "8 original + shaft_intensity + shaft_anisotropy (shaft_quality is param-only, not port-shadowed)");
         for input in AtmosphereNode::INPUTS {
             assert!(!input.required, "{} should be optional (port-shadow)", input.name);
         }
@@ -190,6 +230,8 @@ mod tests {
             ("ambient_tint_r", 1.0),
             ("ambient_tint_g", 1.0),
             ("ambient_tint_b", 1.0),
+            ("shaft_intensity", 0.0),
+            ("shaft_anisotropy", 0.6),
         ];
 
         let mut backend = MockBackend::new();
@@ -262,5 +304,63 @@ mod tests {
     fn negative_density_is_clamped_to_zero() {
         let a = run_with_params(&[("fog_density", -1.0)]);
         assert_eq!(a.fog_density, 0.0, "density must never go negative (exp would blow up)");
+    }
+
+    #[test]
+    fn shaft_params_flow_through_to_atmosphere_fields() {
+        let a = run_with_params(&[("shaft_intensity", 1.5), ("shaft_anisotropy", -0.3)]);
+        assert_eq!(a.shaft_intensity, 1.5);
+        assert_eq!(a.shaft_anisotropy, -0.3);
+        assert_eq!(a.shaft_quality, 1, "no shaft_quality override -> default Med (1)");
+    }
+
+    #[test]
+    fn negative_shaft_intensity_is_clamped_to_zero() {
+        let a = run_with_params(&[("shaft_intensity", -2.0)]);
+        assert_eq!(a.shaft_intensity, 0.0, "shaft_intensity must never go negative");
+    }
+
+    #[test]
+    fn shaft_anisotropy_is_clamped_to_henyey_greenstein_range() {
+        let hot = run_with_params(&[("shaft_anisotropy", 5.0)]);
+        assert_eq!(hot.shaft_anisotropy, 0.9);
+        let cold = run_with_params(&[("shaft_anisotropy", -5.0)]);
+        assert_eq!(cold.shaft_anisotropy, -0.9);
+    }
+
+    #[test]
+    fn shaft_quality_enum_reads_back_as_index() {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Atmosphere, None, (0, 0));
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("shaft_quality"), ParamValue::Enum(2));
+        let mut prim = AtmosphereNode::new();
+        let outputs_bindings: &[(&'static str, Slot)] = &[("atmosphere", out_slot)];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let wire_slots: Vec<(&'static str, Slot)> = Vec::new();
+        let inputs = NodeInputs::new(&wire_slots, &backend);
+        let outputs = NodeOutputs::new(
+            outputs_bindings,
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+        );
+        let time = frame_time();
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+        Primitive::run(&mut prim, &mut ctx);
+        for (slot, value) in atmosphere_scratch.drain(..) {
+            backend.set_atmosphere(slot, value);
+        }
+        let a = backend.atmosphere(out_slot).expect("atmosphere should be set");
+        assert_eq!(a.shaft_quality, 2, "High (index 2) must read back exactly");
     }
 }

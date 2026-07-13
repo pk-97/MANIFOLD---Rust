@@ -45,10 +45,12 @@ struct Vertex {
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
 // aligned throughout — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed. Total 448 bytes (four mat4x4s + twelve vec4s;
-// stale as "272"/"320" in older comments — grew with the P3 atmosphere
-// fields and the P2 prev_view_proj/prev_model pair; `RenderSceneUniforms`'s
-// `size_of` assert in render_scene.rs is the authoritative check).
+// manual padding is needed. Total 464 bytes (four mat4x4s + thirteen vec4s;
+// stale as "272"/"320"/"448" in older comments — grew with the P3 atmosphere
+// fields, the P2 prev_view_proj/prev_model pair, and the
+// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field;
+// `RenderSceneUniforms`'s `size_of` assert in render_scene.rs is the
+// authoritative check).
 // Lights are NO LONGER in here: they live in the `@binding(8)` storage
 // buffer below (a scene can carry any number of lights, not the old 4).
 struct Uniforms {
@@ -92,6 +94,12 @@ struct Uniforms {
     fog_params: vec4<f32>,
     // rgb: ambient/sky tint multiplier on the ambient term (1,1,1 = neutral).
     ambient_tint: vec4<f32>,
+    // VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
+    // reads this field yet, it is not consumed by any fragment entry point
+    // below). x: shaft_intensity (0 = off, THE fader), y: shaft_anisotropy
+    // (Henyey-Greenstein g), z: shaft_quality (0/1/2 = Low/Med/High, as
+    // f32), w: reserved.
+    shaft_params: vec4<f32>,
     // GBUFFER_DESIGN.md §2 D5 (P2): previous-frame scene view_proj and this
     // object's previous-frame model matrix — inputs to the EMIT_VELOCITY
     // pipeline variant's vs_main (clip_prev = prev_view_proj * prev_model *

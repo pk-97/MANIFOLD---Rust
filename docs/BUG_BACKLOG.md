@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-144 | **prewarm-cache-tests-flake-under-full-lib-parallel-run** | `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` and `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` both assert a process-global shared-pipeline-cache count grows by their own prewarm call (`before=N, after=N` failure — no growth observed); reproduces deterministically under the full `cargo test -p manifold-renderer --features gpu-proofs --lib` parallel run but PASSES in isolation (`--test-threads=1` or filtered to just that test). Confirmed pre-existing on the unmodified tree (bisected via `git stash` during VOLUMETRIC_LIGHT_DESIGN P1, 2026-07-13) — unrelated to that phase's Atmosphere/render_scene changes. Root cause: two tests racing to prewarm the SAME global cache key concurrently — whichever runs second finds the entry already there from the other, so its own "before != after" growth check fails. Fix shape: either serialize these two tests against each other (a named-lock or `#[serial]`-style guard), or key each test's assertion off a cache entry unique to that test's own prewarm call instead of the raw global count. LOW (flaky-gate under parallel `--lib`, not a functional regression; doesn't affect `nextest` since these live behind `gpu-proofs` and are excluded from the default sweep). |
 | BUG-143 | **macros-panel-ableton-trim-drag-outside-p7-inventory** | `MacrosPanel`'s Ableton-range trim-bar drag (`dragging_ableton_trim: i32` sentinel + `dragging_ableton_trim_is_min: bool`) is a hand-rolled drag machine — the pre-P7.1 `ParamDragState` shape — found during P7.6's closing `rg 'dragging'` inventory. Not `SliderDragState`-backed, not `DragController`-backed, not in D12's out-list; P7's original audit missed it (it's a distinct gesture from `MacrosPanel`'s per-macro value sliders, which ARE already migrated). Deliberately left unfolded — P7.6's scope is viewport/audio-setup/dock only, "don't invent additional scope" per its own brief. LOW (works correctly today; this is drag-lifecycle-unification debt, not a behavior bug). |
 | BUG-142 | **fire-meter-capture-bench-flakes-under-parallel-load** | `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard µs/tick ceiling on fire-meter capture cost; failed once under `cargo nextest run --workspace` right after a merge-then-rerun (254.54 µs/tick), passed in isolation and on a clean full-workspace rerun immediately after (3192/3192). Same class as BUG-113 (`ParamManifest::get`'s bench) — a wall-clock ceiling assertion inside the default nextest sweep, contention-sensitive by construction. LOW (flaky-gate, not functional). |
 | BUG-141 | **import-graph-fused-region-linearize-depth-parse-fail** | glb import card logs `[freeze] fused region 0 failed to parse: no definition in scope for identifier: linearize_depth` and silently renders unfused — fusion win lost on heavy scene cards. Suspect: codegen doesn't prepend the shared `depth.wgsl` helper header for inlined bodies that call `linearize_depth` (ssao_from_depth / coc_from_depth). Output correct, perf-only. LOW-MED. |
@@ -68,7 +69,7 @@ or human can read it, and it needs no external tool.
 | BUG-122 | **graph-editor-node-face-loses-type-name-when-custom-named** | Once a node is given a custom (author) title, the node face shows only that name — the underlying type (e.g. `node.blur`, `node.mix`) is nowhere on the card, not even as a subtitle or tooltip. Root cause found: `display_label()` (`snapshot.rs:838`) returns the author title outright when set, never combining it with the friendly/type label; the `(WGSL)` suffix is the only case that appends anything. Shipped behavior since `ebd48cde` (2026-06-03), not a recent regression. Fix shape: show both, e.g. a secondary type line/tooltip, or a "Custom Name — Blur" compound header. |
 | BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
 | BUG-120 | **grid-terrain-winding-disagrees-with-vertex-normals** | Suspected (unverified at the emitter): the grid_mesh -> make_triangles chain emits triangles whose winding-derived face normals point -Y while the vertices carry +Y shading normals. Exposed 2026-07-11 by scatter_on_mesh align_to_normal planting ~98% of Scene 2 instances upside-down/underground; scatter now orients to vertex normals (fixed at the consumer), but any future winding consumer (backface culling, facet_normals-on-terrain, GPU culling passes) will hit the same disagreement. Fix shape: assert/normalize winding in make_triangles against the source vertex normals, or document winding as non-authoritative engine-wide. LOW until a winding consumer ships. | make_triangles / grid_mesh |
-| BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | `node.atmosphere` fog at even low density (0.04) uniformly washes out the whole frame instead of reading as distance-graded haze — near geometry loses contrast as much as far geometry. Seen live in Apricot Weather (macro scale, camera distance ~9); fog card removed from the preset as the stopgap. Root cause unknown, NOT yet investigated (Peter's call 2026-07-11: log, don't chase). Suspects: fog factor not actually distance-scaled at short camera ranges; `height_falloff` interaction at y≈0 geometry; fog blend applied pre-tonemap washing highlights. Fix shape: headless fog-density sweep at two camera distances, assert near/far attenuation ratio, then read the atmosphere WGSL blend. | render_scene / atmosphere |
+| BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | CHARACTERIZED (VOLUMETRIC_LIGHT_DESIGN.md P1, 2026-07-13): `apply_fog` IS correctly distance-scaled; the "milk" symptom is saturation — a bounded subject's depth range is small relative to fog's `1/density` decay length, so the fog fraction barely varies across it (measured Δ 1.1–2.5 percentage points across a subject-scale depth slice at camDistance 9/30, vs 15–30% differentiation across a wide-range scene). Absorbed by the shafts design (P2/P3 land the fix); not a fog-curve tweak. | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
 | BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Fix shape: half-day spike on a fixed max-arity conversion (declare the max as optional Coincident inputs; the region machinery already folds unwired optionals as `0u` use flags). If the spike fails, dynamic-arity codegen support is a design question for Peter. LOW (working atoms, dispatch-cost only). |
@@ -136,6 +137,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-144 (prewarm-cache-tests-flake-under-full-lib-parallel-run) — two shared-pipeline-cache prewarm tests race each other under the full parallel `--lib` run — LOW (flaky-gate, not functional)
+**Status:** OPEN — found 2026-07-13 during VOLUMETRIC_LIGHT_DESIGN P1's gate run; bisected to the unmodified tree, confirmed pre-existing.
+
+**Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib` (the full GPU suite) fails two tests: `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` and `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache`, both with a `before=N, after=N` panic (the count didn't grow). Both pass cleanly filtered to just that one test (`--test-threads=1` or an exact-name filter).
+
+**Root cause** — the two tests race to prewarm the SAME process-global pipeline cache. Whichever runs second in the parallel test binary finds its target entry already populated by the other's prewarm call moments earlier, so its own before/after delta reads zero. Reproduced deterministically (2 runs) on the unmodified tree via `git stash`/`test`/`stash pop`, ruling out any relationship to this session's Atmosphere/render_scene edits — the `RenderSceneUniforms` size change (448→464 bytes, VOLUMETRIC_LIGHT_DESIGN P1) does not touch the pipeline-cache path at all.
+
+**Fix shape** — either give each test a cache key/scene shape unique to itself (so the other test's prewarm can't satisfy its assertion), or add a named mutex/serial-test guard between the two so they never interleave. Cosmetic scope: the two named `--test gpu_proofs` runs and any single-module `--features gpu-proofs <module>::gpu_tests` filter (the CLAUDE.md-recommended narrow-run pattern) never hit this, and it's fully outside the default `nextest` sweep (gpu-proofs-gated) — only a full unfiltered `cargo test -p manifold-renderer --features gpu-proofs --lib` run is affected.
 
 ### BUG-141 (import-graph-fused-region-linearize-depth-parse-fail) — glb import's fused region fails WGSL parse (`no definition in scope for identifier: linearize_depth`), card silently renders unfused — LOW-MED (perf, not visual)
 **Status:** OPEN — found 2026-07-12 in Peter's run log during the BUG-140 session (`[freeze] fused region 0 failed to parse, card renders unfused`), not investigated.
@@ -276,22 +286,47 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Fix shape** — read make_triangles' emission order against grid_mesh row-major layout; if winding is inverted, either fix the emission order (check draw paths that might depend on current order) or write the engine-wide rule "vertex normals are authoritative, winding is not" into DEVELOPMENT_REFERENCE.md.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
-**Status:** OPEN — reported live by Peter 2026-07-11 (Apricot Weather); logged without investigation per his call. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1)** — the design diagnoses the washout as the light-blind constant-color fog model; its P1 runs this entry's fix-shape sweep and records the numbers here.
+**Status:** OPEN — root cause now CHARACTERIZED by the V6 sweep (2026-07-13, VOLUMETRIC_LIGHT_DESIGN.md P1, numbers below); fix is the shafts design landing in P2/P3, not a fog-curve tweak. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1)**.
 
 **Symptom** — `node.atmosphere` fog at even low density (0.04) washes out the whole
 frame uniformly: near geometry loses contrast as much as far geometry, so fog reads
 as a milk filter instead of depth. Seen live in Apricot Weather (macro scale, camera
 distance ~9), 2026-07-11. Stopgap: fog card removed from the preset, density zeroed.
 
-**Root cause** — unknown, NOT investigated (Peter's call 2026-07-11: log, don't
-chase). Suspects: fog factor not distance-scaled at short camera ranges;
-`height_falloff` interaction with geometry near y=0; fog blended pre-tonemap so it
-washes highlights.
+**Root cause (CONFIRMED by V6 measurement, 2026-07-13)** — `apply_fog` IS correctly
+distance-scaled (`fog = 1-exp(-density·dist)`, `shaders/render_scene.wgsl:516-526`);
+the washout isn't a math bug, it's saturation: the visible depth RANGE across a
+bounded subject (a photoscanned plant a few world-units deep, viewed from ~9 units
+away) is small relative to fog's characteristic decay length `1/density` (25 units
+at density=0.04), so the fog fraction barely changes across the subject's near/far
+extent — reading as uniform milk — even though the SAME density differentiates
+strongly across a scene with a wide depth range (e.g. a ground plane extending to
+the horizon).
 
-**Fix shape** — headless fog-density sweep at two camera distances via
-`render-generator-preset`; assert near/far attenuation ratio differs; then read the
-atmosphere WGSL blend. Rendering-infra-v2 volumetrics work supersedes this if it
-lands first.
+Measured via `render-generator-preset` (a temporary scratch preset — grazing-angle
+200×200 ground plane, orbit camera, one overhead Sun, `node.atmosphere` at
+density 0.04 vs 0.0 — deleted after the sweep, not committed) at camera distances 9
+and 30, `--size 640x360 --frames 3`:
+
+| camDistance | wide-range near/far ratio-of-ratios (bottom-of-frame vs near-horizon band) | narrow-band ratio (two adjacent bands near the bottom of frame, ~subject-scale depth) |
+|---|---|---|
+| 9  | 1.1828 | near=0.9797, far=0.9689 → Δ=0.0108 (1.1%) |
+| 30 | 1.2951 | near=0.9355, far=0.9102 → Δ=0.0253 (2.5%) |
+
+The wide-range columns confirm the formula differentiates near vs far when the
+depth range is large (far attenuates 15–30% more than near across the full scene).
+The narrow-band columns are the diagnostic: across a subject-scale depth slice near
+the camera, the attenuation delta is only 1–2.5 percentage points — exactly the
+"reads as flat milk" signature Peter saw, and it gets WORSE (not better) at the
+farther camDistance=30, because both near and far surfaces are then farther from
+the camera (more overall fog) while their relative depth range stays the same.
+
+**Fix shape** — not a fog-curve tweak (rejected, D4): the analytic exponential fog
+is correct and stays. The fix is VOLUMETRIC_LIGHT_DESIGN's marched light shafts,
+which read the scene per-light rather than as a single constant-color blend —
+light-driven inscatter can sculpt depth on a bounded subject where a distance-only
+fog curve saturates. P2/P3 land the march; this entry closes when Peter's look-pass
+on the P2/P3 acceptance demo confirms the "milk" complaint is resolved.
 
 ### BUG-117 (render-generator-preset-silently-under-renders-async-loaded-presets) — the look-dev CLI has no wait-for-convergence signal, so a slow-decoding preset can write an incomplete PNG with no warning — LOW (tooling gap, not a runtime bug)
 **Status:** OPEN — found 2026-07-11 authoring Scene 1 (Apricot Weather), a `render_scene` preset over a large (~1.4M-vertex, 84MB) glTF scan.

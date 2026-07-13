@@ -208,6 +208,11 @@ struct RenderSceneUniforms {
     fog_params: [f32; 4],
     /// Scene-wide ambient/sky tint (rgb multiplier on the ambient term).
     ambient_tint: [f32; 4],
+    /// VOLUMETRIC_LIGHT_DESIGN.md D1 (P1 plumbing only — no march kernel
+    /// reads this yet). `x`: shaft_intensity (0 = off, THE fader), `y`:
+    /// shaft_anisotropy (Henyey-Greenstein g), `z`: shaft_quality (0/1/2 =
+    /// Low/Med/High, as f32), `w`: reserved.
+    shaft_params: [f32; 4],
     /// GBUFFER_DESIGN.md §2 D5 (P2): previous frame's scene `view_proj`.
     /// Always present — one `Uniforms` layout shared by both the
     /// velocity-on and velocity-off pipeline variants (the velocity-off
@@ -221,9 +226,10 @@ struct RenderSceneUniforms {
     prev_model: [[f32; 4]; 4],
 }
 
-// 448 = 28 × 16 → the naga 16-byte uniform-size rule holds. Was 320 before
-// the P2 prev_view_proj/prev_model pair (2 more mat4x4 = 128 bytes).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 448);
+// 464 = 29 × 16 → the naga 16-byte uniform-size rule holds. Was 448 before
+// the VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field (+16 bytes,
+// plumbing-only — no march kernel reads it yet).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 464);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -306,6 +312,28 @@ pub struct RenderScene {
     /// exactly `model_n` — an unwired object costs one extra 32-byte L1
     /// storage-buffer read, nothing observable in the output.
     identity_instance_stub: Option<manifold_gpu::GpuBuffer>,
+    /// VOLUMETRIC_LIGHT_DESIGN.md D3 (P2 populates this): half-res
+    /// light-shaft inscatter texture, to be lazily created via the
+    /// `ensure_shadow_map` pattern ONLY when [`wants_shafts`] is true. P1
+    /// introduces the gate and this slot; it stays `None` forever in P1 —
+    /// no march kernel exists yet, so nothing ever calls an `ensure_` fn
+    /// for it (the `wants_shafts_gate` V1 test pins this half of the
+    /// zero-cost-when-off contract).
+    // Un-suppression trigger: VOLUMETRIC_LIGHT_DESIGN.md P2 wires the march
+    // kernel, which reads/writes this slot via `ensure_shaft_inscatter`.
+    #[allow(dead_code)]
+    shaft_inscatter: Option<manifold_gpu::GpuTexture>,
+}
+
+/// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
+/// light-shaft feature. `shaft_intensity <= 0` (the unwired default) means
+/// the march must never run and no shaft texture is ever allocated — the
+/// "unwired = zero cost" contract, extended from fog to shafts.
+// Un-suppression trigger: VOLUMETRIC_LIGHT_DESIGN.md P2's evaluate() calls
+// this to decide whether to run the march + upsample dispatches this frame.
+#[allow(dead_code)]
+fn wants_shafts(atmosphere: &Atmosphere) -> bool {
+    atmosphere.shaft_intensity > 0.0
 }
 
 impl RenderScene {
@@ -337,6 +365,7 @@ impl RenderScene {
             shadow_sampler: None,
             dummy_depth: None,
             identity_instance_stub: None,
+            shaft_inscatter: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -912,6 +941,12 @@ fn build_uniforms(
         fog_color: atmosphere.fog_color,
         fog_params: [atmosphere.fog_density, atmosphere.height_falloff, 0.0, 0.0],
         ambient_tint: atmosphere.ambient_tint,
+        shaft_params: [
+            atmosphere.shaft_intensity,
+            atmosphere.shaft_anisotropy,
+            atmosphere.shaft_quality as f32,
+            0.0,
+        ],
         prev_view_proj,
         prev_model,
     }
@@ -1536,6 +1571,32 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
+    /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
+    /// false, and a fresh `RenderScene` must never have called any
+    /// `ensure_` function for the shaft-inscatter slot — it stays `None`.
+    /// P1 has no march kernel yet, so nothing CAN call an `ensure_` fn; this
+    /// test pins that the gate and the untouched slot both exist and agree.
+    #[test]
+    fn wants_shafts_gate() {
+        assert!(
+            !wants_shafts(&Atmosphere::default()),
+            "shaft_intensity 0 (default) must not want shafts"
+        );
+        let mut hot = Atmosphere::default();
+        hot.shaft_intensity = 1.0;
+        assert!(wants_shafts(&hot), "shaft_intensity > 0 must want shafts");
+        let mut still_off = Atmosphere::default();
+        still_off.shaft_intensity = 0.0;
+        assert!(!wants_shafts(&still_off));
+
+        let scene = RenderScene::new();
+        assert!(
+            scene.shaft_inscatter.is_none(),
+            "off -> no ensure_ call -> the shaft slot stays None"
+        );
+    }
 
     fn params_with(objects: f32, lights: f32) -> ParamValues {
         let mut p = ParamValues::default();
