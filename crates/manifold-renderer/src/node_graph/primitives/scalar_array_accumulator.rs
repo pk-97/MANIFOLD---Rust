@@ -67,6 +67,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Control,
     aliases: ["sum into bins", "scalar array accumulator", "accumulator", "histogram"],
+    boundary_reason: NonGpu,
     extra_fields: {
         accumulator: Vec<f32> = Vec::new(),
         last_trigger_count: Option<u32> = None,

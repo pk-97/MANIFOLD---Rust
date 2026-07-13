@@ -90,6 +90,9 @@ impl EffectNode for EnvelopeDecay {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    }
 
     fn inputs(&self) -> &[NodeInput] {
         &ENVELOPE_DECAY_INPUTS

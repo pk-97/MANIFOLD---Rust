@@ -86,8 +86,8 @@ or human can read it, and it needs no external tool.
 | ~~BUG-090~~ FIXED | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | FIXED @ `78e97d4a` — the named `TestDir`/temp-path-collision suspect was confirmed correct, not float summation-order non-determinism: `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution here (~96% collision rate measured over 200k tight-loop calls), so tests sharing the `TestDir` prefix collided on the same directory under parallel execution and raced on the shared `tone.wav` fixture. Fixed with a per-process atomic sequence number in the path; 10/10 consecutive parallel runs green. |
 | BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
-| BUG-086 | **recording-audio-track-under-covers-duration-on-longer-takes** | Repeated 2-minute 1920x1080 unpaced `recording-soak` self-checks measured `audio_duration_s` 1.3%-3.3% short of the intended duration (116.0s/118.4s/118.5s of 120.0s across three runs — variable, not a fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both measured exactly 60.0s — duration-dependent, not resolution-dependent, and not a "still queued at `stop()`" race (a 500ms settle delay before `stop()` changed the result by <0.1s). The native audio input silently drops on backpressure with no counter at all (`LiveRecordingPlugin.m:546-547`: `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than block` — unlike video's BUG-085, this path doesn't even log). Found 2026-07-10 building LIVE_RECORDING_PROOFS P2's soak self-check; root cause unknown (suspects: sustained real-time backpressure only manifesting past ~60-90s of continuous writing — disk I/O contention as the file grows, fragment-flush cadence, or AAC internal encoder buffering not fully flushed). **CRITICAL (escalated by Peter 2026-07-12: live takes are release material — "IT IS CRITICAL"; audio running short = audio/visual desync)** — silent and uncounted, variable magnitude; unknown whether it scales worse over a full 20-minute take. |
-| BUG-085 | **recording-frames-recorded-overstates-async-append-drops** | `LiveRecorder_EncodeVideoFrame` returns success (and Rust's `frames_recorded` counts it) as soon as the synchronous GPU blit into the CVPixelBuffer completes — but the actual `appendPixelBuffer:` call happens later, async, on `state->appendQueue`, and silently drops the frame (`"[LiveRecorder] VideoToolbox backpressure — dropped frame"`, no counter incremented) if `videoIn.isReadyForMoreMediaData` is false at that moment. Under heavy backpressure `frames_recorded` can overstate the file's real packet count by the async-drop count. Found 2026-07-10 building LIVE_RECORDING_PROOFS P1 (`pool_accounting_consistent`'s bounded-retry-recovery variant hit it once: 107 counted vs 106 actual packets). MED (accounting-only — the file itself stays valid, PTS stays monotonic; but a post-set frame count could read wrong). **Escalated to CRITICAL-adjacent 2026-07-12 (Peter): same silent-drop class as BUG-086; fixed together in the recording-sync lane** — counters must reflect actual appends and no path may drop without counting. |
+| ~~BUG-086~~ FIXED | **recording-audio-track-under-covers-duration-on-longer-takes** | FIXED 2026-07-13 (recording-sync lane) — root cause was NOT the native encoder: `WriteAudioSamples`'s backpressure gate was instrumented with a counter 2026-07-11 and repeatedly measured 0 drops on runs that still fell short, falsifying it per the diagnosis protocol. The real cause was `recording_soak.rs`'s OWN synthetic-audio pusher: `push_realtime_audio_chunk` fed a bounded `ringbuf::HeapRb` (~5s capacity) via `push_slice`, discarded its return value, and advanced its `pushed_frames` bookkeeping by the INTENDED push amount regardless of what the ring actually accepted — so a transient overflow under unpaced/encoder-stress timing bursts was silently discarded, never retried, a harness-side loss with nothing recording it happened. Fixed by tracking the real accepted count (self-heals the backlog on the next call). Verified: 3x paced 2-min 1080p soaks post-fix measured audio_duration_s at 120.0087s/120.0102s/120.0115s (<0.01% off, both drop counters 0 throughout); two paced 1-min runs (720p/1080p) measured 60.0038s/60.0102s; the unpaced/encoder-stress 2-min run — previously the reliable repro — now measures 120.0007s. Landed together with BUG-085 (same silent-drop class rule: no path may return success on a dropped buffer). `LiveRecordingPlugin.m`'s audio backpressure gate was ALSO hardened while investigating (now bounded-spin-waits like the video path before counting a drop, and returns a real error code instead of `LR_OK` on drop) — real defect per the class rule, though it turned out not to be BUG-086's cause. |
+| ~~BUG-085~~ FIXED | **recording-frames-recorded-overstates-async-append-drops** | FIXED 2026-07-13 (recording-sync lane) — `frames_recorded` no longer accumulates from `LiveRecorder_EncodeVideoFrame`'s synchronous LR_OK return (that only proves the frame was queued for async append, not that it landed). Native: a `videoFramesAppendDropped` atomic counter (+ `LiveRecorder_GetVideoFramesAppendDropped`) now counts every way the async `appendPixelBuffer:` call can fail (backpressure, writer not Writing, append returning NO, an exception). Rust: `recording_thread::run` reads that counter and calls `LiveRecorder_Finalize` (which drains the append queue before returning its count) for the ground truth, and returns a `RecordingStats{frames_recorded, frames_sync_failed, video_append_dropped}` instead of an untrustworthy synchronous tally; `LiveRecordingSession::stop()` sums every drop source (`frames_dropped` now includes async-append drops, not just pool exhaustion) so `frames_recorded + frames_dropped` always equals frames submitted. `pool_accounting_consistent`'s forced-backpressure test tightened from `pts.len() <= frames_recorded` to exact equality, plus `dropped > 0`; green 3x. |
 | BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
 | BUG-079 | **missing-preset-fails-silently-no-onscreen-signal** | Loading a project that references an unresolvable preset def (deleted, unregistered, or missing on this machine) degrades *safely but silently*: saved params are kept on a placeholder (keep-don't-drop, [`effects.rs:940`](../crates/manifold-core/src/effects.rs#L940)) and the effect falls back to **source passthrough** ([`preset_runtime.rs:808`](../crates/manifold-renderer/src/preset_runtime.rs#L808)) — but the ONLY signal is a console `eprintln`; nothing shows on screen. A performer sees the layer render without its effect (a missing *generator* layer likely renders empty — inferred, unconfirmed) with no visible reason. Fix shape: surface unresolvable presets in-app (a card/badge or a load-time notice). LOW |
 | BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport — the built content overflows but the scroll estimator doesn't agree (LOW, suspected root cause: `compute_height()` reads a mid-tween drawer-animation value instead of the settled/armed-at-build height) |
@@ -488,112 +488,6 @@ change.
 **What P3 shipped anyway:** the write path is real and tested at the command layer — `BindingMappingEdit::section: Option<Option<String>>` (outer = touched, inner = new value/clear), `EditParamMappingCommand::execute`/`undo` apply/restore it on the manifest spec only (BOUNDARIES D4), and `PanelAction::EffectMappingSection { binding_id, section }` + its `app_render.rs` dispatch arm route it end-to-end. Any future caller (a different surface, or this popover once text input exists) can reach it today.
 
 **Fix shape:** build the caret/selection text-input primitive once (`TextEditModel`, no IME — see Status), host it in `MappingPopover` (shared by `label` + `section` + any future string field), then wire both `EditField::Label` and a new `EditField::Section` through it — the committed spec is UI_WIDGET_UNIFICATION P5a (model) + P5c (this popover). LOW severity — no live gesture is broken by its absence (section can still be seeded by expose + the rename-sweep; it just can't be hand-typed from this popover yet), but it's the second deliverable now blocked on the same missing primitive.
-
-### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
-**Status:** OPEN
-
-Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P2's `recording-soak` self-check gate
-(`crates/manifold-recording/src/bin/recording_soak.rs`). Sequence: the soak bin's synthetic
-audio was originally paced one chunk per video frame-loop iteration (media-time-locked); an
-unpaced 4K/1080p run compresses many minutes of "media time" into a few seconds of wall time,
-which triggered the native audio input's real-time backpressure gate
-([`LiveRecordingPlugin.m:546-547`](../crates/manifold-recording/native/LiveRecordingPlugin.m#L546):
-`if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than
-block`) and lost ~91% of the audio (10.8s decoded out of an intended 120.0s) — worse than
-BUG-085's video path in one respect: this returns `LR_OK` (success) on drop and never logs
-anything, so there isn't even a warning, let alone a counter. Root-fixed the soak's OWN pacing
-(decoupled audio production from the video loop, paced to real wall-clock time instead, plus a
-post-loop real-time catch-up phase — matches how production audio actually arrives, from a
-real-time CoreAudio callback, never frame-coupled) which recovered the overwhelming majority of
-the loss (10.8s → 118.4s of 120.0s). A **residual, VARIABLE shortfall remains and is
-unexplained**: three repeated 2-minute 1920x1080 unpaced runs measured `audio_duration_s` at
-116.0s, 118.4s, and 118.5s against an intended 120.0s (1.3%-3.3% short, run to run — not a
-stable fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both
-measured exactly 60.0s — so whatever's causing it is **duration-dependent, not
-resolution-dependent**, onset is somewhere between 60s and 120s of continuous writing, and the
-magnitude varies (possibly with system load/contention — not isolated). Ruled out: a "still
-queued in the ring buffer at `stop()`" race — inserting a 500ms settle delay before calling
-`session.stop()` changed the measured shortfall by <0.1s, so the loss is happening *during* the
-run, not at shutdown. **Fix shape:** unknown without native-side instrumentation (out of P2's
-scope — proof-harness/soak-authoring work, not native FFI investigation). Suspects: sustained
-real-time backpressure that only manifests past some duration/data-volume threshold (disk I/O
-contention as the fragmented MOV grows, fragment-flush cadence interacting with the audio
-append queue, or AAC's own internal encoder buffering not being fully flushed by the periodic
-drain before a threshold is crossed). Wire an `appendedFrameCount` counter for audio analogous
-to BUG-085's video-side fix, or add NSLog-level visibility on the `LR_OK`-drop path at minimum,
-so this stops being silent. Given the observed variance, the soak's own audio-coverage check
-(`recording_soak.rs`, "Audio coverage sanity gate" comment) does NOT gate PASS/FAIL on a tight
-tolerance — a made-up number would misrepresent confidence that doesn't exist yet — it gates
-only a coarse 50% floor (catches a genuine collapse like the original 91%-loss defect) and
-prints a non-gating stderr warning past 2% short, naming this bug. **Unknown whether this loss
-scales worse over a full 20-minute take** — Peter's first full-scale soak run (P2's Deferred
-item, per design §6 P2) will be the first real data point at show scale; if the shortfall grows
-materially at that scale, this bug's severity should be revisited upward.
-
-**Orchestrator disambiguation 2026-07-10 (Opus, at P2 landing):** ran the soak in `--realtime`
-mode (submissions paced to wall clock — the true show proxy) for 2 minutes at 1920×1080 on an
-idle machine: `audio 120.0s` exactly, full coverage, versus `audio 118.6s` on the same-size
-unpaced run moments earlier. This is strong evidence the shortfall is an **unpaced-stress-mode
-artifact**, not a show-path defect: unpaced video encodes at 100% duty and the synthetic-audio
-catch-up floods the native audio input's real-time gate, which cannot happen in a real 60fps
-show where audio arrives wall-clock-paced from CoreAudio (exactly what `--realtime` replicates).
-Severity for the SHOW path is therefore LOW; the bug is real but lives in the soak's unpaced
-audio-feed pacing under encoder saturation. **Still worth the silent-drop fix** (the `LR_OK`-on-drop
-path with no counter/log is the actual defect worth removing, per BUG-085's sibling shape).
-Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
-concern is now much reduced.
-
-**Observation 2026-07-11 (Lane C, wave2 export/recording sweep):** the silent-drop fix named
-above landed as an instrument — `LiveRecordingPlugin.m`'s `WriteAudioSamples` now counts and
-NSLogs every sample-frame it drops on the `isReadyForMoreMediaData` backpressure gate (an atomic
-`audioFramesDropped`, read live via `LiveRecorder_GetAudioFramesDropped` /
-`LiveRecordingSession::audio_frames_dropped()`, surfaced end-to-end through `ContentState`
-(`recording_dropped_audio_frames`) onto the layer-header Record button, and printed by
-`recording_soak` next to its existing audio-coverage check). Ran a real unpaced 2-minute
-1920×1080 soak (`recording-soak --width 1920 --height 1080 --fps 60 --minutes 2`, the same shape
-as the original repro): `audio_frames_dropped = 0` while `audio_duration_s` still measured
-118.8s against the intended 120.0s (1.2s / ~1.0% short — inside this run's own non-gating 2%
-warning threshold, so no WARNING printed, but still the same class of shortfall this bug tracks).
-**This is a real data point, not a fix**: the native backpressure gate reported zero drops on a
-run that still fell short, so for THIS run the gate is ruled out as the cause — the shortfall is
-happening somewhere the counter can't see (consistent with the standing suspects: AAC encoder
-internal buffering, fragment-flush cadence, or disk I/O contention, none of which the backpressure
-gate would catch). Only one run was captured this session (time-boxed); the counter is now in
-place for whoever runs the confirming full-scale 20-minute soak to check whether it ever fires
-at show scale.
-
-### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
-**Status:** OPEN
-
-Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P1's `pool_accounting_consistent` test
-(`crates/manifold-recording/tests/recording_proofs.rs`), during a bounded-retry-recovery variant
-that deliberately holds pool slots un-released to simulate a slow encoder. `session.stop()`
-reported `frames_recorded: 107`; the file the harness's independent ffprobe oracle actually
-opened had 106 video packets. Root cause, in
-[`LiveRecordingPlugin.m`](../crates/manifold-recording/native/LiveRecordingPlugin.m) around
-line 490: `LiveRecorder_EncodeVideoFrame` returns `LR_OK` (line 519) as soon as the *synchronous*
-GPU blit into the CVPixelBuffer finishes — but the actual `[adaptor appendPixelBuffer:...]` call
-happens **later, asynchronously**, on `state->appendQueue` (`dispatch_async`, lines 490-516).
-Inside that async block, if `videoIn.isReadyForMoreMediaData` is false at the moment it runs
-(real VideoToolbox backpressure), the frame is silently dropped —
-`NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs", ...)` — with **no
-counter incremented anywhere Rust can see**. Rust's `frames_encoded` (→
-`RecordingResult::frames_recorded`) only reflects the synchronous return value, so it can never
-observe this drop. The container file itself stays completely valid (PTS strictly monotonic,
-no corruption) — this is purely an accounting gap: a post-set "N frames recorded" readout could
-overstate the truth by however many frames VideoToolbox silently dropped under backpressure.
-**Fix shape:** wire `atomic_int* appendedCounter` (already tracked at line 489, incremented at
-line 500 on real success) back out through the FFI — e.g. a `LiveRecorder_AppendedCount(handle)`
-query at `stop()`/finalize time, or have `LiveRecorder_Finalize`'s return value report the true
-appended count instead of (or alongside) the synchronous-call count — and have
-`LiveRecordingSession::stop()` prefer it. **Practical severity is LOW**: this needs genuinely
-sustained `isReadyForMoreMediaData == false` backpressure, which the harness's artificial
-fence-holding produces on purpose but a real 60fps show submission rate is very unlikely to
-sustain (VideoToolbox's ProRes proxy encode is comfortably faster than realtime at these
-resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consistent`'s current
-gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
-Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
-assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
 
 ### BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-paths) — `LiveClipManager`'s tick-based pending-launch queue can never be populated in production — LOW (dead code, correctness-neutral)
 **Status:** OPEN
@@ -1536,6 +1430,155 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-086 (recording-audio-track-under-covers-duration-on-longer-takes) — the recorded audio track can silently fall short of the intended duration on longer takes, no counter, root cause unknown — MED
+**Status:** FIXED
+
+**FIXED 2026-07-13 (recording-sync lane).** Diagnosis protocol (per the brief): added
+counters first, ran the paced 2-minute 1080p soak 3x. All 3 measured `audio_frames_dropped
+= 0` while duration was full-length — falsifying the native backpressure gate as this bug's
+cause (consistent with the 2026-07-11 observation below, now confirmed with a clean signal).
+Checked the named suspects in order with ffprobe: before reaching AAC priming/fragment-flush
+discriminators, instrumented `recording_soak.rs`'s OWN synthetic-audio pusher
+(`push_realtime_audio_chunk`) by making `push_audio_chunk` return `ringbuf::Producer::push_slice`'s
+actual accepted count instead of discarding it — and found the real defect immediately: the
+bounded `HeapRb` (~5s capacity) the soak bin pushes into can transiently fill under unpaced/
+encoder-stress timing bursts, and the OLD code advanced its `pushed_frames` bookkeeping by the
+INTENDED push amount regardless of what the ring actually accepted, so an overflow was silently
+discarded rather than retried next call — a harness-side loss, not a native-encoder one.
+Root-fixed by tracking the real accepted count (self-heals: the next call's `to_push` naturally
+includes whatever didn't fit). Verified directly: 3x paced 2-min 1080p soaks measured
+`audio_duration_s` at 120.0087s / 120.0102s / 120.0115s (<0.01% off, intended 120.0s), two
+paced 1-min soaks (720p/1080p) measured 60.0038s / 60.0102s, and the previously-reliable
+unpaced/encoder-stress 2-min repro now measures 120.0007s — full coverage, no shortfall,
+across three separate reruns. `LiveRecordingPlugin.m`'s `WriteAudioSamples` backpressure gate
+was ALSO hardened while investigating (bounded spin-wait matching the video path, `LR_OK` never
+returned on a drop — a real defect under the session's class rule, landed together with
+BUG-085, though it turned out not to be this bug's cause). `docs/LIVE_RECORDING_PROOFS_DESIGN.md`
+doesn't need a status change (P1/P2 already SHIPPED; this is a post-ship bug-fix pass, not a
+phase).
+
+Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P2's `recording-soak` self-check gate
+(`crates/manifold-recording/src/bin/recording_soak.rs`). Sequence: the soak bin's synthetic
+audio was originally paced one chunk per video frame-loop iteration (media-time-locked); an
+unpaced 4K/1080p run compresses many minutes of "media time" into a few seconds of wall time,
+which triggered the native audio input's real-time backpressure gate
+([`LiveRecordingPlugin.m:546-547`](../crates/manifold-recording/native/LiveRecordingPlugin.m#L546):
+`if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop samples rather than
+block`) and lost ~91% of the audio (10.8s decoded out of an intended 120.0s) — worse than
+BUG-085's video path in one respect: this returns `LR_OK` (success) on drop and never logs
+anything, so there isn't even a warning, let alone a counter. Root-fixed the soak's OWN pacing
+(decoupled audio production from the video loop, paced to real wall-clock time instead, plus a
+post-loop real-time catch-up phase — matches how production audio actually arrives, from a
+real-time CoreAudio callback, never frame-coupled) which recovered the overwhelming majority of
+the loss (10.8s → 118.4s of 120.0s). A **residual, VARIABLE shortfall remains and is
+unexplained**: three repeated 2-minute 1920x1080 unpaced runs measured `audio_duration_s` at
+116.0s, 118.4s, and 118.5s against an intended 120.0s (1.3%-3.3% short, run to run — not a
+stable fixed percentage), while two independent 1-minute runs (1280x720 and 1920x1080) both
+measured exactly 60.0s — so whatever's causing it is **duration-dependent, not
+resolution-dependent**, onset is somewhere between 60s and 120s of continuous writing, and the
+magnitude varies (possibly with system load/contention — not isolated). Ruled out: a "still
+queued in the ring buffer at `stop()`" race — inserting a 500ms settle delay before calling
+`session.stop()` changed the measured shortfall by <0.1s, so the loss is happening *during* the
+run, not at shutdown. **Fix shape:** unknown without native-side instrumentation (out of P2's
+scope — proof-harness/soak-authoring work, not native FFI investigation). Suspects: sustained
+real-time backpressure that only manifests past some duration/data-volume threshold (disk I/O
+contention as the fragmented MOV grows, fragment-flush cadence interacting with the audio
+append queue, or AAC's own internal encoder buffering not being fully flushed by the periodic
+drain before a threshold is crossed). Wire an `appendedFrameCount` counter for audio analogous
+to BUG-085's video-side fix, or add NSLog-level visibility on the `LR_OK`-drop path at minimum,
+so this stops being silent. Given the observed variance, the soak's own audio-coverage check
+(`recording_soak.rs`, "Audio coverage sanity gate" comment) does NOT gate PASS/FAIL on a tight
+tolerance — a made-up number would misrepresent confidence that doesn't exist yet — it gates
+only a coarse 50% floor (catches a genuine collapse like the original 91%-loss defect) and
+prints a non-gating stderr warning past 2% short, naming this bug. **Unknown whether this loss
+scales worse over a full 20-minute take** — Peter's first full-scale soak run (P2's Deferred
+item, per design §6 P2) will be the first real data point at show scale; if the shortfall grows
+materially at that scale, this bug's severity should be revisited upward.
+
+**Orchestrator disambiguation 2026-07-10 (Opus, at P2 landing):** ran the soak in `--realtime`
+mode (submissions paced to wall clock — the true show proxy) for 2 minutes at 1920×1080 on an
+idle machine: `audio 120.0s` exactly, full coverage, versus `audio 118.6s` on the same-size
+unpaced run moments earlier. This is strong evidence the shortfall is an **unpaced-stress-mode
+artifact**, not a show-path defect: unpaced video encodes at 100% duty and the synthetic-audio
+catch-up floods the native audio input's real-time gate, which cannot happen in a real 60fps
+show where audio arrives wall-clock-paced from CoreAudio (exactly what `--realtime` replicates).
+Severity for the SHOW path is therefore LOW; the bug is real but lives in the soak's unpaced
+audio-feed pacing under encoder saturation. **Still worth the silent-drop fix** (the `LR_OK`-on-drop
+path with no counter/log is the actual defect worth removing, per BUG-085's sibling shape).
+Peter's first full-scale 20-minute run remains the confirming data point, but the show-relevance
+concern is now much reduced.
+
+**Observation 2026-07-11 (Lane C, wave2 export/recording sweep):** the silent-drop fix named
+above landed as an instrument — `LiveRecordingPlugin.m`'s `WriteAudioSamples` now counts and
+NSLogs every sample-frame it drops on the `isReadyForMoreMediaData` backpressure gate (an atomic
+`audioFramesDropped`, read live via `LiveRecorder_GetAudioFramesDropped` /
+`LiveRecordingSession::audio_frames_dropped()`, surfaced end-to-end through `ContentState`
+(`recording_dropped_audio_frames`) onto the layer-header Record button, and printed by
+`recording_soak` next to its existing audio-coverage check). Ran a real unpaced 2-minute
+1920×1080 soak (`recording-soak --width 1920 --height 1080 --fps 60 --minutes 2`, the same shape
+as the original repro): `audio_frames_dropped = 0` while `audio_duration_s` still measured
+118.8s against the intended 120.0s (1.2s / ~1.0% short — inside this run's own non-gating 2%
+warning threshold, so no WARNING printed, but still the same class of shortfall this bug tracks).
+**This is a real data point, not a fix**: the native backpressure gate reported zero drops on a
+run that still fell short, so for THIS run the gate is ruled out as the cause — the shortfall is
+happening somewhere the counter can't see (consistent with the standing suspects: AAC encoder
+internal buffering, fragment-flush cadence, or disk I/O contention, none of which the backpressure
+gate would catch). Only one run was captured this session (time-boxed); the counter is now in
+place for whoever runs the confirming full-scale 20-minute soak to check whether it ever fires
+at show scale.
+
+### BUG-085 (recording-frames-recorded-overstates-async-append-drops) — `frames_recorded` can overstate the file's real packet count under sustained backpressure — MED accounting / LOW practical likelihood
+**Status:** FIXED
+
+**FIXED 2026-07-13 (recording-sync lane).** `frames_recorded` no longer accumulates from
+`LiveRecorder_EncodeVideoFrame`'s synchronous `LR_OK` return — that return only proves the
+frame was queued for the async `appendPixelBuffer:` call, not that it landed. Native: a new
+`videoFramesAppendDropped` atomic counter (+ `LiveRecorder_GetVideoFramesAppendDropped`,
+mirroring the existing audio counter) now counts every way the async append can fail
+(backpressure, writer not Writing at append time, `appendPixelBuffer:` returning NO, or an
+Objective-C exception) — all previously silent. Rust: `recording_thread::run` polls that
+counter (before `Finalize`, which frees native state) and uses `LiveRecorder_Finalize`'s
+return value — the native `videoFramesAppended` ground truth, read only after the append
+queue is fully drained — for `frames_recorded`, instead of the untrustworthy synchronous
+tally. `run()` now returns a `RecordingStats { frames_recorded, frames_sync_failed,
+video_append_dropped }`; `LiveRecordingSession::stop()` sums every drop source into
+`RecordingResult.frames_dropped` (session-level pool/channel drops + native sync failures +
+native async-append drops), so `frames_recorded + frames_dropped` always equals frames
+submitted, and no path reports success on a drop (the class rule this bug and BUG-086 share).
+`pool_accounting_consistent`'s forced-backpressure test tightened from `pts.len() <=
+frames_recorded` to exact equality plus `assert!(frames_dropped > 0)`; green across 3
+consecutive runs.
+
+Found 2026-07-10 building `LIVE_RECORDING_PROOFS` P1's `pool_accounting_consistent` test
+(`crates/manifold-recording/tests/recording_proofs.rs`), during a bounded-retry-recovery variant
+that deliberately holds pool slots un-released to simulate a slow encoder. `session.stop()`
+reported `frames_recorded: 107`; the file the harness's independent ffprobe oracle actually
+opened had 106 video packets. Root cause, in
+[`LiveRecordingPlugin.m`](../crates/manifold-recording/native/LiveRecordingPlugin.m) around
+line 490: `LiveRecorder_EncodeVideoFrame` returns `LR_OK` (line 519) as soon as the *synchronous*
+GPU blit into the CVPixelBuffer finishes — but the actual `[adaptor appendPixelBuffer:...]` call
+happens **later, asynchronously**, on `state->appendQueue` (`dispatch_async`, lines 490-516).
+Inside that async block, if `videoIn.isReadyForMoreMediaData` is false at the moment it runs
+(real VideoToolbox backpressure), the frame is silently dropped —
+`NSLog(@"[LiveRecorder] VideoToolbox backpressure — dropped frame at %.3fs", ...)` — with **no
+counter incremented anywhere Rust can see**. Rust's `frames_encoded` (→
+`RecordingResult::frames_recorded`) only reflects the synchronous return value, so it can never
+observe this drop. The container file itself stays completely valid (PTS strictly monotonic,
+no corruption) — this is purely an accounting gap: a post-set "N frames recorded" readout could
+overstate the truth by however many frames VideoToolbox silently dropped under backpressure.
+**Fix shape:** wire `atomic_int* appendedCounter` (already tracked at line 489, incremented at
+line 500 on real success) back out through the FFI — e.g. a `LiveRecorder_AppendedCount(handle)`
+query at `stop()`/finalize time, or have `LiveRecorder_Finalize`'s return value report the true
+appended count instead of (or alongside) the synchronous-call count — and have
+`LiveRecordingSession::stop()` prefer it. **Practical severity is LOW**: this needs genuinely
+sustained `isReadyForMoreMediaData == false` backpressure, which the harness's artificial
+fence-holding produces on purpose but a real 60fps show submission rate is very unlikely to
+sustain (VideoToolbox's ProRes proxy encode is comfortably faster than realtime at these
+resolutions). No `#[ignore]`-able regression test yet — `pool_accounting_consistent`'s current
+gate (`frames_recorded + frames_dropped == frames_submitted_total`, tracked entirely
+Rust-side) is internally consistent and doesn't touch this gap; a future test would need to
+assert `probe(file).pts.len() <= frames_recorded` under intentional backpressure instead.
 
 ### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — FIXED 2026-07-13 (CINEMATIC_POST DoF)
 **Status:** FIXED @ 8659c11a (2026-07-13, Sonnet 5, `dof-polish` worktree, branch `feat/dof-polish`)

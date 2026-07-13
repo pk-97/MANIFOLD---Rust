@@ -2464,3 +2464,118 @@ fn group_wires_by_pair_collapses_shared_endpoints_leaves_singletons_alone() {
     let singleton = groups.iter().find(|(k, _)| *k == (2, 9)).expect("the 1-wire pair");
     assert_eq!(singleton.1.len(), 1, "a lone wire between a pair stays its own group (no ribbon)");
 }
+
+// ─── UI_WIDGET_UNIFICATION P4: boundary hit-geometry pins for the canvas's
+//     single-host modal editors (EnumDropdown::option_at, VecEditor::channel_at,
+//     TableEditor::cell_at). The dismiss/swallow behavior at each editor's own
+//     boundary is already pinned above (pressing_outside_open_*); these add the
+//     boundary-coordinate cases the doc calls out by name plus the
+//     cross-editor modal-priority case (one press both dismisses the open
+//     editor and acts on the newly-clicked row). ───────────────────────────
+
+#[test]
+fn option_at_pins_first_last_and_boundary_rows() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 0.0));
+    press_row_value(&mut canvas, vp, 0);
+    let dd = canvas.enum_dropdown.as_ref().expect("dropdown open");
+    assert_eq!(dd.options.len(), 3, "A/B/C");
+
+    let r0 = dd.option_rect(0);
+    let r2 = dd.option_rect(2);
+    // Inside the first row's top-left corner.
+    assert_eq!(dd.option_at(r0.x + 1.0, r0.y + 1.0), Some(0), "first option, near-corner");
+    // Inside the last row's bottom edge (just above it — the row is
+    // half-open [top, top+h)).
+    assert_eq!(dd.option_at(r2.x + 1.0, r2.y + r2.h - 1.0), Some(2), "last option, near-bottom-edge");
+    // One pixel past the list's bottom edge: outside `contains()`, so `None`.
+    assert_eq!(dd.option_at(r2.x + 1.0, r2.y + r2.h + 1.0), None, "past the list bottom");
+    // Above the list (inside the anchor row it opened from): `None`.
+    assert_eq!(dd.option_at(dd.anchor.x + 1.0, dd.anchor.y + 1.0), None, "above the list, on the anchor row");
+}
+
+#[test]
+fn channel_at_pins_first_last_channel_and_header_row() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.1, 0.2, 0.3, 0.4]));
+    press_row_value(&mut canvas, vp, 0);
+    let ed = canvas.vec_editor.as_ref().expect("editor open");
+    assert_eq!(ed.components, 4, "RGBA");
+
+    let ch0 = ed.channel_rect(0);
+    let ch3 = ed.channel_rect(3);
+    assert_eq!(ed.channel_at(ch0.x + 1.0, ch0.y + 1.0), Some(0), "first channel row");
+    assert_eq!(
+        ed.channel_at(ch3.x + 1.0, ch3.y + ch3.h - 1.0),
+        Some(3),
+        "last channel row, near its bottom edge"
+    );
+    // The swatch header row sits above channel 0 — not itself a channel.
+    let sw = ed.swatch_rect().unwrap();
+    assert_eq!(ed.channel_at(sw.x + 1.0, sw.y + 1.0), None, "header row is not a channel");
+    // Past the panel entirely.
+    assert_eq!(ed.channel_at(ch3.x + 1.0, ch3.y + ch3.h + 50.0), None, "past the panel");
+}
+
+#[test]
+fn cell_at_pins_corner_cells_and_the_header_line() {
+    let rows = vec![vec![0.0, 1.0, 2.0], vec![10.0, 11.0, 12.0]];
+    let (mut canvas, vp) = expanded_canvas(table_param("grid", rows));
+    press_row_value(&mut canvas, vp, 0);
+    let ed = canvas.table_editor.as_ref().expect("grid editor open");
+    assert_eq!((ed.rows, ed.cols), (2, 3));
+
+    let top_left = ed.cell_rect(0, 0);
+    let bottom_right = ed.cell_rect(1, 2);
+    assert_eq!(
+        ed.cell_at(top_left.x + 1.0, top_left.y + 1.0),
+        Some((0, 0)),
+        "top-left corner cell"
+    );
+    assert_eq!(
+        ed.cell_at(bottom_right.x + bottom_right.w - 1.0, bottom_right.y + bottom_right.h - 1.0),
+        Some((1, 2)),
+        "bottom-right corner cell, near its own boundary"
+    );
+    // The header line (between the anchor row and the grid) is not a cell.
+    let panel = ed.panel_rect();
+    assert_eq!(ed.cell_at(panel.x + 1.0, panel.y + 1.0), None, "header line is not a cell");
+    // Past the last column, same row band.
+    assert_eq!(
+        ed.cell_at(bottom_right.x + bottom_right.w + 50.0, bottom_right.y + 1.0),
+        None,
+        "past the last column"
+    );
+}
+
+#[test]
+fn pressing_far_outside_dismisses_then_a_second_rows_value_opens_its_own_editor() {
+    // Two rows: an enum on row 0, a color on row 1. The open dropdown's option
+    // list stacks directly below row 0's anchor — which is exactly where row
+    // 1 sits in the static layout, so a single press there lands ON the open
+    // list, not on row 1 underneath it (modal-over-canvas priority, D2/D17).
+    // Pin the two-press sequence instead: an out-of-bounds press dismisses
+    // with no stray command, then a fresh press on row 1's value opens ITS
+    // OWN editor — each editor's modal claim is independent, never sticky
+    // across a dismissal.
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, false);
+    canvas.set_snapshot(&snapshot_with_param_node(
+        "gain",
+        vec![enum_param("mode", 0.0), color_param("tint", [0.1, 0.2, 0.3, 1.0])],
+    ));
+    let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
+
+    press_row_value(&mut canvas, vp, 0);
+    assert!(canvas.enum_dropdown.is_some(), "row 0 dropdown open");
+
+    // Far from both the row and the open list — empty canvas, dismisses.
+    canvas.on_left_button_down(vp, 1000.0, 700.0, 0.0, false);
+    assert!(canvas.enum_dropdown.is_none(), "out-of-bounds press dismissed the modal");
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "dismissal alone emits no value command"
+    );
+    assert!(canvas.vec_editor.is_none(), "dismissal does not open a different editor by itself");
+
+    press_row_value(&mut canvas, vp, 1);
+    assert!(canvas.vec_editor.is_some(), "a fresh press on row 1's value opens its own editor");
+}

@@ -117,6 +117,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["digital plants", "cubes", "shadows", "render"],
+    boundary_reason: FusedBundle,
     extra_fields: {
         shadow_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         shadow_depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,

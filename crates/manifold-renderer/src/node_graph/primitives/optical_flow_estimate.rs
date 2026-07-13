@@ -124,6 +124,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["optical flow", "optical flow estimate", "motion", "flow", "velocity"],
+    boundary_reason: IoBridge,
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         flow_worker: Option<BackgroundWorker<FlowRequest, FlowResponse>> = None,

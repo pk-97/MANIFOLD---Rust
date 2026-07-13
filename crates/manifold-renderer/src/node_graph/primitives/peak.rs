@@ -34,6 +34,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Control,
     aliases: ["peak", "max brightness", "highlight"],
+    boundary_reason: BarrieredReduction,
     extra_fields: {
         measure_buffer: Option<GpuBuffer> = None,
         previous_value: f32 = 0.0,

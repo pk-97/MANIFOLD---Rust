@@ -119,6 +119,81 @@ pub enum InputAccess {
     BufferGather,
 }
 
+/// Why a Boundary primitive is excused from the codegen-path mandate
+/// (`docs/ADDING_PRIMITIVES.md` §"The codegen path is mandatory",
+/// `docs/GRAPH_TOOLING_DESIGN.md` D4). A closed enum: every currently-Boundary
+/// primitive declares exactly one of these reasons (via the `primitive!`
+/// macro's `boundary_reason:` field, or a direct
+/// [`EffectNode::boundary_reason`](crate::node_graph::effect_node::EffectNode::boundary_reason)
+/// override for hand-impl primitives). The compiler stays
+/// conservative — `FusionKind` still defaults to `Boundary` — this enum is
+/// the POLICY layer that makes every atom's excuse for staying Boundary
+/// visible and enforced (`every_boundary_atom_declares_its_reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryReason {
+    /// CPU / control-rate op — no GPU kernel to fuse at all (value, math,
+    /// lfo, camera/light/material param setters, CPU array ops).
+    NonGpu,
+    /// Workgroup-barrier reduction or multi-pass scan/reduce — a single
+    /// dispatch would need `var<workgroup>` + barriers, which the
+    /// no-fused-monolith rule forbids folding into one kernel (`peak`,
+    /// `luminance`, `spawn_from_mesh`, `scatter_on_mesh`).
+    BarrieredReduction,
+    /// Cross-frame GPU state — the primitive's output must materialize in
+    /// VRAM to survive into next frame's input, so there is no VRAM
+    /// round-trip to fuse away (`node.feedback`, `node.array_feedback`).
+    CrossFrameState,
+    /// Upload, readback, or DNN/FFI bridge — the data enters or leaves the
+    /// GPU and is not purely a function of GPU inputs (`image_folder`,
+    /// `gltf_texture_source`, `gltf_mesh_source`, `color_sample`,
+    /// depth-estimator / blob-detector / optical-flow / person-segment
+    /// atoms, `wgsl_compute`'s user-authored full kernel).
+    IoBridge,
+    /// `render_*` rasterization pass — a draw call, not a compute dispatch.
+    DrawCall,
+    /// Fused bundle awaiting decomposition into atoms — dies with the bundle
+    /// (`cylinder_wrap_field`, `torus_wrap_field`, `digital_plants_render`,
+    /// `nested_cubes_geometry`).
+    FusedBundle,
+    /// Passes the barrier-free per-element scope test, but the codegen
+    /// can't yet express one of its inputs (the `draw_*` family's
+    /// array-into-texture read — tracked BUG-114/115). BLOCKED is not
+    /// exempt: the debt lives in the compiler, not the atom.
+    Blocked,
+    /// Owed a `wgsl_body` conversion — legal ONLY for the `type_id`s in
+    /// `CONVERSION_DEBT_LEDGER` (seeded from the 2026-07-11 sweep triage).
+    /// Converting an atom removes it from the ledger; the meta-test fails
+    /// if a listed atom becomes fusable (stale ledger) or if an
+    /// undeclared atom claims this reason without a ledger entry.
+    ConversionDebt,
+}
+
+/// The exact set of `type_id`s legally allowed to declare
+/// `BoundaryReason::ConversionDebt` (design doc D5). Seeded verbatim from the
+/// 2026-07-11 conversion-sweep triage's wave 1–3 atom list, transcribed at
+/// P2 time — two triage names (`affine_transform`/`node.transform`,
+/// `lambert_directional`/`node.basic_light`) had already been converted to
+/// `FusionKind::Pointwise` by 2026-07-13 and are correctly NOT here (see the
+/// P2 landing report's escalation list). Converting an atom removes it from
+/// this list — a deliberate, review-visible edit; adding an atom without
+/// converting it is not permitted (the meta-test below checks both
+/// directions).
+pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
+    "node.grid_mesh",           // generate_grid_mesh
+    "node.hypercube_points",    // hypercube_vertices
+    "node.explosion_force",     // radial_burst_force_field
+    "node.shininess",           // blinn_specular
+    "node.rim_light",           // fresnel_rim
+    "node.matcap_two_tone",     // matcap_two_tone
+    "node.tone_map",            // tone_map
+    "node.rotate_coordinates",  // rotate_2d
+    "node.sine_wave",           // sin_term
+    "node.watercolor",          // watercolor
+    "node.brightness",          // color.rs — P2b triage: single pure per-element kernel, no barriers
+    "node.channel_mixer",       // color.rs — P2b triage: single pure per-element kernel, no barriers
+    "node.gradient_map",        // color.rs — P2b triage: single pure per-element kernel, no barriers
+];
+
 impl InputAccess {
     /// Whether the body computes its own read coordinate / index (a dependent
     /// read the region-grower can't thread as a register). Both texture gather
@@ -131,11 +206,104 @@ impl InputAccess {
     }
 }
 
+/// Render a node's fusion classification as the single stable string both
+/// `catalog_gen` (the `fusion` catalog field, design D3) and `graph_tool
+/// fusion` (design D2/D10) print — one implementation, so the catalog and
+/// the CLI can never disagree about what a `FusionKind`/`BoundaryReason`
+/// pair means: `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+/// `"boundary:<reason_snake_case>"`.
+pub fn fusion_kind_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
+    match node.fusion_kind() {
+        FusionKind::Pointwise => "pointwise".to_string(),
+        FusionKind::Source => "source".to_string(),
+        FusionKind::MultiInputCoincident => "multi_input_coincident".to_string(),
+        FusionKind::Boundary => match node.boundary_reason() {
+            Some(BoundaryReason::NonGpu) => "boundary:non_gpu".to_string(),
+            Some(BoundaryReason::BarrieredReduction) => "boundary:barriered_reduction".to_string(),
+            Some(BoundaryReason::CrossFrameState) => "boundary:cross_frame_state".to_string(),
+            Some(BoundaryReason::IoBridge) => "boundary:io_bridge".to_string(),
+            Some(BoundaryReason::DrawCall) => "boundary:draw_call".to_string(),
+            Some(BoundaryReason::FusedBundle) => "boundary:fused_bundle".to_string(),
+            Some(BoundaryReason::Blocked) => "boundary:blocked".to_string(),
+            Some(BoundaryReason::ConversionDebt) => "boundary:conversion_debt".to_string(),
+            None => "boundary:undeclared".to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FusionKind;
     use crate::node_graph::effect_node::EffectNode;
     use crate::node_graph::primitives::Gain;
+
+    /// Every registered (non-fixture) primitive is either fusable or names
+    /// its `BoundaryReason` — the enforcement half of D4/D5
+    /// (docs/GRAPH_TOOLING_DESIGN.md). `node.__*` fixtures only register
+    /// under `cfg(test)` and are excluded the same way
+    /// `catalog_gen::is_test_fixture` and
+    /// `primitives::mod::every_conventional_array_port_declares_a_channels_signature`
+    /// already carve them out. Every primitive must satisfy
+    /// `is_fusable() XOR boundary_reason().is_some()` — there is no
+    /// undeclared middle.
+    #[test]
+    fn every_boundary_atom_declares_its_reason() {
+        use super::{BoundaryReason, CONVERSION_DEBT_LEDGER};
+        use crate::node_graph::PrimitiveRegistry;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut violations: Vec<String> = Vec::new();
+        let mut conversion_debt_holders: Vec<&str> = Vec::new();
+
+        for type_id in registry.known_type_ids() {
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+
+            let fusable = node.fusion_kind().is_fusable();
+            let reason = node.boundary_reason();
+
+            if reason == Some(BoundaryReason::ConversionDebt) {
+                conversion_debt_holders.push(type_id);
+            }
+
+            if fusable == reason.is_some() {
+                violations.push(format!(
+                    "{type_id}: fusable={fusable}, boundary_reason={reason:?} — \
+                     every primitive must be fusable XOR declare a BoundaryReason \
+                     (fusable atoms must NOT also declare a reason; Boundary atoms \
+                     MUST declare exactly one)",
+                ));
+            }
+        }
+
+        for &ledger_id in CONVERSION_DEBT_LEDGER {
+            if !conversion_debt_holders.contains(&ledger_id) {
+                violations.push(format!(
+                    "{ledger_id}: listed in CONVERSION_DEBT_LEDGER but the registered \
+                     primitive no longer declares BoundaryReason::ConversionDebt — either \
+                     it was converted (remove it from the ledger) or the declaration was lost",
+                ));
+            }
+        }
+        for &holder in &conversion_debt_holders {
+            if !CONVERSION_DEBT_LEDGER.contains(&holder) {
+                violations.push(format!(
+                    "{holder}: declares BoundaryReason::ConversionDebt but is not in \
+                     CONVERSION_DEBT_LEDGER — add it deliberately or use a different reason",
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "boundary_reason declaration violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
 
     #[test]
     fn default_is_boundary() {

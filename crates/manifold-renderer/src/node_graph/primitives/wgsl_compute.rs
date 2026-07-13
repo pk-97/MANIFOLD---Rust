@@ -1953,6 +1953,21 @@ impl EffectNode for WgslCompute {
         self.fusion_kind
     }
 
+    /// Mirrors [`Self::fusion_kind`]'s dynamic dispatch: a full-kernel
+    /// `node.wgsl_compute` (user-authored source, no fragment parse) is a
+    /// Boundary IO bridge; a fragment-form node that parsed to a fusable
+    /// kind carries no boundary reason at all — the XOR invariant
+    /// (`every_boundary_atom_declares_its_reason`) must hold per-instance,
+    /// not just for the type, because this primitive's fusability is
+    /// authored content, not a static declaration.
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        if self.fusion_kind == FusionKind::Boundary {
+            Some(crate::node_graph::freeze::classify::BoundaryReason::IoBridge)
+        } else {
+            None
+        }
+    }
+
     // `// @pure` marker: author-asserted memoizable kernel. The memoizer's own
     // input/param dirty-checks do the rest — a kernel whose inputs change every
     // frame gains nothing, a param-only kernel (BlackHole's deflection bake)

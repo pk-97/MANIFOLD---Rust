@@ -94,6 +94,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["render mesh", "render 3d mesh", "draw 3d", "rasterize", "Render TOP"],
+    boundary_reason: DrawCall,
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         world_pos_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,

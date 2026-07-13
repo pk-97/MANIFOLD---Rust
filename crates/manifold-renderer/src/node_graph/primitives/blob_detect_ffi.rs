@@ -154,6 +154,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["blob tracker", "blob detect ffi", "blob detect", "tracking", "bright spots"],
+    boundary_reason: IoBridge,
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,
         downsample_pipeline: Option<GpuComputePipeline> = None,

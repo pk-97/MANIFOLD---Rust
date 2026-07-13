@@ -50,6 +50,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["beat ramp", "saw", "tempo ramp", "phase"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for BeatRamp {

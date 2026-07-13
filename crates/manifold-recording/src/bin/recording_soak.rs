@@ -9,12 +9,13 @@
 //! `cargo run --release -p manifold-recording --features recording-proofs --bin recording-soak`
 //!
 //! PASS decision (default/unpaced mode) is anchored to the DECODED file, not
-//! Rust's `frames_recorded` counter — see BUG-085 (docs/BUG_BACKLOG.md):
-//! `appendPixelBuffer:` runs async and can silently drop a frame after
-//! `LiveRecorder_EncodeVideoFrame` already returned success, so the Rust
-//! counter can overstate the file's real packet count. An async drop shows
-//! up as a gap in the decoded frame-index sequence, which this binary checks
-//! explicitly (`find_first_gap`).
+//! only Rust's `frames_recorded` counter — belt-and-suspenders against the
+//! class of bug fixed by BUG-085 (docs/BUG_BACKLOG.md): the async
+//! `appendPixelBuffer:` call now feeds `frames_recorded` its ground truth
+//! (read from `LiveRecorder_Finalize` after the append queue drains), but
+//! this binary still cross-checks the decoded frame-index sequence
+//! (`find_first_gap`) as an independent oracle rather than trusting either
+//! counter alone.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -387,24 +388,23 @@ fn execute(args: &Args) -> i32 {
     }
 
     // Audio coverage sanity gate (both modes): the decoded audio track must
-    // exist and must not have catastrophically collapsed. This is
-    // deliberately a coarse 50% floor, not a tight tolerance -- see
-    // BUG-086 (docs/BUG_BACKLOG.md). This binary's own P2 self-check
-    // surfaced a real, currently-unexplained, VARIABLE residual shortfall
-    // even after the real-time-pacing fix above: repeated 2-minute
-    // 1920x1080 unpaced runs measured audio_duration_s at 116.0s, 118.4s,
-    // and 118.5s against an intended 120.0s (1.3%-3.3% short, run to run),
-    // while two independent 1-minute runs (1280x720 and 1920x1080) both
-    // measured exactly 60.0s -- duration-dependent, not resolution-
-    // dependent, not a "still queued at stop()" race (ruled out: a 500ms
-    // settle delay before `session.stop()` changed the result by <0.1s),
-    // and not a stable fixed percentage. Root cause unknown; native FFI
-    // investigation is out of P2's scope, so a made-up tight tolerance
-    // would misrepresent confidence this binary doesn't have. What IS
-    // clearly a broken recording -- the original defect here was a real-
-    // time-pacing bug in THIS soak bin's synthetic audio, since fixed,
-    // that lost ~91% of the audio -- gets caught by the 50% floor; a few
-    // percent of unexplained variance gets reported (below), not gated.
+    // exist and must not have catastrophically collapsed. BUG-086
+    // (docs/BUG_BACKLOG.md) tracked a real, VARIABLE residual shortfall here
+    // (repeated 2-minute 1920x1080 unpaced runs measured audio_duration_s at
+    // 116.0s-118.5s against an intended 120.0s), root-caused this session:
+    // `push_realtime_audio_chunk`'s synthetic-audio ring buffer (bounded
+    // `HeapRb`, ~5s capacity) can transiently fill under unpaced/
+    // encoder-stress timing bursts, and the old code advanced its
+    // `pushed_frames` bookkeeping by the INTENDED push amount regardless of
+    // what `ringbuf::Producer::push_slice` actually accepted -- so a
+    // transient overflow was silently discarded rather than retried, a
+    // permanent loss this binary's own harness caused, not the native
+    // encoder's (confirmed: `audio_frames_dropped` measured 0 on runs that
+    // still fell short). Fixed by tracking the real accepted count, which
+    // self-heals the backlog on the next call. Repeated 2-minute unpaced
+    // runs post-fix measured audio_duration_s at 120.006s-120.012s (<0.01%
+    // off) -- the WARNING threshold below is tightened accordingly; the 50%
+    // floor remains as a defense against a genuinely different collapse.
     if args.audio {
         // BUG-084/BUG-086 instrument: the native encoder's backpressure-drop
         // counter, now live (previously this drop path returned success and
@@ -416,20 +416,26 @@ fn execute(args: &Args) -> i32 {
             "[recording-soak] audio_frames_dropped (native backpressure gate) = {}",
             result.audio_frames_dropped
         );
+        let intended_audio_frames = (duration_s * sample_rate as f64).round() as u64;
+        println!(
+            "[recording-soak] audio_pushed_frames (harness ring-buffer accepted) = {audio_pushed_frames} / {intended_audio_frames} intended",
+        );
         match report.audio_duration_s {
             Some(a) if a >= duration_s * 0.5 => {
-                if (a - duration_s).abs() > duration_s * 0.02 {
+                if (a - duration_s).abs() > duration_s * 0.005 {
                     eprintln!(
-                        "[recording-soak] WARNING: audio_duration_s {a:.1}s is {:.1}s short of \
-                         the intended {duration_s:.1}s (BUG-086 -- known, unexplained, \
-                         non-gating variance; not a SOAK FAIL). audio_frames_dropped={} \
+                        "[recording-soak] WARNING: audio_duration_s {a:.3}s is {:.3}s short of \
+                         the intended {duration_s:.1}s. audio_frames_dropped={} \
+                         audio_pushed_frames={audio_pushed_frames}/{intended_audio_frames} \
                          -- {} the shortfall.",
                         duration_s - a,
                         result.audio_frames_dropped,
                         if result.audio_frames_dropped > 0 {
-                            "backpressure drops correlate with"
+                            "native backpressure drops correlate with"
+                        } else if audio_pushed_frames < intended_audio_frames {
+                            "the harness's own ring buffer under-pushed, which explains"
                         } else {
-                            "backpressure gate is NOT firing, so it does not explain"
+                            "neither known counter explains"
                         },
                     );
                 }
@@ -588,20 +594,33 @@ fn submit_frame_realtime(
 /// Push whatever audio is due by now, paced strictly to REAL wall-clock
 /// elapsed time since `start` -- never to video frame-loop iteration count.
 ///
-/// Why this matters (found via this binary's own self-check soak, not a
-/// pre-existing bug): the native audio input is `expectsMediaDataInRealTime
-/// = YES` (LiveRecordingPlugin.m:284) and, unlike video (which spins up to
-/// 500 times waiting for `isReadyForMoreMediaData`), audio drops
-/// immediately and SILENTLY on backpressure --
-/// `if (!state->audioInput.isReadyForMoreMediaData) return LR_OK; // drop
-/// samples rather than block` (LiveRecordingPlugin.m:546-547) -- success
-/// return, no counter anywhere. Pushing a whole take's audio in a burst
-/// (e.g. once per unpaced video frame, which can race far ahead of real
-/// time) triggers exactly that silent-drop path: the ring buffer was never
-/// the bottleneck, the writer's real-time gate was. Real production audio
-/// is never bursted either -- it arrives from an actual CoreAudio callback
-/// at real hardware rate -- so pacing to wall clock here is the faithful
-/// synthetic equivalent, not a workaround.
+/// Why the wall-clock pacing matters (found via this binary's own self-check
+/// soak, not a pre-existing bug): the native audio input is
+/// `expectsMediaDataInRealTime = YES` (LiveRecordingPlugin.m) and cannot
+/// accept audio faster than real time regardless of how fast unpaced video
+/// encodes; pushing a whole take's audio in a burst (e.g. once per unpaced
+/// video frame, which can race far ahead of real time) would overwhelm it.
+/// Real production audio is never bursted either -- it arrives from an
+/// actual CoreAudio callback at real hardware rate -- so pacing to wall
+/// clock here is the faithful synthetic equivalent, not a workaround.
+///
+/// `pushed_frames` advances by what `ringbuf::Producer::push_slice` actually
+/// ACCEPTED, not by the intended push amount (BUG-086 root cause, found this
+/// session): the ring buffer (bounded, `HeapRb`, ~5s capacity) can transiently
+/// fill when a burst of real elapsed time is due at once (this binary's own
+/// per-frame call cadence, not the native encoder), and the previous version
+/// of this function advanced `pushed_frames` by the intended `to_push`
+/// regardless of what `push_slice` actually accepted -- so any shortfall was
+/// silently discarded rather than retried on the next call, a permanent loss
+/// with nothing recording that it happened. This is the harness's own bug,
+/// not the native encoder's: the caller (`execute`) confirmed a decoded
+/// `audio_frames_dropped` of 0 on runs that still fell short. Tracking the
+/// real accepted count here self-heals -- the next call's `to_push`
+/// naturally includes whatever didn't fit last time -- and the caller
+/// reports any residual shortfall against the intended total once, at the
+/// end, rather than this function trying to count it call-by-call (a
+/// per-call counter double-counts backlog that's still in flight, not yet
+/// lost).
 fn push_realtime_audio_chunk(
     producer: &mut impl ringbuf::traits::Producer<Item = f32>,
     phase: &mut f32,
@@ -615,8 +634,10 @@ fn push_realtime_audio_chunk(
     if to_push == 0 {
         return;
     }
-    push_audio_chunk(producer, phase, sample_rate, channels, to_push as u32);
-    *pushed_frames += to_push;
+    let accepted_samples =
+        push_audio_chunk(producer, phase, sample_rate, channels, to_push as u32);
+    let accepted_frames = accepted_samples as u64 / channels as u64;
+    *pushed_frames += accepted_frames;
 }
 
 /// Synthesize `num_frames` sample-frames of a 440Hz sine into `producer`.
@@ -631,7 +652,7 @@ fn push_audio_chunk(
     sample_rate: u32,
     channels: u16,
     num_frames: u32,
-) {
+) -> usize {
     const FREQ_HZ: f32 = 440.0;
     const AMPLITUDE: f32 = 0.25;
     let mut buf = Vec::with_capacity(num_frames as usize * channels as usize);
@@ -645,7 +666,7 @@ fn push_audio_chunk(
             *phase -= 1.0;
         }
     }
-    producer.push_slice(&buf);
+    producer.push_slice(&buf)
 }
 
 // ---------------------------------------------------------------------

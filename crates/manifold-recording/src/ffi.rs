@@ -61,6 +61,18 @@ unsafe extern "C" {
     /// call frees the native state — do not poll afterward).
     pub fn LiveRecorder_GetAudioFramesDropped(handle: *mut c_void) -> i32;
 
+    /// Read the number of video frames whose async `appendPixelBuffer:` call
+    /// (dispatched from `LiveRecorder_EncodeVideoFrame`) was skipped or
+    /// failed — BUG-085's counter. `LiveRecorder_EncodeVideoFrame` returns
+    /// success as soon as the synchronous GPU blit completes, before the
+    /// async append runs; this counter is the only way to see an append
+    /// that later silently drops.
+    ///
+    /// Backed by an atomic counter; safe to poll from any thread at any
+    /// point before `LiveRecorder_Finalize` is called on this handle (that
+    /// call frees the native state — do not poll afterward).
+    pub fn LiveRecorder_GetVideoFramesAppendDropped(handle: *mut c_void) -> i32;
+
     /// Finalize the recording: drain buffers, close AVAssetWriter.
     ///
     /// Returns the total number of video frames encoded, or negative on error.

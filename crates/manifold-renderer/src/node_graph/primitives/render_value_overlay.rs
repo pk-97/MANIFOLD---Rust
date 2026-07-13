@@ -187,6 +187,7 @@ crate::primitive! {
     category: Generate,
     role: Filter,
     aliases: ["value overlay", "render value overlay", "debug text", "readout", "numbers"],
+    boundary_reason: DrawCall,
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
         font_atlas: Option<GpuTexture> = None,

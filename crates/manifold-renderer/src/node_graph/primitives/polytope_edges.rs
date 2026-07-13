@@ -49,6 +49,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["platonic solid", "polytope edges", "polytope", "edges", "wireframe"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for PolytopeEdges {

@@ -118,6 +118,7 @@ crate::primitive! {
     category: Generate,
     role: Source,
     aliases: ["image folder", "image sequence", "stills", "Movie File In TOP"],
+    boundary_reason: IoBridge,
     extra_fields: {
         // The folder string we last scanned. Empty string = nothing
         // scanned yet; any change drops the file list and re-scans.

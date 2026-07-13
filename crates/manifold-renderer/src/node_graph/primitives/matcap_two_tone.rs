@@ -73,6 +73,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Filter,
     aliases: ["matcap", "two tone", "sphere map", "lit sphere"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for MatcapTwoTone {

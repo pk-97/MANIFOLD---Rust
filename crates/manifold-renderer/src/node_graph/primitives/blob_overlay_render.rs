@@ -84,6 +84,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["blob overlay", "blob overlay render", "tracking boxes", "debug view"],
+    boundary_reason: Blocked,
 }
 
 impl Primitive for BlobOverlayRender {

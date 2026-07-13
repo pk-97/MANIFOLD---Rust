@@ -121,6 +121,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["oscillator", "modulator", "LFO CHOP"],
+    boundary_reason: NonGpu,
 }
 
 crate::param_tooltips!("node.lfo", {

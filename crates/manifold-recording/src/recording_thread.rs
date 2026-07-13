@@ -76,6 +76,27 @@ pub(crate) struct RecordingFrame {
 // PoolSlot contains a raw pointer to a Metal texture — safe to send.
 unsafe impl Send for RecordingFrame {}
 
+/// Recording-thread outcome, read by `LiveRecordingSession::stop()`.
+///
+/// `frames_recorded` is the native ground truth — read from
+/// `LiveRecorder_Finalize`'s return value AFTER it drains the async append
+/// queue, not accumulated from `LiveRecorder_EncodeVideoFrame`'s synchronous
+/// return (BUG-085: that return happens before the real, async
+/// `appendPixelBuffer:` call, so it can't tell success from a later silent
+/// drop).
+pub(crate) struct RecordingStats {
+    /// Video frames actually appended to the file (native `videoFramesAppended`
+    /// counter, read after the append queue is drained).
+    pub frames_recorded: u32,
+    /// Video frames that failed synchronously — before ever being queued for
+    /// async append (GPU fence timeout, blit failure, writer-not-ready spin
+    /// exhausted, etc.).
+    pub frames_sync_failed: u32,
+    /// Video frames queued for async append but dropped there (native
+    /// `videoFramesAppendDropped` counter — BUG-085's instrument).
+    pub video_append_dropped: u32,
+}
+
 /// Run the recording thread main loop.
 ///
 /// This function blocks until `stop` is set to `true` and all remaining
@@ -87,9 +108,8 @@ pub(crate) fn run(
     sample_rate: u32,
     channels: u16,
     stop: Arc<AtomicBool>,
-) -> (u32, u32) {
-    let mut frames_encoded: u32 = 0;
-    let mut frames_failed: u32 = 0;
+) -> RecordingStats {
+    let mut frames_sync_failed: u32 = 0;
 
     // Scratch buffer for draining audio ring buffer.
     let mut audio_scratch = vec![0.0f32; 4096];
@@ -98,13 +118,18 @@ pub(crate) fn run(
     log::info!("[RecordingThread] Started");
 
     /// Encode a single video frame: wait for GPU fence, encode, release pool slot.
+    ///
+    /// BUG-085: `LiveRecorder_EncodeVideoFrame` returning 0 means the frame
+    /// was successfully queued for the native async `appendPixelBuffer:`
+    /// call, NOT that it was appended — the real success/failure happens
+    /// later, off this thread, on the native encoder's own append queue. So
+    /// a 0 return only rules out *synchronous* failure (GPU fence timeout,
+    /// blit failure, writer-not-ready spin exhausted); it does not count
+    /// toward `frames_recorded`. The ground truth is read once, after
+    /// `LiveRecorder_Finalize` drains the append queue — see the tail of
+    /// `run()` below.
     #[inline]
-    fn encode_frame(
-        frame: RecordingFrame,
-        encoder_handle: *mut c_void,
-        frames_encoded: &mut u32,
-        frames_failed: &mut u32,
-    ) {
+    fn encode_frame(frame: RecordingFrame, encoder_handle: *mut c_void, frames_sync_failed: &mut u32) {
         // Wait for GPU blit to complete (kernel notification, zero CPU).
         let fence_ok = frame.gpu_complete.wait(Duration::from_secs(5));
         if !fence_ok {
@@ -113,7 +138,7 @@ pub(crate) fn run(
                  skipping frame, possible GPU hang"
             );
             frame.pool_slot.release();
-            *frames_failed += 1;
+            *frames_sync_failed += 1;
             return;
         }
 
@@ -126,10 +151,8 @@ pub(crate) fn run(
         // Release the pool slot AFTER encoding.
         frame.pool_slot.release();
 
-        if result == 0 {
-            *frames_encoded += 1;
-        } else {
-            *frames_failed += 1;
+        if result != 0 {
+            *frames_sync_failed += 1;
             log::warn!("[RecordingThread] Video encode failed at {elapsed:.3}s: error {result}");
         }
     }
@@ -162,19 +185,9 @@ pub(crate) fn run(
 
         // Encode the first frame, then drain any additional queued frames.
         if let Some(frame) = first_frame {
-            encode_frame(
-                frame,
-                encoder_handle,
-                &mut frames_encoded,
-                &mut frames_failed,
-            );
+            encode_frame(frame, encoder_handle, &mut frames_sync_failed);
             while let Ok(frame) = frame_rx.try_recv() {
-                encode_frame(
-                    frame,
-                    encoder_handle,
-                    &mut frames_encoded,
-                    &mut frames_failed,
-                );
+                encode_frame(frame, encoder_handle, &mut frames_sync_failed);
             }
         }
 
@@ -207,17 +220,33 @@ pub(crate) fn run(
         }
     }
 
-    // Finalize the native encoder.
+    // BUG-085: read the async append-drop counter BEFORE Finalize — it frees
+    // the native state, after which polling is unsafe.
+    let video_append_dropped =
+        unsafe { ffi::LiveRecorder_GetVideoFramesAppendDropped(encoder_handle) }.max(0) as u32;
+
+    // Finalize the native encoder. Its return value is the ground truth
+    // appended-frame count (`videoFramesAppended`, read after the append
+    // queue is fully drained) — this is `frames_recorded`, not the
+    // synchronous-LR_OK accumulator this function used to keep.
     let finalize_result = unsafe { ffi::LiveRecorder_Finalize(encoder_handle) };
-    if finalize_result < 0 {
+    let frames_recorded = if finalize_result >= 0 {
+        finalize_result as u32
+    } else {
         log::error!("[RecordingThread] Encoder finalization failed: {finalize_result}");
-    }
+        0
+    };
 
     log::info!(
-        "[RecordingThread] Finished: {frames_encoded} frames encoded, {frames_failed} failed"
+        "[RecordingThread] Finished: {frames_recorded} frames recorded, \
+         {frames_sync_failed} sync-failed, {video_append_dropped} async-append-dropped"
     );
 
-    (frames_encoded, frames_failed)
+    RecordingStats {
+        frames_recorded,
+        frames_sync_failed,
+        video_append_dropped,
+    }
 }
 
 /// Drain available audio samples from the ring buffer and write to the encoder.

@@ -123,6 +123,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["person mask", "person segment", "segmentation", "people", "matte"],
+    boundary_reason: IoBridge,
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         mask_worker: Option<BackgroundWorker<MaskRequest, MaskResponse>> = None,

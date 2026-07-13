@@ -405,6 +405,8 @@ These are the failure modes that have actually bitten on this codebase. Watch fo
 
 ## 9. The acceptance bar
 
+Machine-check your graph before any of the below: `graph_tool validate <file.json> --kind effect|generator` runs the exact load + compile pipeline the runtime loader takes (catches an unknown type_id, a bad wire, an unresolved binding in milliseconds, no GPU render needed), and `graph_tool fusion <file.json>` shows which nodes actually fold into a fused dispatch vs. stay a boundary — useful while deciding where a decomposition's atom seams should fall. See `docs/GRAPH_TOOLING_DESIGN.md`.
+
 A decomposition ships when:
 
 1. **Bit-parity, tested, not asserted — and tested on the GPU, not in CPU mirror.** When you migrate an existing native generator, the JSON preset MUST render bit-exact against the legacy generator on the canonical fixture (or numerically bounded with documented justification when bit-exact isn't achievable — e.g. RNG-seeded particle sims). **Bit-parity is not a claim you make in a commit message — it is a test that runs.** The standard the codebase uses for effects is the `gpu_tests` module pattern (see [`separable_gaussian.rs`](../crates/manifold-renderer/src/node_graph/primitives/separable_gaussian.rs) for the canonical shape, or `wireframe_shape.rs` for the Array-output variant):

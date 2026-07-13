@@ -14,6 +14,7 @@ pub mod classify;
 pub mod codegen;
 pub mod derived_uniform_registry;
 pub mod diff;
+pub mod fusion_report;
 pub mod install;
 pub mod reference;
 pub mod region;
@@ -22,6 +23,7 @@ pub mod space;
 
 pub use classify::FusionKind;
 pub use diff::{DiffResult, TextureDiff};
+pub use fusion_report::{FusionReport, NodeFusionInfo, RegionSummary, fusion_report};
 
 /// First end-to-end fusion proof — hand-fused Gain and ColorGrade chains
 /// validated against the unfused chains through the oracle (correct fusion
