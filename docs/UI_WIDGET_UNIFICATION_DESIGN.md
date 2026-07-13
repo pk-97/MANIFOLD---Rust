@@ -1,6 +1,6 @@
 # UI Widget Unification — one widget vocabulary, two hosts
 
-**Status: IN PROGRESS · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded · 2026-07-13 (Sonnet): P1 + P2 LANDED (main). P3 (full slider derivation) and P4 (dual-surface dropdown/color-vec widgets) not attempted — each is comparable in scope to P1 itself and deserves its own session. P5 (canvas text-input) BLOCKED pending a short design pass (caret/selection/IME model, per this doc's own §"P5" acknowledgment). P6 not started. · 2026-07-13 (Fable, P7 design pass): P7 expanded to P7.0–P7.6 with D8–D12, per Peter's mandate to "unify all of the graph and timeline widgets, UI, and interaction surfaces even if they have not had any bugs raised previously". P7.0 (AudioTriggerSection) LANDED on main `6917c0ea`; P7.1–P7.6 not started, fully briefed below.**
+**Status: IN PROGRESS · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P7 added, D6 superseded · 2026-07-13 (Sonnet): P1 + P2 LANDED (main). P3 (full slider derivation) and P4 (dual-surface dropdown/color-vec widgets) not attempted — each is comparable in scope to P1 itself and deserves its own session. P5 (canvas text-input) BLOCKED pending a short design pass (caret/selection/IME model, per this doc's own §"P5" acknowledgment). P6 not started. · 2026-07-13 (Fable, P7 design pass): P7 expanded to P7.0–P7.6 with D8–D12, per Peter's mandate to "unify all of the graph and timeline widgets, UI, and interaction surfaces even if they have not had any bugs raised previously". P7.0 (AudioTriggerSection) LANDED on main `6917c0ea`; P7.1–P7.6 not started, fully briefed below. · 2026-07-13 (Fable, P3–P6 design pass): Peter's skepticism of the "deferred on budget" claims audited against the code. Verdicts — **P3 was NOT execution-ready**: three genuine design gaps found and resolved (D13–D15), including a wrong committed contract row (chrome value-cell type-in is DoubleClick, not Click); P3 is now fully briefed. **P4's premise was stale**: the "chrome twins" of the canvas editors were deleted by GRAPH_EDITOR_REDESIGN Phase 6 — re-scoped to canvas-side hygiene (D17). **P6 dissolved in audit**: every named target is already unified; retired (D18), remainder moved to Deferred. **P5 unblocked**: Peter's four answers written in as D16; phased P5a–P5d, zero open decisions (one non-blocking one-liner flagged for Peter inside D16). All-app interaction survey (Peter's "all UI, all pages, all interaction" mandate): §1b — one new duplication class found (text editing ×3 → P5 kills it) plus the double-click-constant twin (→ P4).**
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -57,6 +57,38 @@ Classification: the contract layer is the only *genuinely new* piece — two sma
 and two pure functions. Everything else is rewiring what exists. The design shrank in the
 audit, as it should.
 
+### 1b. Second audit — P3/P4/P5/P6 design pass + all-app interaction survey (verified 2026-07-13)
+
+Run because Peter was "skeptical of the agents exiting their work because they ran out
+of session budget" — every deferred phase re-audited against the code, not the prior
+agent's self-report. Findings that changed the design:
+
+| Finding | Where (verified) | Consequence |
+|---|---|---|
+| Chrome value-cell type-in opens on **DoubleClick**, not Click | `inspector.rs:2375–2380` (`UIEvent::DoubleClick` → `route_value_typein`); `slider.rs`'s "click to type" comments (`:13`, `:47`) are aspirational, not behavior | P1's committed contract row `(ValueCell, Click)` was wrong — corrected by D13, code flip lands in P3 |
+| `EditValue`'s chrome action is built at INPUT time from live state (anchor bounds, current value, clamp range) | `param_card.rs:877–901` (`value_cell_typein` → `PanelAction::BeginParamTextInput`); registry entries are build-time constants and would go stale (values change on `set_*`-only frames, no re-registration) | Registry derivation is impossible for EditValue → D14's two-mechanism rule |
+| Label gestures are genuinely heterogeneous per host | Label+Click = OSC-copy on macros (`macros_panel.rs:458`, `copied_flash`) and param cards (`osc_address`, param_card.rs:140-ish field doc); Label+Click = drawer expand on audio-trigger rows (`audio_trigger_section.rs` module doc); no label mapping action at all on gain / master / layer-chrome sliders | Contract can't own Label+Click → D13's ownership boundary + D15's dead-stop table |
+| The canvas editors' "chrome twins" no longer exist | `graph_editor.rs:1–21` module doc: post GRAPH_EDITOR_REDESIGN Phase 6 "every param control now lives on the node face in the canvas"; the panel is a read-only preview inspector. Chrome param cards carry NO color/vec/table rows (`ParamInfo`, param_card.rs — kinds are slider/toggle/trigger/string; enum params render as *labeled sliders* via `value_labels`, not dropdowns) | P4's dual-surface premise is dead → D17 re-scope |
+| Text editing is implemented three times | `manifold-app/src/text_input.rs` (`TextInputState`: cursor + whole-field select_all only, no ranged selection, no mouse, no clipboard); `mapping_popover.rs:591–635` (`edit_buffer`: append/pop only, no caret); the window-specific key-policy blocks (`window_input.rs:1174–1186`, `:1338–1357`, `:1794–1857`) | The BUG-102 "primitive" must be an extraction + upgrade, not a green-field widget → D16 |
+| No pointer path commits or cancels a text session | commit sites are Enter only (`window_input.rs:1341`, `:1812`); cancel = Esc / overlay-close (`cancel_if_owned_by`) / perform-mode enter. Clicking elsewhere leaves the session active | D16 adds blur-commit (a deliberate, stated behavior change) |
+| Double-click thresholds are declared twice, equal by discipline | `color.rs:838` `DOUBLE_CLICK_TIME_SEC = 0.3` vs `graph_canvas/mod.rs:401–404` `DOUBLE_CLICK_SECONDS = 0.3` / `DOUBLE_CLICK_RADIUS_PX = 4.0` (= `DRAG_THRESHOLD_PX`, color.rs:837) | Single-source the constants → P4, I8 |
+
+**All-app survey** (the mandate: duplicated logic doing the same interaction job in more
+than one place — not "everything that touches the UI"):
+
+| Pattern | Evidence | Verdict |
+|---|---|---|
+| Text editing | three implementations, row above | **The real find** → P5a–P5d (D16) |
+| Double-click recognition | `input.rs:645–658` vs `graph_canvas/interaction.rs:1111` (`is_double_click`) | Constants single-sourced in P4; the recognizers themselves stay per-surface — the canvas keys on node identity (`last_click_node`), which has no retained analog, and the retained one is welded into `UIInputSystem`'s event stream |
+| Drag lifecycle | eight machines | P7.0–P7.6 — in flight in a concurrent session; untouched by this pass |
+| Overlay/popup lifecycle | `Overlay` trait + one app driver (`panels/overlay.rs:1–14`), `popup_shell.rs` (one scrim/container), `picker_core.rs` (shared browser/Ableton core) | Already unified (OVERLAY_SYSTEM_DESIGN) — no work |
+| Scroll normalization | `window_input.rs::normalize_scroll_delta` — one rule, all consumers | Already unified — no work |
+| Keyboard routing | `window_input.rs:1–28` — one owner for both windows since its Phase 7 | Already unified — no work |
+| Hover tracking | `UIInputSystem::hovered_widget` (retained) vs canvas `self.hovered` | Per-surface by design (D1) — not duplication |
+| Context menus | `dropdown.rs::open_context`, items carry typed `PanelAction`s | One implementation, data-driven — no work |
+| Panel click dispatch | ten panels hand-match node ids in `handle_click` beside the `IntentRegistry` (inventory in D18) | Non-uniformity, NOT duplication — each match is the sole implementation of its panel's behavior. Rejected as a phase (D18); moved to Deferred with its real design cost named |
+| Tooltips | ONE implementation, canvas-only (`draw_hover_tooltip`, graph_canvas/render.rs:319); retained chrome has none. AUDIO_SETUP_DOCK's P4 deferral formally assigned the "shared tooltip primitive" gap to THIS design (its §Deferred, "the primitive gap itself still belongs to UI_WIDGET_UNIFICATION") | Not duplication today; the obligation is recorded in Deferred with its trigger (first chrome tooltip consumer) so it can't be dropped |
+
 ## 2. Decisions
 
 **D1 — The two-surface split stays.** Retained chrome + immediate canvas, exactly as
@@ -108,6 +140,8 @@ P2 the steppers/send-fader. The remaining widgets convert in scheduled phases P4
 dual-surface widgets first (P4, where the divergence disease already lives), then the
 canvas text-input primitive (P5, unblocks BUG-102), then contract-derivation for
 chrome-only widgets (P6, future-proofing). No widget waits for its first bug.
+(2026-07-13 note: the audit later re-scoped P4 — no divergence disease remained, D17 —
+and retired P6, D18; the sequencing principle stands.)
 
 **D7 — Zone geometry is parameterized by metrics, not shared constants.** The node face
 legitimately uses different label/value widths than cards (graph_canvas/mod.rs:157–179).
@@ -191,6 +225,148 @@ lifecycle); **every `SliderDragState`-backed panel** (clip_chrome, macros_panel,
 layer_chrome, layer_header, master_chrome — already `DragController`-backed via
 `SliderDragState`; don't touch).
 
+**D13 — Contract ownership boundary; EditValue is DoubleClick.** (Added 2026-07-13,
+P3–P6 design pass.) The contract owns exactly three (zone, gesture) pairs — the ones
+whose meaning must be identical on every surface for muscle memory:
+`(Track, RightClick) → ResetToDefault`, `(Label, RightClick) → OpenMapping`,
+`(ValueCell, DoubleClick) → EditValue`. The last is a **correction** to P1's committed
+table: chrome's shipped type-in gesture is DoubleClick (inspector.rs:2375 →
+`route_value_typein`), and P1 transcribed slider.rs's aspirational "click to type"
+comment instead of the behavior. Nothing observable regresses from the flip — the
+canvas EditValue translation is still a dead stop until P5d, and chrome's dispatch
+never consulted the contract's ValueCell row. Every OTHER (zone, gesture) pair is
+**host-attached**: hosts may freely bind pairs the contract maps to `None`
+(Label+Click OSC-copy on cards/macros; Label+Click drawer-expand on audio-trigger
+rows), but may never hand-bind a contract-owned pair — that's the widened I1 gate.
+*Rejected: putting Label+Click in the contract (e.g. `CopyAddress`)* — the pair means
+different things on different hosts today (copy vs. expand); a contract row that
+half the hosts must override is worse than no row.
+*Rejected: changing chrome to single-click type-in to match P1's table* — an
+unrequested live-UX change smuggled in as a refactor; single-click on chrome value
+cells is also drag-adjacent (the cells sit in slider rows) and would mis-fire.
+
+**D14 — Two derivation mechanisms, split by payload class.** Constant-payload intents
+(OpenMapping — the action is fixed at build: `ParamLabelRightClick(target, pid)`,
+`MacroLabelRightClick(i)`) derive at BUILD time through `register_intents`, P1-style.
+Live-payload intents (EditValue — the action carries anchor bounds, current value,
+clamp range that change between builds) derive at INPUT time: the host's existing
+input-time resolver consults `intent_for()` and constructs the action fresh, exactly
+the pattern the canvas already uses (`on_right_button_down`, P1) and chrome already
+uses (`route_value_typein` → `value_cell_typein`, inspector.rs:2375/param_card.rs:877).
+*Rejected: extending `IntentRegistry` to store closures so everything derives at build
+time* — allocation + captured state inside the registry, and the closure would still
+read stale values captured at build; the staleness class is the reason input-time
+construction exists.
+
+**D15 — Hosts without a target surface translate to nothing; adding surfaces is
+deferred product work.** Per D3, a host lacking a mapping popover (gain, master/layer
+chrome, audio-trigger) or a type-in (every slider host except param_card/gen-params)
+translates the intent to an explicit, greppable nothing. The per-host translation
+table is committed in the P3 brief. Wiring NEW type-in / mapping surfaces onto those
+hosts (so every value cell in the app can be typed into) is a product call, not a
+derivation task — Deferred, with D14's seam making each a one-command addition when
+Peter wants it.
+
+**D16 — One text-editing model: `manifold-ui/src/text_edit.rs`; sessions buffer and
+commit once.** (Peter's four P5 answers, 2026-07-13, quoted where they decide.)
+
+- **Selection model** (Peter: *"Normal click and drag, shift click selection, standard
+  OS and everyday interaction — this should be a unified text system"*): click places
+  the caret, click-drag selects a range, shift-click extends, double-click selects the
+  word, Cmd+A selects all; typing replaces the selection. Cmd+C/X/V clipboard.
+- **Architecture** (Peter: *"General"*): a new widget-layer module
+  `crates/manifold-ui/src/text_edit.rs` — sibling of `slider.rs`/`stepper.rs`/`drag.rs`,
+  no deps beyond the crate (satisfies ui-depends-only-on-foundation). It owns the
+  **editing model only**; each host keeps its renderer and its session policy:
+  `manifold-app/src/text_input.rs` keeps `TextInputField` routing, ctx payloads,
+  owners, and anchors, but its hand-rolled editing mechanics (`text`/`cursor`/
+  `select_all` + `insert_char`/`backspace`/`delete`/`move_*`) are REPLACED by an
+  embedded model; `MappingPopover` embeds a second instance for its fields and deletes
+  `edit_buffer`. The three implementations become one (I7). The window-specific
+  key-policy blocks stay window-specific — window_input.rs:19–24 already documents why
+  merging the *policy* would be a behavior change; what unifies is the mechanics
+  underneath, which is exactly the split that comment endorses.
+- **Committed model shape** (load-bearing; interiors free):
+
+  ```rust
+  // crates/manifold-ui/src/text_edit.rs
+  pub struct TextEditModel {
+      text: String,
+      caret: usize,   // byte offset, always on a char boundary
+      anchor: usize,  // selection anchor; anchor == caret ⇒ no selection
+  }
+  // API (all selection-aware): new(&str), text(), selection() -> Range<usize>,
+  // insert_char, insert_str, backspace, delete,
+  // move_left/move_right(select: bool, word: bool), move_home/move_end(select: bool),
+  // select_all, select_word_at(byte), caret_to(byte, extend: bool), drag_to(byte),
+  // selected_text() -> &str, take_text() -> String
+  //
+  // Pointer x ↔ byte offset stays OUTSIDE the model — hosts resolve it via the
+  // shared pure helper, parameterized by their own measurer (Painter text_width /
+  // UIRenderer measure):
+  pub fn byte_offset_for_x(text: &str, rel_x: f32, measure: &mut dyn FnMut(&str) -> f32) -> usize;
+  ```
+- **IME** (Peter: *"No"*): **interpretation, stated so the executor isn't guessing** —
+  the primitive consumes committed characters only (winit `Key::Character`, exactly
+  today's path); marked-text / candidate-window composition is UNSUPPORTED: no
+  composition events are handled, unknown/control input is ignored (never a crash
+  path). Consequence, stated honestly: composition-based scripts (Japanese/Chinese/
+  Korean) and macOS dead-key accents (option-e → é arrives via composition) cannot be
+  typed into MANIFOLD text fields. ⚠ One-liner for Peter, non-blocking: confirm losing
+  dead-key accents is acceptable; if not, that's a scoped follow-up (NSTextInputClient
+  adoption feeding this same model — see Deferred), not a change to this design.
+- **Undo/commit** (Peter: *"Whatever is industry and user standard"* — researched and
+  decided, not left vague): **buffer locally; ONE `EditingService` command on commit;
+  commit on Enter AND on blur (a click outside the field commits first, then the click
+  proceeds); Esc cancels with no command; in-session Cmd+Z reverts the buffer to its
+  seed text (single-level) and never touches the app undo stack.** Rationale: (a)
+  comparable creative tools (Ableton clip/track rename, Blender field edit, Figma)
+  treat one completed text edit as one undo step — Ctrl+Z after a rename that undoes
+  one letter is user-hostile; (b) this codebase's own precedent is already exactly
+  this — every existing `TextInputField` commit dispatches one command
+  (`handle_text_input_commit`), and the popover's numeric commits are one
+  snapshot→changed→commit triad (one undo entry); (c) per-keystroke commands would
+  flood the 200-cap undo stack. *Rejected: per-keystroke commands through
+  EditingService* — for the reasons above; *rejected: cancel-on-blur* — silently
+  discarding typed text on a stray click loses work; Esc is the explicit discard.
+  Blur-commit is a small deliberate behavior change (today no pointer path ends a
+  session — §1b); overlay teardown keeps its cancel semantics (`cancel_if_owned_by` —
+  closing a popup still discards, unchanged).
+
+**D17 — P4 re-scoped: the dual-surface premise is dead; P4 is canvas-side hygiene.**
+The §1b audit found the canvas modal editors (`EnumDropdown`, `VecEditor`,
+`TableEditor`, graph_canvas/mod.rs:858/:931/:1035) are **single-host widgets** — their
+chrome "twins" were deleted when GRAPH_EDITOR_REDESIGN Phase 6 moved all param
+authoring onto the node face, and chrome cards never render color/vec/table rows (card
+enum params are labeled sliders, not dropdowns). The only genuine overlap with
+`dropdown.rs` is the semantic "click an option picks, click outside dismisses" — with
+zero shared geometry or infrastructure (retained overlay + scroll + anim vs. a 60-line
+pure-math struct). *Rejected: forcing a shared option-list contract between
+`dropdown.rs` and `EnumDropdown`* — it would be an adapter around a misfit, the exact
+§6 forbidden move; the canvas editors already HAVE the P1 shape (pure anchor-derived
+zone geometry + hit queries: `option_at`/`channel_at`/`cell_at`), so the "give them
+contracts" work is already done by construction. What remains is pinning + the
+double-click-constant single-sourcing — the rewritten P4 brief.
+
+**D18 — P6 retired; panel hand-dispatch is not the disease.** Audit per original P6
+target: browser popup / pickers → already one implementation each on the unified
+overlay system (`Overlay` trait + `popup_shell` + `picker_core`); dropdown → gesture
+semantics already data-driven (items carry typed `PanelAction`s); toasts → trivial
+single site; steppers/sliders → P1/P2/P3. **No chrome-only widget remains whose
+gesture semantics exist in more than one place**, so contract derivation there has no
+duplication to delete — the phase would be ceremony. The real remaining non-uniformity
+is that ten panels hand-match node ids in `handle_click` beside the registry
+(ableton_picker.rs:595, audio_setup_panel.rs:1689, audio_trigger_section.rs:467,
+browser_popup.rs:818, clip_chrome.rs:751, layer_chrome.rs:236, layer_header.rs:2095,
+macros_panel.rs:443, master_chrome.rs:341, param_card.rs:3235) — but each match is the
+SOLE implementation of its panel's behavior (no twin anywhere), and several click paths
+mutate panel-local state (`copied_flash.trigger`, macros_panel.rs:458; drawer toggles),
+which the registry's constant-action model cannot express. Wholesale registry migration
+is therefore a real design problem (registry actions with local effects) with no bug
+class driving it. *Rejected as a phase; moved to Deferred with a trigger.* If Peter
+wants mechanism uniformity for its own sake, that's his call to make with the cost in
+front of him — it was NOT what "deferred on budget" was hiding.
+
 ## 3. The contract (committed shapes)
 
 All in `manifold-ui/src/slider.rs` — the widget's one home, next to `build` and `draw`.
@@ -227,7 +403,11 @@ impl BitmapSlider {
         match (zone, g) {
             (SliderZone::Track, RightClick) => Some(SliderIntent::ResetToDefault),
             (SliderZone::Label, RightClick) => Some(SliderIntent::OpenMapping),
-            (SliderZone::ValueCell, Click)  => Some(SliderIntent::EditValue),
+            // D13 correction (2026-07-13): DoubleClick, not Click — chrome's
+            // shipped type-in gesture. The as-built P1 code still says Click;
+            // P3 flips it (no observable change: canvas is a dead stop, chrome
+            // never consulted this row).
+            (SliderZone::ValueCell, DoubleClick) => Some(SliderIntent::EditValue),
             _ => None,
         }
     }
@@ -243,8 +423,8 @@ Host translation, committed:
 | Intent | Chrome (build-time, via `IntentRegistry`) | Canvas (input-time, via `pending_actions`) |
 |---|---|---|
 | `ResetToDefault` | The `Slider.reset` trio the builder already carries — registered on the track node | Absolute set with `default_value`; `SetOuterParam` on mirror rows (D4) |
-| `OpenMapping` | The label's existing mapping action ⚠ VERIFY-AT-IMPL: which `PanelAction` each site registers today — `rg -n 'ids.label' crates/manifold-ui/src` and read the hits | The existing popover path (`on_right_button_down` → `open_mapping_popover`), now gated to the Label zone |
-| `EditValue` | The value cell's existing click-to-type | **None** until P5 lands the canvas text-input primitive (BUG-102); explicit dead stop per D3 in P1–P4 |
+| `OpenMapping` | Resolved 2026-07-13 (the former ⚠ marker): `param_card.rs` registers `ParamLabelRightClick(target, pid)` on the label AND the drawer catcher (`:4218–4224`); `macros_panel.rs` registers `MacroLabelRightClick(i)` (`:475`). No other slider host has a label mapping action — gain / master / layer-chrome / audio-trigger translate to nothing (D15). Build-time derivation per D14 | The existing popover path (`on_right_button_down` → `open_mapping_popover`), now gated to the Label zone |
+| `EditValue` | The value cell's existing type-in, opened on **DoubleClick** (D13) and constructed at INPUT time (`inspector.rs:2375` → `route_value_typein` → `value_cell_typein` param_card.rs:877 → `BeginParamTextInput`) — input-time contract consult per D14, never a registry entry | **None** until P5d wires it; explicit dead stop per D3 in P1–P4 |
 
 Chrome derivation seam: `Slider` gains
 `pub fn register_intents(&self, reg: &mut IntentRegistry<PanelAction>)` which walks the
@@ -257,12 +437,14 @@ deleted.
 
 | Invariant | Enforcement |
 |---|---|
-| I1 — Slider gesture semantics exist once, in the contract; no host hand-registers a slider-zone gesture | Negative gate: `rg -n 'on\(ids\.track' crates/manifold-ui/src` returns zero hits outside `Slider::register_intents` + tests, after P1 |
+| I1 — Slider gesture semantics exist once, in the contract; no host hand-registers a **contract-owned** slider-zone pair (D13 — host-attached pairs on `None` rows stay legal) | Negative gate: `rg -n 'on\(ids\.track' crates/manifold-ui/src` returns zero hits outside `Slider::register_intents` + tests, after P1. Widened by P3 to labels: `rg -n '\.on\(\w+\.label' crates/manifold-ui/src` → zero hits outside `slider.rs`'s `register_*` fns + tests (value cells never registry-register — they derive at input time per D14, so no `on(…value_text…)` may ever appear) |
 | I2 — Chrome and canvas resolve the same intent for the same (zone, gesture) | Unit test in `slider.rs` pinning the full contract table, plus a canvas-side test asserting Track+RightClick on a node param row produces the D4 command (pattern: `macros_panel.rs:589`) |
 | I3 — Zone geometry has one owner | `build` and `draw` call `zones()`; geometry-equivalence test: `zones().track` == the track node rect `build` produces for identical inputs |
 | I4 — Wire-driven rows expose no intents on any surface | Canvas unit test (extends the `:762` guard); chrome N/A (wire-driven params don't build sliders) ⚠ VERIFY-AT-IMPL: confirm via `rg -n 'wire_driven' crates/manifold-ui/src/panels` |
 | I5 — `DragController<T>` is the only drag-lifecycle owner in manifold-ui (post-P7.6) | Negative gates, landed with P7.6: `rg -n 'enum ViewportDragMode' crates/manifold-ui/src` → zero; `rg -n 'drag_mode: DragMode' crates/manifold-ui/src` → zero stored-field hits (the overlay stores `DragController<TimelineDrag>`; `DragMode` survives only as the derived return type of `drag_mode()`); no payload enum carries a `None`/idle variant — idle is the controller's `None` session; plus each P7.x phase's own deletion gate |
 | I6 — One in-flight gesture per surface, by construction | The type itself: `DragController`'s `Option<DragSession<T>>` makes two simultaneously-armed gestures unrepresentable (D8/D10); pinned per migration by that phase's pinning tests |
+| I7 — One text-editing model (post-P5c): every text buffer/caret/selection mutation lives in `text_edit.rs` | Negative gates, landed with P5c: `rg -n 'edit_buffer' crates/manifold-ui/src` → zero; `rg -n 'fn insert_char|fn backspace' crates/manifold-ui/src crates/manifold-app/src` → hits only in `text_edit.rs`; plus the P5a unit suite pinning the model |
+| I8 — Gesture-timing constants have one home (`color.rs`) | Negative gate, landed with P4: `rg -n 'const DOUBLE_CLICK' crates/manifold-ui/src` → hits only in `color.rs` |
 
 ## 5. Phasing
 
@@ -323,42 +505,200 @@ consult it. Scope note NOT closed here: unlike the slider hosts, `AudioSetupPane
 none of its gestures through `IntentRegistry` — full P1-style `register_intents`
 derivation would be a panel-wide dispatch migration, left as a follow-up.
 
-**P3 — full derivation for the slider's remaining gestures.**
-**NOT ATTEMPTED 2026-07-13 (Sonnet).** The §3 VERIFY-AT-IMPL markers turned out to need
-per-site investigation across 4 hosts with heterogeneous, non-uniform label-mapping/
-value-cell-edit logic (unlike P1's track-reset, which had one regular pattern to convert
-4 copies of) — comparable in scope to P1 itself. Deferred to its own session rather than
-risk an incomplete conversion of live mapping/edit UX.
-Entry: resolve the §3 VERIFY-AT-IMPL markers (label-mapping and value-cell actions per
-site). Deliverables: Click/DoubleClick rows of the contract derived at every retained
-slider site; negative gate widens to all slider-zone gestures (`rg -n
-'on\(ids\.(track|label|value_text)' crates/manifold-ui/src` → zero outside
-`register_intents`). Gate: `-p manifold-ui --lib`; the widened I1 gate.
+**P3 — full derivation for the slider's remaining gestures (re-briefed 2026-07-13; D13–D15 govern).**
+History: **NOT ATTEMPTED 2026-07-13 (Sonnet)** — "heterogeneous, non-uniform
+label-mapping/value-cell-edit logic… comparable in scope to P1." The design-pass audit
+confirmed the deferral was hiding real design gaps, not just budget (§1b): the
+committed ValueCell row was wrong, EditValue can't ride the registry, and label
+gestures diverge by host. D13–D15 resolve all three; the phase below has zero open
+decisions.
 
-**P4 — dual-surface widget sweep (scheduled, not bug-triggered — D6 as amended).**
-The canvas holds private twins of chrome widgets today: the enum dropdown
-(`graph_canvas/interaction.rs:578`, modal over the canvas, vs `dropdown.rs`) and the
-Color/Vec editor (`interaction.rs:604`). Entry: inventory every widget kind the node
-face renders (`rg -n 'enum_dropdown|color|vec_editor|toggle' crates/manifold-ui/src/graph_canvas`)
-and pair each with its chrome twin; if a kind has no twin, record why. Deliverables:
-each dual-surface widget gets the P1 shape — zones + `intent_for` in the widget's home
-module, both hosts consuming it, its I1-style negative gate. Gate: `-p manifold-ui
---lib` + the widened negative gates; contract-table unit test per widget (I2 pattern).
+Entry: re-verify the §1b anchors this phase depends on — `rg -n 'ParamLabelRightClick|MacroLabelRightClick'
+crates/manifold-ui/src` (expect: enum defs in panels/mod.rs:792/:803, registration at
+param_card.rs:4218–4224 and macros_panel.rs:473–475, plus consumers/tests; a different
+registration-site set → stop and list); `rg -n 'route_value_typein|value_cell_typein'
+crates/manifold-ui/src` (expect inspector.rs + param_card.rs + tests). Read-back: D13,
+D14, D15, §3's corrected table.
 
-**P5 — canvas text-input primitive (unblocks BUG-102).**
-Build the caret/selection/IME text-entry primitive for the immediate surface once,
-host it in `MappingPopover` (label + section + future string fields), and flip the
-slider contract's `EditValue` canvas translation from None to live. This is the largest
-phase and may warrant its own short design pass at entry (input-method handling has
-real edge cases); it is scheduled here so it stops being an indefinite deferral.
-Gate: `-p manifold-ui --lib`; demo: type into a popover label field via `ui-snap`.
+Deliverables:
+1. **Contract-row flip** in `slider.rs::intent_for`: `(ValueCell, Click)` →
+   `(ValueCell, DoubleClick)` per D13, plus fixing the two stale "click to type"
+   comments (slider.rs:13, :47) and P1's contract-table pinning test to match.
+2. **`BitmapSlider::register_label_mapping(ids: &SliderNodeIds, mapping: &PanelAction,
+   reg: &mut IntentRegistry)`** — the D14 build-time twin of `register_track_reset`:
+   walks `intent_for(Label, RightClick)`, registers `mapping` on `ids.label` when the
+   contract says `OpenMapping`, no-ops when `ids.label` is `None`. `Slider::register_intents`
+   grows an optional mapping action the same way it carries `reset`.
+   Convert the two hand sites: param_card.rs:4218–4224 (label + drawer catcher — the
+   catcher is a second node carrying the SAME action; pass both through the new fn, or
+   keep the catcher line hand-registered with a comment naming it host-attached
+   chrome — executor's choice, both end states pass the gate as long as the *label*
+   registration goes through the contract) and macros_panel.rs:473–475. Delete the
+   literal `on(…, RightClick, …)` lines they replace.
+3. **Input-time contract consult for EditValue** (D14): `value_cell_typein`
+   (param_card.rs:877) gates on
+   `BitmapSlider::intent_for(SliderZone::ValueCell, Gesture::DoubleClick) == Some(SliderIntent::EditValue)`
+   (a const-foldable check whose value is that the contract is the single written
+   table) and its doc-comment names the contract row; same for
+   `driver_period_typein` if the executor judges the Free field a value cell —
+   default: leave it host-attached (it's a drawer field, not a slider zone).
+4. **Per-host translation table, landed as a doc-comment on `intent_for`** (the D15
+   record): param_card/gen-params = all three intents live; macros = Reset + OpenMapping,
+   EditValue → nothing; gain/master-chrome/layer-chrome/audio-trigger/chrome-spec
+   sliders = Reset only, OpenMapping + EditValue → nothing. Host-attached pairs
+   (Label+Click OSC copy, audio-trigger Label+Click drawer expand) stay hand-dispatched
+   and are named in the comment as deliberate non-contract gestures.
+5. I1's widened negative gate (§4) landed by name; I2's contract-table test updated to
+   pin all three rows including the DoubleClick correction.
 
-**P6 — contract derivation for chrome-only widgets.**
-Browser popup, pickers, toasts, remaining panel widgets: single-host today, so no
-parity bug class exists — this phase moves their gesture registrations onto
-widget-declared contracts anyway, so a future canvas appearance (or any new host) is
-free and I1's "no hand-registered gestures" gate can go repo-wide. Mechanical;
-schedule after P4/P5 or interleave with release-push bricks.
+Forbidden moves (this phase's specific temptations): registering `BeginParamTextInput`
+in the registry "just once to be uniform" (D14 staleness class) · changing any host's
+observable gesture besides the contract-row flip (which changes nothing observable —
+if a diff would change what a click DOES anywhere, stop) · adding mapping/type-in
+surfaces to hosts that lack them (D15 — Deferred, product call).
+Gate: `cargo test -p manifold-ui --lib` + `cargo clippy -p manifold-ui -- -D warnings`;
+the widened I1 gate; existing reset tests stay green (P1's list). Demo: none — **L1**
+(derivation-only; the six pinned behaviors are the record — no pixel or command-shape
+change is permitted, which is itself the check). Performer gesture: right-click a macro
+label mid-set → the mappings dropdown opens exactly as before the derivation.
+
+**P4 — canvas-editor pinning + gesture-constant single-sourcing (re-scoped 2026-07-13 — D17).**
+The original P4 premise ("the canvas holds private twins of chrome widgets") did not
+survive the §1b audit: no chrome twins remain (GRAPH_EDITOR_REDESIGN Phase 6 deleted
+the authoring sidebar; cards never render color/vec/table rows). The canvas editors
+already have the P1 contract shape by construction — pure anchor-derived zone geometry
+with hit queries (`EnumDropdown::option_at` mod.rs:912, `VecEditor::channel_at` :1015,
+`TableEditor::cell_at` :1095). What remains is small and canvas-side:
+Entry: re-derive existing test coverage — `rg -n 'option_at|channel_at|cell_at|is_double_click'
+crates/manifold-ui/src/graph_canvas/tests.rs` — and list which hit-geometry paths and
+which modal-priority branches (enum → vec → table → row dispatch order in
+`on_left_button_down`, interaction.rs:594/:621/:668) are unpinned. Read-back: D17, D13.
+Deliverables: (1) unit tests pinning every unpinned hit query (option/channel/cell at
+boundary coordinates) and the modal priority + dismiss-vs-swallow semantics per editor
+(press on option/channel/cell vs. inside-padding vs. outside), pattern:
+graph_canvas/tests.rs:259; (2) `DOUBLE_CLICK_SECONDS` / `DOUBLE_CLICK_RADIUS_PX`
+(graph_canvas/mod.rs:401–404) deleted and re-pointed at `color.rs` — add
+`pub const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0` beside `DOUBLE_CLICK_TIME_SEC`
+(color.rs:838) and alias both surfaces to them (I8); the recognizers themselves stay
+per-surface (§1b survey — the canvas keys on node identity). (3) The no-twin
+classification recorded: a one-line comment on each editor struct naming it
+single-host by design (so a future "unify with dropdown.rs" impulse hits D17's
+rejection). Forbidden: a shared option-list abstraction between `dropdown.rs` and
+`EnumDropdown` (D17's named adapter trap) · touching `DragMode`/drag fields (P7.2 owns
+that file's drag machinery — in flight in another session; coordinate at landing if
+both touch interaction.rs). Gate: `-p manifold-ui --lib` + clippy; I8's negative gate.
+Demo: none — **L1** (pin-only phase).
+
+**P5 — unified text editing (P5a–P5d; designed 2026-07-13 from Peter's four answers — D16 governs all four).**
+Was BLOCKED on a design pass; now fully decided. Not green-field: the §1b audit found
+three existing text-editing implementations — P5 extracts ONE model and re-hosts all
+of them on it. Order matters: P5a is pure library, P5b is the app session, P5c closes
+BUG-102, P5d closes the contract's last dead stop. P3 must land before P5d (it flips
+the ValueCell row to DoubleClick).
+
+**P5a — the model (one session).**
+Deliverables: `crates/manifold-ui/src/text_edit.rs` — `TextEditModel` +
+`byte_offset_for_x` exactly as committed in D16; unit tests covering every op at
+multi-byte UTF-8 boundaries (`é`, CJK, emoji), word-motion boundaries, selection
+replace-on-type, `byte_offset_for_x` with a fake monospace measurer (midpoint
+rounding: a click past a glyph's midpoint lands after it). No caller changes.
+Forbidden: OS/pasteboard/winit deps in manifold-ui (the model takes/returns plain
+strings) · storing selection as a second position type (anchor+caret byte offsets
+only). Gate: `-p manifold-ui --lib` + clippy. Demo: none — **L1**.
+
+**P5b — the app session re-hosted + mouse + clipboard (one session).**
+Entry: P5a landed; re-derive the field/caller inventory — `rg -n '\.text_input\.'
+crates/manifold-app/src | wc -l` and `rg -n 'text_input\.(text|cursor|select_all)\b'
+crates/manifold-app/src` — list before touching. Deliverables:
+- `TextInputState`'s `text`/`cursor`/`select_all` replaced by `model: TextEditModel`
+  (compiler-driven: delete the fields first); `begin()` seeds the model all-selected
+  (today's first-keystroke-replaces behavior, now as a real selection); the key
+  handlers' `insert_char`/`backspace`/`move_*` calls forward to the model, gaining
+  `shift`/`word` modifiers (Shift+arrows select; Option+arrows word-move; Cmd+arrows
+  home/end — standard macOS bindings).
+- **Mouse**: a pointer branch in `window_input.rs`'s press/move/release dispatchers,
+  gated on `text_input.active`: press inside the anchor rect → `caret_to(byte_offset_for_x(…), shift)`
+  (double-click → `select_word_at`); drag → `drag_to`; press OUTSIDE → **commit, then
+  let the press continue** (D16 blur-commit). Single-line fields only need x;
+  multiline (GraphWgsl) maps line-by-y first — same helper per line.
+- **Clipboard**: `macos_pasteboard.rs` (the sole NSPasteboard module) gains
+  `general_pasteboard_string() -> Option<String>` and `set_general_pasteboard_string(&str)`;
+  Cmd+C/X/V on an active session route through the model (`selected_text`/delete/
+  insert_str; paste strips `\n` in single-line fields). Cmd+Z in-session reverts to
+  seed text per D16.
+- Overlay renderer (`app_render.rs::render_text_input_overlay`, :4801) draws the
+  ranged selection highlight + caret from `model.selection()` (today: select_all-only
+  highlight).
+Forbidden: merging the window-specific key-policy blocks (window_input.rs:19–24 — they
+stay separate BY DESIGN; only the mechanics beneath them unify) · a parallel legacy
+editing path kept alive (the old field trio must be gone — negative gate) · touching
+`handle_text_input_commit`'s per-field command routing (commit payloads are out of
+scope). Gate: `-p manifold-ui --lib` + `cargo test -p manifold-app --lib` + clippy on
+both; negative: `rg -n 'select_all: bool|cursor: usize' crates/manifold-app/src/text_input.rs`
+→ zero. Demo: target **L3** if the `ui-snap --script` driver has key/text-event
+actions (⚠ VERIFY-AT-IMPL: read `ui_snapshot/script.rs`'s action vocabulary); else
+**L2** — a PNG of an active session showing a ranged (not whole-field) selection +
+caret, plus a ≤2-min click-script for Peter (rename a marker: click into the name,
+double-click a word, type over it, click away → committed). Performer gesture: click
+into a timeline-marker name, select one word, retype it — no Enter needed, click away
+and it sticks.
+
+**P5c — MappingPopover fields on the model (one session — closes BUG-102).**
+Entry: P5b landed (blur-commit semantics exist); re-verify popover anchors —
+`enter_edit`/`on_text_char`/`commit_edit` (mapping_popover.rs:591/:604/:641) and the
+BUG-102 entry's write-path note (`BindingMappingEdit::section` already shipped and
+tested at the command layer). Deliverables: `edit_buffer` + `on_text_char`/
+`on_backspace` replaced by an embedded `TextEditModel` (numeric fields keep their
+char-filter in front of `insert_char`; label takes any printable); caret + ranged
+selection drawn in the popover's field row via `Painter` (the model's selection Range
+× `draw.rs::text_width` through `byte_offset_for_x`'s inverse — a small pure
+`x_for_byte_offset` helper is permitted in text_edit.rs if needed); pointer press/drag
+inside an editing field routes to the model (the popover already receives
+on_press/on_move/on_release); **an `EditField::Section` row** wired to the shipped
+`BindingMappingEdit.section` write path (outer-Option = touched, inner = value/clear —
+the BUG-102 entry's shape); the module doc's stale "label is read-only" paragraph
+(mapping_popover.rs:24–29) rewritten. Commit semantics per D16 (Enter/blur commit —
+blur includes clicking another popover control; Esc cancels). Gate: `-p manifold-ui
+--lib` + clippy; negative: `rg -n 'edit_buffer' crates/manifold-ui/src` → zero (I7
+lands here by name). BUG-102 → FIXED in `docs/BUG_BACKLOG.md` in the same landing.
+Demo: **L2** — `ui-snap` PNG pair of the popover label mid-edit (caret + partial
+selection visible) and post-commit; affordance check per DESIGN_DOC_STANDARD §5 (the
+label/section rows must read as editable — hover/edit chrome, not bare text).
+Performer gesture: rename a mapped knob's label and give it a section, live, without
+leaving the canvas.
+
+**P5d — canvas EditValue goes live (one session — the contract's last dead stop).**
+Entry: P3 landed (ValueCell row = DoubleClick) + P5b landed (session mechanics);
+re-verify the canvas numeric-row dispatch (interaction.rs:846–872: press anywhere on a
+numeric row starts `ParamScrub`) and `is_double_click` (:1111). Deliverables: in the
+numeric-row branch, a double-click (via `is_double_click`) landing in the row's
+value-box zone (`BitmapSlider::zones` with the canvas metrics — the P1 geometry, NOT a
+private copy) consults `intent_for(ValueCell, DoubleClick)` and emits a new
+`GraphEditCommand::EditGraphNodeNumericParam { node_id, param_name, current, min, max,
+whole_numbers, outer_param_id, anchor }` instead of arming a scrub; the app maps it to
+a text session exactly like `InspectorParam` (new `TextInputField::GraphNumericParam(u32)`
++ ctx carrying id/range/`outer_param_id`; commit parses, clamps, dispatches
+`SetGraphNodeParam` — or `SetOuterParam` for a group-face mirror row, D4 parity).
+Wire-driven rows stay suppressed (the `:762` guard, I4). ⚠ VERIFY-AT-IMPL: confirm a
+press+release with no movement emits no scrub command (read the release dispatch,
+interaction.rs:1182) — if a zero-move scrub commits anything, gate the first click's
+emission before layering double-click on top, and say so in the report. Forbidden: a
+canvas-local zone-geometry copy (the §5-wide rule) · click-to-cycle or any non-list
+enum shortcut (Peter's 2026-07-01 call, mod.rs:854) · reusing `InspectorParam`'s field
+with a smuggled node id (mint the real variant). Gate: `-p manifold-ui --lib` +
+`cargo test -p manifold-app --lib` + clippy; canvas-side test asserting double-click
+on a value box emits the command and single-press elsewhere still scrubs. Demo: **L2**
+— `ui-snap gltfeditor` PNG with the type-in open over a node value box, plus the
+committed `SetGraphNodeParam` in the run log (P1's demo precedent). Performer gesture:
+double-click a node's value box mid-set-build, type `0.5`, Enter — the exact value
+lands without a scrub.
+
+**P6 — RETIRED 2026-07-13 (D18).** The audit found no chrome-only widget whose gesture
+semantics exist in more than one place — every original target is already unified
+(overlay system, popup_shell, picker_core, typed dropdown items) or covered by
+P1/P2/P3. "Mechanical" was wrong on both counts: there is nothing mechanical left, and
+what remains (panel dispatch migration) is neither mechanical nor duplication — see
+D18 and Deferred. I1's repo-wide gates land with P3; no separate phase.
 
 **P7 — drag lifecycle onto `DragController<T>` (added 2026-07-13, Peter; expanded
 2026-07-13, Fable design pass — D8–D12 govern everything below).**
@@ -626,10 +966,15 @@ Gate: `-p manifold-ui --lib` + clippy; the I5 gates. Demo: **L2** — before/aft
 the timeline ruler scrub position via `ui-snap`, plus the dock/audio-setup pinning
 tests. Performer gesture: scrub the timeline ruler to relocate during a build-up.
 
-Phasing-completeness walk: contract both surfaces → P1; stepper/fader reset → P2; full
-slider derivation → P3; dual-surface twins (dropdown, color/vec, node-face toggles) →
-P4; canvas text entry → P5 (was Deferred, rescheduled 2026-07-13); chrome-only widgets
-→ P6 (was Deferred); drag lifecycle consolidation → P7 (was Deferred — D5's
+Phasing-completeness walk (re-done 2026-07-13 for the redesigned phases): contract
+both surfaces → P1; stepper/fader reset → P2; label-mapping derivation + the
+ValueCell-row correction + D15 dead-stop record → P3; canvas-editor pins +
+gesture-constant single-sourcing → P4; the text model → P5a; app session + mouse +
+clipboard + blur-commit → P5b; popover label/section (BUG-102) → P5c; canvas numeric
+type-in (last dead stop) → P5d; chrome-only derivation → RETIRED (D18 — nothing to
+derive); type-in/mapping surfaces on hosts that lack them, IME composition, and panel
+dispatch migration → Deferred, each with its trigger; drag lifecycle consolidation →
+P7 (was Deferred — D5's
 "emission is parity-true" claim was correct but incomplete: the lifecycle machines
 share one shape, `DragController<T>` already exists with migrated consumers). Within
 P7 (walk re-done 2026-07-13): audio-trigger shape → P7.0 (landed); param-card slots →
@@ -663,6 +1008,25 @@ with reasons). No body-committed affordance is unphased.
 11. The sweep covers viewport scrubs, audio-setup band/calibration, and dock dividers;
     input.rs's drag recognizer, `scroll_container`, and the `SliderDragState`-backed
     panels are out, with reasons (D12).
+12. The contract owns three pairs — Track+RightClick, Label+RightClick,
+    ValueCell+**DoubleClick** (corrected from P1's Click); all other pairs are
+    host-attached and legal (D13).
+13. Constant-payload intents derive at build time via the registry; live-payload
+    intents (EditValue) consult the contract at input time; the registry never stores
+    closures (D14).
+14. Hosts without a mapping/type-in surface translate to an explicit nothing; ADDING
+    those surfaces is deferred product work, never smuggled into a derivation phase
+    (D15).
+15. One text-editing model, `manifold-ui/src/text_edit.rs`; standard click/drag/
+    shift-click selection; NO IME composition (committed characters only); buffer
+    locally, ONE command on Enter/blur, Esc cancels, in-session Cmd+Z reverts to seed
+    (D16 — Peter's four answers, 2026-07-13).
+16. P4 is canvas-side pinning + constant single-sourcing; the dual-surface premise is
+    dead — no chrome twins remain, and no shared dropdown abstraction gets built
+    (D17).
+17. P6 is retired; panel hand-`handle_click` dispatch is single-implementation
+    non-uniformity, not duplication — wholesale registry migration is deferred with
+    its real design cost named (D18).
 
 ## 7. Deferred
 
@@ -686,3 +1050,30 @@ Peter's call: unify by design, don't wait for bugs.)
   it is a panel-wide *dispatch* migration, a different unification axis than P7's drag
   lifecycle. Revive as its own phase if a second non-registry panel appears or the
   panel grows more contract widgets.
+- **Panel dispatch migration (all hand-`handle_click` panels onto the registry)** —
+  the D18 inventory: ten panels, each match the sole implementation of its behavior,
+  several mutating panel-local state in the click path (a shape the registry's
+  constant-action model can't express — that's the design problem to solve first).
+  No duplication, no bug class. Trigger: Peter prioritizes mechanism uniformity with
+  the cost in front of him, or a real cross-panel discrete-gesture parity bug appears.
+- **Type-in and mapping surfaces on the hosts that lack them** (macro value cells,
+  layer gain, master/layer opacity+brightness) — D15: the contract makes each a
+  one-command addition through the D14 seam, but each is NEW behavior, a product
+  call. Trigger: Peter asks for "type-in everywhere" (or right-click-mapping
+  everywhere).
+- **IME composition + dead-key accents** — Peter declined IME for v1 (D16). The
+  primitive ignores composition events; dead-key accents (option-e → é) are lost with
+  them. Trigger: Peter wants non-Latin (or accented) text in fields → NSTextInputClient
+  adoption in the app layer, feeding the SAME `TextEditModel` — the model's API was
+  shaped so composition arrives as `insert_str` + selection ops, no redesign.
+- **Per-surface double-click recognizers** — constants unify (P4/I8); the recognizers
+  themselves stay per-surface (canvas keys on node identity; the retained one is
+  welded into `UIInputSystem`). Revive only if a third recognizer appears.
+- **Shared tooltip primitive** — assigned to this design by
+  AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION's P4 escalation ("the primitive gap itself
+  still belongs to UI_WIDGET_UNIFICATION"). Today tooltips exist ONCE, canvas-only
+  (`draw_hover_tooltip`, graph_canvas/render.rs:319) — no duplication, so no phase
+  yet. Trigger: the first retained-chrome tooltip consumer. Shape when revived: a
+  widget-layer primitive (hover-dwell timing + placement as pure functions, per-host
+  drawing — the D2 pattern), with the canvas's bespoke drawer converted as the second
+  host; never a second bespoke implementation.
