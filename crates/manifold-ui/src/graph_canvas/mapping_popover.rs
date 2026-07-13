@@ -71,11 +71,6 @@ const PREVIEW_BG: Color32 = Color32::new(20, 20, 26, 255);
 const PREVIEW_LINE: Color32 = Color32::new(128, 199, 255, 242);
 const PREVIEW_GRID: Color32 = Color32::new(255, 255, 255, 15);
 const PREVIEW_DOT: Color32 = Color32::new(255, 219, 115, 255);
-/// Ranged-selection highlight for an editing text field — same translucent
-/// blue as `manifold-app`'s `TEXT_INPUT_SELECT_BG`, kept local since this
-/// crate doesn't depend on `manifold-app`.
-const EDIT_SELECT_BG: Color32 = Color32::new(77, 128, 204, 102);
-const EDIT_CARET: Color32 = Color32::new(224, 224, 224, 255);
 
 /// The four curve options in display order. Indexed by the order shown,
 /// not by enum discriminant, so the dropdown order is stable here.
@@ -1002,10 +997,10 @@ impl MappingPopover {
             let sel = self.model.selection();
             let hx = text_start_x + x_for_byte_offset(text, sel.start, &mut measure);
             let hend = text_start_x + x_for_byte_offset(text, sel.end, &mut measure);
-            ui.draw_rect(hx, rect.y + 2.0, (hend - hx).max(1.0), rect.h - 4.0, EDIT_SELECT_BG);
+            ui.draw_rect(hx, rect.y + 2.0, (hend - hx).max(1.0), rect.h - 4.0, crate::color::TEXT_EDIT_SELECT_BG);
         }
         let cx = text_start_x + x_for_byte_offset(text, self.model.caret(), &mut measure);
-        ui.draw_rect(cx, rect.y + 2.0, 1.0, rect.h - 4.0, EDIT_CARET);
+        ui.draw_rect(cx, rect.y + 2.0, 1.0, rect.h - 4.0, crate::color::TEXT_EDIT_CARET);
     }
 
     pub fn render(&self, ui: &mut dyn Painter) {
