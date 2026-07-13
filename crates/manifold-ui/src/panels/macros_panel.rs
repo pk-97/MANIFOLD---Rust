@@ -18,6 +18,7 @@ use super::param_slider_shared::{
 };
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
+use crate::drag::DragController;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
@@ -50,6 +51,18 @@ fn fmt_macro(v: f32) -> String {
     format!("{:.2}", v)
 }
 
+// P8 (docs/UI_WIDGET_UNIFICATION_DESIGN.md, BUG-143): what an Ableton-range
+// trim-bar drag targets — folds the old `i32` slot-index sentinel (−1 idle)
+// plus its parallel min/max bool onto `DragController`, the same
+// sentinel-pair disease P7.1's `ParamDragTarget` was built to cure (D8).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AbletonTrimDrag {
+    /// Which macro slot's trim bar is being dragged.
+    index: usize,
+    /// `true` if the min-edge handle is being dragged, `false` for max.
+    is_min: bool,
+}
+
 // ── MacrosPanel ────────────────────────────────────────────────────
 
 pub struct MacrosPanel {
@@ -66,9 +79,10 @@ pub struct MacrosPanel {
     ableton_displays: [Option<AbletonMappingDisplay>; MACRO_COUNT],
     /// Cached Ableton range per slot (for drag updates + build).
     ableton_ranges: [Option<(f32, f32)>; MACRO_COUNT],
-    /// Which macro slot's Ableton trim bar is being dragged (-1 = none).
-    dragging_ableton_trim: i32,
-    dragging_ableton_trim_is_min: bool,
+    /// Which macro slot's Ableton trim bar is being dragged, if any — P8
+    /// (BUG-143): replaces the old `i32` slot-index sentinel (−1 idle) plus
+    /// its parallel min/max bool field.
+    ableton_trim_drag: DragController<AbletonTrimDrag>,
     is_collapsed: bool,
 }
 
@@ -98,8 +112,7 @@ impl MacrosPanel {
             ableton_config_ids: std::array::from_fn(|_| None),
             ableton_displays: std::array::from_fn(|_| None),
             ableton_ranges: [None; MACRO_COUNT],
-            dragging_ableton_trim: -1,
-            dragging_ableton_trim_is_min: false,
+            ableton_trim_drag: DragController::new(),
             // Default closed; project load overrides via set_collapsed().
             is_collapsed: true,
         }
@@ -342,13 +355,13 @@ impl MacrosPanel {
         for (i, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id == t.min_bar_id {
-                    self.dragging_ableton_trim = i as i32;
-                    self.dragging_ableton_trim_is_min = true;
+                    self.ableton_trim_drag
+                        .start(AbletonTrimDrag { index: i, is_min: true }, Vec2::new(pos_x, 0.0));
                     return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
                 }
                 if node_id == t.max_bar_id {
-                    self.dragging_ableton_trim = i as i32;
-                    self.dragging_ableton_trim_is_min = false;
+                    self.ableton_trim_drag
+                        .start(AbletonTrimDrag { index: i, is_min: false }, Vec2::new(pos_x, 0.0));
                     return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
                 }
             }
@@ -368,51 +381,49 @@ impl MacrosPanel {
     /// Handle drag (pointer move while pressed).
     pub fn handle_drag(&mut self, pos_x: f32, tree: &mut UITree) -> Vec<PanelAction> {
         // Ableton trim drag
-        if self.dragging_ableton_trim >= 0 {
-            let i = self.dragging_ableton_trim as usize;
-            if let Some((cur_min, cur_max)) = self.ableton_ranges[i]
-                && let Some(ids) = self.sliders[i].ids()
-            {
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
-                let (new_min, new_max) = if self.dragging_ableton_trim_is_min {
-                    (norm.clamp(0.0, cur_max), cur_max)
-                } else {
-                    (cur_min, norm.clamp(cur_min, 1.0))
-                };
-                self.ableton_ranges[i] = Some((new_min, new_max));
+        if let Some(&AbletonTrimDrag { index: i, is_min }) = self.ableton_trim_drag.payload()
+            && let Some((cur_min, cur_max)) = self.ableton_ranges[i]
+            && let Some(ids) = self.sliders[i].ids()
+        {
+            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+            let (new_min, new_max) = if is_min {
+                (norm.clamp(0.0, cur_max), cur_max)
+            } else {
+                (cur_min, norm.clamp(cur_min, 1.0))
+            };
+            self.ableton_ranges[i] = Some((new_min, new_max));
 
-                if let Some(t) = &self.ableton_trim_ids[i] {
-                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = ids.track_rect.x + OVERLAY_INSET;
-                    let fill_x = base_x + new_min * usable;
-                    let fill_w = (new_max - new_min) * usable;
-                    let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
-                    tree.set_bounds(
-                        t.fill_id,
-                        Rect::new(fill_x, ids.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
-                    );
-                    tree.set_bounds(
-                        t.min_bar_id,
-                        Rect::new(
-                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
-                            ids.track_rect.y,
-                            TRIM_BAR_W,
-                            ids.track_rect.height,
-                        ),
-                    );
-                    tree.set_bounds(
-                        t.max_bar_id,
-                        Rect::new(
-                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
-                            ids.track_rect.y,
-                            TRIM_BAR_W,
-                            ids.track_rect.height,
-                        ),
-                    );
-                }
-
-                return vec![PanelAction::AbletonMacroTrimChanged(i, new_min, new_max)];
+            if let Some(t) = &self.ableton_trim_ids[i] {
+                let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
+                let base_x = ids.track_rect.x + OVERLAY_INSET;
+                let fill_x = base_x + new_min * usable;
+                let fill_w = (new_max - new_min) * usable;
+                let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
+                tree.set_bounds(
+                    t.fill_id,
+                    Rect::new(fill_x, ids.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
+                );
+                tree.set_bounds(
+                    t.min_bar_id,
+                    Rect::new(
+                        base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                        ids.track_rect.y,
+                        TRIM_BAR_W,
+                        ids.track_rect.height,
+                    ),
+                );
+                tree.set_bounds(
+                    t.max_bar_id,
+                    Rect::new(
+                        base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                        ids.track_rect.y,
+                        TRIM_BAR_W,
+                        ids.track_rect.height,
+                    ),
+                );
             }
+
+            return vec![PanelAction::AbletonMacroTrimChanged(i, new_min, new_max)];
         }
         // Slider drag
         for (i, s) in self.sliders.iter_mut().enumerate() {
@@ -425,9 +436,7 @@ impl MacrosPanel {
 
     /// Handle pointer up — commit the drag.
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
-        if self.dragging_ableton_trim >= 0 {
-            let i = self.dragging_ableton_trim as usize;
-            self.dragging_ableton_trim = -1;
+        if let Some(AbletonTrimDrag { index: i, .. }) = self.ableton_trim_drag.release() {
             return vec![PanelAction::AbletonMacroTrimCommit(i)];
         }
         for (i, s) in self.sliders.iter_mut().enumerate() {
@@ -581,6 +590,79 @@ mod tests {
         });
         panel.set_ableton_displays(&displays);
         assert!(panel.height() > base);
+    }
+
+    #[test]
+    fn ableton_trim_drag_lifecycle_matches_press_drag_release_contract() {
+        // BUG-143 / P8 pinning: exercises the real handle_press/handle_drag/
+        // handle_release path for the Ableton range trim-bar drag. Written and
+        // green BEFORE folding the old `i32` slot-index sentinel (+ its
+        // parallel min/max bool) onto `DragController<AbletonTrimDrag>`,
+        // re-verified green AFTER — the PanelAction sequence and computed
+        // [min,max] values must be
+        // byte-identical, proving only the internal plumbing changed.
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        let mut ranges: Vec<Option<(f32, f32)>> = vec![None; MACRO_COUNT];
+        ranges[0] = Some((0.2, 0.8));
+        panel.set_ableton_ranges(&ranges);
+        panel.build(&mut tree, rect());
+
+        let trim = panel.ableton_trim_ids[0].expect("macro 0 has an ableton range, trim handles built");
+
+        // Press the MIN bar on macro 0.
+        let press = panel.handle_press(trim.min_bar_id, 0.3);
+        assert!(
+            matches!(press.as_slice(), [PanelAction::AbletonMacroTrimSnapshot(0)]),
+            "press min bar: {press:?}"
+        );
+
+        // Drag toward a new min. Expected value computed via the same
+        // x_to_normalized helper the production path uses, clamped to cur_max.
+        let track_rect = panel.sliders[0].ids().unwrap().track_rect;
+        let pos_x = track_rect.x + track_rect.width * 0.35;
+        let expected_norm = BitmapSlider::x_to_normalized(track_rect, pos_x).clamp(0.0, 0.8);
+        let drag = panel.handle_drag(pos_x, &mut tree);
+        match drag.as_slice() {
+            [PanelAction::AbletonMacroTrimChanged(0, new_min, new_max)] => {
+                assert!((new_min - expected_norm).abs() < 1e-6, "new_min={new_min} expected={expected_norm}");
+                assert!((new_max - 0.8).abs() < 1e-6, "new_max={new_max} should hold at cur_max");
+            }
+            other => panic!("expected AbletonMacroTrimChanged(0, ..), got {other:?}"),
+        }
+
+        // Release commits macro 0.
+        let release = panel.handle_release();
+        assert!(
+            matches!(release.as_slice(), [PanelAction::AbletonMacroTrimCommit(0)]),
+            "release: {release:?}"
+        );
+
+        // A second release (nothing in flight) is a no-op — proves the drag
+        // truly ended, not just that the first release fired once.
+        assert!(panel.handle_release().is_empty());
+
+        // Press the MAX bar on macro 0 to exercise the other arm.
+        let press_max = panel.handle_press(trim.max_bar_id, 0.9);
+        assert!(
+            matches!(press_max.as_slice(), [PanelAction::AbletonMacroTrimSnapshot(0)]),
+            "press max bar: {press_max:?}"
+        );
+        let pos_x_max = track_rect.x + track_rect.width * 0.95;
+        // cur_min is whatever the previous drag committed it to (expected_norm),
+        // since ableton_ranges was mutated in place during the first drag.
+        let expected_max = BitmapSlider::x_to_normalized(track_rect, pos_x_max).clamp(expected_norm, 1.0);
+        let drag_max = panel.handle_drag(pos_x_max, &mut tree);
+        match drag_max.as_slice() {
+            [PanelAction::AbletonMacroTrimChanged(0, new_min, new_max)] => {
+                assert!((new_min - expected_norm).abs() < 1e-6);
+                assert!((new_max - expected_max).abs() < 1e-6);
+            }
+            other => panic!("expected AbletonMacroTrimChanged(0, ..), got {other:?}"),
+        }
+        let release_max = panel.handle_release();
+        assert!(matches!(release_max.as_slice(), [PanelAction::AbletonMacroTrimCommit(0)]));
     }
 
     #[test]
