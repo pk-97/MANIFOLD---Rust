@@ -305,6 +305,77 @@ mod tests {
         );
     }
 
+    /// The `RangeContract` declared-excuse pattern (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`
+    /// D5), transcribed verbatim from `every_boundary_atom_declares_its_reason`
+    /// above: walks every registered primitive's params via
+    /// `EffectNode::param_contract`, and asserts the set of
+    /// `(type_id, param name, reason)` triples carrying a contract EXACTLY
+    /// EQUALS this curated table. P1 ships this table EMPTY — no contract
+    /// exists in production yet (D6: remove-by-default, no kernel proof, no
+    /// contract) — so this test proves the mechanism, not any real boundary.
+    /// `node.__`-prefixed test fixtures are excluded, same as the
+    /// boundary-reason walk (their contracts are test scaffolding, not
+    /// production facts this ledger tracks).
+    #[test]
+    fn every_range_contract_names_a_real_boundary() {
+        use crate::node_graph::PrimitiveRegistry;
+
+        // Curated table: every `(type_id, param_id, reason)` any registered
+        // primitive is allowed to declare a `RangeContract` for. Empty in
+        // P1 — P2 seeds it as real contracts land (D6/D5).
+        const CURATED: &[(&str, &str, manifold_core::effects::RangeReason)] = &[];
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut found: Vec<(String, String, manifold_core::effects::RangeReason)> = Vec::new();
+
+        for type_id in registry.known_type_ids() {
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            for param in node.parameters() {
+                if let Some(contract) = node.param_contract(&param.name) {
+                    found.push((type_id.to_string(), param.name.to_string(), contract.reason));
+                }
+            }
+        }
+
+        let mut violations: Vec<String> = Vec::new();
+        for (type_id, param_id, reason) in &found {
+            if !CURATED
+                .iter()
+                .any(|(t, p, r)| t == type_id && p == param_id && r == reason)
+            {
+                violations.push(format!(
+                    "{type_id}.{param_id}: declares RangeContract (reason {reason:?}) but is \
+                     not in the curated RANGE_CONTRACT table — add it deliberately with the \
+                     kernel/shader evidence, or remove the contract",
+                ));
+            }
+        }
+        for (type_id, param_id, reason) in CURATED {
+            if !found
+                .iter()
+                .any(|(t, p, r)| t == *type_id && p == *param_id && r == reason)
+            {
+                violations.push(format!(
+                    "{type_id}.{param_id}: listed in the curated RANGE_CONTRACT table \
+                     (reason {reason:?}) but the registered primitive declares no such \
+                     contract — either it was removed (drop the table entry) or the \
+                     declaration was lost",
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "range_contract declaration violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
+
     #[test]
     fn default_is_boundary() {
         assert_eq!(FusionKind::default(), FusionKind::Boundary);

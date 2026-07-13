@@ -583,6 +583,9 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         // ride the JSON catalog through here, not a per-instance graph
         // override (it deliberately has none — D9/BUG-016).
         section: p.section.clone(),
+        // `ParamSpecDef` (the card manifest) carries no contract — see
+        // `param_def_from_spec`'s identical comment in effects.rs.
+        contract: None,
     }
 }
 

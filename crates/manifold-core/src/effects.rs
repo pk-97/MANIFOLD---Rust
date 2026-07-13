@@ -96,6 +96,60 @@ pub struct ParamDef {
     /// still round-trip through the JSON catalog file itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// A real physical/mathematical boundary this param's inner value must
+    /// not cross — as opposed to `min`/`max` above, which are display hints
+    /// (default slider travel) a card, text entry, or modulation is free to
+    /// exceed. `None` for the overwhelming majority of params (PARAM_RANGE_CONTRACT_DESIGN.md
+    /// D6: remove-by-default — no kernel/shader proof, no contract). Additive
+    /// serde field: every saved project and bundled preset loads byte-identical
+    /// with zero migration. See [`RangeContract`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<RangeContract>,
+}
+
+/// A named, real boundary on a param's inner value — the ONLY thing card
+/// range validation (`node_graph::validate` lint (h)) enforces as an error.
+/// Everything else (`ParamDef::min`/`max`) is a display hint that never
+/// restricts (Peter, `docs/PARAM_RANGE_CONTRACT_DESIGN.md`: *"Inner nodes
+/// that don't have a real physical range or boundary shouldn't have a
+/// boundary — that's what the card mappings and ranges are for."*).
+///
+/// One-sided bounds are first-class (`min`/`max` are independently
+/// optional) — a contract may only forbid going too low, or too high, or
+/// both. `reason` is mandatory: there is no contract without a named
+/// excuse, mirroring the `BoundaryReason` declared-excuse pattern
+/// (`node_graph::freeze::classify::BoundaryReason`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeContract {
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+    pub reason: RangeReason,
+}
+
+/// Why a `RangeContract` exists (design doc D2). A closed enum: every
+/// contract names exactly one of these — the meta-test
+/// `every_range_contract_names_a_real_boundary` (manifold-renderer,
+/// `node_graph::freeze::classify`) pins each contracted param to its
+/// reason in a curated table, so a contract can't creep back onto a
+/// param whose range is merely a creative-amount hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RangeReason {
+    /// Addresses a discrete resource (mux select, array slot).
+    Index,
+    /// Sizes an allocation (num_inputs, particle caps).
+    Count,
+    /// The kernel divides/degenerates at or below the bound.
+    DegenerateFloor,
+    /// Geometry collapses outside the bound.
+    DegenerateGeometry,
+    /// The shader physically clamps; beyond the bound is a dead input.
+    ShaderClamp,
+    /// The math is ONLY defined on the interval — a true domain, not a
+    /// lerp/blend factor (those extrapolate legitimately; see the Bloom
+    /// ruling in the design doc's intro).
+    NormalizedDomain,
 }
 
 /// serde `skip_serializing_if` for [`ParamDef::curve`] / [`ParamSpecDef::curve`].
@@ -126,6 +180,7 @@ impl Default for ParamDef {
             invert: false,
             is_trigger_gate: false,
             section: None,
+            contract: None,
         }
     }
 }
@@ -191,6 +246,11 @@ pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> 
         invert: s.invert,
         is_trigger_gate: s.is_trigger_gate,
         section: s.section.clone(),
+        // `ParamSpecDef` (the card manifest) deliberately carries no
+        // contract — contracts are an inner-node fact the card can't own
+        // (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4); this view synthesizes a
+        // registry-shaped `ParamDef` from card data, so it has none either.
+        contract: None,
     }
 }
 

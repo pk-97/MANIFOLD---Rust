@@ -100,6 +100,17 @@ pub trait PrimitiveSpec: Send {
     /// `boundary_reason:` field.
     const BOUNDARY_REASON: Option<crate::node_graph::freeze::classify::BoundaryReason> = None;
 
+    /// `(param name, contract)` pairs — the real physical/mathematical
+    /// boundaries among this primitive's [`PARAMS`](Self::PARAMS), if any
+    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`). Empty by default: the
+    /// overwhelming majority of params carry no contract, only a display
+    /// hint (their declared `range`). Set via the macro's optional
+    /// `param_contracts:` field; a curated meta-test
+    /// (`every_range_contract_names_a_real_boundary`,
+    /// `node_graph::freeze::classify`) pins every entry to its reason so a
+    /// contract can't creep back onto a merely-conventional range.
+    const PARAM_CONTRACTS: &'static [(&'static str, manifold_core::effects::RangeContract)] = &[];
+
     /// PURE primitive: `run()`'s output depends ONLY on its param values and
     /// its wired inputs — no frame time/beat/delta, no `StateStore`, no
     /// randomness, no CPU/FFI side effects, no canvas-dims dependence beyond
@@ -650,6 +661,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
         P::BOUNDARY_REASON
     }
+    fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
+        P::PARAM_CONTRACTS
+            .iter()
+            .find(|(name, _)| *name == param_name)
+            .map(|(_, contract)| contract.clone())
+    }
     fn is_pure(&self) -> bool {
         P::PURE
     }
@@ -808,6 +825,7 @@ macro_rules! primitive {
         $( pure: $pure:literal, )?
         $( fusion_kind: $fusion_kind:ident, )?
         $( boundary_reason: $boundary_reason:ident, )?
+        $( param_contracts: [ $(($contract_param:literal, $contract_expr:expr)),* $(,)? ], )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
         $( stencil_fetch: $stencil:literal, )?
@@ -865,6 +883,8 @@ macro_rules! primitive {
                 $crate::node_graph::freeze::classify::FusionKind::$fusion_kind; )?
             $( const BOUNDARY_REASON: Option<$crate::node_graph::freeze::classify::BoundaryReason> =
                 Some($crate::node_graph::freeze::classify::BoundaryReason::$boundary_reason); )?
+            $( const PARAM_CONTRACTS: &'static [(&'static str, manifold_core::effects::RangeContract)] =
+                &[ $(($contract_param, $contract_expr)),* ]; )?
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?

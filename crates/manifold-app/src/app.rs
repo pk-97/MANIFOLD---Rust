@@ -989,7 +989,11 @@ impl Application {
                         .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
                         .collect();
                     if let Ok(parsed) = cleaned.parse::<f32>() {
-                        let mut v = parsed.clamp(ctx.min, ctx.max);
+                        // PARAM_RANGE_CONTRACT_DESIGN.md D3: `ctx.min`/`ctx.max` are
+                        // the param's display hint (default slider travel), not a
+                        // restriction — a typed value is free to exceed it, exactly
+                        // like a card remap or modulation. No clamp here.
+                        let mut v = parsed;
                         if ctx.whole_numbers {
                             v = v.round();
                         }
@@ -1159,9 +1163,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1176,9 +1181,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1193,9 +1199,10 @@ impl Application {
                                 let old = param
                                     .map(|p| if fx.base_tracked { p.base } else { p.value })
                                     .unwrap_or(0.0);
-                                let new_val = param
-                                    .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                                    .unwrap_or(parsed);
+                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
+                                // are a display hint, not a restriction — a typed
+                                // value is free to exceed it. No clamp here.
+                                let new_val = parsed;
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
@@ -1236,9 +1243,10 @@ impl Application {
                     let old_val = param
                         .map(|p| if gp.base_tracked { p.base } else { p.value })
                         .unwrap_or(0.0);
-                    let new_val = param
-                        .map(|p| parsed.clamp(p.spec.min, p.spec.max))
-                        .unwrap_or(parsed);
+                    // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max` are a
+                    // display hint, not a restriction — a typed value is free to
+                    // exceed it. No clamp here.
+                    let new_val = parsed;
                     let param_id = param.map(|p| p.id().to_string());
                     if (old_val - new_val).abs() > f32::EPSILON
                         && let Some(param_id) = param_id
