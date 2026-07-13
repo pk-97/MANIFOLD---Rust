@@ -51,6 +51,13 @@ mod journey_proof;
 // gate — no separate harness to maintain).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug035_verify;
+// BUG-037 regression guard: headless before/after MANIFOLD_RENDER_TRACE proof
+// that node.render_scene / node.gltf_texture_source's lazy pipeline compiles
+// no longer stall a glTF scene layer's first rendered frame. Shares
+// `journey_proof`'s headless ContentThread infra (same feature gate — no
+// separate harness to maintain).
+#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
+mod bug037_verify;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]
