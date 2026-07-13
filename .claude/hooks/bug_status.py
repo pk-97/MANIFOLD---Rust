@@ -146,7 +146,12 @@ class Entry:
 
 
 def parse(text: str):
-    """Split into (head, entries, tail). Entries span the Open+Fixed region in file order."""
+    """Split into (head, entries, tail, strays, pointers).
+
+    Entries span the Open+Fixed region in file order. Archive-pointer lines
+    (POINTER_RE) are their own bucket wherever they appear — never entry body,
+    never strays — so rebuild() can re-emit them (BUG-139: they used to be
+    swallowed into a preceding entry's body or dropped as strays)."""
     lines = text.split("\n")
     idx = {i: l.strip() for i, l in enumerate(lines) if l.startswith("## ")}
     open_i = next(i for i, l in idx.items() if l == "## Open")
@@ -158,6 +163,7 @@ def parse(text: str):
 
     entries: list[Entry] = []
     strays: list[str] = []                # non-entry, non-blank lines (e.g. "Next free id:")
+    pointers: list[str] = []              # one-line closed-bug archive pointers
     i = open_i + 1
     cur_section = "Open"
     while i < tail_i:
@@ -170,7 +176,8 @@ def parse(text: str):
         if m:
             j = i + 1
             block = [line]
-            while j < tail_i and j != fixed_i and not HEADING_RE.match(lines[j]):
+            while (j < tail_i and j != fixed_i and not HEADING_RE.match(lines[j])
+                   and not POINTER_RE.match(lines[j].strip())):
                 block.append(lines[j])
                 j += 1
             while block and block[-1].strip() == "":   # trim trailing blanks
@@ -178,13 +185,15 @@ def parse(text: str):
             entries.append(Entry(m.group(1), block, cur_section))
             i = j
         else:
-            if line.strip() and not line.startswith("## "):
+            if POINTER_RE.match(line.strip()):
+                pointers.append(line)
+            elif line.strip() and not line.startswith("## "):
                 strays.append(line)
             i += 1
-    return head, entries, tail, strays
+    return head, entries, tail, strays, pointers
 
 
-def rebuild(head, entries, tail) -> str:
+def rebuild(head, entries, tail, pointers) -> str:
     active = [e for e in entries if e.status not in RESOLVED]
     resolved = [e for e in entries if e.status in RESOLVED]
     out = list(head)
@@ -194,6 +203,8 @@ def rebuild(head, entries, tail) -> str:
     out += ["## Fixed", ""]
     for e in resolved:
         out += e.with_status_line() + [""]
+    if pointers:
+        out += list(pointers) + [""]
     out += tail
     return "\n".join(out)
 
@@ -224,21 +235,21 @@ def archive_ids() -> set[str]:
     return ids
 
 
-def pointer_ids(strays: list[str]) -> set[str]:
-    """IDs referenced by one-line closed-bug pointers under ``## Fixed`` (found among strays)."""
-    return {m.group(1) for l in strays if (m := POINTER_RE.match(l.strip()))}
+def pointer_ids(pointers: list[str]) -> set[str]:
+    """IDs referenced by one-line closed-bug pointers under ``## Fixed``."""
+    return {m.group(1) for l in pointers if (m := POINTER_RE.match(l.strip()))}
 
 
 def check(text: str) -> list[str]:
-    head, entries, tail, strays = parse(text)
+    head, entries, tail, strays, pointers = parse(text)
     problems: list[str] = []
 
     # closed-bug archive cross-check: every live pointer must resolve to a real
     # archived entry, every archived entry must have a live pointer, and an id
     # should never be a full entry in the live file AND already archived.
     arch_ids = archive_ids()
-    if arch_ids or any(POINTER_RE.match(l.strip()) for l in strays):
-        ptr_ids = pointer_ids(strays)
+    if arch_ids or pointers:
+        ptr_ids = pointer_ids(pointers)
         for bug_id in sorted(ptr_ids - arch_ids):
             problems.append(f"{bug_id}: has a ## Fixed pointer but no entry in {ARCHIVE.name}")
         for bug_id in sorted(arch_ids - ptr_ids):
@@ -312,12 +323,16 @@ def shipped_designs() -> set[str]:
 
 
 def write(text: str) -> str:
-    head, entries, tail, strays = parse(text)
+    head, entries, tail, strays, pointers = parse(text)
     before = sorted((e.id, e.body_signature()) for e in entries)
-    new_text = rebuild(head, entries, tail)
+    new_text = rebuild(head, entries, tail, pointers)
     # fidelity guard: reparse and prove no entry body content changed
-    h2, e2, t2, _ = parse(new_text)
+    h2, e2, t2, _, p2 = parse(new_text)
     after = sorted((e.id, e.body_signature()) for e in e2)
+    if [p.strip() for p in pointers] != [p.strip() for p in p2]:
+        raise SystemExit(
+            "FIDELITY GUARD TRIPPED — refusing to write: archive-pointer lines "
+            f"changed across rebuild ({len(pointers)} before, {len(p2)} after).")
     if before != after:
         lost = {i for i, _ in before} - {i for i, _ in after}
         gained = {i for i, _ in after} - {i for i, _ in before}
