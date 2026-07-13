@@ -88,14 +88,23 @@ def main() -> int:
 
     target = Path(args.file) if args.file else (
         main_daemon_dir() / "eval" / "live_grades.session.jsonl")
+    # RUNBOOK step 2 gate semantics: baseline before, gate after — this write
+    # may not ADD violations. The shared file carries historical malformed
+    # lines from pre-script sessions; those are the sleep pass's problem, not
+    # a reason to fail a clean append (bit on first real use, 2026-07-13).
+    baseline = set(check_grades.lint(target)) if target.exists() else set()
     with open(target, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
-    problems = check_grades.lint(target)
-    if problems:
-        for pr in problems:
+    added = [pr for pr in check_grades.lint(target) if pr not in baseline]
+    if added:
+        for pr in added:
             print(pr, file=sys.stderr)
-        raise SystemExit(f"appended, but {target.name} now fails check_grades — fix it")
+        raise SystemExit("the appended line itself fails check_grades — fix and retry "
+                         "(it IS in the file; don't blindly re-append)")
+    if baseline:
+        print(f"note: {len(baseline)} pre-existing violation(s) in {target.name} "
+              f"(not yours; left for the sleep pass)", file=sys.stderr)
     print(f"logged seq {args.seq} ({args.move_id}) -> {target}")
     return 0
 
