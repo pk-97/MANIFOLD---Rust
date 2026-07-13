@@ -63,8 +63,41 @@
 // `MatrixCoeffsForPixelBuffer` below. `matrix_coeffs` = (rCr, gCb, gCr, bCb):
 // r = y + rCr*cr; g = y + gCb*cb + gCr*cr; b = y + bCb*cb.
 
+// BUG-132: the FitInside aspect-fit scale used to sample `y_tex`/`cbcr_tex`
+// with a truncated source coordinate (nearest-neighbor) — any resolution
+// mismatch between source and canvas (the common case on the live rig's
+// portrait towers) produced blocky upscaling or shimmering downscaling.
+// These two helpers do a manual 4-tap bilinear blend around the fractional
+// source coordinate instead (no `sampler` object needed since these are
+// `access::read` textures, not sampled ones).
 static NSString* const kYuvToRgbaShaderBody =
-    @"kernel void yuv_to_rgba(\n"
+    @"inline float bilinear_read_r(texture2d<float, access::read> tex, float2 uv, float2 size) {\n"
+     "    float2 p = uv * size - 0.5;\n"
+     "    float2 base = floor(p);\n"
+     "    float2 frac = p - base;\n"
+     "    float2 c0 = clamp(base, float2(0.0), size - 1.0);\n"
+     "    float2 c1 = clamp(base + float2(1.0), float2(0.0), size - 1.0);\n"
+     "    float v00 = tex.read(uint2(c0.x, c0.y)).r;\n"
+     "    float v10 = tex.read(uint2(c1.x, c0.y)).r;\n"
+     "    float v01 = tex.read(uint2(c0.x, c1.y)).r;\n"
+     "    float v11 = tex.read(uint2(c1.x, c1.y)).r;\n"
+     "    return mix(mix(v00, v10, frac.x), mix(v01, v11, frac.x), frac.y);\n"
+     "}\n"
+     "\n"
+     "inline float2 bilinear_read_rg(texture2d<float, access::read> tex, float2 uv, float2 size) {\n"
+     "    float2 p = uv * size - 0.5;\n"
+     "    float2 base = floor(p);\n"
+     "    float2 frac = p - base;\n"
+     "    float2 c0 = clamp(base, float2(0.0), size - 1.0);\n"
+     "    float2 c1 = clamp(base + float2(1.0), float2(0.0), size - 1.0);\n"
+     "    float2 v00 = tex.read(uint2(c0.x, c0.y)).rg;\n"
+     "    float2 v10 = tex.read(uint2(c1.x, c0.y)).rg;\n"
+     "    float2 v01 = tex.read(uint2(c0.x, c1.y)).rg;\n"
+     "    float2 v11 = tex.read(uint2(c1.x, c1.y)).rg;\n"
+     "    return mix(mix(v00, v10, frac.x), mix(v01, v11, frac.x), frac.y);\n"
+     "}\n"
+     "\n"
+     "kernel void yuv_to_rgba(\n"
      "    texture2d<float, access::read>  y_tex    [[texture(0)]],\n"
      "    texture2d<float, access::read>  cbcr_tex [[texture(1)]],\n"
      "    texture2d<float, access::write> out_tex  [[texture(2)]],\n"
@@ -95,13 +128,12 @@ static NSString* const kYuvToRgbaShaderBody =
      "        return;\n"
      "    }\n"
      "\n"
-     "    uint2 src_coord = uint2(src_uv * src_size);\n"
-     "    src_coord = min(src_coord, uint2(src_size) - 1);\n"
-     "\n"
-     "    float y_val = y_tex.read(src_coord).r;\n"
-     "    // CbCr plane is half resolution — divide source coord by 2\n"
-     "    uint2 cbcr_coord = src_coord / 2;\n"
-     "    float2 cbcr = cbcr_tex.read(cbcr_coord).rg;\n"
+     "    // Bilinear (BUG-132): Y and CbCr are sampled independently at each\n"
+     "    // plane's own resolution rather than deriving CbCr's coordinate\n"
+     "    // from a truncated Y coordinate.\n"
+     "    float y_val = bilinear_read_r(y_tex, src_uv, src_size);\n"
+     "    float2 cbcr_size = float2(cbcr_tex.get_width(), cbcr_tex.get_height());\n"
+     "    float2 cbcr = bilinear_read_rg(cbcr_tex, src_uv, cbcr_size);\n"
      "\n"
      "    // Video range (16-235 Y, 16-240 CbCr) → normalized\n"
      "    float y = (y_val - 16.0 / 255.0) * (255.0 / 219.0);\n"
