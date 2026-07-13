@@ -1862,10 +1862,20 @@ impl AudioSetupPanel {
             // same as every other `slider_reset` site.
             UIEvent::RightClick { node_id: Some(id), .. } => {
                 let id = *id;
-                if let Some((_, send)) =
-                    self.send_ids.iter().zip(self.sends.iter()).find(|(ids, _)| {
-                        id == ids.gain_minus || id == ids.gain_value || id == ids.gain_plus
+                if let Some((zone, send)) =
+                    self.send_ids.iter().zip(self.sends.iter()).find_map(|(ids, send)| {
+                        if id == ids.gain_minus {
+                            Some((crate::stepper::StepperZone::Minus, send))
+                        } else if id == ids.gain_value {
+                            Some((crate::stepper::StepperZone::Value, send))
+                        } else if id == ids.gain_plus {
+                            Some((crate::stepper::StepperZone::Plus, send))
+                        } else {
+                            None
+                        }
                     })
+                    && let Some(crate::stepper::StepperIntent::ResetToDefault) =
+                        crate::stepper::Stepper::intent_for(zone, crate::intent::Gesture::RightClick)
                 {
                     let send_id = send.id.clone();
                     (
@@ -2295,6 +2305,37 @@ mod tests {
         assert!(!consumed, "outside click must not be consumed");
         assert!(acts.is_empty());
         assert!(p.is_open(), "panel must not self-close on outside click");
+    }
+
+    /// BUG-070's remainder (P2: now sourced from `Stepper::intent_for`
+    /// instead of a bare id match) — a right-click on any of the three
+    /// stepper zones (minus / value / plus) replays the drag trio at 0.0 dB,
+    /// undoable as one drag to unity, same as every other `slider_reset`
+    /// site. No pre-existing test pinned this path directly before P2;
+    /// added here as part of converting it onto the contract.
+    #[test]
+    fn right_click_any_stepper_zone_resets_gain_to_unity() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build_docked(&mut tree, test_dock_rect());
+        for id in [p.send_ids[0].gain_minus, p.send_ids[0].gain_value, p.send_ids[0].gain_plus] {
+            let (consumed, actions) = p.handle_event(&UIEvent::RightClick {
+                node_id: Some(id),
+                pos: Vec2::new(100.0, 50.0),
+                modifiers: Modifiers::default(),
+            });
+            assert!(consumed, "right-click on a stepper zone must be consumed");
+            match actions.as_slice() {
+                [PanelAction::SliderReset { changed, .. }] => match changed.as_ref() {
+                    PanelAction::AudioSendGainDragChanged(sid, db) => {
+                        assert_eq!(sid.as_str(), "s1");
+                        assert!((db - 0.0).abs() < 1e-6, "reset must target unity (0 dB), got {db}");
+                    }
+                    other => panic!("expected AudioSendGainDragChanged, got {other:?}"),
+                },
+                other => panic!("expected a SliderReset trio, got {other:?}"),
+            }
+        }
     }
 
     #[test]

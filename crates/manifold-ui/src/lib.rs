@@ -32,6 +32,7 @@ pub mod panels;
 pub mod scroll_container;
 pub mod slider;
 pub mod snap;
+pub mod stepper;
 pub mod text;
 pub mod timeline_editing_host;
 pub mod timeline_input_host;
