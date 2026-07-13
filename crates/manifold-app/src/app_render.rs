@@ -5104,6 +5104,7 @@ pub(crate) fn resolve_canvas_binding(
     f32,
     f32,
     Option<(f32, f32)>,
+    Option<String>,
 )> {
     let snap = snapshot?;
     // Canvas runtime id → the node's stable NodeId (anonymous boundary
@@ -5137,6 +5138,7 @@ pub(crate) fn resolve_canvas_binding(
         b.scale,
         b.offset,
         range,
+        b.section.clone(),
     ))
 }
 

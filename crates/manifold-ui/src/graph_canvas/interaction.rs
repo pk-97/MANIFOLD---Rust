@@ -386,6 +386,7 @@ impl GraphCanvas {
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
+        section: Option<String>,
     ) {
         let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
             return;
@@ -398,7 +399,8 @@ impl GraphCanvas {
             (viewport.h - HEADER_HEIGHT).max(0.0),
         );
         self.mapping_popover.open(
-            binding_id, label, min, max, invert, curve, scale, offset, range, anchor, clip,
+            binding_id, label, min, max, invert, curve, scale, offset, range, section, anchor,
+            clip,
         );
     }
 
