@@ -311,8 +311,22 @@ quality enum, beams-follow-lights) lands in a named phase; nothing rides on
   should be. ⚠ VERIFY-AT-IMPL (P2, five minutes): check whether the shadow
   depth pass samples albedo alpha for cutout materials; record the answer in
   the phase notes either way.
-- **Height-fog ground plane variants / fog volumes** — trigger: "keep the
-  haze simple for now" stops being now.
+- **Wispy haze — animated density noise (the committed follow-on).** Peter,
+  2026-07-13: *"Proper realistic haze that wisps, billows, and drifts would
+  be very nice, maybe as an upgrade once we get the basic god rays working."*
+  Trigger: P1–P3 landed and Peter green-lights after the P3 look-pass —
+  becomes P4 via a short amendment, not a new design. Committed shape so the
+  amendment is small: the march's `σ(x)` gains a multiplicative fBM noise
+  term (2–3 octaves, procedural, no texture asset) sampled at `x · noise_
+  scale + wind · scene_time`; new `node.atmosphere` params `noise_amount`
+  (0 = today's uniform haze, byte-identical — the V1 contract extends),
+  `noise_scale`, `wind_x/z`, `drift_speed`. Time-DRIVEN animation is legal
+  under D5 (scene time is an input; D5 bans cross-frame accumulation, not
+  time), so exports stay deterministic. Honest cost: one fBM eval per march
+  step; expect roughly +30–50% march cost — the quality enum is the relief
+  valve, and the P3 perf trace is the baseline it gets measured against.
+- **Height-fog ground plane variants / fog volumes** — trigger: a scene
+  needs haze bounded to a region rather than scene-wide.
 - **Export-tier step counts** (auto-High in export) — export tiers were
   DROPPED by Peter (RENDERING_INFRA_V2 status); the quality enum is
   hand-settable per scene, which covers the need manually.
