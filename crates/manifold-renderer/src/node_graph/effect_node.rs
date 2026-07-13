@@ -927,6 +927,22 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// The [`RangeContract`](manifold_core::effects::RangeContract) on
+    /// this node's `param_name` param, if any — the real physical/
+    /// mathematical boundary the value must not cross
+    /// (`docs/PARAM_RANGE_CONTRACT_DESIGN.md`). `None` by default: the
+    /// overwhelming majority of params have no contract, only a display
+    /// hint (their declared `range` on [`ParamDef`]). `primitive!`-authored
+    /// primitives set this via the optional `param_contracts:` macro field
+    /// (forwarded from `P::PARAM_CONTRACTS`); hand-`impl EffectNode`
+    /// primitives override this method directly. Enforced by the meta-test
+    /// `every_range_contract_names_a_real_boundary`
+    /// (`node_graph::freeze::classify`) — every declared contract must
+    /// appear in that test's curated table with its reason.
+    fn param_contract(&self, _param_name: &str) -> Option<manifold_core::effects::RangeContract> {
+        None
+    }
+
     /// PURE node: output depends only on param values + wired inputs — no
     /// frame time, no `StateStore`, no randomness, no CPU/FFI side effects.
     /// The executor memoizes pure steps (constant-subgraph hoisting): when a

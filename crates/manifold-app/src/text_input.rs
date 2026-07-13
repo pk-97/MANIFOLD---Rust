@@ -125,15 +125,15 @@ pub struct TableCellEdit {
 
 /// Context for an in-flight inspector param type-in — set when the box opens
 /// ([`TextInputField::InspectorParam`]) and read on commit. Lives off the `Copy`
-/// field enum because `ParamId` isn't `Copy`.
+/// field enum because `ParamId` isn't `Copy`. No `min`/`max` here (removed
+/// PARAM_RANGE_CONTRACT_DESIGN.md P1): the commit path no longer clamps a
+/// typed value to the param's display hint, so nothing reads them.
 #[derive(Debug, Clone)]
 pub struct InspectorParamCtx {
     pub target: manifold_ui::panels::GraphParamTarget,
     pub param_id: manifold_core::effects::ParamId,
     /// Base value at open — the undo "from" value and the slider's set point.
     pub old_value: f32,
-    pub min: f32,
-    pub max: f32,
     pub whole_numbers: bool,
 }
 

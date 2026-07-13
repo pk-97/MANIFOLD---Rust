@@ -3569,6 +3569,10 @@
           "type": "float"
         },
         {
+          "contract": {
+            "min": "1",
+            "reason": "count"
+          },
           "default": "32",
           "label": "Max Edges",
           "name": "max_edges",
@@ -10589,6 +10593,11 @@
       ],
       "params": [
         {
+          "contract": {
+            "max": "8",
+            "min": "2",
+            "reason": "count"
+          },
           "default": "5",
           "label": "Input Count",
           "name": "num_inputs",
@@ -17012,6 +17021,11 @@
       ],
       "params": [
         {
+          "contract": {
+            "max": "31",
+            "min": "0",
+            "reason": "index"
+          },
           "default": "0",
           "label": "Selector",
           "name": "selector",
@@ -17023,6 +17037,11 @@
           "type": "float"
         },
         {
+          "contract": {
+            "max": "32",
+            "min": "1",
+            "reason": "count"
+          },
           "default": "8",
           "label": "Input Count",
           "name": "num_inputs",

@@ -1661,8 +1661,8 @@ impl Application {
                     param_id,
                     anchor,
                     value,
-                    min,
-                    max,
+                    min: _,
+                    max: _,
                     whole_numbers,
                 } => {
                     // Prefill the box with the base (set) value, formatted as a
@@ -1687,8 +1687,6 @@ impl Application {
                         target: *target,
                         param_id: param_id.clone(),
                         old_value: *value,
-                        min: *min,
-                        max: *max,
                         whole_numbers: *whole_numbers,
                     });
                     continue;

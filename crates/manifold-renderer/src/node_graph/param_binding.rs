@@ -1175,6 +1175,28 @@ mod tests {
         assert_eq!(inst.params.get("scale"), Some(&ParamValue::Float(0.75)));
     }
 
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D3/invariant table: a hint (declared
+    /// `range`, the display-only slider span) never restricts a write
+    /// through the real param-binding write path — the same path a card
+    /// binding write takes. `AffineTransform.scale`'s declared hint is
+    /// `[0.1, 5.0]`; writing 50.0 (10× past the hint max) through
+    /// `ResolvedBinding::apply` must read back intact, unclamped.
+    #[test]
+    fn apply_writes_out_of_hint_value_intact_unclamped() {
+        let mut g = Graph::new();
+        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let binding = resolved_feedback_amount(feedback);
+        binding.apply(&mut g, None, 50.0).unwrap();
+        let inst = g.get_node(feedback).unwrap();
+        assert_eq!(
+            inst.params.get("scale"),
+            Some(&ParamValue::Float(50.0)),
+            "a value 10x past scale's declared hint max (5.0) must round-trip \
+             through the write boundary unclamped — hints are display spans, \
+             never restrictions"
+        );
+    }
+
     #[test]
     fn apply_node_target_doesnt_need_handle() {
         let mut g = Graph::new();
