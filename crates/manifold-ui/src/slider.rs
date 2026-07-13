@@ -10,9 +10,9 @@ use crate::tree::UITree;
 
 pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
 /// Width of the value box at the row's right end — a distinct cell (its own
-/// rounded chip) showing the value, click-to-type. Toggle/enum controls that
-/// stand in for a value (e.g. a Clip Trigger ON/OFF) use this same width so the
-/// right column stays aligned.
+/// rounded chip) showing the value, double-click-to-type (D13). Toggle/enum
+/// controls that stand in for a value (e.g. a Clip Trigger ON/OFF) use this
+/// same width so the right column stays aligned.
 pub const VALUE_BOX_W: f32 = 56.0;
 /// Padding between the slider track's right edge and the value box, so the value
 /// reads as its own cell instead of being jammed against the fill.
@@ -44,7 +44,7 @@ pub struct SliderNodeIds {
     pub track: NodeId,           // interactive — drag target
     pub fill: NodeId,            // non-interactive — subtle fill from left to value
     pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
-    pub value_text: NodeId,      // interactive — click to type (in the right gutter)
+    pub value_text: NodeId,      // interactive — double-click to type (in the right gutter, D13)
     pub track_rect: Rect,        // usable track (excludes value gutter); for x_to_normalized()
     /// The slider's normalized default, for right-click reset.
     pub default_normalized: f32,
@@ -65,15 +65,24 @@ pub struct Slider {
 }
 
 impl Slider {
-    /// Register this slider's contract-derived intents (UI_WIDGET_UNIFICATION
-    /// P1: `reset` is the only translatable intent so far — `OpenMapping` and
-    /// `EditValue` derivation lands in P3). Delegates to
+    /// Register this slider's contract-derived intents. `reset` is always
+    /// translatable (P1); a label mapping action is optional — pass one via
+    /// [`Slider::register_intents_with_mapping`] when this host has a mapping
+    /// surface for the param (P3/D14). Delegates to
     /// [`BitmapSlider::register_track_reset`] so callers holding a `Slider`
     /// and callers holding a bare `(SliderNodeIds, PanelAction)` pair (the
-    /// three other hand-registration sites, which never built a `Slider`
-    /// struct) share the exact same contract walk.
+    /// hand-registration sites, which never built a `Slider` struct) share
+    /// the exact same contract walk.
     pub fn register_intents(&self, reg: &mut IntentRegistry) {
         BitmapSlider::register_track_reset(&self.ids, &self.reset, reg);
+    }
+
+    /// As [`Slider::register_intents`], plus the D14 build-time label-mapping
+    /// twin ([`BitmapSlider::register_label_mapping`]) when this host has a
+    /// mapping surface for the param.
+    pub fn register_intents_with_mapping(&self, mapping: &PanelAction, reg: &mut IntentRegistry) {
+        BitmapSlider::register_track_reset(&self.ids, &self.reset, reg);
+        BitmapSlider::register_label_mapping(&self.ids, mapping, reg);
     }
 }
 
@@ -203,14 +212,36 @@ impl BitmapSlider {
     }
 
     /// The gesture contract (D2/D5). Pure, total, allocation-free — covers
-    /// discrete gestures only, drags stay host-stateful.
+    /// discrete gestures only, drags stay host-stateful. Owns exactly three
+    /// (zone, gesture) pairs (D13); every other pair is an explicit dead
+    /// stop that hosts may freely bind to their own host-attached gestures
+    /// (Label+Click OSC-copy on param cards/macros; Label+Click drawer-expand
+    /// on audio-trigger rows — neither is a contract row, D13).
+    ///
+    /// Per-host translation (D15, recorded here so a future reader doesn't
+    /// have to re-derive it from the call sites):
+    /// - `param_card`/`gen-params`: all three intents live (Reset, OpenMapping,
+    ///   EditValue).
+    /// - `macros`: Reset + OpenMapping; EditValue → nothing (macros have no
+    ///   type-in surface).
+    /// - gain / master-chrome / layer-chrome / audio-trigger / other
+    ///   chrome-spec sliders: Reset only; OpenMapping + EditValue → nothing
+    ///   (no mapping popover or type-in surface on those hosts).
     pub fn intent_for(zone: SliderZone, g: Gesture) -> Option<SliderIntent> {
         use Gesture::*;
         use SliderZone::*;
         match (zone, g) {
             (Track, RightClick) => Some(SliderIntent::ResetToDefault),
             (Label, RightClick) => Some(SliderIntent::OpenMapping),
-            (ValueCell, Click) => Some(SliderIntent::EditValue),
+            // D13 correction (2026-07-13, P3): DoubleClick, not Click —
+            // chrome's shipped type-in gesture (inspector.rs:2375 →
+            // route_value_typein). P1's committed table said Click,
+            // transcribing slider.rs's aspirational "click to type" comment
+            // instead of the actual behavior; the canvas was and remains a
+            // dead stop for this row until P5d, and chrome never consulted
+            // this row (it derives EditValue at input time, D14), so the
+            // flip changes nothing observable.
+            (ValueCell, DoubleClick) => Some(SliderIntent::EditValue),
             _ => None,
         }
     }
@@ -227,6 +258,22 @@ impl BitmapSlider {
     pub fn register_track_reset(ids: &SliderNodeIds, reset: &PanelAction, reg: &mut IntentRegistry) {
         if let Some(SliderIntent::ResetToDefault) = Self::intent_for(SliderZone::Track, Gesture::RightClick) {
             reg.on(ids.track, Gesture::RightClick, reset.clone());
+        }
+    }
+
+    /// Register a slider's `Label + RightClick -> OpenMapping` intent (P3,
+    /// D14's build-time twin of `register_track_reset` — `OpenMapping`'s
+    /// payload is constant at build time, unlike `EditValue`'s live-state
+    /// payload). No-ops when `ids.label` is `None` (D15 — a host without a
+    /// label can't translate a label gesture) or when a caller passes this
+    /// for a host that has no mapping surface at all: callers simply don't
+    /// call this fn for those hosts (gain / master-chrome / layer-chrome /
+    /// audio-trigger — D15's dead-stop record on `intent_for`).
+    pub fn register_label_mapping(ids: &SliderNodeIds, mapping: &PanelAction, reg: &mut IntentRegistry) {
+        if let Some(label) = ids.label
+            && let Some(SliderIntent::OpenMapping) = Self::intent_for(SliderZone::Label, Gesture::RightClick)
+        {
+            reg.on(label, Gesture::RightClick, mapping.clone());
         }
     }
 
@@ -799,13 +846,17 @@ mod tests {
         use SliderZone::*;
         assert_eq!(BitmapSlider::intent_for(Track, RightClick), Some(SliderIntent::ResetToDefault));
         assert_eq!(BitmapSlider::intent_for(Label, RightClick), Some(SliderIntent::OpenMapping));
-        assert_eq!(BitmapSlider::intent_for(ValueCell, Click), Some(SliderIntent::EditValue));
-        // Every other (zone, gesture) pair is an explicit dead stop (D3).
+        // D13 correction (P3): DoubleClick, not Click — chrome's shipped
+        // type-in gesture.
+        assert_eq!(BitmapSlider::intent_for(ValueCell, DoubleClick), Some(SliderIntent::EditValue));
+        // Every other (zone, gesture) pair is an explicit dead stop (D3),
+        // including ValueCell+Click — chrome's value cell does NOT open on a
+        // single click (that's the P1 mistake D13 corrects).
         for zone in [Label, Track, ValueCell] {
             for g in [Click, DoubleClick, RightClick] {
                 let expected = matches!(
                     (zone, g),
-                    (Track, RightClick) | (Label, RightClick) | (ValueCell, Click)
+                    (Track, RightClick) | (Label, RightClick) | (ValueCell, DoubleClick)
                 );
                 assert_eq!(BitmapSlider::intent_for(zone, g).is_some(), expected, "{zone:?} + {g:?}");
             }
@@ -877,6 +928,66 @@ mod tests {
         // interest here (it's what `register_intents` should have replayed
         // — the same `reset` this slider was built with, above).
         assert!(matches!(resolved, Some(PanelAction::SliderReset { .. })));
+    }
+
+    /// P3/D14: `register_label_mapping` is the label's build-time contract
+    /// translation — registers the given mapping action on `ids.label` when
+    /// present, no-ops when the slider has no label.
+    #[test]
+    fn register_label_mapping_registers_on_label_when_present() {
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let ids = BitmapSlider::build(
+            &mut tree,
+            Some(root),
+            Rect::new(0.0, 0.0, 400.0, 20.0),
+            Some("Opacity"),
+            0.75,
+            "0.75",
+            &SliderColors::default_slider(),
+            11,
+            DEFAULT_LABEL_WIDTH,
+            0.75,
+            placeholder_reset(),
+        )
+        .ids;
+        assert!(ids.label.is_some());
+
+        let mapping = PanelAction::MacroLabelRightClick(0);
+        let mut reg = IntentRegistry::new();
+        BitmapSlider::register_label_mapping(&ids, &mapping, &mut reg);
+        let resolved = reg.resolve(&tree, ids.label, Gesture::RightClick);
+        assert!(matches!(resolved, Some(PanelAction::MacroLabelRightClick(0))));
+    }
+
+    /// P3/D15: a labelless slider has nothing to register the mapping on —
+    /// `register_label_mapping` no-ops rather than panicking or registering
+    /// on some other node.
+    #[test]
+    fn register_label_mapping_noops_without_a_label() {
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let ids = BitmapSlider::build(
+            &mut tree,
+            Some(root),
+            Rect::new(0.0, 0.0, 400.0, 20.0),
+            None,
+            0.75,
+            "0.75",
+            &SliderColors::default_slider(),
+            11,
+            DEFAULT_LABEL_WIDTH,
+            0.75,
+            placeholder_reset(),
+        )
+        .ids;
+        assert!(ids.label.is_none());
+
+        let mapping = PanelAction::MacroLabelRightClick(0);
+        let mut reg = IntentRegistry::new();
+        // Must not panic; nothing to assert-resolve since there's no label
+        // node to register on.
+        BitmapSlider::register_label_mapping(&ids, &mapping, &mut reg);
     }
 
     #[test]

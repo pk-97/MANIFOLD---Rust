@@ -397,11 +397,13 @@ const SAVE_BUTTON_H: f32 = RESET_BUTTON_H;
 const SAVE_BUTTON_GAP: f32 = 8.0;
 
 /// Max seconds between two empty-canvas presses for them to count as a
-/// double-click. Matches the typical OS double-click window.
-const DOUBLE_CLICK_SECONDS: f32 = 0.3;
-/// Max screen-space distance (px) between the two presses of a double-click.
-/// A drag further than this is two separate single-clicks, not a double.
-const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0;
+/// double-click, and the max screen-space distance (px) between them.
+/// Single-sourced at `color.rs` (UI_WIDGET_UNIFICATION P4/I8) — this module
+/// no longer declares its own copy. The recognizer itself (keyed on node
+/// identity via `last_click_node`, interaction.rs) stays canvas-side by
+/// design; only the timing/radius constants unify.
+use color::DOUBLE_CLICK_TIME_SEC as DOUBLE_CLICK_SECONDS;
+use color::DOUBLE_CLICK_RADIUS_PX;
 /// A left-press that moves less than this on release counts as a click, not a
 /// drag — used to tell a pan from a deselecting click, and a marquee from a
 /// stray shift-click.
@@ -855,6 +857,12 @@ impl Rect {
 /// closes it. Peter's call (2026-07-01): pick from a list, never click-to-cycle.
 /// Canvas-owned and hit-tested inside the canvas's own press handler — no
 /// app-level input plumbing, same path as the row scrub + expose checkbox.
+// Single-host by design (UI_WIDGET_UNIFICATION D17): the chrome "twin" this
+// once shared a contract with (a sidebar enum picker) was deleted by
+// GRAPH_EDITOR_REDESIGN Phase 6 — chrome cards never render enum dropdowns
+// anymore (enum params render as labeled sliders there). Do not build a
+// shared option-list abstraction between this and `dropdown.rs` — D17 names
+// and rejects that as an adapter trap around a misfit.
 #[derive(Debug, Clone)]
 pub(crate) struct EnumDropdown {
     /// Runtime (doc) id of the node whose param this drives.
@@ -928,6 +936,9 @@ impl EnumDropdown {
 /// `on_left_button_down`, same pattern as [`EnumDropdown`]; the live channel
 /// values + swatch are read from the node's `ParamView` each frame, so an edit
 /// round-tripping through the snapshot keeps the panel current.
+// Single-host by design (UI_WIDGET_UNIFICATION D17) — same classification as
+// `EnumDropdown`: chrome cards never render color/vec rows, so there is no
+// twin to unify with.
 #[derive(Debug, Clone)]
 pub(crate) struct VecEditor {
     /// Runtime (doc) id of the node whose param this drives.
@@ -1032,6 +1043,9 @@ impl VecEditor {
 /// round-tripping through the snapshot keeps the grid current. Dimensions
 /// (`rows`/`cols`) are captured at open — a cell edit never reshapes the table,
 /// and a structural reshape re-opens the editor.
+// Single-host by design (UI_WIDGET_UNIFICATION D17) — same classification as
+// `EnumDropdown`/`VecEditor`: chrome cards never render table rows, so there
+// is no twin to unify with.
 #[derive(Debug, Clone)]
 pub(crate) struct TableEditor {
     /// Runtime (doc) id of the node whose param this drives.
