@@ -274,6 +274,7 @@ pub use chromatic_displace::ChromaticDisplace;
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
 pub use basic_shape::{BASIC_SHAPE_SHAPES, BasicShape};
 pub use clamp_texture::ClampTexture;
+pub use coc_from_depth::CocFromDepth;
 pub use mirror_axis::MirrorAxis;
 pub use pack_channels::PackChannels;
 pub use pack_curve_xy::PackCurveXy;

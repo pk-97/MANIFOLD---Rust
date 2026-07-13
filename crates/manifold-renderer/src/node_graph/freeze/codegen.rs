@@ -80,14 +80,20 @@ pub(crate) fn param_wgsl_type(p: &ParamDef) -> Result<&'static str, CodegenError
 /// is untouched). The fused path namespaces fields as `n{i}_<name>`, which is
 /// never reserved, so only the standalone Params struct needs this.
 /// How many 4-byte words a param occupies in the merged scalar uniform. Vec3
-/// expands to 3 consecutive f32 fields (`<name>_x/_y/_z`) — matching how the
-/// hand atoms already pack a colour as three scalars (e.g. chroma_key's
-/// key_r/g/b) — and the body receives it reassembled as a `vec3<f32>`.
+/// expands to 3 consecutive f32 fields (`<name>_x/_y/_z`); Vec4/Color expand
+/// to four (`<name>_x/_y/_z/_w`) — matching how the hand atoms already pack a
+/// colour as scalars (e.g. chroma_key's key_r/g/b) — and the body receives it
+/// reassembled as a `vec3<f32>`/`vec4<f32>` (2026-07-14, P3 wave 2: the
+/// shading-family atoms' `color` params are the first standalone-path users
+/// of Vec4/Color; still `param_wgsl_type`-unsupported, so an atom with one of
+/// these params stays a `region.rs` cut — the fused MULTI-node path still
+/// only carries pure scalar uniform fields).
 pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
     match p.ty {
         ParamType::Float | ParamType::Angle | ParamType::Frequency => Ok(1),
         ParamType::Int | ParamType::Bool | ParamType::Enum => Ok(1),
         ParamType::Vec3 => Ok(3),
+        ParamType::Vec4 | ParamType::Color => Ok(4),
         other => Err(CodegenError::UnsupportedParam {
             name: crate::node_graph::intern_name(&p.name),
             ty: other,
@@ -439,6 +445,13 @@ pub fn generate_standalone_ext(
                 writeln!(out, "    {f}_x: f32,").unwrap();
                 writeln!(out, "    {f}_y: f32,").unwrap();
                 writeln!(out, "    {f}_z: f32,").unwrap();
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                // A vec4/color param expands to four consecutive f32 fields,
+                // reassembled as a vec4<f32> at the body call site below.
+                writeln!(out, "    {f}_x: f32,").unwrap();
+                writeln!(out, "    {f}_y: f32,").unwrap();
+                writeln!(out, "    {f}_z: f32,").unwrap();
+                writeln!(out, "    {f}_w: f32,").unwrap();
             } else {
                 let ty = param_wgsl_type(p)?;
                 writeln!(out, "    {f}: {ty},").unwrap();
@@ -673,6 +686,10 @@ pub fn generate_standalone_ext(
         let f = wgsl_safe_field(p.name.as_ref());
         if p.ty == ParamType::Vec3 {
             args.push(format!("vec3<f32>(params.{f}_x, params.{f}_y, params.{f}_z)"));
+        } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+            args.push(format!(
+                "vec4<f32>(params.{f}_x, params.{f}_y, params.{f}_z, params.{f}_w)"
+            ));
         } else {
             args.push(format!("params.{f}"));
         }
@@ -2102,12 +2119,18 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     let mut prelude: Vec<String> = Vec::new(); // deduped top-level decls, emitted once
     let mut helpers: Vec<FnBlock> = Vec::new(); // deduped, emitted once
     let mut bodies: Vec<String> = Vec::new(); // namespaced body fns
+    let mut includes: Vec<&'static str> = Vec::new(); // deduped shared WGSL libs (noise_common, depth_common, …) — BUG-135
     for (i, node) in region.nodes.iter().enumerate() {
         if !node.fusion_kind.is_fusable() {
             return Err(CodegenError::NotFusable(node.fusion_kind));
         }
         if node.body.is_empty() {
             return Err(CodegenError::NoBody);
+        }
+        for inc in node.node_includes {
+            if !includes.contains(inc) {
+                includes.push(inc);
+            }
         }
         let (pre, blocks) = split_fns(node.body);
         for line in pre {
@@ -2316,6 +2339,15 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         .unwrap();
     }
     out.push('\n');
+
+    // --- shared WGSL library includes (e.g. depth_common's linearize_depth),
+    // prepended so the bodies' helper calls resolve — mirrors
+    // generate_fused_buffer's identical block (BUG-135: this texture path
+    // previously never emitted node_includes at all). ---
+    for inc in &includes {
+        out.push_str(inc.trim_end());
+        out.push_str("\n\n");
+    }
 
     // --- shared prelude (deduped top-level consts/structs the bodies declare),
     // then deduped helpers, then namespaced bodies ---
@@ -2808,6 +2840,95 @@ mod dispatch_contract_tests {
             "body call must pass derived fields after params, vec3 reassembled:\n{generated}"
         );
     }
+
+    /// P3 wave 2 (2026-07-14): a `ParamType::Color` param (the shading-family
+    /// atoms' `color`/`color_a`/`color_x_low`/... tint) now lays out on the
+    /// standalone codegen path exactly like Vec3 does — four consecutive f32
+    /// fields (`<name>_x/_y/_z/_w`), reassembled at the body call as a
+    /// `vec4<f32>`. `ParamType::Vec4` shares the same branch (color.rs's
+    /// channel_mixer `row0..row3`). This proves the mechanism generically; the
+    /// real atoms (blinn_specular, fresnel_rim, matcap_two_tone, color.rs) each
+    /// carry their own gpu_tests parity proof against the hand shader.
+    #[test]
+    fn generate_standalone_ext_expands_color_param_to_vec4() {
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::ports::PortKind;
+        use std::borrow::Cow;
+
+        let inputs = [NodeInput {
+            name: Cow::Borrowed("in"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Input,
+            required: true,
+        }];
+        let outputs = [NodeOutput {
+            name: Cow::Borrowed("out"),
+            ty: PortType::Texture2D,
+            kind: PortKind::Output,
+            required: false,
+        }];
+        let params = [
+            ParamDef {
+                name: Cow::Borrowed("intensity"),
+                label: "Intensity",
+                ty: ParamType::Float,
+                default: ParamValue::Float(1.0),
+                range: Some((0.0, 1.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: Cow::Borrowed("tint"),
+                label: "Tint",
+                ty: ParamType::Color,
+                default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
+                range: None,
+                enum_values: &[],
+            },
+        ];
+        let body = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32, tint: vec4<f32>) -> vec4<f32> {\n    return c * intensity * tint;\n}";
+
+        let generated = generate_standalone_ext(
+            FusionKind::Pointwise,
+            body,
+            &inputs,
+            &params,
+            &[],
+            &[],
+            &outputs,
+            false,
+            &[],
+        )
+        .expect("color-param atom must generate");
+
+        assert!(
+            naga::front::wgsl::parse_str(&generated).is_ok(),
+            "generated kernel must parse through naga:\n{generated}"
+        );
+
+        // intensity (1 word) + tint (4 words) = 5 → pad to 8.
+        let expected_params_struct = "struct Params {\n    \
+            intensity: f32,\n    \
+            tint_x: f32,\n    \
+            tint_y: f32,\n    \
+            tint_z: f32,\n    \
+            tint_w: f32,\n    \
+            _pad0: u32,\n    \
+            _pad1: u32,\n    \
+            _pad2: u32,\n\
+            }\n";
+        assert!(
+            generated.contains(expected_params_struct),
+            "Color param must expand to four consecutive f32 fields, padded to 8 words:\n{generated}"
+        );
+
+        assert!(
+            generated.contains(
+                "let result = body(c_in, uv, vec2<f32>(dims), params.intensity, \
+                 vec4<f32>(params.tint_x, params.tint_y, params.tint_z, params.tint_w));"
+            ),
+            "body call must reassemble the Color param as vec4<f32>:\n{generated}"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -3095,6 +3216,85 @@ mod gpu_tests {
         );
         // The sampler must exist even with no gather member.
         assert!(g.wgsl.contains("var samp: sampler;"), "shared sampler bound:\n{}", g.wgsl);
+    }
+
+    /// BUG-135: the fused TEXTURE-domain path must emit a member's
+    /// `node_includes` exactly like `generate_fused_buffer` already does.
+    /// `node.coc_from_depth` declares `wgsl_includes: [DEPTH_COMMON]` — its
+    /// body calls the shared `linearize_depth` helper. Fuse it with a
+    /// pointwise `Gain` neighbour (the real shape a DoF chain forms) and
+    /// assert the shared header text lands in the kernel exactly once and the
+    /// whole thing parses through naga — before this fix, `linearize_depth`
+    /// was never emitted and naga rejected the kernel with "no definition in
+    /// scope for identifier: linearize_depth" (BUG-141's exact symptom).
+    #[test]
+    fn fused_texture_region_carries_and_dedups_wgsl_includes() {
+        use crate::node_graph::primitive::PrimitiveSpec;
+        use crate::node_graph::primitives::{CocFromDepth, Gain};
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: CocFromDepth::FUSION_KIND,
+                    body: CocFromDepth::WGSL_BODY.unwrap(),
+                    params: CocFromDepth::PARAMS,
+                    inputs: vec![InputSource::External(0)],
+                    input_access: CocFromDepth::INPUT_ACCESS.to_vec(),
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: CocFromDepth::WGSL_INCLUDES,
+                    derived_uniforms: CocFromDepth::DERIVED_UNIFORMS,
+                    type_id: CocFromDepth::TYPE_ID.to_string(),
+                    derived_camera_ext: None,
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: Gain::FUSION_KIND,
+                    body: Gain::WGSL_BODY.unwrap(),
+                    params: Gain::PARAMS,
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    type_id: String::new(),
+                    derived_camera_ext: None,
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+            ],
+            num_external_inputs: 1,
+            outputs: vec![id(1)],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
+            camera_externals: 0,
+        };
+        let g = generate_fused(&region).expect("coc_from_depth + Gain region fuses");
+        assert!(
+            g.wgsl.contains("fn linearize_depth"),
+            "the shared depth_common.wgsl helper must be carried into the fused kernel:\n{}",
+            g.wgsl
+        );
+        assert_eq!(
+            g.wgsl.matches("fn linearize_depth").count(),
+            1,
+            "the include is deduped, not duplicated:\n{}",
+            g.wgsl
+        );
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "fused texture kernel with a wgsl_includes member parses through naga (BUG-135/BUG-141):\n{}",
+            g.wgsl
+        );
     }
 
     /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms

@@ -44,15 +44,15 @@ _Generated from the node registry. Do not hand-edit. 238 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Brightness | `node.brightness` | Filter | Multiplies the image brightness up or down. A plain brightness control. |
-| Channel Mixer | `node.channel_mixer` | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
+| Brightness | `node.brightness` | Filter | Collapses colour to a single brightness value using per-channel weights — the default weighting matches how the eye perceives luminance. |
+| Channel Mixer | `node.channel_mixer` | Filter | Remaps RGBA channels through a 4x4 matrix — swap, isolate, or blend channels into each other. |
 | Clamp | `node.clamp` | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
 | Color LUT | `node.color_lut` | Filter | Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes. |
 | Colorize | `node.colorize` | Filter | Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes. |
 | Contrast | `node.contrast` | Filter | Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey. |
 | Dither | `node.dither` | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
 | Exposure | `node.exposure` | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
-| Gradient Map | `node.gradient_map` | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
+| Gradient Map | `node.gradient_map` | Filter | Recolours an image by mapping its brightness onto a two-colour gradient — dark areas become one colour, bright areas another. |
 | Hue / Saturation | `node.hue_saturation` | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
 | Invert | `node.invert` | Filter | Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert. |
 | Levels | `node.levels` | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |

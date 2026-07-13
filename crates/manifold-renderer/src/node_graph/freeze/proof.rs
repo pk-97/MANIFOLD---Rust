@@ -856,6 +856,139 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     );
 }
 
+/// BUG-135/BUG-141: the real glb-import-shaped region — a camera-derived
+/// `wgsl_includes` TEXTURE atom (`node.coc_from_depth`, whose body calls
+/// `depth_common.wgsl`'s `linearize_depth`) fused with a Pointwise neighbour
+/// (`node.invert`). This is the exact shape the CoC-computation half of DoF
+/// v1 forms once its downstream isn't a Gather consumer (I6's
+/// `test.camera_pointwise` fixture proved the camera-derived-uniform
+/// mechanism but declared no `wgsl_includes`, so it never exercised this gap
+/// — see BUG-135's writeup). Before the fix, `generate_fused`'s texture path
+/// never emitted `node_includes`, so naga rejected the fused kernel with
+/// "no definition in scope for identifier: linearize_depth" and
+/// `fuse_canonical_def` fell back to `None` (the whole card renders unfused,
+/// silently — BUG-141's exact glb-import symptom). `.expect(...)` below is
+/// the direct regression guard: it panics on that fallback.
+#[test]
+fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (64u32, 64u32);
+    // Stand-in "depth" — CocFromDepth reads it as raw [0,1] clip depth
+    // (render_scene's contract); a plain gradient exercises `linearize_depth`
+    // across a real value range without needing a full mesh render.
+    let input = gradient_input(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "CocFromDepthFusion", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.free_camera", "nodeId": "cam" },
+            { "id": 2, "typeId": "node.camera_lens", "nodeId": "lens" },
+            { "id": 3, "typeId": "node.coc_from_depth", "nodeId": "coc" },
+            { "id": 4, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "camera" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "depth" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "camera" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+            { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
+
+    // A finite lens (real thin-lens math exercises linearize_depth with real
+    // values, not the f_stop=infinity pinhole shortcut that zeroes the whole
+    // CoC buffer — CocFromDepth's own I2 invariant).
+    let focus_distance = 3.0f32;
+    let f_stop = 2.8f32;
+
+    // ── Unfused: the canonical graph, params set by node id. ──
+    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
+        let id = g
+            .node_id_by_handle(node_id)
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new(node_id)))
+            .unwrap_or_else(|| panic!("unfused graph missing node `{node_id}`"));
+        g.set_param(id, param, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set {node_id}.{param}: {e:?}"));
+    };
+    set_by_node_id(&mut unfused_graph, "lens", "focus_distance", focus_distance);
+    set_by_node_id(&mut unfused_graph, "lens", "f_stop", f_stop);
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out =
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    // ── Fused: coc + invert must collapse into ONE node.wgsl_compute, with
+    // `cam`/`lens` surviving as boundaries (a Camera producer never fuses)
+    // and `lens`'s output routed onto the fused node's synthesized
+    // `camera_ext_0`. If BUG-135 were still present, the fused kernel would
+    // fail naga parse and `fuse_canonical_def` would return `None` — the
+    // `.expect` below is the regression guard. ──
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&def, &registry).expect("coc + invert is one fusable region");
+    assert_eq!(
+        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        1,
+        "coc and invert must collapse to exactly one fused node"
+    );
+    assert!(
+        fused_def.nodes.iter().any(|n| n.type_id == "node.camera_lens"),
+        "the camera/lens producers must survive as boundaries, not fuse away"
+    );
+    let fused_wgsl = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.wgsl_compute")
+        .and_then(|n| n.wgsl_source.as_deref())
+        .expect("fused node carries its generated WGSL");
+    assert!(
+        fused_wgsl.contains("fn linearize_depth"),
+        "the shared depth_common.wgsl helper must be carried into the fused kernel (BUG-135):\n{}",
+        fused_wgsl
+    );
+    assert!(
+        fused_wgsl.contains("@camera_external: camera_ext_0")
+            && fused_wgsl.contains("@derived_uniform_member:"),
+        "the fused kernel must carry both D7/P0 markers (camera_ext port + \
+         derived-uniform recompute):\n{}",
+        fused_wgsl
+    );
+
+    let mut fused_graph = fused_def.into_graph(&registry).expect("fused graph builds");
+    set_by_node_id(&mut fused_graph, "lens", "focus_distance", focus_distance);
+    set_by_node_id(&mut fused_graph, "lens", "f_stop", f_stop);
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    // coc_from_depth has one exposed param (max_radius) but this fixture
+    // leaves it at its default on both sides, so no retarget lookup is
+    // needed here beyond confirming the field exists (parity with I6's
+    // pattern of driving the fused node's port-shadow through `retarget`).
+    let _ = retarget;
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
+    // the ColorGrade / I6 proofs above use.
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "coc_from_depth + invert fusion must match unfused within the \
+         out-of-loop tolerance: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Broad safety net for activating partial-region fusion library-wide: every
 /// bundled preset the finder fuses must render one frame through its fused view
 /// without panicking — the structural-breakage class (invalid generated WGSL, a

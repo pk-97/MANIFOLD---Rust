@@ -1,49 +1,66 @@
 //! Color-domain primitives: [`Brightness`], [`ChannelMix`], [`ColorRamp`].
 //!
 //! All three are pixel-local: each output pixel depends only on the same
-//! input pixel and parameters. They will fuse cleanly with each other and
-//! with other pixel-local primitives once the fusion compiler lands.
+//! input pixel and parameters. Converted onto the freeze codegen path
+//! (2026-07-14, P3 wave 2) — `fusion_kind: Pointwise` + `wgsl_body`, so they
+//! fuse with each other and with other pixel-local primitives. `ChannelMix`'s
+//! four `Vec4` rows and `ColorRamp`'s two `Color` stops were the first
+//! standalone-path users of those param types (`freeze/codegen.rs`'s
+//! `ParamType::Vec4`/`ParamType::Color` branches, added this wave) — they
+//! still fail `region.rs`'s scalar-only cut rule, so these three stay
+//! individually-fusable (their own standalone dispatch) rather than folding
+//! into a multi-node fused region; see each primitive's own doc note.
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuSamplerDesc};
-
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::primitive::Primitive;
 
-const SOURCE_INPUT: NodeInput = NodePort {
-    name: Cow::Borrowed("source"),
-    ty: PortType::Texture2D,
-    kind: PortKind::Input,
-    required: true,
-};
-
-const OUT_OUTPUT: NodeOutput = NodePort {
-    name: Cow::Borrowed("out"),
-    ty: PortType::Texture2D,
-    kind: PortKind::Output,
-    required: false,
-};
+/// Public `TYPE_ID` re-exports for callers that pre-date the `primitive!`
+/// macro conversion (2026-07-14, P3 wave 2) — `persistence.rs`'s registry
+/// coverage test and `mod.rs`'s `pub use` both reference these by name.
+/// `PrimitiveSpec::TYPE_ID` (`Brightness::TYPE_ID` etc.) carries the same
+/// string; these constants are kept only for source compatibility.
+pub const BRIGHTNESS_TYPE_ID: &str = "node.brightness";
+pub const CHANNEL_MIX_TYPE_ID: &str = "node.channel_mixer";
+pub const COLOR_RAMP_TYPE_ID: &str = "node.gradient_map";
 
 // =====================================================================
 // Brightness — RGB → grayscale via per-channel weights.
 // =====================================================================
 
-pub const BRIGHTNESS_TYPE_ID: &str = "node.brightness";
-
-const BRIGHTNESS_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const BRIGHTNESS_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
-
-const BRIGHTNESS_PARAMS: [ParamDef; 1] = [ParamDef {
-    name: Cow::Borrowed("weights"),
-    label: "RGB Weights",
-    ty: ParamType::Vec3,
-    // Rec. 709 luma coefficients.
-    default: ParamValue::Vec3([0.2126, 0.7152, 0.0722]),
-    range: None,
-    enum_values: &[],
-}];
+crate::primitive! {
+    name: Brightness,
+    type_id: "node.brightness",
+    purpose: "RGB -> weighted grayscale (luma) via per-channel weights. Defaults are BT.709 luma coefficients, so the default behaviour is desaturate-to-luminance.",
+    inputs: {
+        source: Texture2D required,
+    },
+    outputs: {
+        out: Texture2D,
+    },
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("weights"),
+            label: "RGB Weights",
+            ty: ParamType::Vec3,
+            // Rec. 709 luma coefficients.
+            default: ParamValue::Vec3([0.2126, 0.7152, 0.0722]),
+            range: None,
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "The luma_for_height / luma_for_sobel pattern in MetallicGlass: collapse a colour field to a scalar before a heightmap or edge-detection pass.",
+    examples: [],
+    picker: { label: "Brightness", category: Atom },
+    summary: "Collapses colour to a single brightness value using per-channel weights — the default weighting matches how the eye perceives luminance.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["brightness", "luma", "grayscale", "desaturate"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/brightness_body.wgsl"),
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,45 +68,8 @@ struct BrightnessUniforms {
     weights: [f32; 4], // xyz used; w padding
 }
 
-pub struct Brightness {
-    type_id: EffectNodeType,
-    pipeline: Option<manifold_gpu::GpuComputePipeline>,
-    sampler: Option<manifold_gpu::GpuSampler>,
-}
-
-impl Brightness {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(BRIGHTNESS_TYPE_ID),
-            pipeline: None,
-            sampler: None,
-        }
-    }
-}
-
-impl Default for Brightness {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for Brightness {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &BRIGHTNESS_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &BRIGHTNESS_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &BRIGHTNESS_PARAMS
-    }
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+impl Primitive for Brightness {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let w = match ctx.params.get("weights") {
             Some(ParamValue::Vec3(v)) => *v,
             _ => [0.2126, 0.7152, 0.0722],
@@ -108,32 +88,37 @@ impl EffectNode for Brightness {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (mandatory for per-element GPU atoms): the kernel is
+            // generated from `wgsl_body` so the atom fuses. `shaders/
+            // brightness.wgsl` is retained only as the gpu_tests parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.brightness standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/brightness.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.brightness",
             )
         });
         let sampler = self
             .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes {
+                manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 1,
                     texture: in_tex,
                 },
-                GpuBinding::Sampler {
+                manifold_gpu::GpuBinding::Sampler {
                     binding: 2,
                     sampler,
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 3,
                     texture: out_tex,
                 },
@@ -144,57 +129,64 @@ impl EffectNode for Brightness {
     }
 }
 
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: BRIGHTNESS_TYPE_ID,
-        create: || Box::new(Brightness::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Brightness", category: crate::node_graph::palette::PaletteCategory::Atom }),
-    }
-}
-
 // =====================================================================
 // ChannelMix — 4x4 RGBA transformation.
 // =====================================================================
 
-pub const CHANNEL_MIX_TYPE_ID: &str = "node.channel_mixer";
-
-const CHANNEL_MIX_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const CHANNEL_MIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
-
-const CHANNEL_MIX_PARAMS: [ParamDef; 4] = [
-    ParamDef {
-        name: Cow::Borrowed("row0"),
-        label: "Row 0 (R)",
-        ty: ParamType::Vec4,
-        default: ParamValue::Vec4([1.0, 0.0, 0.0, 0.0]),
-        range: None,
-        enum_values: &[],
+crate::primitive! {
+    name: ChannelMix,
+    type_id: "node.channel_mixer",
+    purpose: "Per-pixel 4x4 RGBA matrix transform: out = M . in, where M's rows are the four Vec4 params (row0=R, row1=G, row2=B, row3=A). Identity matrix is the param default — output = input.",
+    inputs: {
+        source: Texture2D required,
     },
-    ParamDef {
-        name: Cow::Borrowed("row1"),
-        label: "Row 1 (G)",
-        ty: ParamType::Vec4,
-        default: ParamValue::Vec4([0.0, 1.0, 0.0, 0.0]),
-        range: None,
-        enum_values: &[],
+    outputs: {
+        out: Texture2D,
     },
-    ParamDef {
-        name: Cow::Borrowed("row2"),
-        label: "Row 2 (B)",
-        ty: ParamType::Vec4,
-        default: ParamValue::Vec4([0.0, 0.0, 1.0, 0.0]),
-        range: None,
-        enum_values: &[],
-    },
-    ParamDef {
-        name: Cow::Borrowed("row3"),
-        label: "Row 3 (A)",
-        ty: ParamType::Vec4,
-        default: ParamValue::Vec4([0.0, 0.0, 0.0, 1.0]),
-        range: None,
-        enum_values: &[],
-    },
-];
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("row0"),
+            label: "Row 0 (R)",
+            ty: ParamType::Vec4,
+            default: ParamValue::Vec4([1.0, 0.0, 0.0, 0.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("row1"),
+            label: "Row 1 (G)",
+            ty: ParamType::Vec4,
+            default: ParamValue::Vec4([0.0, 1.0, 0.0, 0.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("row2"),
+            label: "Row 2 (B)",
+            ty: ParamType::Vec4,
+            default: ParamValue::Vec4([0.0, 0.0, 1.0, 0.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("row3"),
+            label: "Row 3 (A)",
+            ty: ParamType::Vec4,
+            default: ParamValue::Vec4([0.0, 0.0, 0.0, 1.0]),
+            range: None,
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Common useful matrices — Swap A -> R: row0=(0,0,0,1), row1=(0,1,0,0), row2=(0,0,1,0), row3=(0,0,0,1). Luma drop: row0=row1=row2=(0.2126,0.7152,0.0722,0), row3=(0,0,0,1). Halation tint: row0=(1,0,0,0), row1=row2=(0,0,0,0). Isolate B: row0=row1=row2=(0,0,1,0), row3=(0,0,0,1).",
+    examples: [],
+    picker: { label: "Channel Mixer", category: Atom },
+    summary: "Remaps RGBA channels through a 4x4 matrix — swap, isolate, or blend channels into each other.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["channel mixer", "channel mix", "swizzle", "matrix"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/channel_mix_body.wgsl"),
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -205,45 +197,8 @@ struct ChannelMixUniforms {
     row3: [f32; 4],
 }
 
-pub struct ChannelMix {
-    type_id: EffectNodeType,
-    pipeline: Option<manifold_gpu::GpuComputePipeline>,
-    sampler: Option<manifold_gpu::GpuSampler>,
-}
-
-impl ChannelMix {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(CHANNEL_MIX_TYPE_ID),
-            pipeline: None,
-            sampler: None,
-        }
-    }
-}
-
-impl Default for ChannelMix {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for ChannelMix {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &CHANNEL_MIX_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &CHANNEL_MIX_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &CHANNEL_MIX_PARAMS
-    }
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+impl Primitive for ChannelMix {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let row = |name: &str, default: [f32; 4]| -> [f32; 4] {
             match ctx.params.get(name) {
                 Some(ParamValue::Vec4(v)) => *v,
@@ -267,32 +222,37 @@ impl EffectNode for ChannelMix {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (mandatory for per-element GPU atoms): the kernel is
+            // generated from `wgsl_body` so the atom fuses. `shaders/
+            // channel_mix.wgsl` is retained only as the gpu_tests parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.channel_mixer standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/channel_mix.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.channel_mixer",
             )
         });
         let sampler = self
             .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes {
+                manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 1,
                     texture: in_tex,
                 },
-                GpuBinding::Sampler {
+                manifold_gpu::GpuBinding::Sampler {
                     binding: 2,
                     sampler,
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 3,
                     texture: out_tex,
                 },
@@ -303,41 +263,48 @@ impl EffectNode for ChannelMix {
     }
 }
 
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: CHANNEL_MIX_TYPE_ID,
-        create: || Box::new(ChannelMix::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Channel Mixer", category: crate::node_graph::palette::PaletteCategory::Atom }),
-    }
-}
-
 // =====================================================================
 // ColorRamp — luma → two-stop gradient lookup.
 // =====================================================================
 
-pub const COLOR_RAMP_TYPE_ID: &str = "node.gradient_map";
-
-const COLOR_RAMP_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
-const COLOR_RAMP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
-
-const COLOR_RAMP_PARAMS: [ParamDef; 2] = [
-    ParamDef {
-        name: Cow::Borrowed("color_a"),
-        label: "Color A",
-        ty: ParamType::Color,
-        default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
-        range: None,
-        enum_values: &[],
+crate::primitive! {
+    name: ColorRamp,
+    type_id: "node.gradient_map",
+    purpose: "Maps input luminance to a two-stop gradient (color_a at luma 0 -> color_b at luma 1). The gradient-map atom (Blender ColorRamp / TD Lookup with two stops). For richer multi-stop palettes (thermal, etc.) use node.lut1d with a supplied LUT texture.",
+    inputs: {
+        source: Texture2D required,
     },
-    ParamDef {
-        name: Cow::Borrowed("color_b"),
-        label: "Color B",
-        ty: ParamType::Color,
-        default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
-        range: None,
-        enum_values: &[],
+    outputs: {
+        out: Texture2D,
     },
-];
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("color_a"),
+            label: "Color A",
+            ty: ParamType::Color,
+            default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("color_b"),
+            label: "Color B",
+            ty: ParamType::Color,
+            default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
+            range: None,
+            enum_values: &[],
+        },
+    ],
+    composition_notes: "Input is premultiplied alpha — unpremultiplied internally to read the true colour for the ramp index; a transparent input pixel stays transparent (keys over the layer below) rather than painting color_a as an opaque box.",
+    examples: [],
+    picker: { label: "Gradient Map", category: Atom },
+    summary: "Recolours an image by mapping its brightness onto a two-colour gradient — dark areas become one colour, bright areas another.",
+    category: ColorAndTone,
+    role: Filter,
+    aliases: ["gradient map", "color ramp", "duotone", "lookup"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/color_ramp_body.wgsl"),
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -346,45 +313,8 @@ struct ColorRampUniforms {
     color_b: [f32; 4],
 }
 
-pub struct ColorRamp {
-    type_id: EffectNodeType,
-    pipeline: Option<manifold_gpu::GpuComputePipeline>,
-    sampler: Option<manifold_gpu::GpuSampler>,
-}
-
-impl ColorRamp {
-    pub fn new() -> Self {
-        Self {
-            type_id: EffectNodeType::new(COLOR_RAMP_TYPE_ID),
-            pipeline: None,
-            sampler: None,
-        }
-    }
-}
-
-impl Default for ColorRamp {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EffectNode for ColorRamp {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.type_id
-    }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        &COLOR_RAMP_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &COLOR_RAMP_OUTPUTS
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &COLOR_RAMP_PARAMS
-    }
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+impl Primitive for ColorRamp {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let color = |name: &str, default: [f32; 4]| -> [f32; 4] {
             match ctx.params.get(name) {
                 Some(ParamValue::Color(c)) => *c,
@@ -407,32 +337,37 @@ impl EffectNode for ColorRamp {
 
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
+            // Codegen path (mandatory for per-element GPU atoms): the kernel is
+            // generated from `wgsl_body` so the atom fuses. `shaders/
+            // color_ramp.wgsl` is retained only as the gpu_tests parity oracle.
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.gradient_map standalone codegen");
             gpu.device.create_compute_pipeline(
-                include_str!("shaders/color_ramp.wgsl"),
-                "cs_main",
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
                 "node.gradient_map",
             )
         });
         let sampler = self
             .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes {
+                manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 1,
                     texture: in_tex,
                 },
-                GpuBinding::Sampler {
+                manifold_gpu::GpuBinding::Sampler {
                     binding: 2,
                     sampler,
                 },
-                GpuBinding::Texture {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 3,
                     texture: out_tex,
                 },
@@ -440,14 +375,6 @@ impl EffectNode for ColorRamp {
             [width.div_ceil(16), height.div_ceil(16), 1],
             "node.gradient_map",
         );
-    }
-}
-
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: COLOR_RAMP_TYPE_ID,
-        create: || Box::new(ColorRamp::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Gradient Map", category: crate::node_graph::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -625,5 +552,208 @@ mod channel_mix_gpu_tests {
             );
         }
         assert!((out[3] - 1.0).abs() < 0.02, "alpha passthrough: {}", out[3]);
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod color_gpu_parity_tests {
+    //! **Generated-vs-hand parity** (`docs/ADDING_PRIMITIVES.md` "The codegen
+    //! path is mandatory") — each atom's standalone kernel (built via
+    //! `standalone_for_spec`) must reproduce its hand shader texel-for-texel.
+    //! `ChannelMix` and `ColorRamp` are the first standalone-path users of
+    //! `ParamType::Vec4`/`ParamType::Color` in a REAL (non-synthetic) atom.
+    use half::f16;
+    use manifold_gpu::{
+        GpuBinding, GpuComputePipeline, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc,
+        GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    };
+
+    use super::{Brightness, BrightnessUniforms, ChannelMix, ChannelMixUniforms, ColorRamp, ColorRampUniforms};
+    use crate::render_target::RenderTarget;
+
+    fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
+        assert_eq!(px.len(), (w * h * 4) as usize);
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px))
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    /// Non-uniform gradient, premultiplied alpha varying too (exercises
+    /// `color_ramp`'s unpremultiply branch across a range of coverage).
+    fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let tx = x as f32 / (w.saturating_sub(1).max(1)) as f32;
+                let ty = y as f32 / (h.saturating_sub(1).max(1)) as f32;
+                let a = 0.2 + 0.8 * ty;
+                px[i] = f16::from_f32(tx * a);
+                px[i + 1] = f16::from_f32((1.0 - tx) * a);
+                px[i + 2] = f16::from_f32(0.5 * a);
+                px[i + 3] = f16::from_f32(a);
+            }
+        }
+        upload_rgba16f(device, w, h, "color-gradient", &px)
+    }
+
+    fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
+        let bytes_per_row = w * 8;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("color-readback");
+        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize)
+            .map(|i| {
+                let o = i * 4;
+                [
+                    f16::from_bits(halves[o]).to_f32(),
+                    f16::from_bits(halves[o + 1]).to_f32(),
+                    f16::from_bits(halves[o + 2]).to_f32(),
+                    f16::from_bits(halves[o + 3]).to_f32(),
+                ]
+            })
+            .collect()
+    }
+
+    /// Dispatch a `color.rs`-shaped kernel (uniform(0), source(1,
+    /// sampler-read), sampler(2), dst(3)) and read back the full RGBA output.
+    fn dispatch(
+        device: &GpuDevice,
+        pipeline: &GpuComputePipeline,
+        src: &GpuTexture,
+        w: u32,
+        h: u32,
+        uniform_bytes: &[u8],
+    ) -> Vec<[f32; 4]> {
+        let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "color-out");
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let mut enc = device.create_encoder("color-dispatch");
+        enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                GpuBinding::Texture { binding: 1, texture: src },
+                GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                GpuBinding::Texture { binding: 3, texture: &out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "color-dispatch",
+        );
+        enc.commit_and_wait_completed();
+        readback_rgba(device, &out.texture, w, h)
+    }
+
+    fn assert_close(hand: &[[f32; 4]], generated: &[[f32; 4]], label: &str) {
+        assert_eq!(hand.len(), generated.len());
+        for (i, (h_px, g_px)) in hand.iter().zip(generated.iter()).enumerate() {
+            for c in 0..4 {
+                assert!(
+                    (h_px[c] - g_px[c]).abs() < 2e-3,
+                    "{label} texel {i} channel {c}: hand={} gen={}",
+                    h_px[c],
+                    g_px[c]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generated_brightness_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 4u32);
+        let src = gradient_input(&device, w, h);
+        let uniforms = BrightnessUniforms { weights: [0.2126, 0.7152, 0.0722, 0.0] };
+        let bytes = bytemuck::bytes_of(&uniforms);
+
+        let hand_wgsl = include_str!("shaders/brightness.wgsl");
+        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "brightness-hand");
+        let hand_out = dispatch(&device, &hand_pipeline, &src, w, h, bytes);
+
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Brightness>()
+            .expect("node.brightness standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "brightness-generated",
+        );
+        let gen_out = dispatch(&device, &gen_pipeline, &src, w, h, bytes);
+
+        assert_close(&hand_out, &gen_out, "brightness");
+    }
+
+    #[test]
+    fn generated_channel_mix_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 4u32);
+        let src = gradient_input(&device, w, h);
+        // Non-trivial matrix: swap R<->A, halve G, isolate B into alpha too.
+        let uniforms = ChannelMixUniforms {
+            row0: [0.0, 0.0, 0.0, 1.0],
+            row1: [0.0, 0.5, 0.0, 0.0],
+            row2: [0.0, 0.0, 1.0, 0.0],
+            row3: [1.0, 0.0, 0.0, 0.0],
+        };
+        let bytes = bytemuck::bytes_of(&uniforms);
+
+        let hand_wgsl = include_str!("shaders/channel_mix.wgsl");
+        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "channel-mix-hand");
+        let hand_out = dispatch(&device, &hand_pipeline, &src, w, h, bytes);
+
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ChannelMix>()
+            .expect("node.channel_mixer standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "channel-mix-generated",
+        );
+        let gen_out = dispatch(&device, &gen_pipeline, &src, w, h, bytes);
+
+        assert_close(&hand_out, &gen_out, "channel_mix");
+    }
+
+    #[test]
+    fn generated_color_ramp_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 4u32);
+        let src = gradient_input(&device, w, h);
+        let uniforms = ColorRampUniforms {
+            color_a: [0.05, 0.0, 0.2, 1.0],
+            color_b: [1.0, 0.85, 0.1, 1.0],
+        };
+        let bytes = bytemuck::bytes_of(&uniforms);
+
+        let hand_wgsl = include_str!("shaders/color_ramp.wgsl");
+        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "color-ramp-hand");
+        let hand_out = dispatch(&device, &hand_pipeline, &src, w, h, bytes);
+
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ColorRamp>()
+            .expect("node.gradient_map standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "color-ramp-generated",
+        );
+        let gen_out = dispatch(&device, &gen_pipeline, &src, w, h, bytes);
+
+        assert_close(&hand_out, &gen_out, "color_ramp");
     }
 }

@@ -260,31 +260,16 @@ macro_rules! hand_descriptor {
     };
 }
 
-// Color (color.rs)
-hand_descriptor!(
-    "node.brightness",
-    "Pixel-local brightness multiply: out.rgb = in.rgb * brightness, alpha passes through.",
-    summary: "Multiplies the image brightness up or down. A plain brightness control.",
-    category: ColorAndTone,
-    role: Filter,
-    aliases: ["brightness", "Level TOP"],
-);
-hand_descriptor!(
-    "node.channel_mixer",
-    "4x4 RGBA matrix transform: each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
-    summary: "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
-    category: ColorAndTone,
-    role: Filter,
-    aliases: ["channel mixer", "channel mix", "matrix", "swizzle", "Channel Mix TOP"],
-);
-hand_descriptor!(
-    "node.gradient_map",
-    "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
-    summary: "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
-    category: ColorAndTone,
-    role: Filter,
-    aliases: ["gradient map", "color ramp", "duotone", "Lookup TOP"],
-);
+// Color (color.rs) — node.brightness / node.channel_mixer / node.gradient_map
+// moved onto the `primitive!` macro (2026-07-14, P3 wave 2 freeze-codegen
+// conversion), which now emits its own `NodeDescriptor` from the macro's
+// `summary`/`category`/`role`/`aliases` fields. The hand descriptors that
+// used to live here are gone — a macro-authored primitive AND a
+// `hand_descriptor!` entry for the same type_id double-register the
+// descriptor inventory channel, and `catalog_gen`'s row-collection
+// non-deterministically picks whichever one iteration order returns
+// (caught by `catalog_gen::tests::regenerates_in_sync` flaking between
+// runs).
 
 // Filter (filter.rs)
 hand_descriptor!(
