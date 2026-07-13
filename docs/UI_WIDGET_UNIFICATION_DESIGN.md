@@ -1,6 +1,6 @@
 # UI Widget Unification — one widget vocabulary, two hosts
 
-**Status: APPROVED design, not built · 2026-07-10 · Fable**
+**Status: APPROVED design, not built · 2026-07-10 · Fable · AMENDED 2026-07-13 (Peter): opportunistic conversion replaced by scheduled sweep — P4–P6 added, D6 superseded**
 **Prerequisites:** none
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -100,10 +100,14 @@ contract* — intent dispatch is for node→action gestures by design (intent.rs
 drag state machines are genuinely host-specific and their command emission is already
 parity-true.
 
-**D6 — Conversion order: slider first, then opportunistic.** P1 converts the slider and
-closes BUG-105. Remaining widgets (steppers, send-fader → P2; toggles/dropdowns →
-deferred) convert when a parity bug or new gesture touches them — Peter's sequencing:
-bricks that land as bug fixes during the release push, no dedicated window.
+**D6 — Conversion order: slider first, then scheduled sweep.** (Amended 2026-07-13 —
+Peter rejected the original "convert when a parity bug touches them" sequencing:
+*"remove the potential for future bugs... not wait until it breaks."* The opportunistic
+model was this design's call, not his.) P1 converts the slider and closes BUG-105;
+P2 the steppers/send-fader. The remaining widgets convert in scheduled phases P4–P6 —
+dual-surface widgets first (P4, where the divergence disease already lives), then the
+canvas text-input primitive (P5, unblocks BUG-102), then contract-derivation for
+chrome-only widgets (P6, future-proofing). No widget waits for its first bug.
 
 **D7 — Zone geometry is parameterized by metrics, not shared constants.** The node face
 legitimately uses different label/value widths than cards (graph_canvas/mod.rs:157–179).
@@ -163,7 +167,7 @@ Host translation, committed:
 |---|---|---|
 | `ResetToDefault` | The `Slider.reset` trio the builder already carries — registered on the track node | Absolute set with `default_value`; `SetOuterParam` on mirror rows (D4) |
 | `OpenMapping` | The label's existing mapping action ⚠ VERIFY-AT-IMPL: which `PanelAction` each site registers today — `rg -n 'ids.label' crates/manifold-ui/src` and read the hits | The existing popover path (`on_right_button_down` → `open_mapping_popover`), now gated to the Label zone |
-| `EditValue` | The value cell's existing click-to-type | **None** — no text input on the canvas (BUG-102); explicit dead stop per D3, revived from Deferred |
+| `EditValue` | The value cell's existing click-to-type | **None** until P5 lands the canvas text-input primitive (BUG-102); explicit dead stop per D3 in P1–P4 |
 
 Chrome derivation seam: `Slider` gains
 `pub fn register_intents(&self, reg: &mut IntentRegistry<PanelAction>)` which walks the
@@ -225,9 +229,37 @@ slider site; negative gate widens to all slider-zone gestures (`rg -n
 'on\(ids\.(track|label|value_text)' crates/manifold-ui/src` → zero outside
 `register_intents`). Gate: `-p manifold-ui --lib`; the widened I1 gate.
 
+**P4 — dual-surface widget sweep (scheduled, not bug-triggered — D6 as amended).**
+The canvas holds private twins of chrome widgets today: the enum dropdown
+(`graph_canvas/interaction.rs:578`, modal over the canvas, vs `dropdown.rs`) and the
+Color/Vec editor (`interaction.rs:604`). Entry: inventory every widget kind the node
+face renders (`rg -n 'enum_dropdown|color|vec_editor|toggle' crates/manifold-ui/src/graph_canvas`)
+and pair each with its chrome twin; if a kind has no twin, record why. Deliverables:
+each dual-surface widget gets the P1 shape — zones + `intent_for` in the widget's home
+module, both hosts consuming it, its I1-style negative gate. Gate: `-p manifold-ui
+--lib` + the widened negative gates; contract-table unit test per widget (I2 pattern).
+
+**P5 — canvas text-input primitive (unblocks BUG-102).**
+Build the caret/selection/IME text-entry primitive for the immediate surface once,
+host it in `MappingPopover` (label + section + future string fields), and flip the
+slider contract's `EditValue` canvas translation from None to live. This is the largest
+phase and may warrant its own short design pass at entry (input-method handling has
+real edge cases); it is scheduled here so it stops being an indefinite deferral.
+Gate: `-p manifold-ui --lib`; demo: type into a popover label field via `ui-snap`.
+
+**P6 — contract derivation for chrome-only widgets.**
+Browser popup, pickers, toasts, remaining panel widgets: single-host today, so no
+parity bug class exists — this phase moves their gesture registrations onto
+widget-declared contracts anyway, so a future canvas appearance (or any new host) is
+free and I1's "no hand-registered gestures" gate can go repo-wide. Mechanical;
+schedule after P4/P5 or interleave with release-push bricks.
+
 Phasing-completeness walk: contract both surfaces → P1; stepper/fader reset → P2; full
-slider derivation → P3; canvas text entry → Deferred (BUG-102); drag unification →
-Deferred; other widget kinds → Deferred. No body-committed affordance is unphased.
+slider derivation → P3; dual-surface twins (dropdown, color/vec, node-face toggles) →
+P4; canvas text entry → P5 (was Deferred, rescheduled 2026-07-13); chrome-only widgets
+→ P6 (was Deferred). Drag unification stays deferred on D5's still-true premise (both
+hosts already emit identical drag commands — no divergence to remove). No
+body-committed affordance is unphased.
 
 ## 6. Decided — do not reopen
 
@@ -244,13 +276,10 @@ Deferred; other widget kinds → Deferred. No body-committed affordance is unpha
 
 ## 7. Deferred
 
-- **Canvas text entry (`EditValue` on the node face)** — blocked on the immediate-surface
-  text-input primitive (BUG-102: caret/selection/IME). Revive when that primitive lands
-  or when a third deliverable blocks on it; the contract row already exists, only the
-  canvas translation flips from None.
+(2026-07-13: canvas text entry and the remaining widget kinds moved OUT of this section
+into scheduled phases P5 / P4+P6 — Peter's call: unify by design, don't wait for bugs.)
+
 - **Drag/scrub contract unification** — both hosts already emit identical commands.
   Revive if a host-drag divergence bug appears (that would falsify D5's premise).
-- **Toggles, dropdowns, buttons, color/vec editors** — convert opportunistically per D6.
-  Revive per widget on its first parity bug or new-gesture request.
 - **Graph-editor sidebar** — already on `IntentRegistry<GraphEditCommand>`; no work. Noted
   so nobody "unifies" it twice.
