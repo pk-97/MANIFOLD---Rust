@@ -675,10 +675,9 @@ fn build_import_graph(
     let ssao_radius_default = (radius * 0.5).clamp(0.01, 5.0);
 
     let ssao_id = fresh_id();
-    let mut ssao_node = plain_node(ssao_id, "ssao", "node.ssao_from_depth", "ssao");
+    let mut ssao_node = plain_node(ssao_id, "ssao", "node.ssao_gtao", "ssao");
     ssao_node.params.insert("radius".to_string(), float(ssao_radius_default));
     ssao_node.params.insert("intensity".to_string(), float(1.0));
-    ssao_node.params.insert("bias".to_string(), float(0.025));
     nodes.push(ssao_node);
 
     let ssao_mix_id = fresh_id();
@@ -801,10 +800,8 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "ssao_radius", "SSAO Radius", ssao_radius_default, "ssao", "radius", 1.0,
     ));
-    card_params.push(card_param(
-        "ssao_bias", "SSAO Bias", 0.0, 0.5, 0.025, false, "Ambient Occlusion",
-    ));
-    card_bindings.push(card_binding("ssao_bias", "SSAO Bias", 0.025, "ssao", "bias", 1.0));
+    // No `ssao_bias` card — node.ssao_gtao (CINEMATIC_POST D9) has no `bias`
+    // param; the per-tap range check subsumes it.
 
     // Category "Geometry" matches the existing 3D-geometry generator
     // convention (Tesseract / DigitalPlants / NestedCubes / Duocylinder /
@@ -923,18 +920,19 @@ mod tests {
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
         // + 1 Environment + 1 Ambient + 2×(metallic + roughness) = 15
-        // framing/material sliders, PLUS the 3 SSAO knobs = 18 params.
+        // framing/material sliders, PLUS the 2 GTAO knobs (radius, intensity
+        // -- `bias` dropped, CINEMATIC_POST D9(b)) = 17 params.
         assert_eq!(
             meta.params.len(),
-            18,
-            "15 framing/material/env + 3 SSAO knobs"
+            17,
+            "15 framing/material + 2 GTAO knobs"
         );
         // Every param routes one-to-one except the shared Ambient, which fans
-        // out to every material's ambient (2 for azalea). 18 + 1 = 19.
+        // out to every material's ambient (2 for azalea). 17 + 1 = 18.
         assert_eq!(
             meta.bindings.len(),
-            19,
-            "18 params, Ambient fanned to 2 materials"
+            18,
+            "17 params, Ambient fanned to 2 materials"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1030,8 +1028,8 @@ mod tests {
         // The SSAO arm is wired into the spine; the lens / DoF / motion-blur
         // nodes were removed.
         assert!(
-            def.nodes.iter().any(|n| n.type_id == "node.ssao_from_depth"),
-            "imported graph must carry the SSAO atom"
+            def.nodes.iter().any(|n| n.type_id == "node.ssao_gtao"),
+            "imported graph must carry the GTAO atom"
         );
         for absent in [
             "node.camera_lens",
@@ -1044,8 +1042,8 @@ mod tests {
                 "`{absent}` should have been removed"
             );
         }
-        // The three SSAO knobs are exposed; no lens/DoF/motion params remain.
-        for id in ["ssao_intensity", "ssao_radius", "ssao_bias"] {
+        // The two GTAO knobs are exposed; no lens/DoF/motion params remain.
+        for id in ["ssao_intensity", "ssao_radius"] {
             let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing SSAO card param `{id}`"));
             assert_eq!(p.section.as_deref(), Some("Ambient Occlusion"), "`{id}` is an AO knob");
             let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
@@ -1058,6 +1056,7 @@ mod tests {
         }
         for gone in [
             "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius", "motion_blur_px",
+            "ssao_bias",
         ] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),

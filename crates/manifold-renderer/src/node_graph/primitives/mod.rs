@@ -194,7 +194,7 @@ mod seed_particles_from_texture;
 mod seed_particles;
 mod separable_gaussian;
 mod sharpen;
-mod ssao_from_depth;
+mod ssao_gtao;
 mod simplex_field_2d;
 mod simplex_noise_force_at_particles;
 mod spawn_from_mesh;

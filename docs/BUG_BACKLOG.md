@@ -159,7 +159,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Symptom** — Loading a project with an imported glb layer logs `[freeze] fused region 0 failed to parse: ParseError { message: "no definition in scope for identifier: linearize_depth" ... }`. The freeze install falls back to unfused execution for that card, so the import graph's per-element tail (SSAO chain / mix) pays N dispatches instead of a fused one. Output is correct — the fallback works as designed — but the fusion win is silently lost on exactly the heavy-scene cards that need it.
 
-**Root cause** — unknown. Suspect: a fused region includes a node whose `wgsl_body` calls the shared `linearize_depth` helper (`depth.wgsl`, GBUFFER D4 — likely `ssao_from_depth` or `coc_from_depth`) but the codegen assembler doesn't prepend that shared helper header into the fused module, so the identifier is unresolved at naga parse time.
+**Root cause** — unknown. Suspect: a fused region includes a node whose `wgsl_body` calls the shared `linearize_depth` helper (`depth.wgsl`, GBUFFER D4 — likely `node.ssao_gtao` (replaces the retired `node.ssao_from_depth`, CINEMATIC_POST D9, 2026-07-13) or `coc_from_depth`) but the codegen assembler doesn't prepend that shared helper header into the fused module, so the identifier is unresolved at naga parse time.
 
 **Fix shape** — make the freeze codegen emit required shared WGSL helper headers for the nodes it inlines (dependency-tag on the primitive spec, or scan bodies for known helper names); add a freeze proof for a region containing a depth-linearizing atom. Verify against the glb import card and CinematicScene (DoF's CoC path likely shares the helper).
 
