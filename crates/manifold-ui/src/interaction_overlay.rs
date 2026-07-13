@@ -365,16 +365,47 @@ struct RegionDrag {
     start_layer: usize,
 }
 
-// ── TimelineDrag (P7.3/P7.4, D8/D11) ────────────────────────────────────
+/// The live timeline's move drag — the highest-stakes fold in all of P7
+/// (P7.5). The fold target for eleven loose fields that previously sat
+/// directly on `InteractionOverlay`: the anchor clip id (was `Option<ClipId>`
+/// — P7.5's entry-proof established every path that arms a move drag also
+/// sets an anchor in the same synchronous call, so it's non-optional here by
+/// construction), the start-layer index, the per-clip snapshot Vec + id set,
+/// the three selection-extent fields, the cross-layer-blocked flag, the
+/// opt-drag-duplicate flag, and the anchor's start-beat/offset-beats pair.
+/// The `AnimF32`/`Transient` visual-tween fields on `InteractionOverlay`
+/// (`lift_anim`, `ghost_alpha`, `settle_dx`, `drag_visual_clip_ids`,
+/// `landing_flash*`, `error_shake`, `was_layer_blocked`) stay OUTSIDE this
+/// payload by design — they deliberately keep easing after release, so their
+/// lifetime outlaps the drag (D11).
+#[derive(Debug, Clone)]
+struct MoveDrag {
+    anchor_clip_id: ClipId,
+    start_layer_index: usize,
+    snapshots: Vec<DragSnapshot>,
+    snapshot_clip_ids: HashSet<ClipId>,
+    selection_min_start_beat: Beats,
+    selection_min_layer: usize,
+    selection_max_layer: usize,
+    layer_blocked: bool,
+    /// Alt/Opt held at grab time → on release, leave a copy of each moved
+    /// clip at its original position (opt-drag duplicate).
+    duplicate_on_release: bool,
+    /// Anchor clip's start beat at grab time.
+    start_beat: Beats,
+    /// Offset from the anchor clip's start to the mouse beat at grab time.
+    offset_beats: Beats,
+}
+
+// ── TimelineDrag (P7.3/P7.4/P7.5, D8/D11) ────────────────────────────────
 // The single lifecycle-owner payload for `InteractionOverlay`'s drag
-// controller. `Move` stays a unit variant here — its state still lives in
-// the loose fields below (`drag_snapshots`, etc.) until P7.5 folds it in.
-// Trim/region/automation all carry their state now (P7.3's automation fold,
-// P7.4's trim/region fold).
+// controller. Every gesture — move, trim, region-select, and the six
+// automation variants — carries its state on this payload now; P7's fold
+// is complete.
 
 #[derive(Debug, Clone)]
 enum TimelineDrag {
-    Move,
+    Move(MoveDrag),
     TrimLeft(TrimDrag),
     TrimRight(TrimDrag),
     RegionSelect(RegionDrag),
@@ -394,7 +425,7 @@ impl TimelineDrag {
     /// (auto-scroll polling, drag readout, snap, input routing) still reads.
     fn kind(&self) -> DragMode {
         match self {
-            TimelineDrag::Move => DragMode::Move,
+            TimelineDrag::Move(_) => DragMode::Move,
             TimelineDrag::TrimLeft(_) => DragMode::TrimLeft,
             TimelineDrag::TrimRight(_) => DragMode::TrimRight,
             TimelineDrag::RegionSelect(_) => DragMode::RegionSelect,
@@ -416,26 +447,9 @@ pub struct InteractionOverlay {
     clip_vertical_padding: f32,
 
     // Drag state (Unity lines 37-73) — EXCLUSIVELY owned here
-    // P7.3/P7.4 (D8/D11): the lifecycle + automation/trim/region gestures'
-    // state fold onto this one controller. `Move` stays a unit variant —
-    // its state is still the loose fields below, until P7.5 folds it in too.
+    // P7.3/P7.4/P7.5 (D8/D11): every gesture's state — move, trim, region,
+    // and the six automation variants — folds onto this one controller.
     drag: DragController<TimelineDrag>,
-    drag_anchor_clip_id: Option<ClipId>,
-    drag_start_layer_index: usize,
-    drag_snapshots: Vec<DragSnapshot>,
-    drag_snapshot_clip_ids: HashSet<ClipId>,
-    drag_selection_min_start_beat: Beats,
-    drag_selection_min_layer: usize,
-    drag_selection_max_layer: usize,
-    drag_layer_blocked: bool,
-    // Alt/Opt held at move-drag start → on release, leave a copy of each moved
-    // clip at its original position (opt-drag duplicate).
-    duplicate_on_release: bool,
-
-    // Move-drag anchor geometry, captured at grab time. (Formerly mirrored on
-    // UIState — folded here so transient gesture state has one owner.)
-    drag_start_beat: Beats,
-    drag_offset_beats: Beats, // offset from the anchor clip's start to the mouse beat
 
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
@@ -467,7 +481,8 @@ pub struct InteractionOverlay {
     settle_dx: AnimF32,
     /// The clip ids [`Self::lift_anim`]/[`Self::ghost_alpha`]/
     /// [`Self::settle_dx`] apply to. During a live move-drag this mirrors
-    /// `drag_snapshot_clip_ids`; `on_end_drag` snapshots it here BEFORE
+    /// the move payload's own snapshot-clip-id set; `on_end_drag` snapshots
+    /// it here BEFORE
     /// clearing the real drag state, so the tweens have something to keep
     /// easing against post-release — the same "keep drawing past the state
     /// event" idea the exit-state pattern uses for deletion, applied here to
@@ -481,9 +496,9 @@ pub struct InteractionOverlay {
     landing_flash: Transient,
     landing_flash_beat: Beats,
     landing_flash_layers: (usize, usize),
-    /// Error shake (D17): fires once on the RISING edge of
-    /// `drag_layer_blocked` (a cross-layer move rejected mid-drag) — a
-    /// 3px/240ms horizontal shake applied to every dragged clip.
+    /// Error shake (D17): fires once on the RISING edge of the move
+    /// payload's layer-blocked flag (a cross-layer move rejected mid-drag)
+    /// — a 3px/240ms horizontal shake applied to every dragged clip.
     /// `was_layer_blocked` detects the edge so a held-blocked drag doesn't
     /// re-fire every frame.
     error_shake: Transient,
@@ -495,17 +510,6 @@ impl InteractionOverlay {
         Self {
             clip_vertical_padding,
             drag: DragController::new(),
-            drag_anchor_clip_id: None,
-            drag_start_layer_index: 0,
-            drag_snapshots: Vec::with_capacity(8),
-            drag_snapshot_clip_ids: HashSet::with_capacity(8),
-            drag_selection_min_start_beat: Beats::ZERO,
-            drag_selection_min_layer: 0,
-            drag_selection_max_layer: 0,
-            drag_layer_blocked: false,
-            duplicate_on_release: false,
-            drag_start_beat: Beats::ZERO,
-            drag_offset_beats: Beats::ZERO,
             modifiers: Modifiers::NONE,
             lift_anim: AnimF32::new(0.0, color::MOTION_MED_MS),
             ghost_alpha: AnimF32::new(1.0, color::MOTION_MED_MS),
@@ -529,18 +533,20 @@ impl InteractionOverlay {
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         let mut any = false;
 
-        let dragging_move = matches!(self.drag.payload(), Some(TimelineDrag::Move));
-        if dragging_move {
+        let dragging_move = matches!(self.drag.payload(), Some(TimelineDrag::Move(_)));
+        let duplicate_on_release =
+            matches!(self.drag.payload(), Some(TimelineDrag::Move(m)) if m.duplicate_on_release);
+        if let Some(TimelineDrag::Move(m)) = self.drag.payload() {
             self.drag_visual_clip_ids.clear();
             self.drag_visual_clip_ids
-                .extend(self.drag_snapshot_clip_ids.iter().cloned());
+                .extend(m.snapshot_clip_ids.iter().cloned());
         }
 
         self.lift_anim.set_target(if dragging_move { 1.0 } else { 0.0 });
         any |= self.lift_anim.tick(dt_ms);
 
         self.ghost_alpha
-            .set_target(if dragging_move && self.duplicate_on_release { 0.5 } else { 1.0 });
+            .set_target(if dragging_move && duplicate_on_release { 0.5 } else { 1.0 });
         any |= self.ghost_alpha.tick(dt_ms);
 
         any |= self.settle_dx.tick(dt_ms);
@@ -629,7 +635,7 @@ impl InteractionOverlay {
     /// allocation.
     pub fn drag_readout_clip_id(&self) -> Option<ClipId> {
         match self.drag.payload() {
-            Some(TimelineDrag::Move) => self.drag_anchor_clip_id.clone(),
+            Some(TimelineDrag::Move(m)) => Some(m.anchor_clip_id.clone()),
             Some(TimelineDrag::TrimLeft(t)) | Some(TimelineDrag::TrimRight(t)) => Some(t.clip_id.clone()),
             _ => None,
         }
@@ -639,13 +645,6 @@ impl InteractionOverlay {
     /// Unity reads Keyboard.current inline; Rust stores the latest state here.
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
         self.modifiers = modifiers;
-    }
-
-    /// Capture the anchor clip's start beat and the grab offset for a move drag.
-    /// The single place move-drag geometry is recorded (formerly `UIState::begin_drag`).
-    fn begin_move(&mut self, anchor_start_beat: Beats, mouse_beat: Beats) {
-        self.drag_start_beat = anchor_start_beat;
-        self.drag_offset_beats = mouse_beat - anchor_start_beat;
     }
 
     /// Build the `TrimDrag` payload for a trim begin (P7.4): the grabbed
@@ -697,7 +696,12 @@ impl InteractionOverlay {
         viewport: &mut TimelineViewportPanel,
     ) {
         match self.drag_mode() {
-            DragMode::Move if self.drag_anchor_clip_id.is_some() => {
+            // P7.5 entry-proof: every path that arms `TimelineDrag::Move`
+            // also sets the anchor clip in the same synchronous call
+            // (`begin_move_drag`), so the anchor is non-optional by
+            // construction — this guard's old `.is_some()` condition was
+            // proven vacuous and is gone (see the landing commit).
+            DragMode::Move => {
                 self.handle_move_drag(mouse_screen_pos, host, ui_state, viewport);
             }
             DragMode::TrimLeft => {
@@ -1498,7 +1502,11 @@ impl InteractionOverlay {
                 press_pos.x, press_pos.y, self.drag_mode()
             );
         }
-        self.drag_layer_blocked = false;
+        // `layer_blocked` no longer needs a pre-emptive reset here — it's
+        // freshly initialized `false` inside `MoveDrag` at construction now
+        // (P7.5). `was_layer_blocked` stays a loose field (its lifetime
+        // needs to persist across the whole gesture for the rising-edge
+        // shake detector in `handle_move_drag`).
         self.was_layer_blocked = false;
 
         // P4 Unit A: grabbing an existing automation dot starts a point
@@ -1557,12 +1565,13 @@ impl InteractionOverlay {
             // Unity lines 322-324: body → move drag
             HitRegion::Body => {
                 // Alt/Opt-drag duplicates: remembered now, acted on at release.
-                self.duplicate_on_release = self.modifiers.alt;
+                let duplicate_on_release = self.modifiers.alt;
                 self.begin_move_drag(
                     &hit.clip_id,
                     hit.layer_index,
                     beat,
                     press_pos,
+                    duplicate_on_release,
                     host,
                     ui_state,
                     viewport,
@@ -1643,7 +1652,7 @@ impl InteractionOverlay {
         // the existing batch-commit logic below via the two flags captured
         // here (their own state still lives in the loose fields until
         // P7.4/P7.5 fold it onto the payload).
-        let ended_move;
+        let mut move_state: Option<MoveDrag> = None;
         let mut trim_state: Option<TrimDrag> = None;
         match self.drag.release() {
             // Unity lines 358-363: region select → finalize
@@ -1695,16 +1704,13 @@ impl InteractionOverlay {
                 host.set_cursor(TimelineCursor::Default);
                 return;
             }
-            Some(TimelineDrag::Move) => {
-                ended_move = true;
+            Some(TimelineDrag::Move(m)) => {
+                move_state = Some(m);
             }
             Some(TimelineDrag::TrimLeft(t)) | Some(TimelineDrag::TrimRight(t)) => {
-                ended_move = false;
                 trim_state = Some(t);
             }
-            None => {
-                ended_move = false;
-            }
+            None => {}
         }
 
         host.begin_command_batch();
@@ -1713,11 +1719,11 @@ impl InteractionOverlay {
         // of the clips that actually moved, accumulated in the record loop.
         let mut landed: Option<(Beats, usize, usize)> = None;
 
-        if ended_move {
+        if let Some(mv) = &move_state {
             // Unity lines 370-386: record commands. No finalize-snap step —
             // `handle_move_drag` already snapped+clamped this position on the
             // last frame (D5); there is nothing left to reconcile here.
-            for snapshot in &self.drag_snapshots {
+            for snapshot in &mv.snapshots {
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
                     let start_changed =
                         (clip.start_beat - snapshot.start_beat).abs() >= Beats(0.0001);
@@ -1741,7 +1747,7 @@ impl InteractionOverlay {
                         // Opt/Alt-drag: drop a copy back at the original position
                         // so the moved clip reads as the duplicate. Added to the
                         // same batch → one undo entry with the move.
-                        if self.duplicate_on_release {
+                        if mv.duplicate_on_release {
                             host.duplicate_clip_to(
                                 &snapshot.clip_id,
                                 snapshot.start_beat,
@@ -1753,8 +1759,8 @@ impl InteractionOverlay {
             }
 
             // Unity lines 407-416: enforce non-overlap on all dragged clips
-            for snapshot in &self.drag_snapshots {
-                host.enforce_non_overlap(&snapshot.clip_id, &self.drag_snapshot_clip_ids);
+            for snapshot in &mv.snapshots {
+                host.enforce_non_overlap(&snapshot.clip_id, &mv.snapshot_clip_ids);
             }
         } else if let Some(trim) = &trim_state {
             // Unity lines 390-401: record a trim command for every selected clip
@@ -1781,7 +1787,7 @@ impl InteractionOverlay {
 
             // Unity lines 417-421: enforce non-overlap on every trimmed clip,
             // ignoring the trimmed set itself so co-selected clips don't shove
-            // each other (mirrors the move path's drag_snapshot_clip_ids).
+            // each other (mirrors the move path's snapshot-clip-id set).
             let trimmed_ids: HashSet<ClipId> =
                 trim.originals.iter().map(|o| o.clip_id.clone()).collect();
             for id in &trimmed_ids {
@@ -1790,14 +1796,10 @@ impl InteractionOverlay {
         }
 
         // Unity lines 436-441: commit as composite command
-        let desc = if ended_move {
-            if self.duplicate_on_release {
-                "Duplicate clips"
-            } else {
-                "Move clips"
-            }
-        } else {
-            "Trim clips"
+        let desc = match &move_state {
+            Some(mv) if mv.duplicate_on_release => "Duplicate clips",
+            Some(_) => "Move clips",
+            None => "Trim clips",
         };
         host.commit_command_batch(desc);
 
@@ -1835,8 +1837,8 @@ impl InteractionOverlay {
     /// `Move`, `TrimLeft`, or `TrimRight`.
     pub fn cancel_drag(&mut self, host: &mut dyn TimelineEditingHost) {
         match self.drag.payload() {
-            Some(TimelineDrag::Move) => {
-                for snapshot in &self.drag_snapshots {
+            Some(TimelineDrag::Move(m)) => {
+                for snapshot in &m.snapshots {
                     host.set_clip_start_beat(&snapshot.clip_id, snapshot.start_beat);
                     if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id)
                         && clip.layer_index != snapshot.layer_index
@@ -1874,11 +1876,6 @@ impl InteractionOverlay {
         // `release()`; `cancel_drag`'s path has not, so this is where it
         // drops (no commit signal, per `cancel`'s contract).
         self.drag.cancel();
-        self.drag_snapshots.clear();
-        self.drag_snapshot_clip_ids.clear();
-        self.drag_anchor_clip_id = None;
-        self.duplicate_on_release = false;
-        self.drag_layer_blocked = false;
         host.mark_dirty();
         host.set_cursor(TimelineCursor::Default);
     }
@@ -1895,11 +1892,31 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &mut TimelineViewportPanel,
     ) {
-        if self.drag_anchor_clip_id.is_none() {
+        // P7.5: `layer_blocked`'s intermediate writes below need `&mut`
+        // access to the payload interleaved with `host`/`viewport` calls
+        // (separate objects, no conflict) and other `self` fields
+        // (`was_layer_blocked`, `error_shake` — disjoint fields, no
+        // conflict). `snapshots`'s lazy re-capture (mirrors the pre-fold
+        // "if empty, capture" discipline) runs first, via a payload_mut
+        // write, before anything below reads it.
+        if !matches!(self.drag.payload(), Some(TimelineDrag::Move(_))) {
             return;
         }
-        if self.drag_snapshots.is_empty() {
-            self.capture_drag_selection(ui_state, host);
+        let snapshots_empty = matches!(self.drag.payload(), Some(TimelineDrag::Move(m)) if m.snapshots.is_empty());
+        if snapshots_empty {
+            let anchor = match self.drag.payload() {
+                Some(TimelineDrag::Move(m)) => m.anchor_clip_id.clone(),
+                _ => return,
+            };
+            let (snapshots, snapshot_clip_ids, min_start_beat, min_layer, max_layer) =
+                Self::capture_drag_selection(ui_state, host, &anchor);
+            if let Some(TimelineDrag::Move(m)) = self.drag.payload_mut() {
+                m.snapshots = snapshots;
+                m.snapshot_clip_ids = snapshot_clip_ids;
+                m.selection_min_start_beat = min_start_beat;
+                m.selection_min_layer = min_layer;
+                m.selection_max_layer = max_layer;
+            }
         }
 
         // Unity line 470: auto-scroll (B11) — the P0 scroll owner advances
@@ -1913,23 +1930,24 @@ impl InteractionOverlay {
         let target_layer = viewport.layer_at_y(screen_pos.y);
         let mut layer_delta: i32 = 0;
         let total_layers = host.layer_count();
+        let mut layer_blocked = false;
 
         if let Some(target) = target_layer
             && total_layers > 0
+            && let Some(TimelineDrag::Move(m)) = self.drag.payload()
         {
-            layer_delta = target as i32 - self.drag_start_layer_index as i32;
-            let min_delta = -(self.drag_selection_min_layer as i32);
-            let max_delta = (total_layers as i32 - 1) - self.drag_selection_max_layer as i32;
+            layer_delta = target as i32 - m.start_layer_index as i32;
+            let min_delta = -(m.selection_min_layer as i32);
+            let max_delta = (total_layers as i32 - 1) - m.selection_max_layer as i32;
             layer_delta = layer_delta.clamp(min_delta, max_delta);
 
             // Unity lines 488-498: type compatibility check
-            self.drag_layer_blocked = false;
             if layer_delta != 0 {
-                for snapshot in &self.drag_snapshots {
+                for snapshot in &m.snapshots {
                     let dest = snapshot.layer_index as i32 + layer_delta;
                     if dest < 0 || dest >= total_layers as i32 {
                         layer_delta = 0;
-                        self.drag_layer_blocked = true;
+                        layer_blocked = true;
                         break;
                     }
                     // Check video↔generator compatibility
@@ -1937,30 +1955,37 @@ impl InteractionOverlay {
                     let dst_is_gen = host.layer_is_generator(dest as usize);
                     if src_is_gen != dst_is_gen {
                         layer_delta = 0;
-                        self.drag_layer_blocked = true;
+                        layer_blocked = true;
                         break;
                     }
                 }
             }
         }
+        if let Some(TimelineDrag::Move(m)) = self.drag.payload_mut() {
+            m.layer_blocked = layer_blocked;
+        }
 
         // Unity lines 503-506: cursor feedback
-        if self.drag_layer_blocked {
+        if layer_blocked {
             host.set_cursor(TimelineCursor::Blocked);
         } else {
             host.set_cursor(TimelineCursor::Move);
         }
 
-        // D17 error shake: fire once on the RISING edge of `drag_layer_blocked`
+        // D17 error shake: fire once on the RISING edge of `layer_blocked`
         // (a held-blocked drag must not re-fire every frame).
-        if self.drag_layer_blocked && !self.was_layer_blocked {
+        if layer_blocked && !self.was_layer_blocked {
             self.error_shake.fire(240.0);
         }
-        self.was_layer_blocked = self.drag_layer_blocked;
+        self.was_layer_blocked = layer_blocked;
+
+        let Some(TimelineDrag::Move(m)) = self.drag.payload() else {
+            return;
+        };
 
         // Unity lines 508-520: apply cross-layer moves
         if layer_delta != 0 {
-            for snapshot in &self.drag_snapshots {
+            for snapshot in &m.snapshots {
                 let target_layer = (snapshot.layer_index as i32 + layer_delta) as usize;
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id)
                     && target_layer != clip.layer_index
@@ -1974,12 +1999,16 @@ impl InteractionOverlay {
         // (formerly) `finalize_move_snap`, see `move_snap_delta` (D5). The
         // clip written here IS the committed result: nothing left to reconcile
         // at release.
-        let anchor_start_beat = mouse_beat - self.drag_offset_beats;
+        let anchor_start_beat = mouse_beat - m.offset_beats;
         let beat_delta = self.move_snap_delta(anchor_start_beat, viewport);
+
+        let Some(TimelineDrag::Move(m)) = self.drag.payload() else {
+            return;
+        };
 
         // Apply beat delta to all clips (direct mutation during drag — committed in OnEndDrag)
         // Unity line 533: movingClip.StartBeat = Max(0, snapshot.StartBeat + beatDelta)
-        for snapshot in &self.drag_snapshots {
+        for snapshot in &m.snapshots {
             let new_start = (snapshot.start_beat + beat_delta).max(Beats::ZERO);
             host.set_clip_start_beat(&snapshot.clip_id, new_start);
         }
@@ -2008,25 +2037,24 @@ impl InteractionOverlay {
     /// forking a second snap implementation. The floor clamp below is a
     /// separate invariant (D5) and still applies even when snap is bypassed.
     fn move_snap_delta(&self, candidate_anchor_beat: Beats, viewport: &TimelineViewportPanel) -> Beats {
+        let Some(TimelineDrag::Move(m)) = self.drag.payload() else {
+            return Beats::ZERO;
+        };
         let snapped = if self.modifiers.command {
             candidate_anchor_beat
         } else {
             viewport.magnetic_snap(
                 candidate_anchor_beat,
-                self.drag_start_layer_index,
-                &self
-                    .drag_snapshot_clip_ids
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                m.start_layer_index,
+                &m.snapshot_clip_ids.iter().cloned().collect::<Vec<_>>(),
             )
         };
-        let mut beat_delta = snapped - self.drag_start_beat;
+        let mut beat_delta = snapped - m.start_beat;
         // Clamp: don't let the leftmost clip go below beat 0. The ONE shared
         // clamp site on the move path — the per-snapshot `.max(Beats::ZERO)`
         // below is the per-clip floor applied where the model is actually
         // written, not a second independent clamp.
-        beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
+        beat_delta = beat_delta.max(-m.selection_min_start_beat);
         beat_delta
     }
 
@@ -2146,12 +2174,11 @@ impl InteractionOverlay {
         layer_index: usize,
         mouse_beat: Beats,
         press_pos: Vec2,
+        opt_duplicate: bool,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
         _viewport: &TimelineViewportPanel,
     ) {
-        self.drag.start(TimelineDrag::Move, press_pos);
-
         // Unity lines 598-648: region-partial move
         if let Some(region) = ui_state.current_region().cloned()
             && let Some(clip) = host.find_clip_by_id(clip_id)
@@ -2198,10 +2225,22 @@ impl InteractionOverlay {
                     if let Some(anchor) = anchor_id
                         && let Some(ac) = host.find_clip_by_id(&anchor)
                     {
-                        self.drag_anchor_clip_id = Some(anchor.clone());
-                        self.drag_start_layer_index = ac.layer_index;
-                        self.begin_move(ac.start_beat, mouse_beat);
-                        self.capture_drag_selection_from_ids(&split_result.interior_clip_ids, host);
+                        let (snapshots, snapshot_clip_ids, selection_min_start_beat, selection_min_layer, selection_max_layer) =
+                            Self::capture_move_selection_from_ids(&split_result.interior_clip_ids, host);
+                        let move_drag = MoveDrag {
+                            anchor_clip_id: anchor.clone(),
+                            start_layer_index: ac.layer_index,
+                            snapshots,
+                            snapshot_clip_ids,
+                            selection_min_start_beat,
+                            selection_min_layer,
+                            selection_max_layer,
+                            layer_blocked: false,
+                            duplicate_on_release: opt_duplicate,
+                            start_beat: ac.start_beat,
+                            offset_beats: mouse_beat - ac.start_beat,
+                        };
+                        self.drag.start(TimelineDrag::Move(move_drag), press_pos);
                         return;
                     }
                     // No interior clips — fall through to normal move
@@ -2215,18 +2254,44 @@ impl InteractionOverlay {
             ui_state.select_clip(ClipId::new(clip_id), lid);
             host.on_clip_selected(clip_id);
         }
-        self.drag_anchor_clip_id = Some(ClipId::new(clip_id));
-        self.drag_start_layer_index = layer_index;
-        if let Some(clip) = host.find_clip_by_id(clip_id) {
-            self.begin_move(clip.start_beat, mouse_beat);
-        }
-        self.capture_drag_selection(ui_state, host);
+        let anchor_clip_id = ClipId::new(clip_id);
+        let (start_beat, offset_beats) = match host.find_clip_by_id(clip_id) {
+            Some(clip) => (clip.start_beat, mouse_beat - clip.start_beat),
+            None => (Beats::ZERO, Beats::ZERO),
+        };
+        let (snapshots, snapshot_clip_ids, selection_min_start_beat, selection_min_layer, selection_max_layer) =
+            Self::capture_drag_selection(ui_state, host, &anchor_clip_id);
+        let move_drag = MoveDrag {
+            anchor_clip_id,
+            start_layer_index: layer_index,
+            snapshots,
+            snapshot_clip_ids,
+            selection_min_start_beat,
+            selection_min_layer,
+            selection_max_layer,
+            layer_blocked: false,
+            duplicate_on_release: opt_duplicate,
+            start_beat,
+            offset_beats,
+        };
+        self.drag.start(TimelineDrag::Move(move_drag), press_pos);
     }
 
     /// Port of Unity InteractionOverlay.CaptureDragSelection (lines 695-753).
-    fn capture_drag_selection(&mut self, ui_state: &UIState, host: &dyn TimelineEditingHost) {
-        self.drag_snapshots.clear();
-        self.drag_snapshot_clip_ids.clear();
+    /// Returns `(snapshots, snapshot_clip_ids, min_start_beat, min_layer,
+    /// max_layer)` for the `MoveDrag` constructor (P7.5) — `fallback_anchor`
+    /// is the grabbed clip, consulted only if nothing in the CURRENT
+    /// selection captures (Unity's anchor-only fallback).
+    fn capture_drag_selection(
+        ui_state: &UIState,
+        host: &dyn TimelineEditingHost,
+        fallback_anchor: &ClipId,
+    ) -> (Vec<DragSnapshot>, HashSet<ClipId>, Beats, usize, usize) {
+        let mut snapshots = Vec::new();
+        let mut snapshot_clip_ids = HashSet::new();
+        let mut min_start_beat = Beats::ZERO;
+        let mut min_layer = 0usize;
+        let mut max_layer = 0usize;
 
         let selected_ids = ui_state.get_selected_clip_ids();
         let mut found_any = false;
@@ -2236,58 +2301,54 @@ impl InteractionOverlay {
                 if clip.is_locked {
                     continue;
                 }
-                self.drag_snapshots.push(DragSnapshot {
+                snapshots.push(DragSnapshot {
                     clip_id: id.clone(),
                     start_beat: clip.start_beat,
                     layer_index: clip.layer_index,
                 });
-                self.drag_snapshot_clip_ids.insert(id.clone());
+                snapshot_clip_ids.insert(id.clone());
 
                 if !found_any {
-                    self.drag_selection_min_start_beat = clip.start_beat;
-                    self.drag_selection_min_layer = clip.layer_index;
-                    self.drag_selection_max_layer = clip.layer_index;
+                    min_start_beat = clip.start_beat;
+                    min_layer = clip.layer_index;
+                    max_layer = clip.layer_index;
                     found_any = true;
                 } else {
-                    self.drag_selection_min_start_beat =
-                        self.drag_selection_min_start_beat.min(clip.start_beat);
-                    self.drag_selection_min_layer =
-                        self.drag_selection_min_layer.min(clip.layer_index);
-                    self.drag_selection_max_layer =
-                        self.drag_selection_max_layer.max(clip.layer_index);
+                    min_start_beat = min_start_beat.min(clip.start_beat);
+                    min_layer = min_layer.min(clip.layer_index);
+                    max_layer = max_layer.max(clip.layer_index);
                 }
             }
         }
 
         // Unity lines 740-753: fallback — anchor clip only
         if !found_any
-            && let Some(ref anchor_id) = self.drag_anchor_clip_id
-            && let Some(clip) = host.find_clip_by_id(anchor_id)
+            && let Some(clip) = host.find_clip_by_id(fallback_anchor)
         {
-            self.drag_snapshots.push(DragSnapshot {
-                clip_id: anchor_id.clone(),
+            snapshots.push(DragSnapshot {
+                clip_id: fallback_anchor.clone(),
                 start_beat: clip.start_beat,
                 layer_index: clip.layer_index,
             });
-            self.drag_snapshot_clip_ids.insert(anchor_id.clone());
-            self.drag_selection_min_start_beat = clip.start_beat;
-            self.drag_selection_min_layer = clip.layer_index;
-            self.drag_selection_max_layer = clip.layer_index;
+            snapshot_clip_ids.insert(fallback_anchor.clone());
+            min_start_beat = clip.start_beat;
+            min_layer = clip.layer_index;
+            max_layer = clip.layer_index;
         }
+
+        (snapshots, snapshot_clip_ids, min_start_beat, min_layer, max_layer)
     }
 
     /// Port of Unity InteractionOverlay.CaptureDragSelectionFromClips (lines 665-693).
-    fn capture_drag_selection_from_ids(
-        &mut self,
+    fn capture_move_selection_from_ids(
         clip_ids: &[ClipId],
         host: &dyn TimelineEditingHost,
-    ) {
-        self.drag_snapshots.clear();
-        self.drag_snapshot_clip_ids.clear();
-
-        if clip_ids.is_empty() {
-            return;
-        }
+    ) -> (Vec<DragSnapshot>, HashSet<ClipId>, Beats, usize, usize) {
+        let mut snapshots = Vec::new();
+        let mut snapshot_clip_ids = HashSet::new();
+        let mut min_start_beat = Beats::ZERO;
+        let mut min_layer = 0usize;
+        let mut max_layer = 0usize;
 
         let mut first = true;
         for id in clip_ids {
@@ -2295,28 +2356,27 @@ impl InteractionOverlay {
                 if clip.is_locked {
                     continue;
                 }
-                self.drag_snapshots.push(DragSnapshot {
+                snapshots.push(DragSnapshot {
                     clip_id: id.clone(),
                     start_beat: clip.start_beat,
                     layer_index: clip.layer_index,
                 });
-                self.drag_snapshot_clip_ids.insert(id.clone());
+                snapshot_clip_ids.insert(id.clone());
 
                 if first {
-                    self.drag_selection_min_start_beat = clip.start_beat;
-                    self.drag_selection_min_layer = clip.layer_index;
-                    self.drag_selection_max_layer = clip.layer_index;
+                    min_start_beat = clip.start_beat;
+                    min_layer = clip.layer_index;
+                    max_layer = clip.layer_index;
                     first = false;
                 } else {
-                    self.drag_selection_min_start_beat =
-                        self.drag_selection_min_start_beat.min(clip.start_beat);
-                    self.drag_selection_min_layer =
-                        self.drag_selection_min_layer.min(clip.layer_index);
-                    self.drag_selection_max_layer =
-                        self.drag_selection_max_layer.max(clip.layer_index);
+                    min_start_beat = min_start_beat.min(clip.start_beat);
+                    min_layer = min_layer.min(clip.layer_index);
+                    max_layer = max_layer.max(clip.layer_index);
                 }
             }
         }
+
+        (snapshots, snapshot_clip_ids, min_start_beat, min_layer, max_layer)
     }
 
     // ────────────────────────────────────────────────────────────
@@ -3936,6 +3996,26 @@ mod motion_tests {
         InteractionOverlay::new(6.0)
     }
 
+    /// A minimal `MoveDrag` payload for driving the motion tests below —
+    /// only `snapshot_clip_ids` (what `tick()` copies into the visual-tween
+    /// target set) and `duplicate_on_release` (the ghost-alpha target) vary
+    /// per test; everything else is an inert placeholder.
+    fn move_drag_for(snapshot_clip_ids: &[&str], duplicate_on_release: bool) -> MoveDrag {
+        MoveDrag {
+            anchor_clip_id: ClipId::new("anchor"),
+            start_layer_index: 0,
+            snapshots: Vec::new(),
+            snapshot_clip_ids: snapshot_clip_ids.iter().map(|id| ClipId::new(*id)).collect(),
+            selection_min_start_beat: Beats::ZERO,
+            selection_min_layer: 0,
+            selection_max_layer: 0,
+            layer_blocked: false,
+            duplicate_on_release,
+            start_beat: Beats::ZERO,
+            offset_beats: Beats::ZERO,
+        }
+    }
+
     #[test]
     fn lift_and_ghost_target_zero_and_one_when_idle() {
         let mut ov = overlay();
@@ -3950,8 +4030,7 @@ mod motion_tests {
     #[test]
     fn move_drag_ramps_lift_up_and_settles_to_one() {
         let mut ov = overlay();
-        ov.drag.start(TimelineDrag::Move, Vec2::ZERO);
-        ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
+        ov.drag.start(TimelineDrag::Move(move_drag_for(&["clip-a"], false)), Vec2::ZERO);
 
         ov.tick(16.0);
         assert!(ov.lift_amount() > 0.0, "lift starts rising the first tick of a move drag");
@@ -3966,9 +4045,7 @@ mod motion_tests {
     #[test]
     fn alt_duplicate_drag_dims_ghost_then_solidifies_on_release() {
         let mut ov = overlay();
-        ov.drag.start(TimelineDrag::Move, Vec2::ZERO);
-        ov.duplicate_on_release = true;
-        ov.drag_snapshot_clip_ids.insert(ClipId::new("clip-a"));
+        ov.drag.start(TimelineDrag::Move(move_drag_for(&["clip-a"], true)), Vec2::ZERO);
 
         ov.tick(color::MOTION_MED_MS);
         assert!(
@@ -3979,7 +4056,6 @@ mod motion_tests {
 
         // Release: drag_mode drops, ghost eases back up ("solidifies").
         ov.drag.cancel();
-        ov.duplicate_on_release = false;
         ov.tick(color::MOTION_MED_MS);
         assert_eq!(ov.ghost_alpha(), 1.0, "fully solid once settled post-release");
         // The clip stays a visual target until every tween has caught up —
