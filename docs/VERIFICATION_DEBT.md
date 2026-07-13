@@ -84,12 +84,13 @@ run the orchestrator executed and whose `.mov` it opened. **Two carried gaps:**
 execution is Peter's pre-gig ritual on the rig; the short soak is the wave's proxy, so the show
 configuration at full data volume (~17.5 GB, past every historical failure threshold) is L2/proxy,
 not L4/real. Close when Peter runs the full soak and it PASSes on the rig.
-(b) **BUG-086** (unpaced-mode audio-coverage shortfall) is logged, not fixed. A `--realtime`
-2-minute run gave full audio (120.0s), so show-path severity is assessed LOW and the fix is
-deferred — but the silent `LR_OK`-on-drop native path has no counter/log and stays a latent
-audio-loss risk until fixed. Revisit-upward trigger: the full-scale soak's audio figure coming
-in materially short. Close when the native audio-drop path gets a counter/log (BUG-085's sibling
-fix) or the full soak confirms no scaling.
+(b) **BUG-086 CLOSED 2026-07-13** (recording-sync lane) — root cause found and fixed: the
+shortfall was `recording_soak.rs`'s own synthetic-audio ring-buffer pusher silently discarding
+overflow under unpaced/encoder-stress timing bursts, not the native encoder (whose backpressure
+gate measured 0 drops throughout, both before and after this fix, and was hardened separately
+per the class rule). Verified: 3x paced 2-min 1080p soaks at <0.01% off intended duration, and
+the unpaced repro that previously fell short by 1.2-3.3% now measures full coverage across 3
+reruns. See `docs/BUG_BACKLOG.md` BUG-086 for the full diagnosis.
 
 ### VD-021 — PROJECT_FILE_INTEGRITY P1: save durability under power loss — L1 reached / L1 carried
 Landed 2026-07-09 (`docs/landings/2026-07-09-project-file-integrity.md`). `save_v2_archive` now
