@@ -98,6 +98,64 @@ fn load_report_is_empty_for_a_clean_project() {
     assert!(project.load_report.human_lines().is_empty());
 }
 
+/// BUG-079: a master effect referencing an unregistered preset def (no
+/// `preset_definition_registry` entry, no inline generator `meta.params`)
+/// must not degrade silently. `build_param_manifest`'s keep-don't-drop
+/// branch already kept the saved param on a placeholder spec instead of
+/// dropping it (BUG-036) — this proves the loader now ALSO counts it into
+/// `load_report.unresolved_preset_templates`, so the "opened with repairs"
+/// toast in `manifold-app` names it instead of the count staying console-only
+/// (the `eprintln!` in `effects.rs::build_param_manifest`).
+#[test]
+fn load_report_surfaces_an_unresolvable_preset_def() {
+    let project = Project::default();
+    let json = serde_json::to_string(&project).expect("serialize");
+    let mut value: serde_json::Value = serde_json::from_str(&json).expect("reparse");
+
+    let effects = value["settings"]["masterEffects"]
+        .as_array_mut()
+        .expect("masterEffects should serialize as an array");
+    effects.push(serde_json::json!({
+        "id": "ghost-effect-1",
+        "effectType": "TotallyMadeUpEffectTypeNobodyRegisters",
+        "enabled": true,
+        "collapsed": false,
+        "params": {
+            "someSavedParam": { "value": 0.42, "exposed": true }
+        }
+    }));
+
+    let rewritten = serde_json::to_string(&value).expect("reserialize");
+    let loaded =
+        manifold_io::loader::load_project_from_json(&rewritten).expect("project must still load");
+
+    assert_eq!(
+        loaded.load_report.unresolved_preset_templates, 1,
+        "expected the unregistered preset def to be counted, got {:?}",
+        loaded.load_report
+    );
+    assert!(!loaded.load_report.is_empty());
+
+    let lines = loaded.load_report.human_lines();
+    assert!(
+        lines.iter().any(|l| l.contains("unresolved preset")),
+        "human_lines should name the unresolved-preset repair: {lines:?}"
+    );
+
+    // Keep-don't-drop (BUG-036): the saved param survives on the instance
+    // rather than vanishing.
+    let ghost = loaded
+        .settings
+        .master_effects
+        .iter()
+        .find(|fx| fx.effect_type().as_str() == "TotallyMadeUpEffectTypeNobodyRegisters")
+        .expect("the unresolvable effect must still be present, not dropped");
+    assert!(
+        ghost.params.get("someSavedParam").is_some(),
+        "the saved param must be kept on a placeholder spec, not dropped"
+    );
+}
+
 /// `#[serde(skip)]` proof: a save→reload round-trip never writes
 /// `loadReport`/`load_report` onto disk, and a freshly-parsed project's
 /// report starts empty regardless of what the in-memory source held.

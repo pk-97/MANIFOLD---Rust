@@ -2501,8 +2501,62 @@ impl Drop for AbletonBridge {
 
 // ── OSC argument extraction helpers ────────────���──────────────────
 
+/// Whether the last `send_osc_to` attempt failed. Gates the warn/debug
+/// throttle below — flips back to `false` (and logs a reconnect) the moment
+/// a send succeeds again.
+///
+/// A bare `static` (not per-`AbletonBridge`-instance state) because
+/// `send_osc_to` is a free function called from many sites that already
+/// hold a mutable borrow of some other `AbletonBridge` field (see the
+/// doc comment on the function) — threading a `&mut self` field through
+/// every call site would fight those borrows for no benefit; there is one
+/// bridge per process and the atomic only throttles log volume, never
+/// drives behavior.
+static OSC_SEND_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// What `send_osc_to` should log for this outcome, decided by
+/// [`note_send_outcome`]. Split out as a pure state transition (no I/O, no
+/// logging) so it can be unit-tested without touching a real socket or the
+/// global log sink.
+#[derive(Debug, PartialEq, Eq)]
+enum SendLogAction {
+    /// Nothing worth logging (steady-state success, or a failure that's
+    /// already been reported and downgraded).
+    Silent,
+    /// First failure since the last success — log at WARN.
+    WarnFirst,
+    /// A repeat of an already-reported failure — log at DEBUG.
+    DebugRepeat,
+    /// A send just succeeded after one or more failures — log at INFO.
+    InfoReconnected,
+}
+
+/// Advance the throttle state machine for one send outcome. `flag` tracks
+/// "the previous attempt failed" — `swap` both reads and updates it
+/// atomically in one step, so this is safe to call from a single-threaded
+/// context (as `send_osc_to` is) without a lock.
+fn note_send_outcome(flag: &AtomicBool, ok: bool) -> SendLogAction {
+    if ok {
+        if flag.swap(false, Ordering::Relaxed) {
+            SendLogAction::InfoReconnected
+        } else {
+            SendLogAction::Silent
+        }
+    } else if flag.swap(true, Ordering::Relaxed) {
+        SendLogAction::DebugRepeat
+    } else {
+        SendLogAction::WarnFirst
+    }
+}
+
 /// Free function to send OSC — avoids borrow conflicts when called alongside
 /// mutable borrows of other `AbletonBridge` fields.
+///
+/// When Ableton isn't running, `sock.send` fails with "Connection refused"
+/// on every heartbeat (~1.5s) — BUG-038: this spammed WARN indefinitely.
+/// Now: warn once on the first failure, downgrade repeated identical
+/// failures to DEBUG, and log an INFO "reconnected" the moment a send
+/// succeeds again.
 fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]) {
     if let Some(sock) = socket {
         let msg = rosc::OscMessage {
@@ -2511,11 +2565,22 @@ fn send_osc_to(socket: &Option<UdpSocket>, address: &str, args: &[rosc::OscType]
         };
         let packet = rosc::OscPacket::Message(msg);
         match rosc::encoder::encode(&packet) {
-            Ok(buf) => {
-                if let Err(e) = sock.send(&buf) {
-                    log::warn!("[AbletonBridge] OSC send failed for {address}: {e}");
+            Ok(buf) => match sock.send(&buf) {
+                Ok(_) => {
+                    if note_send_outcome(&OSC_SEND_FAILED, true) == SendLogAction::InfoReconnected
+                    {
+                        log::info!("[AbletonBridge] OSC send reconnected");
+                    }
                 }
-            }
+                Err(e) => match note_send_outcome(&OSC_SEND_FAILED, false) {
+                    SendLogAction::DebugRepeat => {
+                        log::debug!("[AbletonBridge] OSC send failed for {address}: {e}");
+                    }
+                    _ => {
+                        log::warn!("[AbletonBridge] OSC send failed for {address}: {e}");
+                    }
+                },
+            },
             Err(e) => {
                 log::error!("[AbletonBridge] OSC encode error: {e:?}");
             }
@@ -3194,5 +3259,32 @@ mod tests {
         assert_eq!(fast.1, rosc_did);
         assert_eq!(fast.2, rosc_pid);
         assert!((fast.3 - rosc_val).abs() < f32::EPSILON);
+    }
+
+    // BUG-038: repeated identical OSC-send failures (Ableton not running)
+    // must warn once, then downgrade to DEBUG until a send succeeds again,
+    // at which point a single INFO reconnect log fires. Uses a local
+    // AtomicBool (not the module `OSC_SEND_FAILED` static) so this test is
+    // isolated from others running in parallel.
+    #[test]
+    fn osc_send_throttle_warns_once_then_downgrades_then_reconnects() {
+        let flag = AtomicBool::new(false);
+
+        // First failure — WARN.
+        assert_eq!(note_send_outcome(&flag, false), SendLogAction::WarnFirst);
+        // Repeated failures while still down — DEBUG, not WARN again.
+        assert_eq!(note_send_outcome(&flag, false), SendLogAction::DebugRepeat);
+        assert_eq!(note_send_outcome(&flag, false), SendLogAction::DebugRepeat);
+
+        // A send succeeds — one INFO reconnect log.
+        assert_eq!(
+            note_send_outcome(&flag, true),
+            SendLogAction::InfoReconnected
+        );
+        // Steady-state success afterward is silent.
+        assert_eq!(note_send_outcome(&flag, true), SendLogAction::Silent);
+
+        // A fresh failure after recovering warns again (not DEBUG).
+        assert_eq!(note_send_outcome(&flag, false), SendLogAction::WarnFirst);
     }
 }
