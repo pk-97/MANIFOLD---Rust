@@ -206,6 +206,31 @@ impl InputAccess {
     }
 }
 
+/// Render a node's fusion classification as the single stable string both
+/// `catalog_gen` (the `fusion` catalog field, design D3) and `graph_tool
+/// fusion` (design D2/D10) print — one implementation, so the catalog and
+/// the CLI can never disagree about what a `FusionKind`/`BoundaryReason`
+/// pair means: `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+/// `"boundary:<reason_snake_case>"`.
+pub fn fusion_kind_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
+    match node.fusion_kind() {
+        FusionKind::Pointwise => "pointwise".to_string(),
+        FusionKind::Source => "source".to_string(),
+        FusionKind::MultiInputCoincident => "multi_input_coincident".to_string(),
+        FusionKind::Boundary => match node.boundary_reason() {
+            Some(BoundaryReason::NonGpu) => "boundary:non_gpu".to_string(),
+            Some(BoundaryReason::BarrieredReduction) => "boundary:barriered_reduction".to_string(),
+            Some(BoundaryReason::CrossFrameState) => "boundary:cross_frame_state".to_string(),
+            Some(BoundaryReason::IoBridge) => "boundary:io_bridge".to_string(),
+            Some(BoundaryReason::DrawCall) => "boundary:draw_call".to_string(),
+            Some(BoundaryReason::FusedBundle) => "boundary:fused_bundle".to_string(),
+            Some(BoundaryReason::Blocked) => "boundary:blocked".to_string(),
+            Some(BoundaryReason::ConversionDebt) => "boundary:conversion_debt".to_string(),
+            None => "boundary:undeclared".to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FusionKind;

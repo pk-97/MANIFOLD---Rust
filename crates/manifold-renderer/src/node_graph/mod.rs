@@ -117,6 +117,7 @@ pub use snapshot::{
 /// Crate-internal: the `ParamValue → f32` flattening the live-value tap shares
 /// with the structural snapshot, so frozen and live values format identically.
 pub(crate) use snapshot::param_default_to_f32;
+pub use freeze::{FusionReport, NodeFusionInfo, RegionSummary, fusion_report};
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validate::{ValidateKind, ValidationIssue, ValidationReport, validate_def};
 pub use validation::{

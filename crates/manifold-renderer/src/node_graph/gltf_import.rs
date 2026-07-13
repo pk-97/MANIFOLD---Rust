@@ -1252,6 +1252,93 @@ mod tests {
             .expect("grouped import graph must build through PresetRuntime::from_def");
     }
 
+    /// GRAPH_TOOLING_DESIGN D6: `assemble_import_graph`'s output must be
+    /// validated through `validate_def` before it reaches the project — the
+    /// assembler is code and has bugs. This proves the mechanism the
+    /// `manifold-app` importer hook relies on: a deliberately corrupted
+    /// assembler-style def (one node's `type_id` rewritten to a type the
+    /// registry doesn't know) fails `validate_def` with an issue naming that
+    /// node, never silently. Fixture-free — reuses the synthetic two-material
+    /// summary from `build_import_graph_groups_each_object_and_flattens_to_flat_wiring`.
+    #[test]
+    fn corrupted_assembler_output_fails_validation_naming_the_node() {
+        use super::gltf_load::GltfMaterialInfo;
+        use crate::node_graph::{ValidateKind, validate_def};
+        use manifold_gpu::GpuDevice;
+
+        let mat = |material_index: u32, name: &str, verts: u32, tex: Option<u32>| GltfMaterialInfo {
+            material_index,
+            name: Some(name.to_string()),
+            base_color_factor: [0.5, 0.5, 0.5, 1.0],
+            metallic: 0.0,
+            roughness: 0.6,
+            emissive: [0.0, 0.0, 0.0],
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: tex,
+            vertex_count: verts,
+        };
+        let summary = GltfImportSummary {
+            materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_model.glb");
+        let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");
+
+        // Corrupt exactly one node's type_id to something the registry has
+        // never heard of — the "assembler wrote a typo" failure class.
+        // The producer nodes live inside a group's body (see
+        // `build_import_graph_groups_each_object_and_flattens_to_flat_wiring`
+        // above), so search recursively rather than only the top level.
+        fn find_pbr_material_mut(
+            nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode],
+        ) -> Option<&mut manifold_core::effect_graph_def::EffectGraphNode> {
+            for n in nodes {
+                if n.type_id == "node.pbr_material" {
+                    return Some(n);
+                }
+                if let Some(group) = n.group.as_mut()
+                    && let Some(found) = find_pbr_material_mut(&mut group.nodes)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        const CORRUPT_TYPE_ID: &str = "node.definitely_not_a_real_type";
+        {
+            let target = find_pbr_material_mut(&mut def.nodes)
+                .expect("assembled graph has a pbr_material node to corrupt");
+            target.type_id = CORRUPT_TYPE_ID.to_string();
+        }
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let device = GpuDevice::new();
+        let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
+
+        assert!(
+            !report.is_valid(),
+            "a def with an unknown type_id must fail validate_def, not pass silently"
+        );
+        // Match by type_id, not doc_id: `validate_def` flattens groups before
+        // classifying (this def's producers live inside a group), and
+        // flattening renumbers doc ids via a fresh `IdAlloc` — the corrupted
+        // node's ORIGINAL id doesn't survive to the error, but its (equally
+        // corrupted) type_id does, and the reported node_id still names a
+        // real node in the flattened def the error is about.
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|issue| issue.type_id.as_deref() == Some(CORRUPT_TYPE_ID) && issue.node_id.is_some()),
+            "expected an error naming a node with the corrupted type_id; got: {:?}",
+            report.errors
+        );
+    }
+
     /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
     /// failure (Peter, 2026-07-05), REWRITTEN for
     /// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/P2 — the original

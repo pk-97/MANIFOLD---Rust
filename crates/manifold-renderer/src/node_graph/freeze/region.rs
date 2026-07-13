@@ -63,8 +63,13 @@ type SpaceMap = Option<AHashMap<(u32, String), ElementSpace>>;
 const MIN_REGION_LEN: usize = 2;
 
 /// How a graph node participates in fusion, resolved once per node.
+///
+/// `pub(crate)` (with [`classify_node`]) since GRAPH_TOOLING_DESIGN P3's
+/// `graph_tool fusion` verb calls it directly for its per-node report — the
+/// exact same classification `partition_regions` grows regions from, never
+/// a second implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum NodeClass {
+pub(crate) enum NodeClass {
     /// A same-element-space atom that folds into a fused kernel: a pointwise /
     /// coincident atom threading its input register(s), or a Source generator
     /// producing the region's head value from position. Writes one texture output.
@@ -901,7 +906,11 @@ pub(crate) fn configured_construct(
 
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
-fn classify_node(
+///
+/// `pub(crate)`: `graph_tool fusion`'s report module calls this directly per
+/// node (GRAPH_TOOLING_DESIGN P3) to explain *why* a node sits outside every
+/// region — reusing this exact function rather than re-deriving the verdict.
+pub(crate) fn classify_node(
     node: &EffectGraphNode,
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,

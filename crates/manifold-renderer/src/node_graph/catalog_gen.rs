@@ -92,25 +92,11 @@ struct NodeRow {
 }
 
 /// Render a node's fusion classification for the catalog (design doc D3).
+/// Thin alias — the actual rendering lives in
+/// `freeze::classify::fusion_kind_str` (shared with `graph_tool fusion`,
+/// design D2/D10, so the catalog and the CLI verb can never disagree).
 fn fusion_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
-    use crate::node_graph::freeze::classify::{BoundaryReason, FusionKind};
-
-    match node.fusion_kind() {
-        FusionKind::Pointwise => "pointwise".to_string(),
-        FusionKind::Source => "source".to_string(),
-        FusionKind::MultiInputCoincident => "multi_input_coincident".to_string(),
-        FusionKind::Boundary => match node.boundary_reason() {
-            Some(BoundaryReason::NonGpu) => "boundary:non_gpu".to_string(),
-            Some(BoundaryReason::BarrieredReduction) => "boundary:barriered_reduction".to_string(),
-            Some(BoundaryReason::CrossFrameState) => "boundary:cross_frame_state".to_string(),
-            Some(BoundaryReason::IoBridge) => "boundary:io_bridge".to_string(),
-            Some(BoundaryReason::DrawCall) => "boundary:draw_call".to_string(),
-            Some(BoundaryReason::FusedBundle) => "boundary:fused_bundle".to_string(),
-            Some(BoundaryReason::Blocked) => "boundary:blocked".to_string(),
-            Some(BoundaryReason::ConversionDebt) => "boundary:conversion_debt".to_string(),
-            None => "boundary:undeclared".to_string(),
-        },
-    }
+    crate::node_graph::freeze::classify::fusion_kind_str(node)
 }
 
 struct PortRow {
