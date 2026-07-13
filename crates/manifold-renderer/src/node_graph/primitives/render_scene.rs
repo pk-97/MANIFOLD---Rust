@@ -726,6 +726,60 @@ impl RenderScene {
             })
     }
 
+    /// BUG-037: compile every `pipeline_for` (`MaterialKind`, `emit_velocity`)
+    /// variant into `device`'s shared render-pipeline cache ahead of time.
+    /// `pipeline_for` compiles the requested variant lazily on the first draw
+    /// that needs it — a real Metal render-pipeline compile (multisampled,
+    /// alpha-to-coverage), tens of ms — which is what stalled the content
+    /// thread ~37ms on a glTF scene layer's first rendered frame
+    /// (`RENDER_TRACE` showed `generators=37.1ms`). The device's pipeline
+    /// cache (`manifold-gpu`, keyed by shader hash) is shared across every
+    /// `RenderScene` instance and every layer, so warming all 8 fixed
+    /// variants once — independent of any specific project or asset — makes
+    /// every later `pipeline_for` call, on any layer, a cache hit. Called
+    /// from `GeneratorRegistry::prewarm_all` at app startup, the same
+    /// sanctioned "compile pipelines ahead of the hot path" mechanism used
+    /// for the bundled JSON generator presets.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        for kind in [
+            MaterialKind::Unlit,
+            MaterialKind::Phong,
+            MaterialKind::Pbr,
+            MaterialKind::Cel,
+        ] {
+            let fs_entry = match kind {
+                MaterialKind::Unlit => "fs_unlit",
+                MaterialKind::Phong => "fs_phong",
+                MaterialKind::Pbr => "fs_pbr",
+                MaterialKind::Cel => "fs_cel",
+            };
+            device.create_render_pipeline_depth_msaa(
+                include_str!("shaders/render_scene.wgsl"),
+                "vs_main",
+                fs_entry,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                None,
+                MSAA_SAMPLES,
+                true,
+                "node.render_scene",
+            );
+            device.create_specialized_render_pipeline_depth_msaa(
+                include_str!("shaders/render_scene.wgsl"),
+                "vs_main",
+                fs_entry,
+                Self::VELOCITY_SPECIALIZATIONS,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                None,
+                MSAA_SAMPLES,
+                true,
+                Some(manifold_gpu::GpuTextureFormat::Rg16Float),
+                "node.render_scene.velocity",
+            );
+        }
+    }
+
     /// AI-composition surface metadata.
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
@@ -1803,6 +1857,49 @@ mod tests {
             plan.resource_format(depth_res.unwrap()),
             Some(manifold_gpu::GpuTextureFormat::R32Float),
             "depth's resource_format must be R32Float at compile time"
+        );
+    }
+}
+
+/// BUG-037 — GPU-backed proof `prewarm_pipelines` actually populates the
+/// device's shared render-pipeline cache, so a later `pipeline_for` call (on
+/// any layer, any project) is a cache hit instead of a lazy first-draw
+/// compile. Run deliberately: `cargo test -p manifold-renderer --features
+/// gpu-proofs node_graph::primitives::render_scene::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn prewarm_pipelines_populates_the_shared_render_cache() {
+        let device = crate::test_device();
+        let before = device.render_pipeline_cache_len();
+        RenderScene::prewarm_pipelines(&device);
+        let after = device.render_pipeline_cache_len();
+        assert!(
+            after > before,
+            "prewarm_pipelines must add cache entries: before={before} after={after}"
+        );
+
+        // Idempotent: a second call must not grow the cache further (every
+        // variant already hit).
+        RenderScene::prewarm_pipelines(&device);
+        assert_eq!(
+            device.render_pipeline_cache_len(),
+            after,
+            "a second prewarm pass must be a pure cache hit, not add more entries"
+        );
+
+        // The exact combination `pipeline_for` would compile lazily on a
+        // glTF scene layer's first draw must already be warm — proves this
+        // isn't just "some pipeline got created."
+        let mut scene = RenderScene::default();
+        let cache_before_use = device.render_pipeline_cache_len();
+        scene.pipeline_for(&device, MaterialKind::Pbr, false);
+        assert_eq!(
+            device.render_pipeline_cache_len(),
+            cache_before_use,
+            "pipeline_for after prewarm must be a cache hit, not compile a new pipeline"
         );
     }
 }

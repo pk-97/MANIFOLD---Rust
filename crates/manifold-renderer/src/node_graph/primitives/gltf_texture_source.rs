@@ -271,6 +271,26 @@ impl Primitive for GltfTextureSource {
 }
 
 impl GltfTextureSource {
+    /// BUG-037: compile the stretch-blit compute pipeline into `device`'s
+    /// shared compute-pipeline cache ahead of time. `run()` step 7 only
+    /// reaches `self.pipeline.get_or_insert_with(...)` once a texture has
+    /// actually decoded, so on a project's first glTF texture the compile
+    /// (real MSL compile) lands on the same frame as the decode — part of
+    /// the content-thread stall this bug reports. The shader source and
+    /// entry point are fixed (no project data involved), and the device's
+    /// pipeline cache is keyed by shader hash and shared across every
+    /// `GltfTextureSource` instance, so warming it once here makes every
+    /// later `get_or_insert_with` a cache hit regardless of which layer or
+    /// asset triggers it first. Called from `GeneratorRegistry::prewarm_all`
+    /// at app startup, alongside `RenderScene::prewarm_pipelines`.
+    pub fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
+        device.create_compute_pipeline(
+            include_str!("shaders/gltf_texture_blit.wgsl"),
+            "cs_main",
+            "node.gltf_texture_source",
+        );
+    }
+
     fn ensure_texture(
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
@@ -364,5 +384,50 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         let params = params_at(1024.0, 1024.0);
         assert_eq!(node.output_dims("nonexistent", (1920, 1080), &[], &params), None);
+    }
+}
+
+/// BUG-037 — GPU-backed proof `prewarm_pipeline` actually populates the
+/// device's shared compute-pipeline cache, so the first glTF texture that
+/// decodes in a live project hits `run()` step 7's
+/// `self.pipeline.get_or_insert_with(...)` as a cache hit rather than
+/// compiling the blit shader on the content thread. Run deliberately:
+/// `cargo test -p manifold-renderer --features gpu-proofs
+/// node_graph::primitives::gltf_texture_source::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn prewarm_pipeline_populates_the_shared_compute_cache() {
+        let device = crate::test_device();
+        let before = device.compute_pipeline_cache_len();
+        GltfTextureSource::prewarm_pipeline(&device);
+        let after = device.compute_pipeline_cache_len();
+        assert!(
+            after > before,
+            "prewarm_pipeline must add a cache entry: before={before} after={after}"
+        );
+
+        // Idempotent.
+        GltfTextureSource::prewarm_pipeline(&device);
+        assert_eq!(
+            device.compute_pipeline_cache_len(),
+            after,
+            "a second prewarm pass must be a pure cache hit"
+        );
+
+        // The exact call `run()` step 7 makes must now be a cache hit.
+        let cache_before_use = device.compute_pipeline_cache_len();
+        device.create_compute_pipeline(
+            include_str!("shaders/gltf_texture_blit.wgsl"),
+            "cs_main",
+            "node.gltf_texture_source",
+        );
+        assert_eq!(
+            device.compute_pipeline_cache_len(),
+            cache_before_use,
+            "the blit pipeline compile after prewarm must be a cache hit"
+        );
     }
 }
