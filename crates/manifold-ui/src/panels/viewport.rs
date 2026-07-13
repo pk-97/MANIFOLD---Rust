@@ -2,6 +2,7 @@ use super::{Panel, PanelAction};
 use crate::bitmap_painter;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
+use crate::drag::DragController;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -120,9 +121,6 @@ pub struct TimelineViewportPanel {
     // only so the input system routes presses/drags here.
     scrollbar_h_rect: Rect,
     scrollbar_h_btn_id: Option<NodeId>,
-    /// Pointer-to-thumb-left offset captured at drag start, so the thumb tracks
-    /// the pointer 1:1 instead of snapping its left edge under the cursor.
-    scrollbar_grab_dx: f32,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
 
@@ -154,7 +152,7 @@ pub struct TimelineViewportPanel {
     node_count: usize,
 
     // Drag interaction state
-    drag_mode: ViewportDragMode,
+    drag: DragController<ViewportDrag>,
     /// True when Alt was held at drag start — bypasses grid snapping for
     /// sample-accurate scrubbing. Unity: `RulerScrubHandler.ShouldUseFreeScrub()`.
     scrub_free: bool,
@@ -192,8 +190,6 @@ pub struct TimelineViewportPanel {
     marker_line_cache: Vec<(f32, Color32)>,
     selected_marker_ids: Vec<MarkerId>,
     marker_node_ids: Vec<NodeId>,
-    marker_drag_id: Option<MarkerId>,
-    marker_drag_start_beat: Beats,
 
     // B13 — live position/length readout for the clip currently being
     // moved/trimmed: (position, duration, layer_index). `None` outside a
@@ -247,15 +243,24 @@ struct SplitFlickState {
     flick: crate::anim::Transient,
 }
 
-/// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
-/// (move, trim, region) is handled by InteractionOverlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ViewportDragMode {
-    None,
+/// Viewport-local drag payload (P7.6, D8/D12) — `DragController<ViewportDrag>`
+/// replaces the old `ViewportDragMode` discriminant + the parallel
+/// `marker_drag_id`/`marker_drag_start_beat` fields (folded into
+/// `MarkerDrag`'s payload) and `scrollbar_grab_dx` (folded into
+/// `ScrollbarHDrag`'s payload — it was only ever read during a scrollbar
+/// drag's continuation; the plain-Click path that also computed it never
+/// needed to persist it). Only tracks ruler/overview/marker/scrollbar drags
+/// — all clip interaction (move, trim, region) is handled by
+/// `InteractionOverlay`.
+#[derive(Debug, Clone, PartialEq)]
+enum ViewportDrag {
     RulerScrub,
     OverviewScrub,
-    MarkerDrag,
-    ScrollbarHDrag,
+    MarkerDrag { marker_id: MarkerId, start_beat: Beats },
+    /// Pointer-to-thumb-left offset captured at drag start, so the thumb
+    /// tracks the pointer 1:1 instead of snapping its left edge under the
+    /// cursor.
+    ScrollbarHDrag { grab_dx: f32 },
 }
 
 /// B13 — dirty-checked bars.beats formatter for the live drag/trim readout.
@@ -333,7 +338,6 @@ impl TimelineViewportPanel {
             insert_cursor_ruler_id: None,
             scrollbar_h_rect: Rect::ZERO,
             scrollbar_h_btn_id: None,
-            scrollbar_grab_dx: 0.0,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
             export_range_enabled: false,
@@ -348,7 +352,7 @@ impl TimelineViewportPanel {
             cached_active_track_index: None,
             first_node: 0,
             node_count: 0,
-            drag_mode: ViewportDragMode::None,
+            drag: DragController::new(),
             scrub_free: false,
             cached_fingerprint: 0,
             overview_pixels: Vec::new(),
@@ -369,8 +373,6 @@ impl TimelineViewportPanel {
             marker_line_cache: Vec::new(),
             selected_marker_ids: Vec::new(),
             marker_node_ids: Vec::new(),
-            marker_drag_id: None,
-            marker_drag_start_beat: Beats::ZERO,
             drag_readout: None,
             drag_readout_cache: DragReadoutCache::default(),
             drag_readout_label_id: None,
@@ -1087,7 +1089,7 @@ impl TimelineViewportPanel {
     /// True while the horizontal scrollbar thumb is being dragged (app.rs uses it
     /// to draw the thumb in its active colour).
     pub fn scrollbar_h_dragging(&self) -> bool {
-        self.drag_mode == ViewportDragMode::ScrollbarHDrag
+        matches!(self.drag.payload(), Some(ViewportDrag::ScrollbarHDrag { .. }))
     }
 
     /// Set scroll position (clamped). Returns true if the value actually changed.
@@ -1578,6 +1580,139 @@ mod tests {
     }
 
     // ── B14 zoom-back (`docs/TIMELINE_INTERACTION_P1_SPEC.md` §5 P1.6) ──
+
+    // ── P7.6 viewport-drag-fold pinning ─────────────────────────────────
+    // `docs/UI_WIDGET_UNIFICATION_DESIGN.md` P7.6: prove ruler-scrub,
+    // overview-scrub, marker-drag, and horizontal-scrollbar-drag survive the
+    // fold of `ViewportDragMode` + `marker_drag_id`/`marker_drag_start_beat`
+    // + `scrollbar_grab_dx` onto `DragController<ViewportDrag>`, driven
+    // through the real `on_timeline_event` entry point.
+
+    fn built_viewport() -> TimelineViewportPanel {
+        let mut tree = UITree::new();
+        let mut vp = TimelineViewportPanel::new();
+        vp.set_tracks(vec![TrackInfo::default()]);
+        vp.build(&mut tree, &test_layout());
+        vp
+    }
+
+    fn drag_begin(origin: Vec2) -> UIEvent {
+        UIEvent::DragBegin { node_id: None, pos: origin, origin, modifiers: Modifiers::NONE }
+    }
+    fn drag(pos: Vec2) -> UIEvent {
+        UIEvent::Drag { node_id: None, pos, delta: Vec2::ZERO }
+    }
+    fn drag_end(pos: Vec2) -> UIEvent {
+        UIEvent::DragEnd { node_id: None, pos }
+    }
+
+    #[test]
+    fn ruler_scrub_begin_drag_end_emits_seek_each_step() {
+        let mut vp = built_viewport();
+        let r = vp.ruler_rect;
+        let origin = Vec2::new(r.x + 20.0, r.y + r.height * 0.5);
+
+        let began = vp.on_timeline_event(&drag_begin(origin));
+        assert!(matches!(began.as_slice(), [PanelAction::Seek(_)]), "ruler drag-begin must Seek");
+
+        let moved = vp.on_timeline_event(&drag(Vec2::new(r.x + 80.0, origin.y)));
+        assert!(matches!(moved.as_slice(), [PanelAction::Seek(_)]), "ruler drag continuation must Seek");
+
+        let ended = vp.on_timeline_event(&drag_end(Vec2::new(r.x + 80.0, origin.y)));
+        assert!(ended.is_empty(), "ruler scrub end emits nothing further");
+
+        // A drag AFTER end must not still be routed as a ruler scrub (the
+        // controller must have gone idle).
+        let stray = vp.on_timeline_event(&drag(Vec2::new(r.x + 120.0, origin.y)));
+        assert!(stray.is_empty(), "no drag session should remain armed after DragEnd");
+    }
+
+    #[test]
+    fn overview_scrub_begin_and_drag_emit_normalized_position() {
+        let mut vp = built_viewport();
+        let ov = vp.overview_rect;
+        let origin = Vec2::new(ov.x + 5.0, ov.y + ov.height * 0.5);
+
+        let began = vp.on_timeline_event(&drag_begin(origin));
+        assert!(matches!(began.as_slice(), [PanelAction::OverviewScrub(_)]));
+
+        let moved = vp.on_timeline_event(&drag(Vec2::new(ov.x + ov.width * 0.5, origin.y)));
+        match moved.as_slice() {
+            [PanelAction::OverviewScrub(norm)] => {
+                assert!((0.4..0.6).contains(norm), "midpoint drag should read ~0.5, got {norm}");
+            }
+            other => panic!("expected OverviewScrub, got {other:?}"),
+        }
+        vp.on_timeline_event(&drag_end(origin));
+    }
+
+    #[test]
+    fn marker_drag_begin_track_end_round_trips_the_grabbed_marker_id() {
+        let mut vp = built_viewport();
+        vp.set_markers(vec![UiMarker { id: MarkerId::new("m1"), ..UiMarker::new(Beats::from_f32(4.0)) }]);
+        let flag = vp.marker_flag_rect(Beats::from_f32(4.0));
+        let origin = Vec2::new(flag.x + flag.width * 0.5, flag.y + flag.height * 0.5);
+
+        let began = vp.on_timeline_event(&drag_begin(origin));
+        match began.as_slice() {
+            [PanelAction::MarkerDragStarted(id)] => assert_eq!(id, "m1"),
+            other => panic!("expected MarkerDragStarted, got {other:?}"),
+        }
+
+        let moved = vp.on_timeline_event(&drag(Vec2::new(origin.x + 40.0, origin.y)));
+        match moved.as_slice() {
+            [PanelAction::MarkerDragMoved(id, beat)] => {
+                assert_eq!(id, "m1");
+                assert!(*beat > 4.0, "dragging right must move the marker later");
+            }
+            other => panic!("expected MarkerDragMoved, got {other:?}"),
+        }
+
+        let ended = vp.on_timeline_event(&drag_end(Vec2::new(origin.x + 40.0, origin.y)));
+        match ended.as_slice() {
+            [PanelAction::MarkerDragEnded(id, _)] => assert_eq!(id, "m1"),
+            other => panic!("expected MarkerDragEnded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scrollbar_h_drag_tracks_the_grab_offset_and_reports_dragging() {
+        let mut vp = built_viewport();
+        // Force real content to scroll: a clip far out past the visible
+        // range (`max_content_beat`) plus a tight zoom so the timeline's
+        // content is wider than the viewport — an unscrollable thumb
+        // produces no drag target (`scrollbar_h_layout` returns `None`).
+        vp.set_clips(vec![ViewportClip {
+            clip_id: "far".into(),
+            layer_index: 0,
+            start_beat: Beats::from_f32(500.0),
+            duration_beats: Beats::from_f32(4.0),
+            name: "".into(),
+            color: color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }]);
+        vp.set_zoom(400.0);
+        let sb = vp.scrollbar_h_rect;
+        assert!(sb.width > 0.0 && sb.height > 0.0, "scrollbar strip must be laid out");
+        let origin = Vec2::new(sb.x + sb.width * 0.1, sb.y + sb.height * 0.5);
+
+        assert!(!vp.scrollbar_h_dragging());
+        let began = vp.on_timeline_event(&drag_begin(origin));
+        assert!(!began.is_empty(), "a scrollbar drag-begin over a scrollable thumb must emit a scroll action");
+        assert!(vp.scrollbar_h_dragging(), "scrollbar_h_dragging() must reflect the live session");
+
+        let moved = vp.on_timeline_event(&drag(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
+        assert!(matches!(moved.as_slice(), [PanelAction::TimelineScrollbarH(_)]));
+
+        vp.on_timeline_event(&drag_end(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
+        assert!(!vp.scrollbar_h_dragging(), "drag-end must clear the session");
+    }
 
     #[test]
     fn zoom_back_restores_captured_view() {

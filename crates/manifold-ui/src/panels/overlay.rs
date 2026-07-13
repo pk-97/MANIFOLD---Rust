@@ -163,7 +163,7 @@ pub trait Overlay {
     /// OPEN overlay gets this regardless of whether it owned the gesture, so
     /// it must be idempotent. Default: no-op. Overrides clear any drag state
     /// armed by `claims_drag`/`on_event` (P2: the audio panel's
-    /// `dragging_band`/`calibration_drag`).
+    /// `DragController<AudioSetupDrag>` session).
     fn gesture_ended(&mut self) {}
 
     /// Did this overlay just arm an immediate-drag surface (D6,
@@ -171,8 +171,8 @@ pub trait Overlay {
     /// just routed to it? Read by `UIRoot` once, immediately after
     /// `route_overlay_event` consumes a `PointerDown` — never per-event.
     /// Default: no. Must reflect THIS press, not a stale flag from a
-    /// previous gesture (the audio panel returns true iff it just armed
-    /// `dragging_band` on the `PointerDown` being routed).
+    /// previous gesture (the audio panel returns true iff it just armed a
+    /// band-divider grab on the `PointerDown` being routed).
     fn wants_immediate_drag(&self) -> bool {
         false
     }

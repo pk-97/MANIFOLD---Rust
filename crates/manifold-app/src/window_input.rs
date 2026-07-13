@@ -943,8 +943,9 @@ impl Application {
             {
                 match state {
                     ElementState::Pressed => {
-                        if let Some(edge) = ed.dock.hit_test(area, Vec2::new(cx, cy)) {
-                            ed.dock.begin(edge);
+                        let press = Vec2::new(cx, cy);
+                        if let Some(edge) = ed.dock.hit_test(area, press) {
+                            ed.dock.begin(edge, press);
                             ed.offscreen_dirty = true;
                             return;
                         }
