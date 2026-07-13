@@ -193,18 +193,35 @@ impl GraphCanvas {
     }
 
     /// Screen-space x where a numeric param row's slider TRACK zone begins —
-    /// i.e. past the right-aligned label cell. Mirrors the exact geometry
-    /// `render.rs`'s `NodeRow::Param` branch feeds `BitmapSlider::draw`
-    /// (`slider_x = sx + PARAM_LABEL_X * zoom`, then `label_width =
-    /// PARAM_SLIDER_LABEL_W * zoom`), so the right-click reset hit-zone
-    /// (BUG-105) can't drift from the drawn label/track boundary. Same for
-    /// every row on a node (the offset is node-relative, not per-row), so
-    /// this only needs `node_id`. `None` for a missing node.
+    /// i.e. past the right-aligned label cell. Delegates to
+    /// [`crate::slider::BitmapSlider::zones`] (UI_WIDGET_UNIFICATION P1) fed
+    /// the exact same `slider_rect`/`SliderMetrics` `render.rs`'s
+    /// `NodeRow::Param` branch feeds `BitmapSlider::draw` — one geometry
+    /// source (I3), not a canvas-local copy, so the right-click reset
+    /// hit-zone (BUG-105) can't drift from the drawn label/track boundary.
+    /// Same for every row on a node (the offset is node-relative, not
+    /// per-row), so this only needs `node_id`. `None` for a missing node.
     pub(crate) fn param_slider_track_x(&self, viewport: Rect, node_id: u32) -> Option<f32> {
         let node = self.find_node(node_id)?;
         let (nx, _ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        let sw = NODE_WIDTH * self.zoom;
+        let pad_x = PARAM_PAD_X * self.zoom;
         let slider_x = nx + PARAM_LABEL_X * self.zoom;
-        Some(slider_x + PARAM_SLIDER_LABEL_W * self.zoom)
+        let row_right = nx + sw - pad_x;
+        // Only x/width feed zones()'s label/track split, so a placeholder
+        // y/height (never read for this) keeps this a 1:1 mirror of
+        // render.rs's real `slider_rect` without needing the row's y.
+        // `zones()` speaks `node::Rect` (build/draw's shared vocabulary);
+        // this module's own `graph_canvas::Rect` is screen-space only.
+        let slider_rect =
+            crate::node::Rect::new(slider_x, 0.0, (row_right - slider_x).max(0.0), 1.0);
+        let metrics = crate::slider::SliderMetrics {
+            label_width: PARAM_SLIDER_LABEL_W * self.zoom,
+            value_box_w: PARAM_SLIDER_VALUE_BOX_W * self.zoom,
+            gap: crate::slider::GAP * self.zoom,
+            value_gap: crate::slider::VALUE_GAP * self.zoom,
+        };
+        Some(crate::slider::BitmapSlider::zones(slider_rect, &metrics).track.x)
     }
 
     /// Screen-space rect of a node's header "reveal sockets" chip — the small

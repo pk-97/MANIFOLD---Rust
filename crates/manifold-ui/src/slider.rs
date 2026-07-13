@@ -1,6 +1,7 @@
 use crate::color;
 use crate::drag::DragController;
 use crate::draw::{Painter, elide_to_width, text_width};
+use crate::intent::{Gesture, IntentRegistry};
 use crate::node::*;
 use crate::panels::PanelAction;
 use crate::tree::UITree;
@@ -63,6 +64,79 @@ pub struct Slider {
     pub reset: PanelAction,
 }
 
+impl Slider {
+    /// Register this slider's contract-derived intents (UI_WIDGET_UNIFICATION
+    /// P1: `reset` is the only translatable intent so far — `OpenMapping` and
+    /// `EditValue` derivation lands in P3). Delegates to
+    /// [`BitmapSlider::register_track_reset`] so callers holding a `Slider`
+    /// and callers holding a bare `(SliderNodeIds, PanelAction)` pair (the
+    /// three other hand-registration sites, which never built a `Slider`
+    /// struct) share the exact same contract walk.
+    pub fn register_intents(&self, reg: &mut IntentRegistry) {
+        BitmapSlider::register_track_reset(&self.ids, &self.reset, reg);
+    }
+}
+
+// ── The gesture contract (UI_WIDGET_UNIFICATION_DESIGN.md §3) ──────────
+//
+// Zone geometry + gesture→intent mapping, in widget language. Hosts
+// translate an intent into their own action type (chrome → `PanelAction` at
+// build time via `register_intents`/`register_track_reset`; canvas →
+// `GraphEditCommand` at input time in `graph_canvas/interaction.rs`). This
+// is the ONE geometry/gesture source — `build`, `draw`, and the canvas
+// hit-test all delegate to `zones()`/`intent_for()` rather than keeping
+// private copies (D2, D7, I1, I3).
+
+/// A slider's interactive zones, host-agnostic (no `NodeId`s — the canvas has
+/// no tree nodes to name).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SliderZone {
+    Label,
+    Track,
+    ValueCell,
+}
+
+/// What a gesture on a zone MEANS, in widget terms (D2). Hosts translate:
+/// chrome → `PanelAction`, canvas → `GraphEditCommand`. A host may translate
+/// an intent to nothing when its surface lacks the target (D3) — `EditValue`
+/// on the canvas is an explicit dead stop until P5.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SliderIntent {
+    /// Write the widget's default back through the value path, undoable as
+    /// one drag (D4).
+    ResetToDefault,
+    /// Open the mapping/binding surface for this param.
+    OpenMapping,
+    /// Begin text entry on the value.
+    EditValue,
+}
+
+/// Per-host widths driving zone geometry (D7 — the node face legitimately
+/// uses wider label/value cells than the card, so the *numbers* are
+/// per-host, never the *shape logic*). `gap`/`value_gap` are pre-scaled by
+/// the caller exactly like `label_width`/`value_box_w` already are in
+/// [`BitmapSlider::draw`] — `build` passes the raw module consts (scale 1),
+/// `draw` passes its zoom-scaled locals. `label_width <= 0.0` means "no
+/// label column" (mirrors `build`/`draw`'s own `label.is_some() &&
+/// !is_empty()` gate — those callers zero it out when there's no label text
+/// to draw, not just when the widget never carries a label at all).
+#[derive(Clone, Copy)]
+pub struct SliderMetrics {
+    pub label_width: f32,
+    pub value_box_w: f32,
+    pub gap: f32,
+    pub value_gap: f32,
+}
+
+/// Zone rects for a slider occupying `rect` — the one geometry source;
+/// `build` and `draw` both delegate to it (P1 deleted their private copies).
+#[derive(Clone, Copy, Debug)]
+pub struct SliderZones {
+    pub label: Option<Rect>,
+    pub track: Rect,
+    pub value_cell: Rect,
+}
+
 /// Stateless helper for building and updating bitmap slider widgets.
 /// Composes 5 existing node types (Label, Button, Panel, Panel, Button).
 ///
@@ -107,6 +181,55 @@ impl SliderColors {
 }
 
 impl BitmapSlider {
+    /// Zone rects for a slider occupying `rect` — see [`SliderZones`]. Pure,
+    /// allocation-free (the canvas calls this per visible row per frame).
+    pub fn zones(rect: Rect, metrics: &SliderMetrics) -> SliderZones {
+        let y = rect.y;
+        let h = rect.height;
+        let (label, x) = if metrics.label_width > 0.0 {
+            let r = Rect::new(rect.x, y, metrics.label_width, h);
+            (Some(r), rect.x + metrics.label_width + metrics.gap)
+        } else {
+            (None, rect.x)
+        };
+        let value_box_x = rect.x + rect.width - metrics.value_box_w;
+        let track_right = value_box_x - metrics.value_gap;
+        let track_w = (track_right - x).max(1.0);
+        SliderZones {
+            label,
+            track: Rect::new(x, y, track_w, h),
+            value_cell: Rect::new(value_box_x, y, metrics.value_box_w, h),
+        }
+    }
+
+    /// The gesture contract (D2/D5). Pure, total, allocation-free — covers
+    /// discrete gestures only, drags stay host-stateful.
+    pub fn intent_for(zone: SliderZone, g: Gesture) -> Option<SliderIntent> {
+        use Gesture::*;
+        use SliderZone::*;
+        match (zone, g) {
+            (Track, RightClick) => Some(SliderIntent::ResetToDefault),
+            (Label, RightClick) => Some(SliderIntent::OpenMapping),
+            (ValueCell, Click) => Some(SliderIntent::EditValue),
+            _ => None,
+        }
+    }
+
+    /// Register a slider's `Track + RightClick -> ResetToDefault` intent
+    /// (P1's sole chrome translation; `OpenMapping`/`EditValue` derivation is
+    /// P3) through the contract, replacing every hand-written
+    /// `reg.on(ids.track, Gesture::RightClick, reset)` (I1). The single
+    /// delegation point for the four hand-registration sites this design
+    /// unifies: `chrome/diff.rs::register_slider_resets`,
+    /// `layer_header.rs`'s gain slider, `param_card.rs::register_intents`
+    /// (main rows + envelope decay + audio-shape drawer rows), and
+    /// `audio_trigger_section.rs::register_intents`.
+    pub fn register_track_reset(ids: &SliderNodeIds, reset: &PanelAction, reg: &mut IntentRegistry) {
+        if let Some(SliderIntent::ResetToDefault) = Self::intent_for(SliderZone::Track, Gesture::RightClick) {
+            reg.on(ids.track, Gesture::RightClick, reset.clone());
+        }
+    }
+
     /// Build slider nodes into the tree. Returns node IDs for event routing.
     /// `rect` is the full bounding box for the entire slider row (label + track + value).
     #[allow(clippy::too_many_arguments)]
@@ -135,9 +258,20 @@ impl BitmapSlider {
             default_normalized,
         };
 
-        let mut x = rect.x;
         let y = rect.y;
         let h = rect.height;
+
+        // ── Zones: the one geometry source (`zones()`), shared with `draw`
+        //    and the graph-canvas hit-test. `label_width` zeroes out unless
+        //    there's actual label text, matching the old inline gate. ──
+        let has_label = label.is_some_and(|t| !t.is_empty());
+        let metrics = SliderMetrics {
+            label_width: if has_label { label_width } else { 0.0 },
+            value_box_w: VALUE_BOX_W,
+            gap: GAP,
+            value_gap: VALUE_GAP,
+        };
+        let z = Self::zones(rect, &metrics);
 
         // ── Label (fixed width, right-aligned, interactive for right-click mapping) ──
         // Name right-aligns to the label cell so it hugs the slider track; tracks
@@ -148,7 +282,7 @@ impl BitmapSlider {
         {
             ids.label = Some(tree.add_node(
                 parent_id,
-                Rect::new(x, y, label_width, h),
+                z.label.expect("has_label true implies zones() returns a label rect"),
                 UINodeType::Label,
                 UIStyle {
                     text_color: colors.text,
@@ -159,17 +293,14 @@ impl BitmapSlider {
                 Some(label_text),
                 UIFlags::VISIBLE | UIFlags::INTERACTIVE,
             ));
-            x += label_width + GAP;
         }
 
         // ── Track (flexible width; the value lives in a fixed gutter at its
         //    right end, separated by VALUE_GAP, so the usable track stops short of
         //    it). The track node is the usable region — `track_rect` — so drag
         //    mapping, fill, and thumb all agree and never reach under the value. ──
-        let value_box_x = rect.x + rect.width - VALUE_BOX_W;
-        let track_right = value_box_x - VALUE_GAP;
-        let track_w = (track_right - x).max(1.0);
-        let track_rect = Rect::new(x, y, track_w, h);
+        let track_rect = z.track;
+        let value_box_x = z.value_cell.x;
         ids.track_rect = track_rect;
 
         ids.track = tree.add_node(
@@ -188,7 +319,7 @@ impl BitmapSlider {
         );
 
         // ── Fill (child of track, non-interactive) ──
-        let fill_w = compute_fill_width(track_w, normalized_value, FILL_INSET);
+        let fill_w = compute_fill_width(track_rect.width, normalized_value, FILL_INSET);
         let fill_rect = Rect::new(
             track_rect.x + FILL_INSET,
             track_rect.y + FILL_INSET,
@@ -316,32 +447,43 @@ impl BitmapSlider {
         let value_gap = VALUE_GAP * scale;
         let gap = GAP * scale;
 
-        let mut x = rect.x;
         let y = rect.y;
         let h = rect.height;
+
+        // ── Zones: the one geometry source, shared with `build` and the
+        //    graph-canvas hit-test (`zones()`). `label_width`/`value_box_w`
+        //    are pre-scaled by the caller (unchanged convention); `gap`/
+        //    `value_gap` are scaled here since callers never saw the raw
+        //    consts. ──
+        let has_label = label.is_some_and(|t| !t.is_empty());
+        let metrics = SliderMetrics {
+            label_width: if has_label { label_width } else { 0.0 },
+            value_box_w,
+            gap,
+            value_gap,
+        };
+        let z = Self::zones(rect, &metrics);
 
         if let Some(label_text) = label
             && !label_text.is_empty()
         {
             let text = elide_to_width(label_text, font_size, label_width);
             let tw = text_width(&text, font_size);
-            let text_x = x + (label_width - tw).max(0.0);
+            let label_rect = z.label.expect("has_label true implies zones() returns a label rect");
+            let text_x = label_rect.x + (label_width - tw).max(0.0);
             let text_y = y + (h - font_size) * 0.5;
             ui.draw_text(text_x, text_y, &text, font_size, colors.text.to_array());
-            x += label_width + gap;
         }
 
-        let value_box_x = rect.x + rect.width - value_box_w;
-        let track_right = value_box_x - value_gap;
-        let track_w = (track_right - x).max(1.0);
-        let track_rect = Rect::new(x, y, track_w, h);
+        let value_box_x = z.value_cell.x;
+        let track_rect = z.track;
 
         ui.draw_rounded_rect(
             track_rect.x, track_rect.y, track_rect.width, track_rect.height,
             colors.track, track_radius,
         );
 
-        let fill_w = compute_fill_width(track_w, normalized_value, fill_inset);
+        let fill_w = compute_fill_width(track_rect.width, normalized_value, fill_inset);
         if fill_w > 0.0 {
             ui.draw_rounded_rect(
                 track_rect.x + fill_inset,
@@ -646,6 +788,95 @@ mod tests {
             PanelAction::MasterOpacityChanged(1.0),
             PanelAction::MasterOpacityCommit,
         )
+    }
+
+    /// I2: pins the full contract table (§3/§4). Chrome and canvas both
+    /// resolve `intent_for` — this is the one place the table itself is
+    /// asserted, so a change here is a deliberate contract edit, not drift.
+    #[test]
+    fn intent_for_pins_the_full_contract_table() {
+        use Gesture::*;
+        use SliderZone::*;
+        assert_eq!(BitmapSlider::intent_for(Track, RightClick), Some(SliderIntent::ResetToDefault));
+        assert_eq!(BitmapSlider::intent_for(Label, RightClick), Some(SliderIntent::OpenMapping));
+        assert_eq!(BitmapSlider::intent_for(ValueCell, Click), Some(SliderIntent::EditValue));
+        // Every other (zone, gesture) pair is an explicit dead stop (D3).
+        for zone in [Label, Track, ValueCell] {
+            for g in [Click, DoubleClick, RightClick] {
+                let expected = matches!(
+                    (zone, g),
+                    (Track, RightClick) | (Label, RightClick) | (ValueCell, Click)
+                );
+                assert_eq!(BitmapSlider::intent_for(zone, g).is_some(), expected, "{zone:?} + {g:?}");
+            }
+        }
+    }
+
+    /// I3: zone geometry has one owner — `zones().track` must equal the
+    /// track rect `build` actually materialises for identical inputs, so a
+    /// future edit to either can't silently diverge from the other.
+    #[test]
+    fn zones_track_matches_build_track_rect() {
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let rect = Rect::new(0.0, 0.0, 400.0, 20.0);
+
+        let ids = BitmapSlider::build(
+            &mut tree,
+            Some(root),
+            rect,
+            Some("Opacity"),
+            0.75,
+            "0.75",
+            &SliderColors::default_slider(),
+            11,
+            DEFAULT_LABEL_WIDTH,
+            0.75,
+            placeholder_reset(),
+        )
+        .ids;
+
+        let metrics = SliderMetrics {
+            label_width: DEFAULT_LABEL_WIDTH,
+            value_box_w: VALUE_BOX_W,
+            gap: GAP,
+            value_gap: VALUE_GAP,
+        };
+        let z = BitmapSlider::zones(rect, &metrics);
+        assert_eq!(z.track.x, ids.track_rect.x);
+        assert_eq!(z.track.width, ids.track_rect.width);
+        assert_eq!(z.label.map(|l| l.x), Some(0.0));
+    }
+
+    /// I1/register_track_reset: the contract's chrome translation IS the
+    /// slider's own declared `reset` action, registered on the track node —
+    /// what every hand site used to write inline.
+    #[test]
+    fn register_track_reset_registers_the_declared_reset_on_track() {
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let reset = placeholder_reset();
+        let slider = BitmapSlider::build(
+            &mut tree,
+            Some(root),
+            Rect::new(0.0, 0.0, 400.0, 20.0),
+            Some("Opacity"),
+            0.75,
+            "0.75",
+            &SliderColors::default_slider(),
+            11,
+            DEFAULT_LABEL_WIDTH,
+            0.75,
+            reset.clone(),
+        );
+
+        let mut reg = IntentRegistry::new();
+        slider.register_intents(&mut reg);
+        let resolved = reg.resolve(&tree, Some(slider.ids.track), Gesture::RightClick);
+        // PanelAction carries no PartialEq; SliderReset is the marker of
+        // interest here (it's what `register_intents` should have replayed
+        // — the same `reset` this slider was built with, above).
+        assert!(matches!(resolved, Some(PanelAction::SliderReset { .. })));
     }
 
     #[test]
