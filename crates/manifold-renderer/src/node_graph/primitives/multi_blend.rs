@@ -166,6 +166,9 @@ impl EffectNode for MultiBlend {
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
+    }
 
     fn inputs(&self) -> &[NodeInput] {
         &self.inputs

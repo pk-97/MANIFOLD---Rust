@@ -58,6 +58,7 @@ crate::primitive! {
     role: Control,
     aliases: ["scale offset", "affine scalar", "rescale", "map range", "attenuvert"],
     pure: true,
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for AffineScalar {

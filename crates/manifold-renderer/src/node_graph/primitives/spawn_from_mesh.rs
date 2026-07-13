@@ -115,6 +115,7 @@ crate::primitive! {
     category: Particles3D,
     role: Source,
     aliases: ["spawn from mesh", "seed particles from mesh", "mesh explode", "mesh dissolve", "mesh particles"],
+    boundary_reason: BarrieredReduction,
     extra_fields: {
         // The macro-allocated `pipeline` field holds vertices_main; these hold
         // the other three entry points of the surface-mode three-pass dispatch.

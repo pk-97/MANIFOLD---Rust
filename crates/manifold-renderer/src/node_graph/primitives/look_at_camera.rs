@@ -115,6 +115,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["look at camera", "target camera", "aim camera"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for LookAtCamera {

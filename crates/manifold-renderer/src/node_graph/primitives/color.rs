@@ -77,6 +77,9 @@ impl EffectNode for Brightness {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
+    }
     fn inputs(&self) -> &[NodeInput] {
         &BRIGHTNESS_INPUTS
     }
@@ -228,6 +231,9 @@ impl EffectNode for ChannelMix {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
+    }
     fn inputs(&self) -> &[NodeInput] {
         &CHANNEL_MIX_INPUTS
     }
@@ -365,6 +371,9 @@ impl Default for ColorRamp {
 impl EffectNode for ColorRamp {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
+    }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
     }
     fn inputs(&self) -> &[NodeInput] {
         &COLOR_RAMP_INPUTS

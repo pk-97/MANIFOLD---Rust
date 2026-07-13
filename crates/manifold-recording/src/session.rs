@@ -16,7 +16,7 @@ use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use crate::config::{AudioCodec, LiveRecordingConfig, RecordingResult};
 use crate::ffi;
 use crate::format_converter::FormatConverter;
-use crate::recording_thread::{self, RecordingFrame};
+use crate::recording_thread::{self, RecordingFrame, RecordingStats};
 use crate::texture_pool::{DEFAULT_POOL_SIZE, PoolSlot, TextureRingPool};
 
 /// Live recording session. Created on the content thread, owned by ContentPipeline.
@@ -30,7 +30,7 @@ pub struct LiveRecordingSession {
     format_converter: FormatConverter,
     /// Wrapped in Option so Drop can take it to signal the recording thread.
     frame_tx: Option<Sender<RecordingFrame>>,
-    recording_thread: Option<JoinHandle<(u32, u32)>>,
+    recording_thread: Option<JoinHandle<RecordingStats>>,
     stop: Arc<AtomicBool>,
     start_time: Instant,
     frames_submitted: u32,
@@ -329,34 +329,47 @@ impl LiveRecordingSession {
     }
 
     /// Stop recording, drain remaining frames, finalize the MP4.
+    ///
+    /// `frames_dropped` (BUG-085/BUG-086 class rule: every drop is counted,
+    /// no path returns success on one) sums every way a frame never made it
+    /// into the file: pool exhaustion / channel-full at the session level
+    /// (`self.frames_dropped`), synchronous encode failure on the recording
+    /// thread, and the native encoder's async `appendPixelBuffer:` drops —
+    /// so `frames_recorded + frames_dropped` always equals the number of
+    /// frames actually submitted.
     pub fn stop(mut self) -> RecordingResult {
         // Read the native audio-drop counter BEFORE shutdown() — finalize
         // frees the native state, and the handle is invalid after that.
         let audio_frames_dropped = self.audio_frames_dropped();
-        let (frames_encoded, frames_failed) = self.shutdown();
+        let stats = self.shutdown();
 
         let duration = self.start_time.elapsed().as_secs_f64();
-        let _ = frames_failed;
+        let frames_dropped =
+            self.frames_dropped + stats.frames_sync_failed + stats.video_append_dropped;
 
         log::info!(
-            "[LiveRecording] Stopped: {frames_encoded} encoded, {} dropped, \
+            "[LiveRecording] Stopped: {} recorded, {frames_dropped} dropped \
+             ({} session, {} sync-failed, {} async-append), \
              {audio_frames_dropped} audio frames dropped, {duration:.1}s -> {}",
+            stats.frames_recorded,
             self.frames_dropped,
+            stats.frames_sync_failed,
+            stats.video_append_dropped,
             self.output_path,
         );
 
         RecordingResult {
             output_path: self.output_path.clone(),
-            frames_recorded: frames_encoded,
-            frames_dropped: self.frames_dropped,
+            frames_recorded: stats.frames_recorded,
+            frames_dropped,
             audio_frames_dropped,
             duration_seconds: duration,
         }
     }
 
     /// Signal the recording thread to stop, drop the channel, and join.
-    /// Safe to call multiple times (idempotent). Returns (encoded, failed).
-    fn shutdown(&mut self) -> (u32, u32) {
+    /// Safe to call multiple times (idempotent).
+    fn shutdown(&mut self) -> RecordingStats {
         self.stop.store(true, Ordering::Release);
 
         // Drop the sender so the recording thread sees disconnection after draining.
@@ -373,7 +386,11 @@ impl LiveRecordingSession {
                 }
             }
         }
-        (0, 0)
+        RecordingStats {
+            frames_recorded: 0,
+            frames_sync_failed: 0,
+            video_append_dropped: 0,
+        }
     }
 }
 

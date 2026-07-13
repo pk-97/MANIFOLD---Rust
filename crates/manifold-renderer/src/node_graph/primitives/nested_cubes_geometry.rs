@@ -100,6 +100,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["nested cubes", "cubes", "geometry"],
+    boundary_reason: FusedBundle,
     extra_fields: {
         fill_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         edge_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,

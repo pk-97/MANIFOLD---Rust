@@ -25,20 +25,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
-use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::preset_runtime::{JsonGeneratorLoadError, PresetRuntime};
-use manifold_renderer::node_graph::{EffectGraphDefExt, PrimitiveRegistry, compile};
+use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_gpu::GpuDevice;
+use manifold_renderer::node_graph::{PrimitiveRegistry, ValidateKind, ValidationReport, validate_def};
 
 const ASSET_SUBDIRS: &[&str] = &["assets/effect-presets", "assets/generator-presets"];
 const GENERATOR_SUBDIR: &str = "assets/generator-presets";
-
-// Small canvas keeps per-preset allocation cheap. Canvas-sized array
-// outputs (scatter accumulators etc.) scale by w×h, so 256×256 stays
-// well under the per-preset budget even for particle-density graphs.
-const CHECK_CANVAS_W: u32 = 256;
-const CHECK_CANVAS_H: u32 = 256;
-const CHECK_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 fn main() {
     let start = Instant::now();
@@ -50,11 +42,15 @@ fn main() {
     let device = GpuDevice::new();
 
     let mut total = 0usize;
-    let mut failures: Vec<(PathBuf, String)> = Vec::new();
+    let mut failures: Vec<(PathBuf, ValidationReport)> = Vec::new();
 
     for subdir in ASSET_SUBDIRS {
         let dir = manifest_dir.join(subdir);
-        let is_generator_dir = *subdir == GENERATOR_SUBDIR;
+        let kind = if *subdir == GENERATOR_SUBDIR {
+            ValidateKind::Generator
+        } else {
+            ValidateKind::Effect
+        };
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
@@ -68,19 +64,30 @@ fn main() {
                 continue;
             }
             total += 1;
-            if let Err(msg) = check_one(&path, &registry, &device, is_generator_dir) {
-                failures.push((path, msg));
+            match parse_and_validate(&path, &registry, &device, kind) {
+                Ok(report) if report.is_valid() => {}
+                Ok(report) => failures.push((path, report)),
+                Err(msg) => failures.push((
+                    path,
+                    ValidationReport {
+                        errors: vec![manifold_renderer::node_graph::ValidationIssue {
+                            node_id: None,
+                            type_id: None,
+                            port: None,
+                            message: msg,
+                        }],
+                        warnings: Vec::new(),
+                    },
+                )),
             }
         }
     }
 
-    for (path, msg) in &failures {
-        let rel = path
-            .strip_prefix(manifest_dir)
-            .unwrap_or(path.as_path());
+    for (path, report) in &failures {
+        let rel = path.strip_prefix(manifest_dir).unwrap_or(path.as_path());
         println!("FAIL {}", rel.display());
-        for line in msg.lines() {
-            println!("  {line}");
+        for issue in &report.errors {
+            println!("  {}", issue.message);
         }
     }
 
@@ -97,77 +104,18 @@ fn main() {
     }
 }
 
-fn check_one(
+/// Parses `path` from disk and runs it through [`validate_def`] — the
+/// same load + compile pipeline the runtime / editor take (and the
+/// generator chain-build allocation audit for generator presets).
+/// `Err` here means the file itself didn't parse; a parsed-but-invalid
+/// graph comes back as an `Ok(report)` whose `errors` are non-empty.
+fn parse_and_validate(
     path: &Path,
     registry: &PrimitiveRegistry,
     device: &GpuDevice,
-    is_generator: bool,
-) -> Result<(), String> {
+    kind: ValidateKind,
+) -> Result<ValidationReport, String> {
     let bytes = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let def: EffectGraphDef =
-        serde_json::from_str(&bytes).map_err(|e| format!("parse: {e}"))?;
-
-    check_bindings_resolve(&def)?;
-
-    let graph = def
-        .clone()
-        .into_graph(registry)
-        .map_err(|e| e.to_string())?;
-    compile(&graph).map_err(|e| e.to_string())?;
-
-    // Generator-side post-compile audit. `compile()` covers static
-    // validation (types, cycles, required inputs) but doesn't allocate
-    // the Array<T> buffer pool. The full chain build path catches
-    // `UnsizedArrayOutput` (sizing returned None) at the cause site
-    // and `UnboundArrayResource` (any other reason a wire's source
-    // didn't bind) at the catch-all audit — both the bug class that
-    // FluidSim2D's silent-black-output hit. Effect presets don't run
-    // the same Array allocation path (yet); the load/compile check
-    // above is sufficient for them.
-    if is_generator {
-        PresetRuntime::from_def_with_device(
-            def,
-            registry,
-            device,
-            CHECK_CANVAS_W,
-            CHECK_CANVAS_H,
-            CHECK_FORMAT,
-            None,
-        )
-        .map_err(|e: JsonGeneratorLoadError| e.to_string())?;
-    }
-
-    Ok(())
-}
-
-/// Mirrors `every_bundled_preset_binding_resolves_to_an_outer_param` —
-/// each `bindings[i].id` must match some `params[j].id`. Bindings whose
-/// id has no matching outer param sit forever on `default_value` at
-/// runtime (silent failure mode).
-fn check_bindings_resolve(def: &EffectGraphDef) -> Result<(), String> {
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return Ok(());
-    };
-    let param_ids: ahash::AHashSet<&str> =
-        meta.params.iter().map(|p| p.id.as_str()).collect();
-    let mut bad: Vec<String> = Vec::new();
-    for binding in &meta.bindings {
-        if !param_ids.contains(binding.id.as_str()) {
-            let target = match &binding.target {
-                BindingTarget::Node { node_id, param } => {
-                    format!("node {node_id}.{param}")
-                }
-                other => format!("{other:?}"),
-            };
-            bad.push(format!(
-                "binding id='{}' (target {target}) has no matching outer-card param id",
-                binding.id
-            ));
-        }
-    }
-    if bad.is_empty() {
-        Ok(())
-    } else {
-        Err(bad.join("\n"))
-    }
+    let def: EffectGraphDef = serde_json::from_str(&bytes).map_err(|e| format!("parse: {e}"))?;
+    Ok(validate_def(&def, registry, kind, device))
 }

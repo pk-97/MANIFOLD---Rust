@@ -107,6 +107,7 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["tonemap", "aces", "agx", "hdr", "filmic"],
+    boundary_reason: ConversionDebt,
 }
 
 impl Primitive for ToneMap {

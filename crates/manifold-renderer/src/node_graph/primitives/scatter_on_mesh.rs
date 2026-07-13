@@ -124,6 +124,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["scatter on mesh", "surface scatter", "instance on surface", "field of instances", "populate mesh"],
+    boundary_reason: BarrieredReduction,
     extra_fields: {
         // The macro-allocated `pipeline` field holds area_main; these hold
         // the other two entry points of the 3-pass dispatch.

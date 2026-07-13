@@ -54,6 +54,7 @@ crate::primitive! {
     category: Routing,
     role: Filter,
     aliases: ["switch", "mux", "mux scalar", "selector", "Switch CHOP"],
+    boundary_reason: NonGpu,
 }
 
 const MUX_SCALAR_INPUT_PORT_NAMES: [&str; 8] = [

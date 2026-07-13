@@ -155,6 +155,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["cel", "toon", "cartoon", "material", "Toon BSDF"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for CelMaterial {

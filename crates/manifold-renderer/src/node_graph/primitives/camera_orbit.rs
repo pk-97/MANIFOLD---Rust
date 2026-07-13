@@ -117,6 +117,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["orbit camera", "camera orbit", "camera", "viewpoint", "Camera COMP"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for CameraOrbit {

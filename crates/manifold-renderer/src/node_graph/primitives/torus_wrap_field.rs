@@ -93,6 +93,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Map,
     aliases: ["torus wrap", "donut", "wrap"],
+    boundary_reason: FusedBundle,
 }
 
 impl Primitive for TorusWrapField {

@@ -152,6 +152,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["gltf", "glb", "import mesh", "load model", "File In SOP"],
+    boundary_reason: IoBridge,
     extra_fields: {
         // (path, mesh_index, primitive_index, material_index, fit, recenter)
         // last parsed (or in flight). Any change re-triggers a background

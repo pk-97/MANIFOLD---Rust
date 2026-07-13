@@ -47,6 +47,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["trigger gate", "gate", "enable"],
+    boundary_reason: NonGpu,
     extra_fields: {
         last_input: Option<u32> = None,
         output_count: u32 = 0,

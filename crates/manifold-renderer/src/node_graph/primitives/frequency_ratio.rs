@@ -66,6 +66,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["frequency ratio", "harmonic", "interval"],
+    boundary_reason: NonGpu,
     extra_fields: {
         clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
     },

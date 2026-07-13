@@ -110,7 +110,7 @@ save_preset(json, name)
 
 Why declarative: atomic, no stale imperative state held by the model, validation errors reference the submitted document directly, and the artifact is inspectable at every step.
 
-`validate_graph` runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
+`validate_graph` wraps `node_graph::validate::validate_def` — built and shipped by GRAPH_TOOLING_DESIGN (2026-07-13) together with a `graph-tool` CLI and card lints; P2 here is an adapter over that seam, not new checks. It runs the existing graph compile path **minus GPU dispatch**: unknown primitive types, channel-type mismatches on wires, unwired required ports, cycle check honoring per-port state capture (`state_capture_input_ports`), param name/range validation. Error messages must name the node id and port — they are consumed by a model, and vague errors burn the user's tokens.
 
 ## 7. Preview render path
 

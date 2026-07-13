@@ -123,6 +123,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["transform", "transform 3d", "trs", "position rotation scale", "object transform"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for Transform3D {

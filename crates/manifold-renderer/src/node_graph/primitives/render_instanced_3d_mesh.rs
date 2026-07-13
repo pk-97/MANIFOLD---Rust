@@ -95,6 +95,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["render copies", "render instanced 3d mesh", "instancing", "instances", "Geometry COMP"],
+    boundary_reason: DrawCall,
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,

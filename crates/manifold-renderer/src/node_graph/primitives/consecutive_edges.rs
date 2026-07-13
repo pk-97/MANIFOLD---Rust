@@ -72,6 +72,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["edge pairs", "consecutive edges", "connect points", "polyline"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for ConsecutiveEdges {

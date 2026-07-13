@@ -75,6 +75,7 @@ crate::primitive! {
     category: Stylize,
     role: Filter,
     aliases: ["draw scanlines", "hud", "overlay", "scanline", "crt"],
+    boundary_reason: Blocked,
 }
 
 const SCANLINES_SHADER: &str = r#"

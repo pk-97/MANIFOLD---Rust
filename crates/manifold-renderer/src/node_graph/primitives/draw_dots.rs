@@ -65,6 +65,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw dots", "hud", "overlay", "center dot", "points"],
+    boundary_reason: Blocked,
 }
 
 const DOTS_SHADER: &str = r#"

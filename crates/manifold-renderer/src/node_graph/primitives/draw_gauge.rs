@@ -103,6 +103,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw gauge", "hud", "overlay", "size bar", "meter"],
+    boundary_reason: Blocked,
 }
 
 const GAUGE_SHADER: &str = r#"

@@ -386,7 +386,7 @@ _Generated from the node registry. Do not hand-edit. 237 nodes registered, group
 | `DigitalPlants` | Digital Plants | generator | Geometry | 14 |
 | `Dither` | Dither | effect | Color | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
-| `EdgeDetect` | Edge Detect | effect | Diagnostic | 3 |
+| `EdgeDetect` | Edge Detect | effect | Diagnostic | 2 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
 | `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |

@@ -172,6 +172,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["phong", "glossy", "specular", "material"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for PhongMaterial {
