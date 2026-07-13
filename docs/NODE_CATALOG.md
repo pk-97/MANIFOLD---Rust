@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 235 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 237 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -61,12 +61,13 @@ _Generated from the node registry. Do not hand-edit. 235 nodes registered, group
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
-### Blur & Sharpen (7)
+### Blur & Sharpen (8)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Blur | `node.blur` | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
 | Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
+| Bokeh Gather | `node.bokeh_gather` | Filter | A true circular-aperture depth-of-field blur: each out-of-focus pixel gathers from a disc of neighbors sized by its own blur amount, and neighbors only contrib… |
 | Custom Convolution | `node.custom_convolution` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
 | Motion Blur | `node.motion_blur` | Filter | Smears each pixel along its own screen-space motion, scaled by the camera's shutter angle — the classic filmic motion-blur look, driven by real per-object move… |
@@ -126,12 +127,13 @@ _Generated from the node registry. Do not hand-edit. 235 nodes registered, group
 | — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
-### Mask (6)
+### Mask (7)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Chroma Key | `node.chroma_key` | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
 | Circle Mask | `node.circle_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
+| CoC Dilate | `node.coc_dilate` | Map | Spreads the maximum blur amount from a depth-of-field mask into its neighboring pixels, so the transition from sharp to blurry looks soft instead of having a h… |
 | CoC From Depth | `node.coc_from_depth` | Map | Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | SSAO From Depth | `node.ssao_from_depth` | Map | Computes contact shadows from scene depth and a physical camera lens — darkens crevices and touching surfaces the way ambient light naturally would. |

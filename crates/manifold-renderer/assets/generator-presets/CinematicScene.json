@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CinematicScene",
-  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> variable_blur(H) -> variable_blur(V) gather, and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 adds the motion-blur tail.",
+  "description": "Physical-camera 3D scene with true depth of field, contact-shadow AO, and velocity-directed motion blur (docs/CINEMATIC_POST_DESIGN.md D6). A faceted mesh under one key light, shot through node.camera_lens (the one lens node.render_scene's exposure, node.coc_from_depth's circle-of-confusion, AND node.motion_blur's shutter angle all read), an ssao_from_depth -> node.mix(Multiply) contact-occlusion arm, a coc_from_depth -> coc_dilate -> bokeh_gather occlusion-aware disc gather (coc_dilate fixes BUG-137's hard cutoff at depth discontinuities by spreading the max CoC into neighboring pixels before the gather reads it; bokeh_gather is CINEMATIC_POST P4's single-pass 32-tap circular-aperture gather, replacing the earlier two-pass variable_blur H/V separable blur), and a motion_blur tail reading render_scene's velocity output. Grown incrementally across CINEMATIC_POST's phases: P1 shipped the DoF chain; P2 added the SSAO arm; P3 added the motion-blur tail; BUG-137 added the coc_dilate stage; P4 swapped variable_blur(H)+variable_blur(V) for one node.bokeh_gather.",
   "presetMetadata": {
     "id": "CinematicScene",
     "displayName": "Cinematic Scene",
@@ -305,30 +305,21 @@
       }
     },
     {
-      "id": 10,
-      "typeId": "node.variable_blur",
-      "nodeId": "blur_h",
-      "handle": "blur_h",
-      "title": "DoF Blur H",
+      "id": 16,
+      "typeId": "node.bokeh_gather",
+      "nodeId": "bokeh",
+      "handle": "bokeh",
+      "title": "Bokeh Gather",
       "params": {
-        "axis": { "type": "Enum", "value": 0 },
-        "max_radius": { "type": "Float", "value": 24.0 },
-        "quality": { "type": "Enum", "value": 1 },
-        "weighting_mode": { "type": "Enum", "value": 0 }
+        "max_radius": { "type": "Float", "value": 24.0 }
       }
     },
     {
-      "id": 11,
-      "typeId": "node.variable_blur",
-      "nodeId": "blur_v",
-      "handle": "blur_v",
-      "title": "DoF Blur V",
-      "params": {
-        "axis": { "type": "Enum", "value": 1 },
-        "max_radius": { "type": "Float", "value": 24.0 },
-        "quality": { "type": "Enum", "value": 1 },
-        "weighting_mode": { "type": "Enum", "value": 0 }
-      }
+      "id": 15,
+      "typeId": "node.coc_dilate",
+      "nodeId": "coc_dilate",
+      "handle": "coc_dilate",
+      "title": "CoC Dilate"
     },
     {
       "id": 14,
@@ -362,11 +353,10 @@
     { "fromNode": 8, "fromPort": "depth", "toNode": 12, "toPort": "depth" },
     { "fromNode": 8, "fromPort": "color", "toNode": 13, "toPort": "a" },
     { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "b" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "width" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "width" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 14, "toPort": "in" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 16, "toPort": "in" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 15, "toPort": "in" },
+    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "width" },
+    { "fromNode": 16, "fromPort": "out", "toNode": 14, "toPort": "in" },
     { "fromNode": 8, "fromPort": "velocity", "toNode": 14, "toPort": "velocity" },
     { "fromNode": 14, "fromPort": "out", "toNode": 99, "toPort": "in" }
   ]
