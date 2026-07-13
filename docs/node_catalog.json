@@ -20960,13 +20960,6 @@
           "max": "1",
           "min": "0",
           "name": "Threshold"
-        },
-        {
-          "default": "0",
-          "id": "mode",
-          "max": "2",
-          "min": "0",
-          "name": "Mode"
         }
       ]
     },
