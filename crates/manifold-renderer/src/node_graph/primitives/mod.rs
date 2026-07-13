@@ -24,6 +24,7 @@ mod bend_mesh;
 mod blob_detect_ffi;
 mod blob_overlay_render;
 mod block_displace_field;
+mod bokeh_gather;
 mod box_mask;
 mod blur_3d_separable;
 mod blinn_specular;

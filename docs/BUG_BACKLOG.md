@@ -1510,6 +1510,18 @@ and cost its fusability, so the fold option is dead.** The dilated CoC feeds whi
 consumes it: the shipped `variable_blur` pair today, `node.bokeh_gather` after CINEMATIC_POST P4
 (which needs the dilation equally — P4 does not make this bug obsolete).
 
+**2026-07-13 update (P4 landed):** `node.bokeh_gather` (`crates/manifold-renderer/src/node_graph/
+primitives/bokeh_gather.rs`) built and swapped into `CinematicScene` in place of the two
+`variable_blur` H/V nodes, still reading `coc_dilate`'s dilated output (`coc_from_depth.out ->
+coc_dilate.in -> bokeh_gather.width`, `coc_from_depth`/`coc_dilate` wires unchanged from the
+BUG-137 fix above) — per this same note's own prediction, P4 does not obsolete the dilation, and
+the wiring confirms it still feeds the gather. Gate green (I1 generated-vs-CPU-reference +
+generated-vs-hand parity, I2 zero-CoC pass-through, full `manifold-renderer --features gpu-proofs`
+sweep 1463 passed, focused nextest 1150 passed, scoped clippy clean, `check_presets` 57/57, I5
+load-smoke `bundled_cinematic_scene_loads_and_compiles`). Still left OPEN pending Peter's
+before/after PNG look-pass (per the amended CINEMATIC_POST demo rule) confirming the hard depth-edge
+seam is actually gone with bokeh_gather in place — this session did not render or judge the PNG.
+
 ### BUG-138 — `node.variable_blur` fixed tap count looks blocky at large CoC radius — LOW-MED (CINEMATIC_POST DoF)
 **Status:** OPEN
 
@@ -1529,6 +1541,14 @@ radius rather than holding it fixed. **Demoted to secondary 2026-07-13:** P4 is 
 DoF root fix (CINEMATIC_POST status amendment) and `CinematicScene` stops using the gaussian pair
 once it lands — the tap-scaling fix then only matters for the still-user-wireable
 `variable_blur` atom itself, at the dof-polish lane's tail.
+
+**2026-07-13 update (P4 landed):** `CinematicScene` now runs `node.bokeh_gather` (true 32-tap 2D
+disc gather, `crates/manifold-renderer/src/node_graph/primitives/bokeh_gather.rs`) in place of the
+two `variable_blur` H/V nodes this bug names — the `variable_blur` atom itself is untouched and
+still ships/wireable elsewhere, only the preset swap happened. Whether the blockiness this bug
+describes is actually resolved is a look-pass question, not a gate question (the numeric gate
+proves the atom matches its own committed D5 spec, not that it looks better than the old kernel)
+— left OPEN pending Peter's before/after PNG look-pass, same as BUG-137's update above.
 
 ## Fixed
 
