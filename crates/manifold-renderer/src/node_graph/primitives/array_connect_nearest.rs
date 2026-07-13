@@ -53,6 +53,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Control,
     aliases: ["connect nearest", "array connect nearest", "nearest neighbour", "constellation"],
+    boundary_reason: NonGpu,
     extra_fields: {
         last_edge_count: Option<usize> = None,
     },

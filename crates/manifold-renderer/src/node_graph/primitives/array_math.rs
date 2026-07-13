@@ -155,6 +155,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["list math", "array math", "Math CHOP"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for ArrayMath {

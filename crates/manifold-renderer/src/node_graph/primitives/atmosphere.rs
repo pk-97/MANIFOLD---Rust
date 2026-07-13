@@ -110,6 +110,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Source,
     aliases: ["atmosphere", "fog", "haze", "depth fog", "mist", "sky tint"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for AtmosphereNode {

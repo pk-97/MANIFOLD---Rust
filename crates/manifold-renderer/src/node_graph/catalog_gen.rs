@@ -79,6 +79,36 @@ struct NodeRow {
     inputs: Vec<PortRow>,
     outputs: Vec<PortRow>,
     params: Vec<ParamRow>,
+    /// Fusion classification (design doc D3, `docs/GRAPH_TOOLING_DESIGN.md`):
+    /// `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+    /// `"boundary:<reason_snake_case>"`. Computed from the live instance's
+    /// `fusion_kind()`/`boundary_reason()` — never hand-maintained, so it
+    /// can't drift from the registry. `"boundary:undeclared"` is a real
+    /// possible value (an atom on `ESCALATED_PENDING_TRIAGE`, awaiting
+    /// orchestrator triage) — see `freeze::classify` doc comments.
+    fusion: String,
+}
+
+/// Render a node's fusion classification for the catalog (design doc D3).
+fn fusion_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
+    use crate::node_graph::freeze::classify::{BoundaryReason, FusionKind};
+
+    match node.fusion_kind() {
+        FusionKind::Pointwise => "pointwise".to_string(),
+        FusionKind::Source => "source".to_string(),
+        FusionKind::MultiInputCoincident => "multi_input_coincident".to_string(),
+        FusionKind::Boundary => match node.boundary_reason() {
+            Some(BoundaryReason::NonGpu) => "boundary:non_gpu".to_string(),
+            Some(BoundaryReason::BarrieredReduction) => "boundary:barriered_reduction".to_string(),
+            Some(BoundaryReason::CrossFrameState) => "boundary:cross_frame_state".to_string(),
+            Some(BoundaryReason::IoBridge) => "boundary:io_bridge".to_string(),
+            Some(BoundaryReason::DrawCall) => "boundary:draw_call".to_string(),
+            Some(BoundaryReason::FusedBundle) => "boundary:fused_bundle".to_string(),
+            Some(BoundaryReason::Blocked) => "boundary:blocked".to_string(),
+            Some(BoundaryReason::ConversionDebt) => "boundary:conversion_debt".to_string(),
+            None => "boundary:undeclared".to_string(),
+        },
+    }
 }
 
 struct PortRow {
@@ -148,6 +178,7 @@ fn collect_rows() -> Vec<NodeRow> {
         .map(|f| {
             let node = (f.create)();
             let desc: Option<&NodeDescriptor> = descriptor_for(f.type_id);
+            let fusion = fusion_str(node.as_ref());
             NodeRow {
                 type_id: f.type_id,
                 label: f.picker.map(|p| p.label),
@@ -161,6 +192,7 @@ fn collect_rows() -> Vec<NodeRow> {
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs: node.outputs().iter().map(port_row).collect(),
                 params: node.parameters().iter().map(param_row).collect(),
+                fusion,
             }
         })
         .collect();
@@ -331,6 +363,7 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
         "purpose": r.purpose,
         "aliases": r.aliases,
         "examples": r.examples,
+        "fusion": r.fusion,
         "inputs": inputs,
         "outputs": outputs,
         "params": params,

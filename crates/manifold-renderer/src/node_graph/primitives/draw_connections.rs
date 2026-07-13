@@ -99,6 +99,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw connections", "hud", "overlay", "connection lines", "links", "constellation"],
+    boundary_reason: Blocked,
 }
 
 const CONNECTIONS_SHADER: &str = r#"

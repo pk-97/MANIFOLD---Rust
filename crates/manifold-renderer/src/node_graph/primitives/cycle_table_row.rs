@@ -50,6 +50,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["cycle table row", "sequence", "step"],
+    boundary_reason: NonGpu,
     extra_fields: {
         clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
     },

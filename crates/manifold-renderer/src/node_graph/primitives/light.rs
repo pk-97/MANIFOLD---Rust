@@ -203,6 +203,7 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Source,
     aliases: ["light", "lamp", "sun", "point light"],
+    boundary_reason: NonGpu,
 }
 
 impl Primitive for LightNode {

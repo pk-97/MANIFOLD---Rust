@@ -52,6 +52,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["clip trigger cycle", "cycle", "rotate"],
+    boundary_reason: NonGpu,
     extra_fields: {
         cycle: ClipTriggerCycle = ClipTriggerCycle::new(),
     },

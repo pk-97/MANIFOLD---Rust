@@ -46,6 +46,7 @@ crate::primitive! {
     category: MathAndConvert,
     role: Filter,
     aliases: ["array feedback", "list feedback", "frame delay"],
+    boundary_reason: CrossFrameState,
     extra_fields: {
         // Tracks the last `reset_trigger` integer value to detect
         // edges. `None` until the first observation; subsequent

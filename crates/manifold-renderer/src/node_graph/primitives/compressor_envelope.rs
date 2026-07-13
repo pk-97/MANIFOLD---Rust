@@ -137,6 +137,9 @@ impl EffectNode for CompressorEnvelope {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    }
 
     fn inputs(&self) -> &[NodeInput] {
         &COMPRESSOR_ENVELOPE_INPUTS

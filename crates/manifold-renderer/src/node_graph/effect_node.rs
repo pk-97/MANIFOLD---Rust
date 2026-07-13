@@ -915,6 +915,18 @@ pub trait EffectNode: Send {
         crate::node_graph::freeze::classify::FusionKind::Boundary
     }
 
+    /// Why this node stays a fusion Boundary (design doc D4,
+    /// `docs/GRAPH_TOOLING_DESIGN.md`). `None` by default. `primitive!`-
+    /// authored primitives set it via the `boundary_reason:` field
+    /// (forwarded from `P::BOUNDARY_REASON`); hand-`impl EffectNode`
+    /// primitives override this method directly. Every registered
+    /// primitive is expected to satisfy `is_fusable() XOR
+    /// boundary_reason().is_some()` — enforced by
+    /// `freeze::classify::tests::every_boundary_atom_declares_its_reason`.
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        None
+    }
+
     /// PURE node: output depends only on param values + wired inputs — no
     /// frame time, no `StateStore`, no randomness, no CPU/FFI side effects.
     /// The executor memoizes pure steps (constant-subgraph hoisting): when a

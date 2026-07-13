@@ -146,6 +146,9 @@ impl EffectNode for Source {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    }
     fn inputs(&self) -> &[NodeInput] {
         &[]
     }
@@ -184,6 +187,9 @@ impl Default for FinalOutput {
 impl EffectNode for FinalOutput {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
+    }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
     }
     fn inputs(&self) -> &[NodeInput] {
         &FINAL_OUTPUT_INPUTS
@@ -322,6 +328,9 @@ fn read_f(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
 impl EffectNode for GeneratorInput {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
+    }
+    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
+        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
     }
     fn inputs(&self) -> &[NodeInput] {
         &[]

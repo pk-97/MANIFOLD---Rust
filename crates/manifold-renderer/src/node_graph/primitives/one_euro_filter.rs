@@ -71,6 +71,7 @@ crate::primitive! {
     category: Control,
     role: Control,
     aliases: ["one euro filter", "smooth", "1 euro filter", "denoise"],
+    boundary_reason: NonGpu,
     extra_fields: {
         prev: Vec<f32> = Vec::new(),
         dx: Vec<f32> = Vec::new(),

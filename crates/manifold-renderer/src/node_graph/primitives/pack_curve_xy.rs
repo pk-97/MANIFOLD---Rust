@@ -57,6 +57,7 @@ crate::primitive! {
     category: Geometry3D,
     role: Filter,
     aliases: ["combine xy", "pack curve xy", "pack curve", "zip points"],
+    boundary_reason: NonGpu,
 }
 
 impl PackCurveXy {

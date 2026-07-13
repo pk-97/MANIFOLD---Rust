@@ -180,6 +180,7 @@ crate::primitive! {
     category: Generate,
     role: Filter,
     aliases: ["text", "render text", "title", "Text TOP"],
+    boundary_reason: DrawCall,
     extra_fields: {
         rasterizer: TextRasterizer = TextRasterizer::new(),
         text_texture: Option<manifold_gpu::GpuTexture> = None,

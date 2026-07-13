@@ -91,6 +91,7 @@ crate::primitive! {
     role: Filter,
     aliases: ["draw particles 3d", "scatter particles 3d", "scatter 3d", "splat", "volume"],
     fusion_kind: Boundary,
+    boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/scatter_particles_3d_body.wgsl"),
     atomic_outputs: ["accum"],
 }

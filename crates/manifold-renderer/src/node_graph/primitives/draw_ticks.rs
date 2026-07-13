@@ -93,6 +93,7 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw ticks", "hud", "overlay", "tick marks", "ruler"],
+    boundary_reason: Blocked,
 }
 
 const TICKS_SHADER: &str = r#"
