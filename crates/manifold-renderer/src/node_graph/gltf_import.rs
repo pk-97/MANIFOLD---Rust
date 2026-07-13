@@ -383,18 +383,19 @@ fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     nodes.push(cam_node);
 
-    // Physical lens (CINEMATIC_POST D6): the one node the DoF group's
-    // circle-of-confusion AND node.motion_blur's shutter angle both read.
-    // f_stop starts at the primitive's own neutral top-of-range (32 —
-    // matches CinematicScene's declared max) and shutter_angle at 0, so an
-    // import looks unchanged until the DoF/Motion Blur cards are dialed in.
-    // focus_distance seeds to the synthesized camera's own framing distance
-    // so the subject is the first thing that stays sharp once f_stop drops.
+    // Physical lens (CINEMATIC_POST D6): the node the DoF group's
+    // circle-of-confusion reads. No motion_blur consumer wired (see the
+    // motion_blur removal note below), so `shutter_angle` is left at the
+    // primitive's own neutral default (0) rather than set here. f_stop
+    // starts at the primitive's own neutral top-of-range (32 — matches
+    // CinematicScene's declared max), so an import looks unchanged until
+    // the Depth of Field card is dialed in. focus_distance seeds to the
+    // synthesized camera's own framing distance so the subject is the
+    // first thing that stays sharp once f_stop drops.
     let lens_id = fresh_id();
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
     lens_node.params.insert("f_stop".to_string(), float(32.0));
-    lens_node.params.insert("shutter_angle".to_string(), float(0.0));
     nodes.push(lens_node);
 
     let sun_id = fresh_id();
@@ -804,38 +805,39 @@ fn build_import_graph(
     }));
     nodes.push(dof_group_node);
 
-    // Motion blur tail (CINEMATIC_POST P3): a single primitive, not a group
-    // — it reads render_scene's `velocity` output (lazy, costs nothing until
-    // wired) directed by the shared lens's shutter_angle.
-    let motion_blur_id = fresh_id();
-    let mut motion_blur_node =
-        plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
-    motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
-    nodes.push(motion_blur_node);
-
+    // No `node.motion_blur` tail: it's live-tracked as BUG-136 (MED-HIGH,
+    // `docs/BUG_BACKLOG.md`) — orbiting the camera in the running app
+    // produces no visible blur despite the wiring, shader math, and
+    // velocity buffer all having been runtime-confirmed correct through
+    // exhaustive headless probing. The unresolved suspects live in the
+    // live app's UI-thread param propagation / render-loop scheduling,
+    // outside what this assembler controls. It's also disproportionately
+    // expensive for a no-op: `graph_tool fusion` on the assembled import
+    // graph shows the whole GTAO/DoF chain (and this node too, had it
+    // stayed) failing to fuse into anything but one 2-node region — every
+    // atom pays its own dispatch (BUG-141, also open) — so a broken,
+    // always-on 32px gather was pure cost with no visual payoff. Retry
+    // once BUG-136 lands a root cause.
     let final_id = fresh_id();
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
     // The lens sits between the raw orbit camera and every downstream
-    // consumer (render_scene, the ao/dof groups, motion blur) — the one
-    // node whose focus_distance/f_stop/shutter_angle all four cards read.
+    // consumer (render_scene, the ao/dof groups) — the node whose
+    // focus_distance/f_stop the Depth of Field card reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
     wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
     wires.push(wire(atmosphere_id, "atmosphere", render_id, "atmosphere"));
 
-    // render_scene → ao (contact AO) → dof (defocus) → motion_blur → final.
+    // render_scene → ao (contact AO) → dof (defocus) → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
     wires.push(wire(lens_id, "out", ao_group_id, "camera"));
     wires.push(wire(render_id, "color", ao_group_id, "color"));
     wires.push(wire(render_id, "depth", dof_group_id, "depth"));
     wires.push(wire(lens_id, "out", dof_group_id, "camera"));
     wires.push(wire(ao_group_id, "out", dof_group_id, "color"));
-    wires.push(wire(dof_group_id, "out", motion_blur_id, "in"));
-    wires.push(wire(render_id, "velocity", motion_blur_id, "velocity"));
-    wires.push(wire(lens_id, "out", motion_blur_id, "camera"));
-    wires.push(wire(motion_blur_id, "out", final_id, "in"));
+    wires.push(wire(dof_group_id, "out", final_id, "in"));
 
     // Shared framing / light / environment card knobs. These come LAST in
     // `card_params` (after the per-object material knobs) but read first on
@@ -954,17 +956,22 @@ fn build_import_graph(
     card_params.push(card_param("dof_fstop", "F-Stop", 0.5, 32.0, 32.0, false, "Depth of Field"));
     card_bindings.push(card_binding("dof_fstop", "F-Stop", 32.0, "lens", "f_stop", 1.0));
 
-    // Motion blur — the lens's shutter_angle (0..360°, matches a real
-    // camera's shutter dial) directs node.motion_blur's per-pixel smear.
-    // Default 0 = shutter closed, no blur, until the model or camera moves.
-    card_params.push(card_param("mb_shutter", "Shutter Angle", 0.0, 360.0, 0.0, false, "Motion Blur"));
+    // Atmosphere — two independent node.atmosphere knobs, each its own
+    // slider (not folded together): `shaft_intensity` alone does nothing
+    // visible — the shaft march scatters light through the fog medium, so
+    // `fog_density` must also be raised for beams to actually appear
+    // (docs/VOLUMETRIC_LIGHT_DESIGN.md D1/D4: "the two faders", both
+    // required together). Kept separate rather than one combined "God
+    // Rays" knob so fog and shafts stay independently dialable, matching
+    // how every other card knob here maps 1:1 to a node param. Both
+    // default to 0 (off, matches the atom's own defaults) — the sun's
+    // `cast_shadows` (already on above) is what gives the shafts their
+    // shape once both faders are up. Range mirrors the primitive's own
+    // declared envelope.
+    card_params.push(card_param("fog_density", "Fog Density", 0.0, 1.0, 0.0, false, "Atmosphere"));
     card_bindings.push(card_binding(
-        "mb_shutter", "Shutter Angle", 0.0, "lens", "shutter_angle", 1.0,
+        "fog_density", "Fog Density", 0.0, "atmosphere", "fog_density", 1.0,
     ));
-
-    // God rays — node.atmosphere's shaft_intensity (CINEMATIC_POST/VOLUMETRIC_LIGHT).
-    // Default 0 = off; the sun's existing `cast_shadows` (already on by
-    // default above) is what gives the shafts something to carve gaps in.
     card_params.push(card_param("god_rays", "God Rays", 0.0, 2.0, 0.0, false, "Atmosphere"));
     card_bindings.push(card_binding(
         "god_rays", "God Rays", 0.0, "atmosphere", "shaft_intensity", 1.0,
@@ -1089,11 +1096,12 @@ mod tests {
         // + 1 Environment + 1 Ambient + 2×(metallic + roughness) = 15
         // framing/material sliders, PLUS 2 GTAO knobs (radius, intensity --
         // `bias` dropped, CINEMATIC_POST D9(b)) + 2 DoF (focus, f-stop) +
-        // 1 Motion Blur (shutter angle) + 1 God Rays (shaft intensity) = 21.
+        // 2 Atmosphere (fog density, god rays — no Motion Blur section,
+        // BUG-136) = 21.
         assert_eq!(
             meta.params.len(),
             21,
-            "15 framing/material + 2 GTAO + 2 DoF + 1 motion blur + 1 god rays"
+            "15 framing/material + 2 GTAO + 2 DoF + 2 atmosphere (fog + god rays)"
         );
         // Every param routes one-to-one except the shared Ambient, which fans
         // out to every material's ambient (2 for azalea). 21 + 1 = 22.
@@ -1193,8 +1201,9 @@ mod tests {
             "camera angle bindings pass radians straight through"
         );
 
-        // The full CINEMATIC_POST stack is wired into the spine: GTAO, the
-        // lens, DoF's atom chain, motion blur, and atmosphere (god rays).
+        // GTAO, the lens, and DoF's atom chain are wired into the spine.
+        // No motion blur (BUG-136 + fusion cost, see the removal comment
+        // in `build_import_graph`) and atmosphere is a top-level node.
         for present in [
             "node.ssao_gtao",
             "node.bilateral_blur",
@@ -1202,7 +1211,6 @@ mod tests {
             "node.coc_from_depth",
             "node.coc_dilate",
             "node.bokeh_gather",
-            "node.motion_blur",
             "node.atmosphere",
         ] {
             assert!(
@@ -1213,12 +1221,16 @@ mod tests {
                 "imported graph must carry `{present}`"
             );
         }
-        // `node.variable_blur` was P4's superseded DoF blur stage — never
-        // reintroduced (bokeh_gather replaced it).
-        assert!(
-            !def.nodes.iter().any(|n| n.type_id == "node.variable_blur"),
-            "`node.variable_blur` was replaced by node.bokeh_gather, never reintroduced"
-        );
+        // `node.motion_blur` was removed (BUG-136: no visible effect live,
+        // despite correct wiring — see the removal comment above) and
+        // `node.variable_blur` was P4's superseded DoF blur stage — neither
+        // is reintroduced.
+        for absent in ["node.motion_blur", "node.variable_blur"] {
+            assert!(
+                !def.nodes.iter().any(|n| n.type_id == absent),
+                "`{absent}` should not be in the imported graph"
+            );
+        }
         // The GTAO knobs are exposed and still bind the ssao node directly —
         // grouping doesn't change its explicit stable node_id.
         for id in ["ssao_intensity", "ssao_radius"] {
@@ -1232,11 +1244,16 @@ mod tests {
                 other => panic!("expected a Node target for `{id}`, got {other:?}"),
             }
         }
-        // New DoF / motion blur / god rays knobs, each targeting its own node.
+        // New DoF / atmosphere knobs, each targeting its own node. Fog
+        // density and god rays are two independent sliders, not folded
+        // into one — the atom needs both raised together to show beams
+        // (see the card-authoring comment in `build_import_graph`), but
+        // each still routes to its own atmosphere param 1:1 like every
+        // other card knob.
         for (id, section, target_node) in [
             ("dof_focus", "Depth of Field", "lens"),
             ("dof_fstop", "Depth of Field", "lens"),
-            ("mb_shutter", "Motion Blur", "lens"),
+            ("fog_density", "Atmosphere", "atmosphere"),
             ("god_rays", "Atmosphere", "atmosphere"),
         ] {
             let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing card param `{id}`"));
@@ -1249,15 +1266,18 @@ mod tests {
                 other => panic!("expected a Node target for `{id}`, got {other:?}"),
             }
         }
-        // Defaults keep a fresh import visually unchanged: DoF/motion blur/
-        // god rays all start at their neutral (no-op) value.
+        // Defaults keep a fresh import visually unchanged: DoF/fog/god rays
+        // all start at their neutral (no-op) value.
         let dof_fstop = meta.params.iter().find(|p| p.id == "dof_fstop").unwrap();
         assert_eq!(dof_fstop.default_value, 32.0, "f-stop starts at the lens's no-blur top-of-range");
-        let mb_shutter = meta.params.iter().find(|p| p.id == "mb_shutter").unwrap();
-        assert_eq!(mb_shutter.default_value, 0.0, "shutter starts closed (no motion blur)");
+        let fog_density = meta.params.iter().find(|p| p.id == "fog_density").unwrap();
+        assert_eq!(fog_density.default_value, 0.0, "fog starts off");
         let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
         assert_eq!(god_rays.default_value, 0.0, "god rays start off");
-        for gone in ["lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius", "motion_blur_px", "ssao_bias"] {
+        for gone in [
+            "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
+            "motion_blur_px", "mb_shutter", "ssao_bias",
+        ] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),
                 "unused card param id `{gone}` should not exist"
@@ -1992,3 +2012,4 @@ mod tests {
         println!("create_with_override proof: wrote {out_path} (fraction {fraction:.4})");
     }
 }
+
