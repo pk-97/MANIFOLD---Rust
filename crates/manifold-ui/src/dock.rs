@@ -25,6 +25,7 @@
 
 use crate::color;
 use crate::cursors::TimelineCursor;
+use crate::drag::DragController;
 use crate::node::{Color32, Rect, Vec2};
 
 /// Width (px) of a drag-handle hit / highlight band, centered on the seam.
@@ -92,8 +93,9 @@ pub struct Dock {
     pub show_right: bool,
     pub show_bottom: bool,
 
-    /// Edge currently being dragged, if any.
-    active: Option<DockEdge>,
+    /// Edge currently being dragged, if any (P7.6: `DragController<DockEdge>`
+    /// replaces the hand-rolled `Option<DockEdge>` hit→begin→drag→end triad).
+    drag: DragController<DockEdge>,
     /// Edge under the cursor (for handle highlight + resize cursor).
     hover: Option<DockEdge>,
 }
@@ -112,7 +114,7 @@ impl Dock {
             show_left: true,
             show_right: true,
             show_bottom: true,
-            active: None,
+            drag: DragController::new(),
             hover: None,
         }
     }
@@ -179,20 +181,21 @@ impl Dock {
     /// Update the hover edge from a cursor position (no-op while dragging — the
     /// active edge stays highlighted). Call on every cursor move.
     pub fn set_hover_from(&mut self, area: Rect, pos: Vec2) {
-        if self.active.is_none() {
+        if !self.drag.is_active() {
             self.hover = self.hit_test(area, pos);
         }
     }
 
-    /// Begin dragging an edge (call after a successful `hit_test` on press).
-    pub fn begin(&mut self, edge: DockEdge) {
-        self.active = Some(edge);
+    /// Begin dragging an edge (call after a successful `hit_test` on press,
+    /// with the same press position `hit_test` was called at).
+    pub fn begin(&mut self, edge: DockEdge, pos: Vec2) {
+        self.drag.start(edge, pos);
         self.hover = Some(edge);
     }
 
     /// True while a divider drag is in progress.
     pub fn is_dragging(&self) -> bool {
-        self.active.is_some()
+        self.drag.is_active()
     }
 
     /// The edge currently highlighted (hovered, or dragged). For dirty-checking
@@ -206,7 +209,7 @@ impl Dock {
     /// edge is active.
     pub fn drag(&mut self, area: Rect, pos: Vec2) {
         let (lw, rw, _) = self.eff();
-        match self.active {
+        match self.drag.payload() {
             Some(DockEdge::Left) => {
                 let ceiling = (area.width - rw - MIN_CANVAS_W).max(self.left_range.0);
                 self.left_w = (pos.x - area.x)
@@ -231,13 +234,13 @@ impl Dock {
 
     /// End the active drag.
     pub fn end(&mut self) {
-        self.active = None;
+        self.drag.cancel();
     }
 
     /// The resize cursor for the current hover / drag, if the pointer is on a
     /// handle: horizontal arrows for the columns, vertical for the bottom strip.
     pub fn cursor(&self) -> Option<TimelineCursor> {
-        match self.active.or(self.hover) {
+        match self.drag.payload().copied().or(self.hover) {
             Some(DockEdge::Left) | Some(DockEdge::Right) => Some(TimelineCursor::ResizeHorizontal),
             Some(DockEdge::Bottom) => Some(TimelineCursor::ResizeVertical),
             None => None,
@@ -255,7 +258,7 @@ impl Dock {
         let r = self.rects(area);
         let mut seam = |edge: DockEdge, handle: Rect, vertical: bool| {
             let full = if vertical { handle.width } else { handle.height };
-            let (c, thickness): (Color32, f32) = if self.active == Some(edge) {
+            let (c, thickness): (Color32, f32) = if self.drag.payload() == Some(&edge) {
                 (color::RESIZE_HANDLE_DRAG, full)
             } else if self.hover == Some(edge) {
                 (color::RESIZE_HANDLE_HOVER, full)
@@ -342,7 +345,7 @@ mod tests {
     #[test]
     fn drag_clamps_to_range() {
         let mut d = Dock::editor();
-        d.begin(DockEdge::Left);
+        d.begin(DockEdge::Left, Vec2::ZERO);
         // Drag far past the max — clamps to left_range.1.
         d.drag(area(), Vec2::new(5000.0, 450.0));
         assert_eq!(d.left_w, d.left_range.1);
@@ -359,7 +362,7 @@ mod tests {
         // so the left drag clamps to keep the canvas at exactly MIN_CANVAS_W.
         let w = Rect::new(0.0, 0.0, 1100.0, 900.0);
         let mut d = Dock::editor();
-        d.begin(DockEdge::Left);
+        d.begin(DockEdge::Left, Vec2::ZERO);
         d.drag(w, Vec2::new(640.0, 450.0)); // wants max left_w=640
         let r = d.rects(w);
         assert!((r.canvas.width - MIN_CANVAS_W).abs() < 0.01);
@@ -372,7 +375,7 @@ mod tests {
         // canvas shrinks but panels still never overlap (canvas width >= 0).
         let narrow = Rect::new(0.0, 0.0, 700.0, 900.0);
         let mut d = Dock::editor();
-        d.begin(DockEdge::Left);
+        d.begin(DockEdge::Left, Vec2::ZERO);
         d.drag(narrow, Vec2::new(640.0, 450.0));
         let r = d.rects(narrow);
         assert!(r.canvas.width >= 0.0);
