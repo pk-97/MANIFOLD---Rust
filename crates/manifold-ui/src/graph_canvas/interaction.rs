@@ -386,6 +386,7 @@ impl GraphCanvas {
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
+        section: Option<String>,
     ) {
         let Some(anchor) = self.param_row_rect(viewport, node_id, pi) else {
             return;
@@ -398,7 +399,8 @@ impl GraphCanvas {
             (viewport.h - HEADER_HEIGHT).max(0.0),
         );
         self.mapping_popover.open(
-            binding_id, label, min, max, invert, curve, scale, offset, range, anchor, clip,
+            binding_id, label, min, max, invert, curve, scale, offset, range, section, anchor,
+            clip,
         );
     }
 
@@ -871,8 +873,42 @@ impl GraphCanvas {
                 if p.wire_driven {
                     return;
                 }
-                // Numeric ranged params scrub in place.
+                // Numeric ranged params scrub in place — UNLESS this press is
+                // the second half of a double-click landing in the value-cell
+                // zone (D13's `(ValueCell, DoubleClick) -> EditValue` row,
+                // P5d — the contract's last dead stop). That opens the
+                // numeric type-in instead of arming a scrub; single-clicks
+                // anywhere else on the row keep scrubbing exactly as before.
                 if let Some(s) = p.scrub {
+                    let in_value_cell = self.param_slider_zones(viewport, node_id).is_some_and(|z| {
+                        sx >= z.value_cell.x && sx <= z.value_cell.x + z.value_cell.width
+                    });
+                    let wants_edit = in_value_cell
+                        && self.is_double_click(sx, sy, now, Some(node_id))
+                        && matches!(
+                            crate::slider::BitmapSlider::intent_for(
+                                crate::slider::SliderZone::ValueCell,
+                                crate::intent::Gesture::DoubleClick,
+                            ),
+                            Some(crate::slider::SliderIntent::EditValue)
+                        );
+                    self.note_click(sx, sy, now, Some(node_id));
+                    if wants_edit {
+                        self.last_click_time = None; // latch so a 3rd press is fresh
+                        if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
+                            self.pending_actions.push(GraphEditCommand::EditGraphNodeNumericParam {
+                                node_id,
+                                param_name: p.name,
+                                current: s.current_value,
+                                min: s.range.0,
+                                max: s.range.1,
+                                whole_numbers: s.is_int,
+                                outer_param_id: p.outer_param_id,
+                                anchor: (anchor.x, anchor.y, anchor.w, anchor.h),
+                            });
+                        }
+                        return;
+                    }
                     self.drag.start(
                         CanvasDrag::ParamScrub {
                             node_id,

@@ -202,17 +202,30 @@ impl GraphCanvas {
     /// Same for every row on a node (the offset is node-relative, not
     /// per-row), so this only needs `node_id`. `None` for a missing node.
     pub(crate) fn param_slider_track_x(&self, viewport: Rect, node_id: u32) -> Option<f32> {
+        Some(self.param_slider_zones(viewport, node_id)?.track.x)
+    }
+
+    /// The full zone split (label/track/value-cell) for a numeric param
+    /// row's slider — one geometry source (I3), the SAME `SliderMetrics`
+    /// `render.rs`'s `NodeRow::Param` branch feeds `BitmapSlider::draw`. Only
+    /// x/width are meaningful (a placeholder y/height, never read by
+    /// callers that only want zone x-ranges — [`Self::param_slider_track_x`]
+    /// and P5d's value-cell hit test both only compare `sx`), so this is a
+    /// 1:1 mirror of render.rs's real `slider_rect` without needing the
+    /// row's y. `zones()` speaks `node::Rect` (build/draw's shared
+    /// vocabulary); this module's own `graph_canvas::Rect` is screen-space
+    /// only. `None` for a missing node.
+    pub(crate) fn param_slider_zones(
+        &self,
+        viewport: Rect,
+        node_id: u32,
+    ) -> Option<crate::slider::SliderZones> {
         let node = self.find_node(node_id)?;
         let (nx, _ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
         let sw = NODE_WIDTH * self.zoom;
         let pad_x = PARAM_PAD_X * self.zoom;
         let slider_x = nx + PARAM_LABEL_X * self.zoom;
         let row_right = nx + sw - pad_x;
-        // Only x/width feed zones()'s label/track split, so a placeholder
-        // y/height (never read for this) keeps this a 1:1 mirror of
-        // render.rs's real `slider_rect` without needing the row's y.
-        // `zones()` speaks `node::Rect` (build/draw's shared vocabulary);
-        // this module's own `graph_canvas::Rect` is screen-space only.
         let slider_rect =
             crate::node::Rect::new(slider_x, 0.0, (row_right - slider_x).max(0.0), 1.0);
         let metrics = crate::slider::SliderMetrics {
@@ -221,7 +234,7 @@ impl GraphCanvas {
             gap: crate::slider::GAP * self.zoom,
             value_gap: crate::slider::VALUE_GAP * self.zoom,
         };
-        Some(crate::slider::BitmapSlider::zones(slider_rect, &metrics).track.x)
+        Some(crate::slider::BitmapSlider::zones(slider_rect, &metrics))
     }
 
     /// Screen-space rect of a node's header "reveal sockets" chip — the small

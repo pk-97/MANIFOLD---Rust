@@ -207,6 +207,31 @@ impl EffectNode for MuxTexture {
         Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
     }
 
+    /// PARAM_RANGE_CONTRACT_DESIGN.md D6/§2 mechanical grant: both params on
+    /// this hand-`impl EffectNode` primitive address/size a discrete
+    /// resource, evidenced by this file's own defensive clamps (curated in
+    /// `freeze::classify::tests::every_range_contract_names_a_real_boundary`).
+    /// `selector` — `resolve_selector_index` (this file, line 197) rounds and
+    /// clamps to `[0, num_inputs)`; the absolute reachable index space is
+    /// `[0, MAX_INPUTS - 1]`. `num_inputs` — `rebuild_ports` (this file, line
+    /// 149) clamps `n` to `[1, MAX_INPUTS]` before slicing the static
+    /// `IN_PORT_NAMES` table.
+    fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
+        match param_name {
+            "selector" => Some(manifold_core::effects::RangeContract {
+                min: Some(0.0),
+                max: Some((MAX_INPUTS - 1) as f32),
+                reason: manifold_core::effects::RangeReason::Index,
+            }),
+            "num_inputs" => Some(manifold_core::effects::RangeContract {
+                min: Some(1.0),
+                max: Some(MAX_INPUTS as f32),
+                reason: manifold_core::effects::RangeReason::Count,
+            }),
+            _ => None,
+        }
+    }
+
     fn inputs(&self) -> &[NodeInput] {
         &self.inputs
     }

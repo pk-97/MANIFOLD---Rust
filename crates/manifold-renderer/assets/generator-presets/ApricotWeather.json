@@ -117,7 +117,7 @@
       {
         "id": "camDistance",
         "label": "Camera Distance",
-        "defaultValue": 26.205,
+        "defaultValue": 9.0,
         "target": {
           "kind": "node",
           "nodeId": "cam",

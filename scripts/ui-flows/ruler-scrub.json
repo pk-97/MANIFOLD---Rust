@@ -1,0 +1,17 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Pointer": {
+      "target": { "Point": { "x": 400.0, "y": 190.0 } },
+      "gesture": {
+        "Drag": {
+          "to": { "Point": { "x": 900.0, "y": 190.0 } },
+          "steps": 6
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "Dump"
+]

@@ -66,19 +66,22 @@ impl TimelineViewportPanel {
         Vec::new()
     }
 
-    /// Resolve a press in the horizontal scrollbar strip to a pan action, latching
-    /// the grab offset for the subsequent drag (§24 5e). A press on the thumb grabs
-    /// it where touched; a press on the track centres the thumb under the pointer.
-    fn scrollbar_h_press(&mut self, pos: Vec2) -> Option<PanelAction> {
+    /// Resolve a press in the horizontal scrollbar strip to a pan action, computing
+    /// the grab offset for a subsequent drag to latch (§24 5e). A press on the thumb
+    /// grabs it where touched; a press on the track centres the thumb under the
+    /// pointer. Returns `(grab_dx, action)` — the caller decides whether to persist
+    /// `grab_dx` into a drag session (`DragBegin`) or discard it (a plain `Click`
+    /// never arms a drag, so it never needs the offset again).
+    fn scrollbar_h_press(&self, pos: Vec2) -> Option<(f32, PanelAction)> {
         let (_, thumb) = self.scrollbar_h_layout()?;
-        self.scrollbar_grab_dx = if thumb.contains(pos) {
+        let grab_dx = if thumb.contains(pos) {
             pos.x - thumb.x
         } else {
             thumb.width * 0.5
         };
-        let thumb_left = pos.x - self.scrollbar_grab_dx;
+        let thumb_left = pos.x - grab_dx;
         let sx = self.scrollbar_h_scroll_at(thumb_left)?;
-        Some(PanelAction::TimelineScrollbarH(sx))
+        Some((grab_dx, PanelAction::TimelineScrollbarH(sx)))
     }
 
     /// Route a viewport-local pointer event (the `Panel::handle_event` body).
@@ -107,9 +110,10 @@ impl TimelineViewportPanel {
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }
                 // Horizontal scrollbar: click the track to jump (centre the thumb
-                // under the pointer), or click the thumb to no-op-then-drag.
+                // under the pointer), or click the thumb to no-op-then-drag. A
+                // plain click never arms a drag, so the grab offset is discarded.
                 if self.scrollbar_h_rect.contains(*pos)
-                    && let Some(action) = self.scrollbar_h_press(*pos)
+                    && let Some((_grab_dx, action)) = self.scrollbar_h_press(*pos)
                 {
                     return vec![action];
                 }
@@ -122,26 +126,27 @@ impl TimelineViewportPanel {
             } => {
                 // Marker flag drag (priority over ruler scrub)
                 if let Some(marker_id) = self.hit_test_marker_flag(*origin) {
-                    self.drag_mode = ViewportDragMode::MarkerDrag;
-                    // Store start beat for undo
-                    self.marker_drag_start_beat = self
+                    let start_beat = self
                         .markers
                         .iter()
                         .find(|m| m.id == marker_id)
                         .map(|m| m.beat)
                         .unwrap_or(Beats::ZERO);
-                    self.marker_drag_id = Some(marker_id.clone());
+                    self.drag.start(
+                        ViewportDrag::MarkerDrag { marker_id: marker_id.clone(), start_beat },
+                        *origin,
+                    );
                     return vec![PanelAction::MarkerDragStarted(marker_id.to_string())];
                 }
                 if self.overview_rect.contains(*origin) {
-                    self.drag_mode = ViewportDragMode::OverviewScrub;
+                    self.drag.start(ViewportDrag::OverviewScrub, *origin);
                     self.scrub_free = false;
                     let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width)
                         .clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*origin) {
-                    self.drag_mode = ViewportDragMode::RulerScrub;
+                    self.drag.start(ViewportDrag::RulerScrub, *origin);
                     // Latch Alt state at drag start — Unity checks per-frame but
                     // Drag events don't carry modifiers, so we capture once.
                     self.scrub_free = modifiers.alt;
@@ -152,8 +157,8 @@ impl TimelineViewportPanel {
                 // Horizontal scrollbar drag (§24 5e). Latches the grab offset so
                 // the thumb tracks the pointer 1:1.
                 if self.scrollbar_h_rect.contains(*origin) {
-                    self.drag_mode = ViewportDragMode::ScrollbarHDrag;
-                    if let Some(action) = self.scrollbar_h_press(*origin) {
+                    if let Some((grab_dx, action)) = self.scrollbar_h_press(*origin) {
+                        self.drag.start(ViewportDrag::ScrollbarHDrag { grab_dx }, *origin);
                         return vec![action];
                     }
                     return Vec::new();
@@ -163,62 +168,53 @@ impl TimelineViewportPanel {
 
             // ── Drag: marker → ruler → overview scrub continuation
             UIEvent::Drag { pos, .. } => {
-                if self.drag_mode == ViewportDragMode::MarkerDrag
-                    && let Some(marker_id) = &self.marker_drag_id
-                {
-                    let raw = self.pixel_to_beat(pos.x);
-                    let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
-                    return vec![PanelAction::MarkerDragMoved(
-                        marker_id.to_string(),
-                        beat.as_f32(),
-                    )];
-                }
-                if self.drag_mode == ViewportDragMode::OverviewScrub {
-                    let norm =
-                        ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
-                    return vec![PanelAction::OverviewScrub(norm)];
-                }
-                if self.drag_mode == ViewportDragMode::RulerScrub {
-                    // Clamp pixel to ruler rect so dragging outside the viewport
-                    // doesn't seek to extreme positions.
-                    let clamped_x = pos
-                        .x
-                        .clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
-                    let raw = self.pixel_to_beat(clamped_x);
-                    let beat = self.scrub_snap_beat(raw, self.scrub_free);
-                    return vec![PanelAction::Seek(beat.as_f32())];
-                }
-                if self.drag_mode == ViewportDragMode::ScrollbarHDrag {
-                    let thumb_left = pos.x - self.scrollbar_grab_dx;
-                    if let Some(sx) = self.scrollbar_h_scroll_at(thumb_left) {
-                        return vec![PanelAction::TimelineScrollbarH(sx)];
+                match self.drag.payload() {
+                    Some(ViewportDrag::MarkerDrag { marker_id, .. }) => {
+                        let marker_id = marker_id.clone();
+                        let raw = self.pixel_to_beat(pos.x);
+                        let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
+                        vec![PanelAction::MarkerDragMoved(marker_id.to_string(), beat.as_f32())]
                     }
-                    return Vec::new();
+                    Some(ViewportDrag::OverviewScrub) => {
+                        let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width)
+                            .clamp(0.0, 1.0);
+                        vec![PanelAction::OverviewScrub(norm)]
+                    }
+                    Some(ViewportDrag::RulerScrub) => {
+                        // Clamp pixel to ruler rect so dragging outside the viewport
+                        // doesn't seek to extreme positions.
+                        let clamped_x = pos
+                            .x
+                            .clamp(self.ruler_rect.x, self.ruler_rect.x + self.ruler_rect.width);
+                        let raw = self.pixel_to_beat(clamped_x);
+                        let beat = self.scrub_snap_beat(raw, self.scrub_free);
+                        vec![PanelAction::Seek(beat.as_f32())]
+                    }
+                    Some(ViewportDrag::ScrollbarHDrag { grab_dx }) => {
+                        let thumb_left = pos.x - grab_dx;
+                        match self.scrollbar_h_scroll_at(thumb_left) {
+                            Some(sx) => vec![PanelAction::TimelineScrollbarH(sx)],
+                            None => Vec::new(),
+                        }
+                    }
+                    None => Vec::new(),
                 }
-                Vec::new()
             }
 
             // ── DragEnd: reset drag mode ─────────────────────────
             UIEvent::DragEnd { pos, .. } => {
-                if self.drag_mode == ViewportDragMode::MarkerDrag {
-                    let result = if let Some(marker_id) = self.marker_drag_id.take() {
+                match self.drag.release() {
+                    Some(ViewportDrag::MarkerDrag { marker_id, .. }) => {
                         let raw = self.pixel_to_beat(pos.x);
                         let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
-                        vec![PanelAction::MarkerDragEnded(
-                            marker_id.to_string(),
-                            beat.as_f32(),
-                        )]
-                    } else {
+                        vec![PanelAction::MarkerDragEnded(marker_id.to_string(), beat.as_f32())]
+                    }
+                    Some(_) => {
+                        self.scrub_free = false;
                         Vec::new()
-                    };
-                    self.drag_mode = ViewportDragMode::None;
-                    return result;
+                    }
+                    None => Vec::new(),
                 }
-                if self.drag_mode != ViewportDragMode::None {
-                    self.drag_mode = ViewportDragMode::None;
-                    self.scrub_free = false;
-                }
-                Vec::new()
             }
 
             // ── DoubleClick: marker rename ────────────────────────

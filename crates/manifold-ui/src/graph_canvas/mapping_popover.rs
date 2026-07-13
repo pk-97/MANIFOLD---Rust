@@ -21,18 +21,22 @@
 //! snapshot/changed/commit `PanelAction` triad, so a range drag still
 //! coalesces into one undo entry.
 //!
-//! Label editing is intentionally **deferred**: a real text field on the
-//! immediate-mode canvas would need caret/selection/IME handling that
-//! doesn't exist on this surface yet. The label is shown read-only in the
-//! popover header so you know which binding you're reshaping; renaming
-//! still works from the (existing) `EffectMappingLabel` action whenever a
-//! text-field surface lands.
+//! Label AND section are live text fields (UI_WIDGET_UNIFICATION P5c, closes
+//! BUG-102): both embed [`crate::text_edit::TextEditModel`] — the same
+//! caret/selection primitive `manifold-app`'s `TextInputState` and the
+//! canvas numeric type-in (P5d) share (I7, one editing home). Click places
+//! the caret, click-drag selects a range within the field, typing replaces
+//! the selection; Enter/blur commits, Esc cancels (D16). The popover has no
+//! `UITree`, so caret + ranged-selection highlight are drawn as `Painter`
+//! rects/text rather than through a retained text-field widget — the same
+//! immediate-mode convention every other row here already uses.
 
 use crate::MacroCurve;
 use crate::PanelAction;
 use crate::apply_card_reshape;
 use crate::draw::Painter;
 use crate::node::Color32;
+use crate::text_edit::{TextEditModel, byte_offset_for_x, x_for_byte_offset};
 
 use super::Rect;
 
@@ -137,7 +141,9 @@ enum DragTarget {
 }
 
 /// Which field is being typed into. The four numeric fields parse as `f32`;
-/// `Label` is a free-text rename committed via `EffectMappingLabel`.
+/// `Label` is a free-text rename committed via `EffectMappingLabel`; `Section`
+/// is a free-text (or empty-to-clear) commit via `EffectMappingSection`
+/// (P5c, closes BUG-102).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditField {
     Min,
@@ -145,6 +151,7 @@ enum EditField {
     Scale,
     Offset,
     Label,
+    Section,
 }
 
 impl From<DragTarget> for EditField {
@@ -167,6 +174,9 @@ pub struct MappingPopover {
     /// `PanelAction` so the app routes to the right `UserParamBinding`.
     binding_id: String,
     label: String,
+    /// The binding's card section (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
+    /// D5). `None` = unsectioned. Editable via `EditField::Section` (P5c).
+    section: Option<String>,
     /// The binding's declared min/max *range bounds* (the slider's full
     /// span). The trim handles select a sub-window within this; we map a
     /// handle's pixel position to a value in `[range_lo, range_hi]`.
@@ -198,14 +208,24 @@ pub struct MappingPopover {
     /// never moves is a click → type the value.
     drag_moved: bool,
     /// The field currently being typed into (`None` = not editing). Clicking a
-    /// value (min / max / scale / offset) or the header label enters edit mode;
-    /// the host feeds keystrokes via [`Self::on_text_char`] /
+    /// value (min / max / scale / offset / section) or the header label enters
+    /// edit mode; the host feeds keystrokes via [`Self::on_text_char`] /
     /// [`Self::on_backspace`] and commits with [`Self::commit_edit`] (Enter) or
-    /// cancels with [`Self::cancel_edit`] (Esc).
+    /// cancels with [`Self::cancel_edit`] (Esc). A press elsewhere inside the
+    /// panel also commits (D16 blur-commit); closing the popover (a press
+    /// outside it) discards instead, unchanged overlay-teardown semantics.
     edit: Option<EditField>,
-    /// In-progress typed text for the active [`Self::edit`] field. Empty on
-    /// entry; commit parses it as `f32` (empty / unparseable → no change).
-    edit_buffer: String,
+    /// The active [`Self::edit`] field's editing model (P5c, I7) — caret +
+    /// selection + text, shared shape with every other text session in the
+    /// app. Seeded fresh by [`Self::enter_edit`]; numeric fields seed empty
+    /// (type a fresh value), Label/Section seed with the current text
+    /// pre-selected (edit in place). Commit parses/validates per field.
+    model: TextEditModel,
+    /// True between a press inside the field currently being edited and its
+    /// release — `on_move` extends the selection via `drag_to` while set
+    /// (P5c mouse press/drag routing, mirrors `manifold-app`'s
+    /// `TextInputState::dragging`).
+    text_dragging: bool,
     /// The card slider's current (post-modulation) value, pushed by the host
     /// each frame via [`Self::set_live_value`]. Drives the live dot on the
     /// preview so you can watch where the knob sits — and where drivers /
@@ -222,6 +242,7 @@ impl MappingPopover {
             open: false,
             binding_id: String::new(),
             label: String::new(),
+            section: None,
             range_lo: 0.0,
             range_hi: 1.0,
             cur_min: 0.0,
@@ -236,7 +257,8 @@ impl MappingPopover {
             scrub_start: 0.0,
             drag_moved: false,
             edit: None,
-            edit_buffer: String::new(),
+            model: TextEditModel::new(""),
+            text_dragging: false,
             live_value: None,
             pending_actions: Vec::new(),
         }
@@ -289,11 +311,13 @@ impl MappingPopover {
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
+        section: Option<String>,
         anchor: Rect,
         clip: Rect,
     ) {
         self.binding_id = binding_id;
         self.label = label;
+        self.section = section;
         self.cur_min = min;
         self.cur_max = max;
         self.invert = invert;
@@ -319,7 +343,8 @@ impl MappingPopover {
         self.dragging = None;
         self.drag_moved = false;
         self.edit = None;
-        self.edit_buffer.clear();
+        self.text_dragging = false;
+        self.model = TextEditModel::new("");
         self.live_value = None;
 
         let h = self.panel_height();
@@ -343,14 +368,15 @@ impl MappingPopover {
         self.open = false;
         self.dragging = None;
         self.edit = None;
-        self.edit_buffer.clear();
+        self.text_dragging = false;
+        self.model = TextEditModel::new("");
     }
 
     // ── Geometry ────────────────────────────────────────────────────
 
     fn panel_height(&self) -> f32 {
         // header + preview + min + max + invert + curve + scale + offset +
-        // goto-node, padded.
+        // section + goto-node, padded.
         PAD + HEADER_H
             + ROW_GAP + PREVIEW_H    // live response preview
             + ROW_GAP + ROW_H        // min
@@ -359,6 +385,7 @@ impl MappingPopover {
             + ROW_GAP + CURVE_ROW_H  // curve
             + ROW_GAP + ROW_H        // scale
             + ROW_GAP + ROW_H        // offset
+            + ROW_GAP + ROW_H        // section (P5c)
             + ROW_GAP + ROW_H        // go to node
             + PAD
     }
@@ -404,8 +431,23 @@ impl MappingPopover {
     fn offset_row_y(&self) -> f32 {
         self.scale_row_y() + ROW_H + ROW_GAP
     }
-    fn goto_row_y(&self) -> f32 {
+    fn section_row_y(&self) -> f32 {
         self.offset_row_y() + ROW_H + ROW_GAP
+    }
+    fn goto_row_y(&self) -> f32 {
+        self.section_row_y() + ROW_H + ROW_GAP
+    }
+
+    /// Right-aligned click-to-type value box for the card `section` field
+    /// (P5c) — same shape as [`Self::value_field_rect`], its own row since
+    /// `Section` isn't a [`DragTarget`] (no scrub, click-to-type only).
+    fn section_field_rect(&self) -> Rect {
+        Rect::new(
+            self.origin.0 + POPOVER_W - PAD - 76.0,
+            self.section_row_y(),
+            76.0,
+            ROW_H,
+        )
     }
 
     /// Full-width "Go to node" button at the popover's foot — the discoverable
@@ -469,6 +511,40 @@ impl MappingPopover {
 
     // ── Input ───────────────────────────────────────────────────────
 
+    /// Screen geometry of the field currently being edited, plus its font
+    /// size and whether its text right-aligns (the four numeric fields +
+    /// Section) or left-aligns (Label) — the input the pointer-routing and
+    /// caret-rendering math below share (P5c).
+    fn active_field_geometry(&self) -> Option<(Rect, f32, bool)> {
+        match self.edit? {
+            EditField::Label => Some((self.header_rect(), FONT, false)),
+            EditField::Section => Some((self.section_field_rect(), FONT_SMALL, true)),
+            EditField::Min => Some((self.value_field_rect(DragTarget::Min), FONT_SMALL, true)),
+            EditField::Max => Some((self.value_field_rect(DragTarget::Max), FONT_SMALL, true)),
+            EditField::Scale => Some((self.value_field_rect(DragTarget::Scale), FONT_SMALL, true)),
+            EditField::Offset => Some((self.value_field_rect(DragTarget::Offset), FONT_SMALL, true)),
+        }
+    }
+
+    /// The byte offset under screen-x `sx` within the field currently being
+    /// edited, via [`byte_offset_for_x`] — `draw::text_width` is the
+    /// measurer, same width function the rendered text uses, so hit-testing
+    /// and drawing never disagree. `0` if nothing is being edited (callers
+    /// only reach this while `is_editing()`).
+    fn byte_at_field_x(&self, sx: f32) -> usize {
+        let Some((rect, font, right_aligned)) = self.active_field_geometry() else {
+            return 0;
+        };
+        let text = self.model.text();
+        let mut measure = |s: &str| crate::draw::text_width(s, font);
+        let text_start_x = if right_aligned {
+            rect.x + rect.w - measure(text) - 5.0
+        } else {
+            rect.x
+        };
+        byte_offset_for_x(text, sx - text_start_x, &mut measure)
+    }
+
     /// Pointer press. Returns `true` if the popover consumed it. A press
     /// outside the panel returns `false` so the host can dismiss.
     pub fn on_press(&mut self, sx: f32, sy: f32) -> bool {
@@ -478,16 +554,36 @@ impl MappingPopover {
         if !Self::point_in(self.panel_rect(), sx, sy) {
             return false;
         }
-        // Any press inside the panel commits a pending edit first (click-away
-        // to confirm), then proceeds to handle the new press.
+        // A press inside the field ALREADY being edited repositions the
+        // caret and arms drag-select (P5c pointer routing) — it does NOT
+        // commit-and-reopen the session, which would wipe the selection a
+        // click-drag is trying to make.
+        if let Some((field_rect, ..)) = self.active_field_geometry()
+            && Self::point_in(field_rect, sx, sy)
+        {
+            let byte = self.byte_at_field_x(sx);
+            self.model.caret_to(byte, false);
+            self.text_dragging = true;
+            return true;
+        }
+        // Any OTHER press inside the panel commits a pending edit first
+        // (click-away to confirm — D16 blur-commit), then proceeds to
+        // handle the new press.
         if self.is_editing() {
             self.commit_edit();
         }
         // Header label — click to rename the knob (seeded with the current
-        // name). Drivers / Ableton / OSC address this binding by stable id, so
-        // the rename never re-keys them; only the displayed label changes.
+        // name, pre-selected). Drivers / Ableton / OSC address this binding
+        // by stable id, so the rename never re-keys them; only the displayed
+        // label changes.
         if Self::point_in(self.header_rect(), sx, sy) {
             self.enter_edit(EditField::Label);
+            return true;
+        }
+        // Section field — click to type/clear the card section (P5c, closes
+        // BUG-102).
+        if Self::point_in(self.section_field_rect(), sx, sy) {
+            self.enter_edit(EditField::Section);
             return true;
         }
         // Min / Max value fields — click to type an exact bound (including past
@@ -556,10 +652,17 @@ impl MappingPopover {
         true
     }
 
-    /// Pointer move. Drives the scale/offset scrub (the only drag now that the
-    /// range is set by typing — no trim handles).
+    /// Pointer move. Drives an in-progress text drag-select over the
+    /// editing field (P5c) when one is armed; otherwise the scale/offset
+    /// scrub (the only drag now that the range is set by typing — no trim
+    /// handles).
     pub fn on_move(&mut self, sx: f32, _sy: f32) {
         if !self.open {
+            return;
+        }
+        if self.text_dragging {
+            let byte = self.byte_at_field_x(sx);
+            self.model.drag_to(byte);
             return;
         }
         if let Some(which) = self.dragging {
@@ -567,10 +670,11 @@ impl MappingPopover {
         }
     }
 
-    /// Pointer release. The only drag is a scale/offset scrub: a real scrub
-    /// commits as one undo entry; a press that never moved is a click → enter
-    /// numeric edit.
+    /// Pointer release. Ends a text drag-select if one was armed. The only
+    /// OTHER drag is a scale/offset scrub: a real scrub commits as one undo
+    /// entry; a press that never moved is a click → enter numeric edit.
     pub fn on_release(&mut self) {
+        self.text_dragging = false;
         if let Some(which) = self.dragging.take() {
             if self.drag_moved {
                 self.pending_actions
@@ -583,55 +687,63 @@ impl MappingPopover {
         }
     }
 
-    // ── Numeric entry ───────────────────────────────────────────────
+    // ── Text entry (P5c: TextEditModel-backed, I7) ────────────────────
 
     /// Begin typing into `field`. Numeric fields seed empty (type a fresh
-    /// value); the label seeds with the current name (edit in place). Enter
-    /// commits, Esc cancels. Cancels any in-progress drag.
+    /// value); Label/Section seed with the current text, pre-selected (edit
+    /// in place — first keystroke replaces it, same convention as every
+    /// other text session in the app). Enter commits, Esc cancels. Cancels
+    /// any in-progress drag.
     fn enter_edit(&mut self, field: EditField) {
         self.dragging = None;
-        self.edit_buffer = if field == EditField::Label {
-            self.label.clone()
-        } else {
-            String::new()
+        self.text_dragging = false;
+        let seed = match field {
+            EditField::Label => self.label.clone(),
+            EditField::Section => self.section.clone().unwrap_or_default(),
+            EditField::Min | EditField::Max | EditField::Scale | EditField::Offset => String::new(),
         };
+        self.model = TextEditModel::new(&seed);
+        if matches!(field, EditField::Label | EditField::Section) {
+            self.model.select_all();
+        }
         self.edit = Some(field);
     }
 
-    /// Feed one typed character to the active field. The label takes any
-    /// printable character; numeric fields take digits, a single decimal point,
-    /// and a leading minus.
+    /// Feed one typed character to the active field, replacing the current
+    /// selection if any (typing replaces the selection, D16). Label/Section
+    /// take any printable character; numeric fields take digits, a single
+    /// decimal point, and a leading minus.
     pub fn on_text_char(&mut self, c: char) {
         match self.edit {
-            Some(EditField::Label) => {
+            Some(EditField::Label) | Some(EditField::Section) => {
                 if !c.is_control() {
-                    self.edit_buffer.push(c);
+                    self.model.insert_char(c);
                 }
             }
             Some(_) => {
-                if c.is_ascii_digit() {
-                    self.edit_buffer.push(c);
-                } else if c == '.' && !self.edit_buffer.contains('.') {
-                    self.edit_buffer.push('.');
-                } else if c == '-' && self.edit_buffer.is_empty() {
-                    self.edit_buffer.push('-');
+                let allowed = c.is_ascii_digit()
+                    || (c == '.' && !self.model.text().contains('.'))
+                    || (c == '-' && self.model.text().is_empty());
+                if allowed {
+                    self.model.insert_char(c);
                 }
             }
             None => {}
         }
     }
 
-    /// Delete the last typed character.
+    /// Delete the selection, or (no selection) the char before the caret.
     pub fn on_backspace(&mut self) {
         if self.edit.is_some() {
-            self.edit_buffer.pop();
+            self.model.backspace();
         }
     }
 
     /// Cancel the edit, discarding the typed text.
     pub fn cancel_edit(&mut self) {
         self.edit = None;
-        self.edit_buffer.clear();
+        self.text_dragging = false;
+        self.model = TextEditModel::new("");
     }
 
     /// Commit the typed value to the active field and emit the matching
@@ -642,7 +754,8 @@ impl MappingPopover {
         let Some(field) = self.edit.take() else {
             return;
         };
-        let buffer = std::mem::take(&mut self.edit_buffer);
+        self.text_dragging = false;
+        let buffer = self.model.take_text();
         let id = self.binding_id.clone();
 
         // Label: free-text rename. Emits the (already-existing) label edit and
@@ -657,6 +770,22 @@ impl MappingPopover {
                         binding_id: id,
                         label,
                     });
+            }
+            return;
+        }
+
+        // Section: free-text, empty clears back to unsectioned (P5c, closes
+        // BUG-102). Outer touched-ness is implicit in emitting the action at
+        // all; the inner `Option<String>` carries value-vs-clear.
+        if field == EditField::Section {
+            let trimmed = buffer.trim();
+            let new_section = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            if new_section != self.section {
+                self.section = new_section.clone();
+                self.pending_actions.push(PanelAction::EffectMappingSection {
+                    binding_id: id,
+                    section: new_section,
+                });
             }
             return;
         }
@@ -706,7 +835,7 @@ impl MappingPopover {
                 self.pending_actions
                     .push(PanelAction::EffectMappingAffineCommit { binding_id: id });
             }
-            EditField::Label => unreachable!("handled above"),
+            EditField::Label | EditField::Section => unreachable!("handled above"),
         }
     }
 
@@ -822,13 +951,56 @@ impl MappingPopover {
         let active = self.dragging == Some(which) || editing;
         let bg = if active { CURVE_BG_ACTIVE } else { BTN_BG };
         ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
-        let txt = if editing {
-            format!("{}|", self.edit_buffer)
-        } else {
-            value_text
-        };
-        let tw = txt.chars().count() as f32 * FONT_SMALL * 0.55;
+        let txt = if editing { self.model.text().to_string() } else { value_text };
+        let tw = crate::draw::text_width(&txt, FONT_SMALL);
         ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+        if editing {
+            self.draw_caret_and_selection(ui, r, FONT_SMALL, true);
+        }
+    }
+
+    /// Draw the card-`section` field (P5c): label on the left, a right-aligned
+    /// click-to-type box on the right — `"—"` when unsectioned, the section
+    /// name otherwise, or the live edit buffer + caret while typing.
+    fn draw_section_field(&self, ui: &mut dyn Painter, panel_x: f32) {
+        let r = self.section_field_rect();
+        ui.draw_text(panel_x + PAD, r.y + 3.0, "Section", FONT, TEXT_SECONDARY);
+        let editing = self.edit == Some(EditField::Section);
+        let bg = if editing { CURVE_BG_ACTIVE } else { BTN_BG };
+        ui.draw_rounded_rect(r.x, r.y, r.w, r.h, bg, 2.0);
+        let txt = if editing {
+            self.model.text().to_string()
+        } else {
+            self.section.clone().unwrap_or_else(|| "\u{2014}".to_string())
+        };
+        let tw = crate::draw::text_width(&txt, FONT_SMALL);
+        ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
+        if editing {
+            self.draw_caret_and_selection(ui, r, FONT_SMALL, true);
+        }
+    }
+
+    /// Draws the ranged-selection highlight + caret for the field currently
+    /// being edited, from `self.model` (P5c — caret + selection instead of
+    /// the old whole-buffer `"|"` suffix). `rect`/`font`/`right_aligned`
+    /// mirror [`Self::active_field_geometry`] / [`Self::byte_at_field_x`]'s
+    /// text-origin math, so hit-testing and drawing never disagree.
+    fn draw_caret_and_selection(&self, ui: &mut dyn Painter, rect: Rect, font: f32, right_aligned: bool) {
+        let text = self.model.text();
+        let mut measure = |s: &str| crate::draw::text_width(s, font);
+        let text_start_x = if right_aligned {
+            rect.x + rect.w - measure(text) - 5.0
+        } else {
+            rect.x
+        };
+        if self.model.has_selection() {
+            let sel = self.model.selection();
+            let hx = text_start_x + x_for_byte_offset(text, sel.start, &mut measure);
+            let hend = text_start_x + x_for_byte_offset(text, sel.end, &mut measure);
+            ui.draw_rect(hx, rect.y + 2.0, (hend - hx).max(1.0), rect.h - 4.0, crate::color::TEXT_EDIT_SELECT_BG);
+        }
+        let cx = text_start_x + x_for_byte_offset(text, self.model.caret(), &mut measure);
+        ui.draw_rect(cx, rect.y + 2.0, 1.0, rect.h - 4.0, crate::color::TEXT_EDIT_CARET);
     }
 
     pub fn render(&self, ui: &mut dyn Painter) {
@@ -849,19 +1021,19 @@ impl MappingPopover {
 
         // Header: the binding label (left, click to rename) and the live
         // input→output readout (right). While renaming, the label shows the
-        // typed buffer + caret over a highlight; the readout hides so a long
-        // name has room.
+        // model's live text with a ranged-selection highlight + caret drawn
+        // over it (P5c — was a whole-buffer `"|"` suffix); the readout hides
+        // so a long name has room.
         let renaming = self.edit == Some(EditField::Label);
+        let hr = self.header_rect();
         if renaming {
-            let hr = self.header_rect();
             ui.draw_rounded_rect(hr.x - 3.0, hr.y, hr.w, hr.h, CURVE_BG_ACTIVE, 2.0);
         }
-        let header_txt = if renaming {
-            format!("{}|", self.edit_buffer)
-        } else {
-            self.label.clone()
-        };
+        let header_txt = if renaming { self.model.text().to_string() } else { self.label.clone() };
         ui.draw_text(panel.x + PAD, panel.y + PAD, &header_txt, FONT, TEXT_PRIMARY);
+        if renaming {
+            self.draw_caret_and_selection(ui, hr, FONT, false);
+        }
         if let Some(v) = self.live_value.filter(|_| !renaming) {
             let readout = format!("{} → {}", trim_num(v), trim_num(self.reshape_output(v)));
             let tw = readout.chars().count() as f32 * FONT_SMALL * 0.55;
@@ -938,6 +1110,9 @@ impl MappingPopover {
             self.draw_value_field(ui, panel.x, which, name, format_affine(val));
         }
 
+        // ── Section field (P5c, closes BUG-102) ──
+        self.draw_section_field(ui, panel.x);
+
         // ── Go to node ──
         // The discoverable "where is this slider mapped from?" action: a
         // full-width button that navigates the editor canvas to the node this
@@ -978,6 +1153,7 @@ mod tests {
             1.0,
             0.0,
             Some((0.0, 1.0)),
+            None,
             Rect::new(100.0, 100.0, 168.0, 18.0),
             Rect::new(0.0, 0.0, 1000.0, 800.0),
         );
@@ -1015,6 +1191,7 @@ mod tests {
             1.0,
             0.0,
             Some((0.0, 1.0)),
+            None,
             Rect::new(0.0, 0.0, 168.0, 18.0),
             Rect::new(0.0, 0.0, 1000.0, 800.0),
         );
@@ -1166,9 +1343,9 @@ mod tests {
         for ch in "-1a2.3.4".chars() {
             p.on_text_char(ch);
         }
-        assert_eq!(p.edit_buffer, "-12.34");
+        assert_eq!(p.model.text(), "-12.34");
         p.on_backspace();
-        assert_eq!(p.edit_buffer, "-12.3");
+        assert_eq!(p.model.text(), "-12.3");
         // Cancel discards without emitting or changing the value.
         let before = p.cur_offset;
         p.drain_actions();
@@ -1184,9 +1361,10 @@ mod tests {
         let hr = p.header_rect();
         assert!(p.on_press(hr.x + 2.0, hr.y + 2.0));
         assert!(p.is_editing(), "clicking the header enters label edit");
-        // Label seeds with the current name; the field takes free text + spaces.
-        assert_eq!(p.edit_buffer, "Rotation");
-        while !p.edit_buffer.is_empty() {
+        // Label seeds with the current name, pre-selected (D16); the field
+        // takes free text + spaces.
+        assert_eq!(p.model.text(), "Rotation");
+        while !p.model.text().is_empty() {
             p.on_backspace();
         }
         for ch in "Chaos".chars() {
@@ -1203,5 +1381,135 @@ mod tests {
             actions.as_slice(),
             [PanelAction::EffectMappingLabel { label, .. }] if label == "Chaos X"
         ));
+    }
+
+    // ── P5c: Section field (closes BUG-102) ───────────────────────────
+
+    #[test]
+    fn click_section_field_enters_edit_and_types_a_value() {
+        let mut p = open_popover(); // unsectioned
+        assert_eq!(p.section, None);
+        let r = p.section_field_rect();
+        assert!(p.on_press(r.x + 2.0, r.y + 2.0));
+        assert!(p.is_editing(), "clicking the section box enters edit");
+        p.drain_actions();
+        for ch in "Lights".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        assert!(!p.is_editing());
+        assert_eq!(p.section, Some("Lights".to_string()));
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::EffectMappingSection { section: Some(s), .. }] if s == "Lights"
+        ));
+    }
+
+    #[test]
+    fn committing_an_empty_section_clears_it() {
+        let mut p = open_popover();
+        p.enter_edit(EditField::Section);
+        p.model.select_all();
+        // Seed a section, commit, then clear it.
+        for ch in "Lights".chars() {
+            p.on_text_char(ch);
+        }
+        p.commit_edit();
+        p.drain_actions();
+        assert_eq!(p.section, Some("Lights".to_string()));
+
+        p.enter_edit(EditField::Section);
+        // enter_edit pre-selects the seeded text; typing nothing and
+        // committing an emptied buffer clears the section back to None.
+        while !p.model.text().is_empty() {
+            p.on_backspace();
+        }
+        p.commit_edit();
+        assert_eq!(p.section, None);
+        let actions = p.drain_actions();
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::EffectMappingSection { section: None, .. }]
+        ));
+    }
+
+    #[test]
+    fn section_seeds_pre_selected_so_typing_replaces_it() {
+        let mut p = MappingPopover::new();
+        p.open(
+            "b".to_string(),
+            "Label".to_string(),
+            0.0,
+            1.0,
+            false,
+            MacroCurve::Linear,
+            1.0,
+            0.0,
+            Some((0.0, 1.0)),
+            Some("Old".to_string()),
+            Rect::new(100.0, 100.0, 168.0, 18.0),
+            Rect::new(0.0, 0.0, 1000.0, 800.0),
+        );
+        p.enter_edit(EditField::Section);
+        assert_eq!(p.model.text(), "Old");
+        assert!(p.model.has_selection(), "seeded text starts pre-selected (D16)");
+        p.on_text_char('N');
+        assert_eq!(p.model.text(), "N", "typing over the selection replaces it, not appends");
+    }
+
+    // ── P5c: pointer-driven caret placement + drag-select ─────────────
+
+    #[test]
+    fn clicking_inside_the_field_already_being_edited_repositions_the_caret() {
+        let mut p = open_popover();
+        p.enter_edit(EditField::Offset);
+        for ch in "12.5".chars() {
+            p.on_text_char(ch);
+        }
+        assert_eq!(p.model.caret(), 4, "caret at the end after typing");
+        // A second press inside the SAME field (not commit-and-reopen)
+        // repositions the caret instead of resetting the buffer.
+        let r = p.value_field_rect(DragTarget::Offset);
+        assert!(p.on_press(r.x + 1.0, r.y + 2.0), "press inside the active field is consumed");
+        assert!(p.is_editing(), "still editing — not committed by an in-field press");
+        assert_eq!(p.model.text(), "12.5", "buffer untouched by the reposition click");
+    }
+
+    #[test]
+    fn dragging_inside_the_active_field_extends_the_selection() {
+        let mut p = open_popover();
+        p.enter_edit(EditField::Offset);
+        for ch in "12.5".chars() {
+            p.on_text_char(ch);
+        }
+        let r = p.value_field_rect(DragTarget::Offset);
+        // Press near the box's right edge (end of the right-aligned text)…
+        assert!(p.on_press(r.x + r.w - 1.0, r.y + 2.0));
+        // …then drag toward its left edge — a selection should grow.
+        p.on_move(r.x + 1.0, r.y + 2.0);
+        assert!(p.model.has_selection(), "drag inside the field grows a selection");
+        p.on_release();
+        // Release ends the drag; the selection (and edit session) persists
+        // until commit/cancel.
+        assert!(p.is_editing());
+    }
+
+    #[test]
+    fn pressing_a_different_field_while_editing_commits_first_then_opens_the_new_one() {
+        let mut p = open_popover(); // cur_scale 1.0
+        p.enter_edit(EditField::Offset);
+        for ch in "5".chars() {
+            p.on_text_char(ch);
+        }
+        // Press the Scale field (not Offset) — blur-commits Offset (D16).
+        // Scale/Offset are scrub fields: a press-with-no-drag then arms a
+        // click, which `on_release` resolves into entering edit on Scale.
+        let scale_r = p.value_field_rect(DragTarget::Scale);
+        assert!(p.on_press(scale_r.x + scale_r.w * 0.5, scale_r.y + scale_r.h * 0.5));
+        assert_eq!(p.cur_offset, 5.0, "the offset edit was committed on blur");
+        p.on_release();
+        assert!(p.is_editing(), "the Scale click (no drag) enters its own edit");
+        assert_eq!(p.model.text(), "", "the newly-opened Scale field seeds empty");
     }
 }
