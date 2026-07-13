@@ -2579,3 +2579,105 @@ fn pressing_far_outside_dismisses_then_a_second_rows_value_opens_its_own_editor(
     press_row_value(&mut canvas, vp, 1);
     assert!(canvas.vec_editor.is_some(), "a fresh press on row 1's value opens its own editor");
 }
+
+// ─── UI_WIDGET_UNIFICATION P5d: the contract's last dead stop — a
+//     double-click on a numeric row's value-cell zone opens the type-in
+//     instead of arming a scrub; every other press on the row keeps
+//     scrubbing exactly as before. ─────────────────────────────────────
+
+#[test]
+fn zero_move_press_release_on_a_numeric_row_emits_no_command() {
+    // VERIFY-AT-IMPL (P5d brief): confirms the premise the double-click
+    // layering relies on — an ordinary click-with-no-drag on the value box
+    // arms then releases a scrub with nothing committed.
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.5));
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    let z = canvas.param_slider_zones(vp, 1).unwrap();
+    let x = z.value_cell.x + z.value_cell.width * 0.5;
+    let y = row.y + row.h * 0.5;
+
+    canvas.on_left_button_down(vp, x, y, 1.0, false);
+    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
+    canvas.on_left_button_up(vp, x, y);
+    assert!(canvas.drain_edits().is_empty(), "zero-move press+release emits nothing");
+}
+
+#[test]
+fn double_click_on_the_value_cell_opens_the_type_in_instead_of_scrubbing() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.5));
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    let z = canvas.param_slider_zones(vp, 1).unwrap();
+    let x = z.value_cell.x + z.value_cell.width * 0.5;
+    let y = row.y + row.h * 0.5;
+
+    canvas.on_left_button_down(vp, x, y, 1.0, false);
+    canvas.on_left_button_up(vp, x, y);
+    canvas.drain_edits();
+
+    // Second press within the double-click time/radius window (I8's
+    // single-sourced constants), same value cell.
+    canvas.on_left_button_down(vp, x, y, 1.05, false);
+    assert!(
+        !matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })),
+        "double-click opens the type-in, not a second scrub"
+    );
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::EditGraphNodeNumericParam {
+                node_id,
+                param_name,
+                current,
+                min,
+                max,
+                whole_numbers,
+                outer_param_id,
+                ..
+            } => Some((node_id, param_name, current, min, max, whole_numbers, outer_param_id)),
+            _ => None,
+        })
+        .expect("double-click emits EditGraphNodeNumericParam");
+    assert_eq!(cmd.0, 1, "node id");
+    assert_eq!(cmd.1, "amount", "param name");
+    assert!((cmd.2 - 0.5).abs() < 1e-6, "prefilled with the current value");
+    assert!(cmd.6.is_none(), "not a group-face mirror row");
+}
+
+#[test]
+fn single_click_on_the_value_cell_still_scrubs() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.5));
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    let z = canvas.param_slider_zones(vp, 1).unwrap();
+    let x = z.value_cell.x + z.value_cell.width * 0.5;
+    let y = row.y + row.h * 0.5;
+
+    canvas.on_left_button_down(vp, x, y, 1.0, false);
+    assert!(matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })));
+    assert!(canvas.drain_edits().is_empty(), "opening a scrub emits nothing on its own");
+}
+
+#[test]
+fn double_click_outside_the_value_cell_still_scrubs() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.5));
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    let z = canvas.param_slider_zones(vp, 1).unwrap();
+    // Inside the TRACK zone, left of the value cell — never the type-in's
+    // zone, so double-clicking here keeps scrubbing (D13: EditValue is
+    // owned by ValueCell alone).
+    let x = z.track.x + z.track.width * 0.5;
+    let y = row.y + row.h * 0.5;
+
+    canvas.on_left_button_down(vp, x, y, 1.0, false);
+    canvas.on_left_button_up(vp, x, y);
+    canvas.drain_edits();
+    canvas.on_left_button_down(vp, x, y, 1.05, false);
+    assert!(
+        matches!(canvas.drag.payload(), Some(CanvasDrag::ParamScrub { .. })),
+        "double-click outside the value cell still scrubs"
+    );
+    assert!(
+        canvas.drain_edits().iter().all(|a| !matches!(a, GraphEditCommand::EditGraphNodeNumericParam { .. })),
+        "no type-in command from a double-click outside the value cell"
+    );
+}
