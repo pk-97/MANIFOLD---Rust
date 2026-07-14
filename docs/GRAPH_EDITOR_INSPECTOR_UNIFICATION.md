@@ -2,8 +2,10 @@
 
 **Status:** IN PROGRESS — Change 2 (selection-follows) SHIPPED 2026-07-01. Change 3
 (full inspector column in the editor) SHIPPED with EDITOR_WINDOW_UNIFICATION P1–P3
-(2026-07-14). Change 4 (layout invariance, closes BUG-160) APPROVED 2026-07-14, not
-built — see the section at the end of this doc.
+(2026-07-14). Change 4 (layout invariance, closes BUG-160): P2 (tick parity, D4)
+SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL — D1/D2/D7 shipped in the same
+landing, D3 (fit-at-every-width: elide/chip-wrap) and the width-sweep
+containment test still owed — see the section at the end of this doc.
 **Related:** `docs/GRAPH_EDITOR_REDESIGN.md`, `project_graph_editor_redesign`, `project_binding_unification_design`, `feedback_graph_editor_unified_surface`
 
 > **Shipped — selection-follows.** Clicking an effect/generator card in the main
@@ -322,7 +324,7 @@ that card. Same underlying retarget call, two entry points.
 
 ---
 
-## Change 4 — Layout invariance (closes BUG-160) · APPROVED 2026-07-14, not built · Fable 5
+## Change 4 — Layout invariance (closes BUG-160) · P2 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL (D1/D2/D7 shipped, D3 + width-sweep test owed) · Fable design, Sonnet execution
 
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -466,7 +468,14 @@ drawer; if card frames still disagree with their content, fix the
 `compute_height`-vs-`build` single-source rule (audit intro ⚠) inside P2 before
 touching P1. P1 (width geometry) follows.
 
-**P1 — Geometry unification (one session).**
+**P1 — Geometry unification (one session).** PARTIAL — SHIPPED 2026-07-15
+(`d85ab207`): D1 (chevron lane reserved in both contexts), D2 (`row_geometry()`
+shared helper), D7 (`Dock::editor()`'s `right_range` widened to the shared
+policy range), and a scoped D5 equivalence test
+(`perform_and_author_slider_rows_are_geometry_identical`). NOT shipped: D3
+(elide-to-width labels + choice-chip fit/wrap across every row width) and the
+width-sweep containment test (`inspector_rows_fit_card_bounds_across_widths`)
+— genuinely a full session's worth on their own; picked up in a follow-up.
 Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
 section whole + `feedback_single_source_y_layout`; restate D1–D3 + forbidden moves
 before code. Deliverables: the D2 helper; all row builders ported; D1 both-context
@@ -490,7 +499,8 @@ card. Test scope: `-p manifold-ui` focused; workspace sweep at landing.
 Forbidden moves: per-row nudges (fix in the helper); a second "editor card" widget;
 touching `build_in_rect`'s structure; PNG-diff as a gate.
 
-**P2 — Tick parity (one session, may batch with P1).**
+**P2 — Tick parity (one session, may batch with P1).** SHIPPED 2026-07-15
+(`d85ab207`).
 Entry: P1 merged or same branch. Read-back: D4, D6; BUG-157 backlog entry.
 Deliverables: `UIRoot::tick_inspector` extraction; editor per-frame call
 (`tick_inspector` + `update_fire_meters` mirrored, in the main tick's editor branch
