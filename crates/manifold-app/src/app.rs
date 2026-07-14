@@ -206,6 +206,14 @@ pub struct Application {
     /// Active inspector drag — prevents snapshot from overwriting dragged field.
     pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
 
+    /// A node-face scrub session currently rerouted through a card binding's
+    /// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). `None` when no
+    /// bound-param drag is in flight. Set at the first `SetGraphNodeParam` on
+    /// a bound `(node_id, param_name)`; cleared on the matching
+    /// `EndGraphNodeParamScrub` (one undo-worthy `ChangeGraphParamCommand`
+    /// per whole drag, not one per pointer-move).
+    pub(crate) bound_node_param_drag: Option<crate::app_render::BoundNodeParamDrag>,
+
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
 
@@ -612,6 +620,7 @@ impl Application {
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,
+            bound_node_param_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: None,
