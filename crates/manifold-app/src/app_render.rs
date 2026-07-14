@@ -3804,7 +3804,7 @@ impl Application {
         crate::editor_frame::composite_editor_frame(
             &gpu.device,
             self.ui_renderer.as_mut(),
-            &ws.ui_root,
+            &mut ws.ui_root,
             &ws.dock,
             editor_area,
             self.graph_canvas.as_ref(),

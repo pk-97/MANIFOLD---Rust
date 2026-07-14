@@ -1633,7 +1633,7 @@ mod editor_window_harness {
         composite_editor_frame(
             &device,
             Some(&mut renderer),
-            &ui_root,
+            &mut ui_root,
             &dock,
             editor_area,
             Some(&canvas),

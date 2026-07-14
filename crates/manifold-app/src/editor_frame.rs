@@ -69,6 +69,20 @@
 //!    `composite_main_ui_frame`) — the editor path constructs no
 //!    `UICacheManager`, full stop (D5). This is not a narrowing of the P1
 //!    signature; the editor was never on that model.
+//!
+//! ── `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 — additional deviation found
+//! at VERIFY-AT-IMPL:
+//!
+//! 5. `composite_editor_frame` takes `ui_root: &mut UIRoot`, not `&UIRoot` as
+//!    it did through P3. The shared tree-overlay pass
+//!    (`tree_passes::render_tree_overlay_passes`) performs the
+//!    overlay-region dirty-clear on `ui_root.tree`, which requires `&mut`
+//!    (`tree_passes.rs` module doc deviation 1) — mirrors
+//!    `ui_frame.rs::composite_main_ui_frame` taking `&mut UIRoot` for the
+//!    identical reason (that module's deviation 2). Every caller already
+//!    held its `ui_root` behind a `mut` binding (built via `UIRoot::new()`/
+//!    `sync_project_data` moments earlier, or `self.graph_editor`'s owned
+//!    field), so this is source-compatible at every call site.
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture};
 use manifold_renderer::ui_renderer::{Depth, UIRenderer};
@@ -214,10 +228,14 @@ pub(crate) struct EditorMiniTimelineInputs<'a> {
 }
 
 /// Composites the graph-editor window for one frame into `offscreen`: clear,
-/// canvas immediate-mode draws, the merged sidebar/inspector `UITree`,
-/// dock dividers, mini-timeline, the mapping-popover and text-input
-/// overlays, and `prepare`/`render`. Does NOT acquire or present a drawable,
-/// and does NOT draw the node-output preview monitor blits (those are
+/// canvas immediate-mode draws, the merged sidebar/inspector `UITree` (full
+/// range — D2's `[0, overlay_region_start)` narrowing is NOT applied here;
+/// see the ESCALATED comment at the call site below), dock dividers,
+/// mini-timeline, the shared tree-overlay pass
+/// (`tree_passes::render_tree_overlay_passes` —
+/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D1, P1), the mapping popover, and
+/// `prepare`/`render`. Does NOT acquire or present a drawable, and does
+/// NOT draw the node-output preview monitor blits (those are
 /// drawable-targeted, macOS-only, live-input-fed — stay in
 /// `present_graph_editor_window`, unchanged, on their own encoder after this
 /// call returns, exactly as `composite_main_ui_frame` leaves the video-band
@@ -231,13 +249,22 @@ pub(crate) struct EditorMiniTimelineInputs<'a> {
 /// self.ui_renderer, self.graph_canvas.as_ref())` — both sides genuinely
 /// optional, not just one. `popover` / `text_input` / `frame_timer` are
 /// always-real, always-cheap values — see module doc deviation 3.
+/// `ui_root` is `&mut` (was `&`, P3): the shared tree-overlay pass performs
+/// the overlay-region dirty-clear on `ui_root.tree`, which needs `&mut`
+/// (`tree_passes.rs` module doc deviation 1) — mirrors `ui_frame.rs`'s
+/// `composite_main_ui_frame` taking `ui_root: &mut UIRoot` for the same
+/// reason (module doc deviation 2).
 /// Precedent: `present_graph_editor_window` (pre-extraction) :3694-3751
-/// minus the drawable-tail's node-preview blits.
+/// minus the drawable-tail's node-preview blits; caller order per
+/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` §3 (popover moves AFTER the tree-
+/// overlay pass — depth sorting, not enqueue order, governs stacking, so
+/// this is not a visual change: POPOVER(300) still paints above
+/// OVERLAY(200) and below TOOLTIP(400) regardless of enqueue order).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_editor_frame(
     device: &GpuDevice,
     ui_renderer: Option<&mut UIRenderer>,
-    ui_root: &UIRoot,
+    ui_root: &mut UIRoot,
     dock: &Dock,
     editor_area: UiRect,
     canvas: Option<&GraphCanvas>,
@@ -261,6 +288,31 @@ pub(crate) fn composite_editor_frame(
         // Layer the sidebar/inspector UITree on top of the canvas's
         // immediate-mode draws (the flush protocol covers them with their
         // own batches) — ONE tree, ONE call, matching the live paint order.
+        // ⚠ ESCALATED (P1, `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D2): NOT
+        // narrowed to `[0, overlay_region_start)` as D2 specifies. Verified
+        // at impl (grep, not assumed — `rg "overlay_region_start ="` /
+        // `rg "\.build\(\)" ` across manifold-app): `UIRoot::overlay_region_
+        // start`/`overlay_draw` are populated in exactly one place,
+        // `UIRoot::build_overlays` (ui_root.rs:1085-1139), called only from
+        // `UIRoot::build()` (ui_root.rs:994/1008) — which is called ONLY by
+        // the main window's `apply_ui_frame_invalidations`
+        // (`ui_frame.rs:221`). The editor's `Workspace::ui_root` is built via
+        // plain `UIRoot::new()` (`workspace.rs:86`) and `.build()` is never
+        // called on it anywhere in the codebase — its `overlay_region_start`
+        // stays its `UIRoot::new()` default (0) and `overlay_draw` stays
+        // empty for the editor's entire lifetime. The design's audit (§1,
+        // row 2) states "the editor's build() populates overlay_draw exactly
+        // like the main window's" — this is contradicted by the above.
+        // Narrowing this range to `[0, 0)` would render NOTHING for the
+        // editor's sidebar/inspector/canvas-overlay tree (not just leave
+        // BUG-151 unfixed — a strictly worse regression), and the shared
+        // pass's `overlay_draw` loop below would also draw nothing for the
+        // node browser (that field is permanently empty here), so BUG-151
+        // would remain unfixed even with the narrowing applied. Left at the
+        // full range (pre-P1 behavior, unchanged) so this phase's other
+        // deliverables can land without regressing the editor window; see
+        // the phase report's escalation for the open question this blocks
+        // on.
         ui_renderer.render_tree_range(&ui_root.tree, 0, usize::MAX);
         // Column dividers: a thin seam always, a highlight band on
         // hover/drag. Drawn after the panels so the seam reads on top of
@@ -280,20 +332,30 @@ pub(crate) fn composite_editor_frame(
                 ui_renderer,
             );
         }
+        // Shared tree-overlay pass (D1): overlay_draw loop + TOOLTIP tier +
+        // browser-popup thumbnails + overlay-region dirty-clear — the SAME
+        // function the main window calls. `text_input` is `Some` only when
+        // the active session belongs to THIS window (D4).
+        crate::tree_passes::render_tree_overlay_passes(
+            device,
+            ui_renderer,
+            ui_root,
+            logical_w,
+            logical_h,
+            crate::tree_passes::TreeOverlayInputs {
+                text_input: text_input.is_owned_by_editor().then_some(text_input),
+                frame_timer,
+            },
+        );
         // The mapping drawer floats over the composited canvas + sidebar:
         // it draws inline at POPOVER depth (above the CONTENT-depth nodes),
-        // unclipped.
+        // unclipped. D5(doc): immediate-mode content, exempt from
+        // `overlay_draw` — depth constants (OVERLAY 200 < POPOVER 300 <
+        // TOOLTIP 400) order it correctly regardless of enqueue order.
         if popover.is_open() {
             ui_renderer.push_depth(Depth::POPOVER);
             popover.set_live_value(popover_live_value);
             popover.render(ui_renderer);
-            ui_renderer.pop_depth();
-        }
-        // Graph text-input overlay (group rename / String param / wgsl /
-        // node search) — tops everything at TOOLTIP depth.
-        if text_input.active && text_input.field.is_graph_field() {
-            ui_renderer.push_depth(Depth::TOOLTIP);
-            crate::app_render::render_text_input_overlay(text_input, frame_timer, ui_renderer);
             ui_renderer.pop_depth();
         }
         if ui_renderer.prepare(device, logical_w, logical_h, scale) {

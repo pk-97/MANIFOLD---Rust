@@ -194,7 +194,9 @@ pub fn render_graph_to_png(
 
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
-    let device = GpuDevice::new();
+    // BUG-152: `Arc<GpuDevice>` — see the `render_graph_editor_to_png` call
+    // site's comment for why.
+    let device = std::sync::Arc::new(GpuDevice::new());
     let mut renderer = UIRenderer::new(&device, FORMAT);
     let target = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-graph");
     let dpi = f64::from(scale);
@@ -333,7 +335,12 @@ pub fn render_graph_editor_to_png(
     let canvas_height = dock_rects.canvas.height;
     let card_x = canvas_x + canvas_width;
 
-    let device = GpuDevice::new();
+    // BUG-152: `Arc<GpuDevice>`, not a bare `GpuDevice` — `render_graph_node_
+    // textures` below needs an owned `Arc` to hand `MetalBackend::new`
+    // (BUG-054's constructor signature). Every other use of `device` in this
+    // function keeps working unchanged via `&Arc<GpuDevice>`'s `Deref`
+    // coercion to `&GpuDevice`.
+    let device = std::sync::Arc::new(GpuDevice::new());
     let mut renderer = UIRenderer::new(&device, FORMAT);
     let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor");
     let dpi = f64::from(scale);
@@ -466,7 +473,7 @@ pub fn render_graph_editor_to_png(
     crate::editor_frame::composite_editor_frame(
         &device,
         Some(&mut renderer),
-        &ui_root,
+        &mut ui_root,
         &dock,
         editor_area,
         Some(&canvas),
@@ -671,7 +678,10 @@ impl GraphNodeTextures {
 /// graph begins at a `Source` node get a neutral mid-grey fixture on that input;
 /// generators self-produce and need none.
 fn render_graph_node_textures(
-    device: &GpuDevice,
+    // BUG-152: `&Arc<GpuDevice>`, not `&GpuDevice` — `MetalBackend::new`
+    // (BUG-054) takes an owned `Arc<GpuDevice>`; this is the only call in
+    // this module that needs to clone one out.
+    device: &std::sync::Arc<GpuDevice>,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Option<GraphNodeTextures> {
     use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -733,7 +743,7 @@ fn render_graph_node_textures(
         .nodes()
         .find(|inst| inst.node.type_id().as_str() == SOURCE_TYPE_ID)
         .map(|inst| inst.id);
-    let mut backend = MetalBackend::new(device, GW, GH, GFMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), GW, GH, GFMT);
     if let Some(sid) = source_id
         && let Some(res) = resource_for_output(&plan, sid, "out")
     {
