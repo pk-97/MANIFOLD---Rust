@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-156 | **fluidsim3d-4k-perf-regression-suspect-bug066-fix** | FluidSim3D no longer holds smooth 60FPS at 4K — regressed, and the change under suspicion is the BUG-066 fix (`eebac94d`), which resized volume-node dispatch grids from the legacy 8³ workgroup to the codegen 4³ workgroup (8x more dispatched groups per volume kernel). Reported by Peter 2026-07-14. Not investigated. HIGH (live-rig performance). |
 | BUG-155 | **camera-rotation-params-missing-smooth-360-wrap** | Camera orbit/tilt/rotation params jump at the wrap boundary instead of wrapping smoothly through 0/360 degrees, so a saw wave can't drive a clean continuous spin. Reported by Peter 2026-07-14. Root cause unknown — may share a cause with BUG-096. MED. |
 | BUG-154 | **removing-group-with-slider-bound-nodes-leaves-stale-effect-card** | Deleting a node group containing a node bound to an effect card slider doesn't warn or remove the stale slider — group deletion likely skips the card-binding cleanup that single-node deletion runs. Reported by Peter 2026-07-14. MED. |
 | BUG-153 | **ui-snap-inspector-scene-172px-nondeterministic** | `cargo run --features ui-snapshot -- ui-snap inspector` is not run-to-run deterministic: two consecutive runs of the SAME unmodified binary differ in exactly 172 pixels, always the same bounding box (x 1258-1274, y 450-854 at 1536×1216 — a narrow vertical band, likely the inspector's scrollbar thumb or a hover/blend-state artifact). Confirmed pre-existing (reproduces identically on unmodified `origin/main`, unrelated to any diff) while byte-diffing `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1's before/after — the `timeline` and `states` scenes are NOT affected (byte-identical run-to-run). LOW (test-determinism only, no correctness impact — but silently defeats any future byte-identical regression check against this one scene). |
@@ -137,6 +138,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-156 (fluidsim3d-4k-perf-regression-suspect-bug066-fix) — FluidSim3D no longer holds smooth 60FPS at 4K — HIGH, reported by Peter 2026-07-14
+**Status:** OPEN — found not fixed 2026-07-14, reported by Peter during live-rig use.
+
+**Symptom** — FluidSim3D used to run smoothly at 60FPS at 4K output resolution; it no longer does. Peter suspects this is a regression from the BUG-066 fix.
+
+**Root cause** — unknown, not investigated this session, but the suspected culprit is well-formed: BUG-066's fix (`eebac94d`, see the closed entry in `docs/archive/BUG_BACKLOG_CLOSED.md`) resized `edge_slope_3d`/`swirl_force_3d`'s (and the other volume nodes') dispatch grids from `div_ceil(8)` (legacy 8×8×8 workgroup) to `div_ceil(4)` against the freeze codegen's actual `@workgroup_size(4,4,4)` for 3D-volume kernels. Correcting the grid size to match the real workgroup was necessary for correctness (forces were only landing in 1/8th of the volume before), but going from an 8³ to a 4³ workgroup at the same volume resolution means 8x more dispatched workgroups per volume kernel — a real, expected throughput cost of the fix, not an incidental one. Whether that 8x is actually what's landing on the frame budget (vs. some other change since, or the 4³ workgroup being genuinely suboptimal occupancy for this GPU) is unverified.
+
+**Fix shape** — profile FluidSim3D at 4K with the profiler (`manifold-profiler`) to confirm the volume-node dispatches (`edge_slope_3d`, `swirl_force_3d`, and any other 3D-volume kernel sized off `VOLUME_WORKGROUP_3D`) are where the frame time went, comparing against a pre-`eebac94d` build if needed to isolate it from unrelated changes since. If confirmed, the fix is not "revert BUG-066" (that reintroduces the top-right-quadrant forces bug) — it's making the corrected dispatch cheap again: a larger workgroup size for the 3D volume kernels (if occupancy/shared-memory allows), or reducing per-workgroup overhead, while keeping the grid sized correctly against whatever workgroup size is actually emitted.
 
 ### BUG-155 (camera-rotation-params-missing-smooth-360-wrap) — camera orbit/tilt/rotation controls don't smooth-wrap at 360 degrees, so a full rotation can't be modulated cleanly via a saw wave — MED, reported by Peter 2026-07-14
 **Status:** OPEN — found not fixed 2026-07-14, reported by Peter during live-rig use.
