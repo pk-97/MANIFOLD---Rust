@@ -228,6 +228,36 @@ the drag hit-test (`scrollbar_h_layout`). Verified by `playhead_scrollbar_demo`.
 The system can be perfect and still look ordinary. Tune on the running app: ramp values, hierarchy
 emphasis weight, shadow weight, spacing rhythm, badge glyphs. **Done = Peter signs off it looks SOTA.**
 
+### Popup layer decisions (2026-07-14)
+
+Peter + Fable review of the popup/menu surface (dropdowns, context menus, the effect browser modal,
+the Ableton macro picker, settings). Landed in the "professional pass" — `crates/manifold-ui/src/color.rs`,
+`panels/dropdown.rs`, `panels/browser_popup.rs`, `panels/ableton_picker.rs`, `panels/settings_popup.rs`,
+`panels/popup_shell.rs`, `crates/manifold-app/src/ui_frame.rs`, `crates/manifold-renderer/src/clip_draw.rs`.
+
+- **No shadows UI-wide, for now** (`color::SHADOWS_ENABLED = false`). On MANIFOLD's near-black stage
+  palette a dark drop-shadow doesn't read as elevation, it reads as a smudge under the panel. Gated at
+  both production call sites rather than deleted — the §17 `draw_shadow` primitive and its constants
+  stay, so this is a one-line flip when a lighter theme or a different shadow treatment makes it worth
+  re-enabling.
+- **Instant popup open, no enter/exit motion.** The 0.98→1 scale + fade tween (`enter_anim`, D17) that
+  every popup carried was removed outright, not just shortened — a menu that pops in a few frames late
+  reads as latency on a live rig where every other surface reacts on the same frame as the input.
+  Popups now build at final size/opacity on the very frame they open.
+- **Single-surface menus, hover-only highlights.** Unchecked dropdown rows used to carry their own
+  opaque `DROPDOWN_BG` fill; per-row AA seams between adjacent opaque rects read as pixel gaps between
+  items. Rows are now `TRANSPARENT` by default — the menu container is the only opaque surface — and
+  only the hover/pressed/checked state paints a highlight, now with `corner_radius: 4.0` so it reads as
+  a distinct rounded chip rather than a flush-edged box.
+- **12px/28px spacing scale.** `PADDING_H` 8→12, `ITEM_HEIGHT` 24→28, plus an explicit 8px left text
+  inset (`ITEM_TEXT_INSET_X`) — rows lost their individual box in the single-surface change above, so
+  labels needed their own room to keep from sitting flush against the hover highlight's edge.
+- **Screen-clamped menus.** `DropdownPanel::open_at`'s edge clamp only pulled the container back from
+  the right/bottom; an anchor that was itself off-screen on the left/top (a trigger scrolled partly past
+  the edge) had nothing pulling `x`/`y` back up to 0, so a long menu (the 128-item MIDI note picker was
+  the reported case) could run off both edges at once. Fixed with a final `.clamp(0.0, ..)` on both axes
+  after the existing right/bottom logic; a 40-item-menu-near-every-corner unit test covers it.
+
 ---
 
 ## 9. Sequence & rationale

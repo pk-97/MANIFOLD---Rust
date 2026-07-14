@@ -670,7 +670,7 @@ pub(crate) fn render_main_ui_passes(
         // so it sits under the panel's own fill at this depth. Skip a
         // leading full-screen scrim (dim-modal backdrop) so the shadow
         // lifts the panel, not the whole screen.
-        if start < end {
+        if start < end && manifold_ui::color::SHADOWS_ENABLED {
             let tree = &ui_root.tree;
             let mut r = tree.get_bounds(tree.id_at(start));
             if r.width >= logical_w as f32 - 1.0
