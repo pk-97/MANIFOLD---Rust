@@ -69,7 +69,7 @@ or human can read it, and it needs no external tool.
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
 | BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Half-day spike DONE 2026-07-14 (see detail below): the static-max-arity + optional-Coincident + `0u` use-flag shape works technically (already proven in production by `node.pack_rgba`) but costs a real 4x texture-sample increase for multi_blend's common 2–3-wired case and loses the editor's dynamic port-shrink UX; switch_texture is a harder, separate call (32-input vocabulary, loses its 5x→1x branch-pruning short-circuit). Peter's call owed on whether to pursue. LOW (working atoms, dispatch-cost only). |
-| BUG-114 | **draw-family-blocked-on-array-into-texture-codegen-read-path** | The six `draw_*` atoms (dots/markers/ticks/gauge/scanlines/connections) pass the codegen mandate's per-element scope test (per-pixel bodies over the output grid) but CANNOT convert: texture-domain codegen has no read-path for an input storage `Array` (the marks buffer) — classify cut rule 9 makes a wired Array input on a texture atom a Boundary, and `freeze/classify.rs` names the needed `BufferIndex` kind as planned-not-built. Fix shape: add the `BufferIndex` read-path to codegen + a region-grow rule, then convert `draw_*` per the mandate. Per ADDING_PRIMITIVES scope test #5 these are BLOCKED (tracked compiler gap), not exempt. LOW (each sits in 1 shipped preset, overlay/HUD chains; cost is one dispatch per atom). |
+| ~~BUG-114~~ FIXED | **draw-family-blocked-on-array-into-texture-codegen-read-path** | FIXED — `docs/FUSION_SOTA_DESIGN.md` P4a+P4b+P5. `InputAccess::BufferIndex` mechanism (P4a) + Vec3/Vec4/Color param-gate lift (P5) unblocked all six `draw_*` atoms + `blob_overlay`; `BlobTracking.json` measured 18→13 estimated dispatches (1 region, 6 members). Full writeup in the Fixed section below. |
 | BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
 | BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
 | BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
@@ -312,47 +312,6 @@ underneath it.
 edge-detector reads the raw conditioned value, never the display-smoothed one); this is purely
 "does the meter look as fast as the audio is," which is why Peter deferred it rather than folding
 it into the round-trip test session.
-
-### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
-**Status:** FIXED — `docs/FUSION_SOTA_DESIGN.md` P4a+P4b+P5. P4a (`ae9ab74c`) built the
-`InputAccess::BufferIndex` mechanism (classify variant, region-grow rule, standalone+fused codegen
-struct synthesis from a port's `Channels[…]` layout, `buf_<port>` binding) and proved it on
-`node.draw_dots`. P5 (`1b013b0e`) lifted the Vec3/Vec4/Color param gate the six atoms' `color`
-param independently tripped. P4b converts the remaining five `draw_*` atoms
-(`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/`draw_connections`) + `blob_overlay` per
-the ADDING_PRIMITIVES recipe (`wgsl_body` fragment + `fusion_kind`/`input_access` + generated-vs-hand
-parity oracle), removing every `boundary_reason: Blocked`. `draw_connections` additionally proves
-the BufferIndex mechanism generalizes to TWO tagged array inputs on one atom (`detections` +
-`edges`) — P4a only exercised one. `draw_scanlines` needed no BufferIndex tag at all (no array
-input) — it was purely gated by the Color param P5 lifted. Measured on `BlobTracking.json` (the
-real HUD preset all six/seven atoms and their overlay chain live in): `graph-tool fusion` — before
-18 nodes / 0 regions / 18 estimated dispatches; after 18 nodes / **1 region (6 members: both
-draw_markers instances + draw_dots + draw_gauge + draw_ticks + draw_connections) / 13 estimated
-dispatches**. `draw_scanlines` stays isolated in this preset (topologically separated from the HUD
-chain by two `value_overlay` draw-call boundaries, not a param/array gap) — a genuine, expected
-non-fusion, not a regression. `docs/node_catalog.json`/`NODE_CATALOG.md` and
-`docs/fusion_census.md` regenerated (buffer-index-shaped family: 22→16 refusals, 12→10
-dispatches-saved-if-lifted — the six/seven converted atoms leaving the bucket). Logged 2026-07-11
-while sharpening the codegen-mandate scope test.
-
-**Symptom** — the six `draw_*` atoms (draw_dots/markers/ticks/gauge/scanlines/connections) remain
-plain-WGSL fusion boundaries despite being per-element in shape: each dispatches one thread per
-OUTPUT PIXEL (`[w/16, h/16]`, e.g. draw_dots.rs ~161) and indexes a marks `Array` (blob
-detections) inside the body — a gather, not a scatter. An overlay chain costs one dispatch per
-atom where a fused run would cost ~1.
-
-**Root cause** — a codegen capability gap, not an atom defect: texture-domain codegen has no
-read-path for an input storage `Array`. Classify cut rule 9 (FREEZE_COMPILER_MAP §4) makes any
-wired Array input on a texture atom a Boundary, and the buffer-region path requires no texture
-output, so the shape fits neither. `freeze/classify.rs` names the needed kind — `BufferIndex`,
-"read element i from a storage buffer" — as planned-but-not-built (additive: one codegen
-read-path + one region-grow rule, per its own comments).
-
-**Fix shape** — build the `BufferIndex` read-path for texture-domain bodies, then convert the six
-atoms per the ADDING_PRIMITIVES recipe (wgsl_body + markers + `standalone_for_spec` + parity
-oracle). Per the mandate's scope test #5 these are BLOCKED, not exempt — the debt lives in the
-compiler. Severity LOW: each atom sits in exactly 1 shipped preset (overlay/HUD vocabulary), so
-the unfused cost only bites in stacked per-pixel overlay chains.
 
 ### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (spike done, Peter's call owed)
 **Status:** OPEN — logged 2026-07-11 while sharpening the codegen-mandate scope test. Half-day spike
@@ -1449,6 +1408,47 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
+**Status:** FIXED — `docs/FUSION_SOTA_DESIGN.md` P4a+P4b+P5. P4a (`ae9ab74c`) built the
+`InputAccess::BufferIndex` mechanism (classify variant, region-grow rule, standalone+fused codegen
+struct synthesis from a port's `Channels[…]` layout, `buf_<port>` binding) and proved it on
+`node.draw_dots`. P5 (`1b013b0e`) lifted the Vec3/Vec4/Color param gate the six atoms' `color`
+param independently tripped. P4b converts the remaining five `draw_*` atoms
+(`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/`draw_connections`) + `blob_overlay` per
+the ADDING_PRIMITIVES recipe (`wgsl_body` fragment + `fusion_kind`/`input_access` + generated-vs-hand
+parity oracle), removing every `boundary_reason: Blocked`. `draw_connections` additionally proves
+the BufferIndex mechanism generalizes to TWO tagged array inputs on one atom (`detections` +
+`edges`) — P4a only exercised one. `draw_scanlines` needed no BufferIndex tag at all (no array
+input) — it was purely gated by the Color param P5 lifted. Measured on `BlobTracking.json` (the
+real HUD preset all six/seven atoms and their overlay chain live in): `graph-tool fusion` — before
+18 nodes / 0 regions / 18 estimated dispatches; after 18 nodes / **1 region (6 members: both
+draw_markers instances + draw_dots + draw_gauge + draw_ticks + draw_connections) / 13 estimated
+dispatches**. `draw_scanlines` stays isolated in this preset (topologically separated from the HUD
+chain by two `value_overlay` draw-call boundaries, not a param/array gap) — a genuine, expected
+non-fusion, not a regression. `docs/node_catalog.json`/`NODE_CATALOG.md` and
+`docs/fusion_census.md` regenerated (buffer-index-shaped family: 22→16 refusals, 12→10
+dispatches-saved-if-lifted — the six/seven converted atoms leaving the bucket). Logged 2026-07-11
+while sharpening the codegen-mandate scope test.
+
+**Symptom** — the six `draw_*` atoms (draw_dots/markers/ticks/gauge/scanlines/connections) remain
+plain-WGSL fusion boundaries despite being per-element in shape: each dispatches one thread per
+OUTPUT PIXEL (`[w/16, h/16]`, e.g. draw_dots.rs ~161) and indexes a marks `Array` (blob
+detections) inside the body — a gather, not a scatter. An overlay chain costs one dispatch per
+atom where a fused run would cost ~1.
+
+**Root cause** — a codegen capability gap, not an atom defect: texture-domain codegen has no
+read-path for an input storage `Array`. Classify cut rule 9 (FREEZE_COMPILER_MAP §4) makes any
+wired Array input on a texture atom a Boundary, and the buffer-region path requires no texture
+output, so the shape fits neither. `freeze/classify.rs` names the needed kind — `BufferIndex`,
+"read element i from a storage buffer" — as planned-but-not-built (additive: one codegen
+read-path + one region-grow rule, per its own comments).
+
+**Fix shape** — build the `BufferIndex` read-path for texture-domain bodies, then convert the six
+atoms per the ADDING_PRIMITIVES recipe (wgsl_body + markers + `standalone_for_spec` + parity
+oracle). Per the mandate's scope test #5 these are BLOCKED, not exempt — the debt lives in the
+compiler. Severity LOW: each atom sits in exactly 1 shipped preset (overlay/HUD vocabulary), so
+the unfused cost only bites in stacked per-pixel overlay chains.
 
 ### BUG-146 (render-scene-atom-pipelines-never-prewarmed) — a scene layer's first frame pays every atom's lazy codegen-pipeline compile (node.cube_mesh confirmed; likely every `primitive!` atom no bundled preset happens to exercise structurally) — LOW-MED (first-frame stall, not steady-state)
 **Status:** FIXED (fusion-sweep worktree, this session) — option (b) from the original fix shape: a registry-wide "every atom prewarms its own codegen pipeline once, unconditionally" sweep, structural rather than atom-by-atom. Found 2026-07-13 as the residual left over after BUG-145's shaft/shadow prewarm fix, during VOLUMETRIC_LIGHT_DESIGN P3's `MANIFOLD_RENDER_TRACE` content-thread perf gate.
