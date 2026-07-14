@@ -1041,7 +1041,7 @@ rather than bumping the baseline, which would silently bless the drift the ratch
 Unrelated to param storage.
 
 ### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
-**Status:** OPEN
+**Status:** FIXED 2026-07-14 (bug-wave lane A, `bug/wave3-lane-a`). Root fix at the class level: `wgsl_compute.rs`'s fragment-form input rename (`:581`) now filters to texture-typed ports (`matches!(inp.ty, PortType::Texture2D | PortType::Texture2DTyped(_))`) before stripping `tex_`, mirroring the sibling binding-key rename's existing filter (`:586`, `BindingKind::SampledTexture`) — the two renames can no longer disagree. Regression test `fragment_scalar_param_named_tex_prefixed_is_not_stripped` proves a `@param: tex_speed` scalar keeps its full port name and its param-manifest entry. Gated: `cargo clippy -p manifold-renderer -- -D warnings` clean; `cargo nextest run -p manifold-renderer node_graph::primitives::wgsl_compute` 32/32 passed.
 
 **Root cause** — [wgsl_compute.rs:544-548](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L544-L548):
 the fragment-form rename loop strips a literal `tex_` prefix from EVERY input port name with
