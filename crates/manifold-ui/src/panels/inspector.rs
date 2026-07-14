@@ -327,6 +327,31 @@ impl InspectorCompositePanel {
         self.drawer_anim_active
     }
 
+    /// Force every card's tweens (drawer height, tab-ink, collapse, spawn
+    /// pop, delete fade, value flash, value snap-back) to their settled end
+    /// state — BUG-073 fix shape (b): a headless `--script` driver has no
+    /// per-frame timer, so a tween a step arms mid-script would otherwise
+    /// never advance unless that step happens to insert a `Step` afterward.
+    /// Returns whether anything was actually mid-flight — the caller only
+    /// needs to force a rebuild (drawer heights only take effect at the next
+    /// `build()`) when this is `true`.
+    pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let mut any = false;
+        for card in &mut self.master_effects {
+            any |= card.skip_to_settled(tree);
+        }
+        for card in &mut self.layer_effects {
+            any |= card.skip_to_settled(tree);
+        }
+        if let Some(gp) = self.gen_params.as_mut() {
+            any |= gp.skip_to_settled(tree);
+        }
+        if any {
+            self.drawer_anim_active = false;
+        }
+        any
+    }
+
     // ── Configuration ─────────────────────────────────────────────
 
     /// The scope currently shown in the inspector.
