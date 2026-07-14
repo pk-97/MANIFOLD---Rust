@@ -100,6 +100,16 @@ pub enum GraphEditCommand {
         param_name: String,
         new_value: crate::types::SerializedParamValue,
     },
+    /// A node-face numeric scrub session just ended (mouse-up). Emitted
+    /// unconditionally by the canvas's `ParamScrub` release path — harmless
+    /// for an ordinary (unbound) row, where the app has nothing tracked for
+    /// it. Exists so the dispatch layer can close out a **card-bound**
+    /// param's write-back gesture (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1)
+    /// with exactly one undo-worthy commit for the whole drag, instead of
+    /// one per pointer-move — every `SetGraphNodeParam` during the drag
+    /// already wrote the live (card) value, so there is nothing left to
+    /// apply here, only to close the undo entry.
+    EndGraphNodeParamScrub { node_id: u32, param_name: String },
     /// Set an **outer performance-card param** to a new value. Emitted by a
     /// scrub/click on a group box's face row (D6,
     /// `docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` §2): that row is a live

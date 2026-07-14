@@ -1539,6 +1539,53 @@ impl Command for ToggleNodeParamExposeCommand {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Find the node `(node_id, node_handle)` addresses in `nodes` (recursing
+/// into group bodies), using the same "empty stable id defaults to handle"
+/// convention `ToggleNodeParamExposeCommand::execute` uses to mint the
+/// identity in the first place: prefer a real `node_id` match; fall back to
+/// `handle` only for a node whose own `node_id` is empty (a bundled node
+/// that predates stable ids). D9's freeze-on-unmap write target.
+fn find_node_by_id_or_handle_mut<'a>(
+    nodes: &'a mut [EffectGraphNode],
+    node_id: &NodeId,
+    node_handle: &str,
+) -> Option<&'a mut EffectGraphNode> {
+    let idx = nodes.iter().position(|n| {
+        (!n.node_id.is_empty() && &n.node_id == node_id)
+            || (n.node_id.is_empty() && n.handle.as_deref() == Some(node_handle))
+    });
+    if let Some(idx) = idx {
+        return Some(&mut nodes[idx]);
+    }
+    for n in nodes.iter_mut() {
+        if let Some(group) = n.group.as_deref_mut()
+            && let Some(found) = find_node_by_id_or_handle_mut(&mut group.nodes, node_id, node_handle)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Convert an effective f32 value to the `SerializedParamValue` shape its
+/// `ParamConvert` implies — the def-slot write shape for D9's freeze, mirror
+/// of `param_binding::convert_param_value` (which targets the renderer-side
+/// `ParamValue` instead of the wire `SerializedParamValue`).
+fn effective_value_to_serialized(
+    convert: manifold_core::effects::ParamConvert,
+    value: f32,
+) -> SerializedParamValue {
+    use manifold_core::effects::ParamConvert;
+    match convert {
+        ParamConvert::Float | ParamConvert::Trigger => SerializedParamValue::Float { value },
+        ParamConvert::IntRound => SerializedParamValue::Int { value: value.round() as i32 },
+        ParamConvert::BoolThreshold => SerializedParamValue::Bool { value: value > 0.5 },
+        ParamConvert::EnumRound => SerializedParamValue::Enum {
+            value: value.round().max(0.0) as u32,
+        },
+    }
+}
+
 fn mirror_effect_side(
     effect: &mut manifold_core::effects::PresetInstance,
     node_id: &NodeId,
@@ -1688,6 +1735,31 @@ fn mirror_effect_side(
         } else {
             Vec::new()
         };
+        // D9 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): freeze the EFFECTIVE
+        // value into the def slot this binding stops governing, so unmapping
+        // never visually snaps the render to whatever stale value the slot
+        // held from a pre-binding write. Must run BEFORE the binding is
+        // removed (needs `binding`'s reshape) but after `param` is captured
+        // above (needs its live `.value`).
+        if let Some(graph) = effect.graph.as_mut() {
+            let effective = manifold_core::effects::apply_card_reshape(
+                param.value,
+                binding.min,
+                binding.max,
+                binding.invert,
+                binding.curve,
+                binding.scale,
+                binding.offset,
+            );
+            if let Some(target_node) =
+                find_node_by_id_or_handle_mut(&mut graph.nodes, node_id, node_handle)
+            {
+                target_node.params.insert(
+                    inner_param.to_string(),
+                    effective_value_to_serialized(binding.convert, effective),
+                );
+            }
+        }
         let _ = effect.remove_user_binding_by_id(&binding_id);
         EffectMirrorReverse::RemovedUserBinding {
             binding,
@@ -5084,6 +5156,91 @@ mod tests {
             .unwrap();
         assert!(!node.exposed_params.contains("rotation"));
         assert_eq!(fx.user_param_bindings().len(), 0);
+    }
+
+    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` D9: unmapping a user-added binding
+    /// freezes the card's current effective value into the def slot the
+    /// binding stops governing, instead of leaving whatever stale value sat
+    /// there — so the render never visually snaps on unmap.
+    #[test]
+    fn unexpose_user_binding_freezes_effective_value_into_def_slot() {
+        let mut project = Project::default();
+        let effect_id = EffectId::new("test-mirror-instance-freeze");
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.mirror"));
+        fx.id = effect_id.clone();
+        project.settings.master_effects.push(fx);
+
+        // Expose rotation (appends a user binding).
+        let mut expose_cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        expose_cmd.execute(&mut project);
+
+        // Move the card away from default, as a performer would — through
+        // the same command the card's own slider drag commits via
+        // (`ChangeGraphParamCommand`, `commands/effects.rs`), not a raw
+        // manifest poke.
+        let binding_id = project
+            .find_effect_by_id(&effect_id)
+            .unwrap()
+            .user_param_bindings()[0]
+            .id
+            .clone();
+        let mut set_cmd = crate::commands::effects::ChangeGraphParamCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            binding_id,
+            0.0,
+            77.0,
+        );
+        set_cmd.execute(&mut project);
+
+        // Unexpose — this removes the user binding and must freeze 77.0
+        // into the def's `rotation` slot before the binding goes away.
+        let mut unexpose_cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(effect_id.clone()),
+            manifold_core::NodeId::new("uv_transform"),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            false,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        unexpose_cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&effect_id).unwrap();
+        assert_eq!(fx.user_param_bindings().len(), 0, "binding removed");
+        let def = fx.graph.as_ref().unwrap();
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("uv_transform"))
+            .unwrap();
+        match node.params.get("rotation") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert!((value - 77.0).abs() < 1e-6, "expected frozen 77.0, got {value}");
+            }
+            other => panic!("expected a frozen Float value, got {other:?}"),
+        }
     }
 
     #[test]

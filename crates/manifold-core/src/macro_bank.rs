@@ -41,6 +41,58 @@ impl MacroCurve {
             }
         }
     }
+
+    /// Exact inverse of [`Self::apply`] — total and closed-form: every
+    /// current variant is strictly monotonic on `[0, 1]`
+    /// (`PARAM_TWO_WAY_BINDING_DESIGN.md` D3), so there is no read-only
+    /// fallback to reach for here. Input clamped to `[0, 1]` like `apply`.
+    /// If a future variant is non-monotonic, add it here first — that's
+    /// where it fails to typecheck conceptually (a read-only fallback is
+    /// Deferred until then).
+    pub fn inverse(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::Exponential => t.sqrt(),
+            Self::Logarithmic => t * t,
+            // Standard closed-form inverse of the Hermite smoothstep
+            // 3t² - 2t³, valid because the curve is monotonic on [0, 1].
+            Self::SCurve => 0.5 - ((1.0 - 2.0 * t).clamp(-1.0, 1.0).asin() / 3.0).sin(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod macro_curve_inverse_tests {
+    use super::MacroCurve;
+
+    #[test]
+    fn macro_curve_inverse_roundtrips() {
+        let curves = [
+            MacroCurve::Linear,
+            MacroCurve::Exponential,
+            MacroCurve::Logarithmic,
+            MacroCurve::SCurve,
+        ];
+        for curve in curves {
+            let mut t = 0.0;
+            while t <= 1.0 {
+                let forward = curve.apply(t);
+                let back = curve.inverse(forward);
+                assert!(
+                    (back - t).abs() < 1e-3,
+                    "{curve:?}: inverse(apply({t})) = {back}, expected ~{t}"
+                );
+                let inv = curve.inverse(t);
+                let fwd = curve.apply(inv);
+                assert!(
+                    (fwd - t).abs() < 1e-3,
+                    "{curve:?}: apply(inverse({t})) = {fwd}, expected ~{t}"
+                );
+                t += 0.05;
+            }
+        }
+    }
 }
 
 // ── Mapping target ─────────────────────────────────────────────────

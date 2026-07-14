@@ -201,6 +201,76 @@ pub struct ContentThread {
     pub profiler: Option<manifold_profiler::ProfileSession>,
 }
 
+/// D4 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): overlay the EFFECTIVE
+/// (forward-reshaped) value onto every card-bound node-face row, instead of
+/// the raw `def.nodes[..].params` value `GraphSnapshot::from_def` reads —
+/// which may hold a stale node-face write `apply_bindings` stomps on the
+/// next rebuild (BUG-158's snap-back). Walks `def.preset_metadata.bindings`;
+/// for each `Node` target, reads the outer card's live value off
+/// `instance.params` and pushes it through `apply_card_reshape` before
+/// overwriting the matching row's `current_value`. A no-op for every unbound
+/// param (no metadata, or no binding targets it) and for a binding whose
+/// outer id isn't in the manifest (an authoring-time gap, not a user state).
+fn apply_effective_bound_values(
+    snap: &mut manifold_renderer::node_graph::GraphSnapshot,
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    instance: &manifold_core::effects::PresetInstance,
+) {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return;
+    };
+    for binding in &meta.bindings {
+        let BindingTarget::Node { node_id, param } = &binding.target else {
+            continue;
+        };
+        if node_id.is_empty() {
+            continue;
+        }
+        let Some(spec) = meta.params.iter().find(|p| p.id == binding.id) else {
+            continue;
+        };
+        let Some(card_value) = instance.params.get(&binding.id).map(|p| p.value) else {
+            continue;
+        };
+        let effective = manifold_core::effects::apply_card_reshape(
+            card_value,
+            spec.min,
+            spec.max,
+            spec.invert,
+            spec.curve,
+            binding.scale,
+            binding.offset,
+        );
+        if let Some(row) = find_node_param_row_mut(&mut snap.nodes, node_id, param) {
+            row.current_value = effective;
+        }
+    }
+}
+
+/// Find the `ParamSnapshot` for `(node_id, param)` anywhere in `nodes`,
+/// recursing into group bodies — a bound node can live inside a group
+/// (BUG-103's glTF per-object case).
+fn find_node_param_row_mut<'a>(
+    nodes: &'a mut [manifold_renderer::node_graph::NodeSnapshot],
+    node_id: &manifold_core::NodeId,
+    param: &str,
+) -> Option<&'a mut manifold_renderer::node_graph::ParamSnapshot> {
+    for node in nodes.iter_mut() {
+        if &node.node_id == node_id
+            && let Some(row) = node.parameters.iter_mut().find(|p| p.name == param)
+        {
+            return Some(row);
+        }
+        if let Some(group) = node.group.as_mut()
+            && let Some(row) = find_node_param_row_mut(&mut group.nodes, node_id, param)
+        {
+            return Some(row);
+        }
+    }
+    None
+}
+
 impl ContentThread {
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
@@ -1349,6 +1419,7 @@ impl ContentThread {
                     snap.outer_routings = self
                         .content_pipeline
                         .outer_routings_for(instance.effect_type());
+                    apply_effective_bound_values(&mut snap, def, instance);
                     snap
                 } else {
                     self.content_pipeline
@@ -1402,6 +1473,9 @@ impl ContentThread {
                                 BindingTarget::Composite { .. } => None,
                             })
                             .collect();
+                    }
+                    if let Some(gp) = layer.gen_params() {
+                        apply_effective_bound_values(&mut snap, &d, gp);
                     }
                     snap
                 } else {
