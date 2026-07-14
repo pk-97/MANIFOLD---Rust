@@ -1,8 +1,9 @@
 # Graph Editor ↔ Main Inspector Unification
 
-**Status:** Change 2 (selection-follows) SHIPPED 2026-07-01. Change 3 (full
-inspector column in the editor) IN PROGRESS 2026-07-01 — supersedes the narrower
-Change 1 below.
+**Status:** IN PROGRESS — Change 2 (selection-follows) SHIPPED 2026-07-01. Change 3
+(full inspector column in the editor) SHIPPED with EDITOR_WINDOW_UNIFICATION P1–P3
+(2026-07-14). Change 4 (layout invariance, closes BUG-160) APPROVED 2026-07-14, not
+built — see the section at the end of this doc.
 **Related:** `docs/GRAPH_EDITOR_REDESIGN.md`, `project_graph_editor_redesign`, `project_binding_unification_design`, `feedback_graph_editor_unified_surface`
 
 > **Shipped — selection-follows.** Clicking an effect/generator card in the main
@@ -318,3 +319,135 @@ that card. Same underlying retarget call, two entry points.
   `CardContext::Author` and verify no perform chrome leaks in.
 - **Overclaim check:** "node params get modulation for free" is FALSE until Option B.
   Option A ships the shared widget without modulation on raw node params.
+
+---
+
+## Change 4 — Layout invariance (closes BUG-160) · APPROVED 2026-07-14, not built · Fable 5
+
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+
+Peter's directive, verbatim (2026-07-14): "The cards and inspector in the graph
+editor should be IDENTICAL to the main window inspector with only the mapping
+chevron the only extra. It should fundamentally not be possible to have a
+different layout or drift in any possible way. It should be the same 'object' and
+'UI object'." And on verification: "the png checks are not reliable for Sonnet
+agents as they are too dumb to determine correct card boundaries etc from images"
+— so every gate in this change is a TREE assert (geometry read from the built
+`UITree`), never a PNG a reviewer must judge.
+
+### Audit — what exists and where the drift lives (verified 2026-07-14, rendered + read)
+
+The rendered editor scene (`ui-snap editor` on tip `bbc30bce`) shows the misfit
+Peter reported: the Fluid Sim 2D card's "Clip Trigger Mode" row label is clipped
+at its left edge and row internals are squeezed. The mechanism, read from code:
+
+| Piece | Where | Fact |
+|---|---|---|
+| Context flag | `crates/manifold-ui/src/panels/param_card.rs:89` `CardContext { Perform, Author }`; set for the editor at `crates/manifold-app/src/workspace.rs:92` (BUG-121 fix) | Author = editor cards. |
+| **Geometry forks on context** | `param_card.rs:2469` and `:2702` — `chevron_lane = if author { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 }`, subtracted from `slider_w` | The SAME card lays out differently per window. This is the structural violation of "identical". Two row builders duplicate the lane math — they can drift from each other too. |
+| Label column | `param_card.rs:2477` `label_width_for_row(w - PADDING*2)` | Label width ignores the chevron lane; at the editor's 340px lane (Dock::editor() right_range default) long labels collide/clip. |
+| **Motion forks on context** | `param_card.rs:830` (`eases = context != Author`), `:1080-1090` ("Author context which nothing ticks") | Author cards SNAP drawer heights because the editor's `UIRoot` is never ticked — a workaround for the missing tick, not a design. |
+| Missing tick | `crates/manifold-app/src/ui_root.rs:2994` `update()` early-returns on `!built`; editor root is permanently `!built`; `app_render.rs:3146` ticks only `self.ws.ui_root`; `update_fire_meters` (`:3198`) also main-only | Same mechanism BUG-157 documented. Inspector drawer tweens/value-flash/dying-card collapse never advance in the editor; fire meters never move there. |
+| Shared build path (already unified — do not touch) | `inspector.rs:2070` `build_in_rect` (both windows), `sync_inspector_data` mirrored to the editor instance at `app_render.rs:2943-2957` | Build + sync are already single-path; Change 4 closes the two remaining forks (geometry, tick) and pins the invariant with machine checks. |
+
+### Decisions
+
+- **D1 — Geometry is context-independent, by construction.** The chevron lane
+  (`MAP_CHEVRON_W + DE_BUTTON_GAP`) is reserved in BOTH contexts; Perform simply
+  draws nothing in it. `CardContext` may affect which GLYPHS draw, never any rect.
+  Rejected: overlay-chevron-without-reserving (chevron would cover the A button on
+  mappable rows); rejected: context-dependent geometry with a parity test only
+  (Peter: must be impossible, not merely caught).
+- **D2 — One row-geometry helper.** A single function (in `param_card.rs`, shape it
+  like `crate::slider::label_width_for_row`) computes label width, slider width,
+  button-lane and chevron-lane rects for a row width. Every row builder (slider
+  rows `:2456`, dropdown/table rows `:2702`, toggle/trigger rows) consumes it; no
+  builder does lane arithmetic inline. This is `single-source-y-layout` applied to
+  row X-geometry.
+- **D3 — Rows must fit at every legal width, fixed at the source.** Labels elide
+  (`elide_to_width` exists in `crates/manifold-ui/src/draw.rs`), slider has an
+  enforced minimum, and nothing overflows the card frame at any width in
+  [232, 900] (the union of both windows' lanes: main `MIN_INSPECTOR_WIDTH=232`,
+  editor `right_range=(240,560)`). The clipped "Clip Trigger Mode" label is fixed
+  HERE, not by nudging that row.
+- **D4 — Tick parity, then delete the snap fork.** Extract the inspector's
+  per-frame tick into `UIRoot::tick_inspector(&mut self)` (calls
+  `self.inspector.update(&mut self.tree)`); `UIRoot::update()` calls it; the
+  editor calls it + `update_fire_meters` every frame it presents (the editor
+  rebuilds its tree each present, so advancing tweens reflow for free). Then
+  remove the Author snap-vs-ease fork (`param_card.rs:830`, `:1080-1090`) so
+  motion is identical. This also retires BUG-157's root for the inspector column.
+- **D5 — The gate is a tree-equivalence assert, not a PNG.** A unit test builds the
+  SAME fixture into a Perform-context and an Author-context
+  `InspectorCompositePanel` at the SAME rect and asserts node-for-node identical
+  geometry, allowing extra nodes only from an explicit chevron-glyph allowlist.
+  Shape it like the existing two-context test
+  `author_context_host_draws_resolvable_mapping_chevron` (`inspector.rs:2886`).
+- **D6 — BUG-121's chrome ruling stands.** The cog stays suppressed in Author
+  (a cog that opens the graph editor from inside the graph editor is circular);
+  header chrome presence may differ, header GEOMETRY may not. The mapping chevron
+  remains the only Author extra, per Peter's directive.
+
+### Invariants & enforcement
+
+- **Same fixture + same rect ⇒ same geometry across contexts (modulo chevron
+  glyphs).** Enforcement: `perform_and_author_trees_are_geometry_identical`
+  (new, `manifold-ui`), the D5 test — this is the "fundamentally not possible to
+  drift" check; any future context-gated rect breaks it by construction.
+- **No inline lane arithmetic outside the helper.** Enforcement: negative gate
+  `rg -n "MAP_CHEVRON_W" crates/manifold-ui/src/panels/param_card.rs` — hits only
+  the const def + the D2 helper (exact expected-hit list pinned in the phase gate).
+- **Every row fits its card at every legal width.** Enforcement:
+  `inspector_rows_fit_card_bounds_across_widths` (new): build the BUG-160 fixture
+  at 232/280/340/500/900 px in both contexts; walk the tree; assert every node
+  rect is contained by its card frame and every label's drawn width ≤ its cell.
+- **The editor inspector ticks.** Enforcement:
+  `editor_tick_advances_inspector_motion` (new, `manifold-app`): drive
+  `tick_inspector` on an un-`built` root with a live drawer tween; assert the
+  height advances (fails on today's `!built` early-return semantics if someone
+  re-routes the editor tick through `update()`).
+
+### Phasing
+
+**P1 — Geometry unification (one session).**
+Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
+section whole + `feedback_single_source_y_layout`; restate D1–D3 + forbidden moves
+before code. Deliverables: the D2 helper; all row builders ported; D1 both-context
+lane reservation; D3 elide/min-width behavior; the D5 equivalence test; the width-
+sweep containment test; fixture extension covering the failing card (Fluid Sim 2D's
+enum/toggle rows — the `inspector` ui-snap fixture's cards don't cover it, which is
+why P1's byte-diff missed the regression). Gate: both new tests green;
+`cargo test -p manifold-ui --lib`; negative: the `MAP_CHEVRON_W` rg gate; no
+geometry read of `CardContext` outside the helper (`rg -n "context == CardContext"
+crates/manifold-ui/src/panels/param_card.rs` — expected-hit list = glyph sites only,
+pinned at execution). Demo: `ui-snap editor` PNG attached to the landing report
+(L2 — for Peter's eyes, NOT the gate; the tests are the gate). Performer gesture:
+in the editor, every label on the Fluid Sim 2D card reads un-clipped at the default
+lane width; dragging the lane divider to its minimum keeps every control inside its
+card. Test scope: `-p manifold-ui` focused; workspace sweep at landing.
+Forbidden moves: per-row nudges (fix in the helper); a second "editor card" widget;
+touching `build_in_rect`'s structure; PNG-diff as a gate.
+
+**P2 — Tick parity (one session, may batch with P1).**
+Entry: P1 merged or same branch. Read-back: D4, D6; BUG-157 backlog entry.
+Deliverables: `UIRoot::tick_inspector` extraction; editor per-frame call
+(`tick_inspector` + `update_fire_meters` mirrored, in the main tick's editor branch
+or `present_graph_editor_window` — executor's choice, both run per frame); delete
+the snap fork (`param_card.rs:830`, `:1080-1090`) with its comment; the
+`editor_tick_advances_inspector_motion` test. Gate: new test green;
+`cargo test -p manifold-ui -p manifold-app --lib`; negative:
+`rg -n "Author context which nothing ticks" crates/manifold-ui` = 0 hits (the
+workaround comment is gone because the workaround is). Update BUG-157's backlog
+entry: its inspector half is fixed by this phase; the perf-HUD half remains as
+filed. Demo: none beyond the test — L1 (motion parity has no static surface).
+Test scope: focused; workspace sweep at landing.
+Forbidden moves: making the editor root `built = true` (that flag gates
+main-window-only structure); calling full `update()` on the editor root.
+
+### Decided — do not reopen
+1. Chevron lane reserved in both contexts; context = glyphs only (D1).
+2. One row-geometry helper; no inline lane math (D2).
+3. Fit is fixed at the source for [232, 900]; no per-row nudges (D3).
+4. Editor ticks the inspector; snap fork deleted (D4).
+5. Gates are tree asserts; PNGs are for Peter, never for Sonnet judgment (D5).
+6. Cog stays suppressed in Author; BUG-121 stands (D6).

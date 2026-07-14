@@ -2314,7 +2314,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         let array_ports: Vec<&NodeInput> =
             node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
         for (idx, src) in node.inputs.iter().enumerate() {
-            if idx < tex_count {
+            if node.input_access.get(idx).copied().unwrap_or_default() != InputAccess::BufferIndex {
                 continue;
             }
             if let InputSource::External(e) = src {
