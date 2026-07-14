@@ -1,6 +1,6 @@
 # Editor Window Unification — rendering is a property of the tree, never of the window
 
-**Status:** APPROVED design · P1 LANDED 2026-07-14 (BUG-151 FIXED) · P2–P3 not built · Fable 5 (with Peter in the room) · Sonnet-executable
+**Status:** SHIPPED 2026-07-14 — all phases complete on `feat/editor-window-unification`, pending orchestrator merge to `origin/main`. P1 (shared `tree_passes.rs::render_tree_overlay_passes`, D1/D2/D4, BUG-151 FIXED) already LANDED on main @ `c8584b8d`. P2 (D6 redraw-keepalive aggregate + perf-HUD-in-editor demo) committed @ `9be53956`, not yet merged. P3 (D7 structural guard `tree_render_call_sites_are_allowlisted` + I2 fold-in + this supersession sweep) committed this phase, not yet merged. Fable 5 (with Peter in the room) · Sonnet-executable
 **Prerequisites:** the popup professional pass and the BUG-150 fix (both LANDED on main by `e310c592`, verified 2026-07-14). BUG-151 was fixed by P1 of this design (see docs/BUG_BACKLOG.md) — the standalone BUG-151 hunt prompt (prompt 3 of the `popup-professional-pass-prompt` memory) is SUPERSEDED; do not run it.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
