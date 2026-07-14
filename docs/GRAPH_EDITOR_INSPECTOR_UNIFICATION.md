@@ -337,9 +337,32 @@ agents as they are too dumb to determine correct card boundaries etc from images
 
 ### Audit — what exists and where the drift lives (verified 2026-07-14, rendered + read)
 
-The rendered editor scene (`ui-snap editor` on tip `bbc30bce`) shows the misfit
-Peter reported: the Fluid Sim 2D card's "Clip Trigger Mode" row label is clipped
-at its left edge and row internals are squeezed. The mechanism, read from code:
+**The primary defect (Peter, 2026-07-14, screenshot + correction: "the card
+content doesn't fit the card's HEIGHT"):** in his screenshot (Stylized Feedback
+card, audio-mod drawer open) the Zoom and Rotate rows draw PAST the card's bottom
+edge — the card frame is shorter than the rows built inside it. **The likely
+mechanism is the missing tick (D4), promoted to the primary fix:** a card's frame
+height flows through per-instance animated drawer-height state
+(`tick_drawers`, advanced only by `InspectorCompositePanel::update`,
+`inspector.rs:2382`), and the editor's panel instance is NEVER ticked
+(`UIRoot::update()` early-returns on `!built`, `ui_root.rs:2994-2996`; only the
+main window is ticked, `app_render.rs:3146`) — so the editor's card heights sit
+stale while the rows build at their true size and overflow the frame. The Author
+snap-instead-of-ease workaround (`param_card.rs:830`, `:1080-1090`) was supposed
+to mask exactly this and evidently doesn't cover every height path — P1's FIRST
+task is to verify the stale-height mechanism empirically (build the editor
+fixture, compare card frame height against the sum of its built rows) before
+changing layout code, and to fix height at its source: the card's frame height
+and its row layout must derive from the SAME row list in the SAME pass, so a
+frame that disagrees with its content is unrepresentable. ⚠ VERIFY-AT-IMPL: if
+the height mismatch reproduces even with ticking fixed, the divergence is in
+`compute_height` vs `build` (the pair `apply_mods_compact` exists to keep in
+agreement, `inspector.rs:2114-2116`) — fix there, same single-source rule.
+Secondary, real but not the reported bug: width-fit gaps (the same screenshot's
+Feature chips clip their own captions; `ui-snap editor` on `bbc30bce` shows the
+Fluid Sim 2D "Clip Trigger Mode" label clipped) — D3 covers both axes; and the
+Author chevron lane geometry fork below, a 14px identity violation. The
+mechanism table, read from code:
 
 | Piece | Where | Fact |
 |---|---|---|
@@ -364,12 +387,20 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
   rows `:2456`, dropdown/table rows `:2702`, toggle/trigger rows) consumes it; no
   builder does lane arithmetic inline. This is `single-source-y-layout` applied to
   row X-geometry.
-- **D3 — Rows must fit at every legal width, fixed at the source.** Labels elide
-  (`elide_to_width` exists in `crates/manifold-ui/src/draw.rs`), slider has an
-  enforced minimum, and nothing overflows the card frame at any width in
-  [232, 900] (the union of both windows' lanes: main `MIN_INSPECTOR_WIDTH=232`,
-  editor `right_range=(240,560)`). The clipped "Clip Trigger Mode" label is fixed
-  HERE, not by nudging that row.
+- **D3 — Every element fits its card at every legal width, fixed at the source.
+  THIS is the primary fix — the defect Peter reported and screenshotted.** The
+  rule, for every row type: content adapts to the width the card has, nothing
+  clips, nothing overflows, nothing overlaps. Concretely: labels and chip captions
+  elide with ellipsis (`elide_to_width` exists in `crates/manifold-ui/src/draw.rs`)
+  — a chip must never draw a fragment of its own word; choice-chip strips
+  (Source/Feature/Band rows in the audio-mod drawer — the worst case is Feature's
+  EIGHT chips) get a minimum chip width and either elide captions or wrap the strip
+  to a second line when even elided chips can't fit (pick ONE mechanism and apply
+  it to every chip strip — no per-row variants); sliders have an enforced minimum
+  track width; the card title reserves the badge + toggle space before laying out
+  text. Holds for every width in [232, 900] (union of both windows' lanes: main
+  `MIN_INSPECTOR_WIDTH=232`, editor `right_range=(240,560)`). Fixed in the shared
+  geometry helper / row builders — never by nudging one row or one card.
 - **D4 — Tick parity, then delete the snap fork.** Extract the inspector's
   per-frame tick into `UIRoot::tick_inspector(&mut self)` (calls
   `self.inspector.update(&mut self.tree)`); `UIRoot::update()` calls it; the
@@ -387,6 +418,23 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
   (a cog that opens the graph editor from inside the graph editor is circular);
   header chrome presence may differ, header GEOMETRY may not. The mapping chevron
   remains the only Author extra, per Peter's directive.
+- **D7 — Width is the ONE sanctioned per-window difference; the width POLICY is
+  shared.** Peter, 2026-07-14, two rulings, the second superseding the first on
+  width only: "Not just identical but FUNDAMENTALLY the same object in code so
+  they can't drift or differ by design" — then "the width can differ as the user
+  may want different widths for the editor and main page, everything else should
+  be fundamentally the same." Resolution: each window keeps its own user-set
+  width VALUE (the editor's lane and the main inspector's lane resize
+  independently), but both draw from the same width POLICY — one shared min/max
+  range (`MIN_INSPECTOR_WIDTH`..`MAX_INSPECTOR_WIDTH`; `Dock::editor()`'s
+  `right_range` narrows to nothing more restrictive than that shared range) and
+  identical layout at any given width (D3's fit rule + D5's equivalence test,
+  which already compares at the SAME rect — width being per-window is why the
+  fit rule must hold across the whole range, not at one blessed default). After
+  D7: same panel type, same sync data, same geometry function, same tick path,
+  same width policy; the two per-window facts are the width value (sanctioned,
+  user-owned) and the panel instance (forced by per-window `UITree` node ids —
+  the Change 3 ruling; carries zero layout information, pinned by D5).
 
 ### Invariants & enforcement
 
@@ -397,10 +445,12 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
 - **No inline lane arithmetic outside the helper.** Enforcement: negative gate
   `rg -n "MAP_CHEVRON_W" crates/manifold-ui/src/panels/param_card.rs` — hits only
   the const def + the D2 helper (exact expected-hit list pinned in the phase gate).
-- **Every row fits its card at every legal width.** Enforcement:
-  `inspector_rows_fit_card_bounds_across_widths` (new): build the BUG-160 fixture
-  at 232/280/340/500/900 px in both contexts; walk the tree; assert every node
-  rect is contained by its card frame and every label's drawn width ≤ its cell.
+- **Every element fits its card at every legal width (the primary invariant).**
+  Enforcement: `inspector_rows_fit_card_bounds_across_widths` (new): build the
+  BUG-160 fixture at 232/280/340/500/900 px in both contexts; walk the tree;
+  assert every node rect is contained by its card frame, no two sibling rects in
+  a row overlap, and every text node's drawn width ≤ its cell (labels, values,
+  AND chip captions — a caption wider than its chip is the screenshot bug).
 - **The editor inspector ticks.** Enforcement:
   `editor_tick_advances_inspector_motion` (new, `manifold-app`): drive
   `tick_inspector` on an un-`built` root with a live drawer tween; assert the
@@ -409,14 +459,26 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
 
 ### Phasing
 
+**Execution order (corrected 2026-07-14, after Peter's height report): P2 FIRST.**
+The height overflow is the reported bug and tick parity (D4) is its likely
+mechanism — run P2, then re-render the editor fixture with an open audio-mod
+drawer; if card frames still disagree with their content, fix the
+`compute_height`-vs-`build` single-source rule (audit intro ⚠) inside P2 before
+touching P1. P1 (width geometry) follows.
+
 **P1 — Geometry unification (one session).**
 Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
 section whole + `feedback_single_source_y_layout`; restate D1–D3 + forbidden moves
 before code. Deliverables: the D2 helper; all row builders ported; D1 both-context
-lane reservation; D3 elide/min-width behavior; the D5 equivalence test; the width-
-sweep containment test; fixture extension covering the failing card (Fluid Sim 2D's
-enum/toggle rows — the `inspector` ui-snap fixture's cards don't cover it, which is
-why P1's byte-diff missed the regression). Gate: both new tests green;
+lane reservation; D3 elide/min-width/chip-fit behavior; D7 width-policy sharing
+(the editor lane's clamp range widens to the shared `MIN_INSPECTOR_WIDTH`..
+`MAX_INSPECTOR_WIDTH`; each window keeps its own width value); the D5
+equivalence test; the width-
+sweep containment test; fixture extension covering BOTH observed failing shapes —
+an effect card with its audio-mod drawer OPEN including the eight-chip Feature
+strip (Peter's Stylized Feedback screenshot) and the Fluid Sim 2D enum/toggle rows
+(the `inspector` ui-snap fixture's cards cover neither, which is why P1's
+byte-diff missed the regression). Gate: both new tests green;
 `cargo test -p manifold-ui --lib`; negative: the `MAP_CHEVRON_W` rg gate; no
 geometry read of `CardContext` outside the helper (`rg -n "context == CardContext"
 crates/manifold-ui/src/panels/param_card.rs` — expected-hit list = glyph sites only,
@@ -451,3 +513,7 @@ main-window-only structure); calling full `update()` on the editor root.
 4. Editor ticks the inspector; snap fork deleted (D4).
 5. Gates are tree asserts; PNGs are for Peter, never for Sonnet judgment (D5).
 6. Cog stays suppressed in Author; BUG-121 stands (D6).
+7. Width VALUE is per-window (user preference, Peter's explicit call); width
+   POLICY (min/max clamp) and layout-at-any-width are shared (D7). The fit fix
+   (D3) is the primary fix; the chevron lane was never the bug, only a secondary
+   identity violation.
