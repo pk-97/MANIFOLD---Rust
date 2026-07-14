@@ -278,12 +278,6 @@ impl ChipMotion {
         let base = color::mix(rest, hover_color, self.hover.value());
         color::mix(base, press_color, self.press.value())
     }
-
-    /// The "1px press drop" vertical offset: `0.0` at rest, up to `max_px`
-    /// fully pressed.
-    pub fn press_offset_y(&self, max_px: f32) -> f32 {
-        self.press.value() * max_px
-    }
 }
 
 impl Default for ChipMotion {
@@ -662,12 +656,9 @@ mod tests {
     }
 
     #[test]
-    fn chip_motion_press_drop_and_precedence() {
+    fn chip_motion_press_wins_over_hover_precedence() {
         let mut m = ChipMotion::new();
-        assert_eq!(m.press_offset_y(1.0), 0.0);
-
         m.tick(90.0, true, true); // fully hovered + pressed after one full MOTION_FAST
-        assert_eq!(m.press_offset_y(1.0), 1.0, "fully pressed reaches the max drop");
         // Press wins over hover once both are fully settled.
         assert_eq!(m.blend(Color32::BLACK, Color32::WHITE, Color32::new(255, 0, 0, 255)), Color32::new(255, 0, 0, 255)); // design-token-exempt: test fixture (chip-motion tween highlight)
     }
