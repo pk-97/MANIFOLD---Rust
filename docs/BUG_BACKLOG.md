@@ -993,7 +993,7 @@ so activation is unaffected. This kills the whole class including the race where
 callback fires between play and pause. One-line-ish, `manifold-playback` only.
 
 ### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
-**Status:** OPEN
+**Status:** PARTIAL 2026-07-14 (bug-wave3 lane D) — did step (1) of the entry's own fix shape: factored the atlas-cell-UV math out of `app_render.rs`'s inline block into `content_pipeline::atlas_cell_uv(cell, monitor_aspect) -> [f32; 4]`, a pure function, with 3 unit tests (square-aspect no-letterboxing, cell-index grid-position decomposition, wide-monitor vertical letterboxing) — `cargo test -p manifold-app --bin manifold atlas_cell_uv` 3 passed. `app_render.rs`'s live call site now calls the shared helper instead of duplicating the math inline. Step (2) — building the synthetic-atlas harness scene that packs per-node textures + a matching `node_atlas_layout` and drives previews through this helper for a whole-graph PNG proof — NOT done this session (real harness-authoring work, timeboxed out rather than rushed). The math itself is unit-tested now, which is strictly more coverage than before (previously zero), but the "wrong cell chosen" class of bug (a `node_atlas_layout` mismatch, not a UV-formula bug) is still unverified headless. Verify: `cargo build --bin manifold` clean; `cargo clippy -p manifold-app -- -D warnings` clean; `cargo test -p manifold-app --bin manifold` 174 passed.
 
 **Gap** — the inline node-preview fix (BUG-027) is pixel-verified headless only through the
 per-node-texture path (`ui_snapshot/render.rs`, whole-texture UV `[0,0,1,1]`). The LIVE app packs
