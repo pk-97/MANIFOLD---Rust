@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-159 | **timeline-scroll-past-playhead-violent-snapback** | Scrolling the arrangement past the playhead during playback violently snaps the view back — playhead-follow fights the user's gesture instead of yielding to it (Ableton-style smooth limit expected). Reported by Peter 2026-07-14. MED (performance-surface feel). |
+| BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
 | BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
 | BUG-156 | **fluidsim3d-4k-perf-regression-suspect-bug066-fix** | FluidSim3D no longer holds smooth 60FPS at 4K — regressed, and the change under suspicion is the BUG-066 fix (`eebac94d`), which resized volume-node dispatch grids from the legacy 8³ workgroup to the codegen 4³ workgroup (8x more dispatched groups per volume kernel). Reported by Peter 2026-07-14. Not investigated. HIGH (live-rig performance). |
 | BUG-155 | **camera-rotation-params-missing-smooth-360-wrap** | Camera orbit/tilt/rotation params jump at the wrap boundary instead of wrapping smoothly through 0/360 degrees, so a saw wave can't drive a clean continuous spin. Reported by Peter 2026-07-14. Root cause unknown — may share a cause with BUG-096. MED. |
@@ -107,9 +109,9 @@ or human can read it, and it needs no external tool.
 | BUG-037 | **glp-first-render-stall** | PARTIAL @ `dea66221`/`7fdf25d0` — `render_scene`/`gltf_texture_source` PSO compiles now prewarmed at startup; live trace shows a real ~37% frame-0 reduction but a large preset (BlossomField) still doesn't clear the 20ms bar. Remaining cost is elsewhere (scatter_on_mesh, mesh upload, shadow pass) — see full entry. (MED) |
 | ~~BUG-038~~ FIXED | **ableton-log-spam** | FIXED @ `06bfd879` — throttled: warn once, then debug until reconnect, which logs once at info. |
 | ~~BUG-111~~ FIXED | **fused-segment-inner-override-noop** | FIXED @ `d73b3e36` — `EffectSlot::card_prefix` translates both the `node_map` and `fused_retarget` lookups into the segment's `c{i}.`-prefixed namespace. |
-| BUG-015 | **inspector-overlap** | stale-chrome class FIXED 2026-07-08 — incremental cache path now falls back to full render on out-of-sub-region dirt (`has_dirty_outside_ranges` + `incremental_path_safe`); blanket `clear_dirty` narrowed to the overlay region so the fallback isn't erased. (2026-07-04 "sections interleaved" sighting = separate open thread if it recurs) |
+| ~~BUG-015~~ FIXED | **inspector-overlap** | FIXED — stale-chrome class fixed 2026-07-08 (`738f4e94`/`4319eb8d`: incremental cache path falls back to full render on out-of-sub-region dirt); the original 2026-07-04 "sections interleaved" sighting never reproduced. Closed by Peter's call 2026-07-14 (staleness audit); reopen if it recurs. |
 | ~~BUG-060~~ FIXED | **inspector-footer-overpaint** | FIXED @ `39836352` (landed `cc4eeb37`, rig-verified by Peter 2026-07-10, re-confirmed solved by Peter 2026-07-12; class-killed — clip bound per command at enqueue). History: REOPENED 2026-07-08. Opus 2nd pass: tree-geometry cause **ELIMINATED on the live cache path** (new `footer_leak_probe` test proves the inspector clips at footer_top through `traverse_flat_range`; footer's own render is correct) — the "inspector escapes into the footer" framing is wrong. Cause localized BELOW the tree, to the cache/dirty layer (tab-swap clears it = full recomposite). Artifact is **stale UI content** (UI colours / button fragments left behind), NOT clear/dark — the prior "footer goes dark, RGB 9-16" atlas dump was a HARNESS failure, not the symptom. Stale-pixel / dirty-clear bug, BUG-015 class. Needs live atlas+offscreen pixel dump. Cause still OPEN. **2026-07-10 (Fable + Peter):** Rig screenshots relocate the artifact — fragments accumulate at the scroll viewport's CLIP EDGES (bottom sliver above footer_top on both tabs, top sliver under the tab strip on Master), i.e. INSIDE the inspector panel rows, and build up per scroll step until tab-swap wipes them. Both existing probes are structurally blind there: `footer_leak_probe` checks geometry below footer_top, the P0 differential asserts rows [footer_top, footer_top+h) — the artifact rows were never asserted, so the harness "0 diff" results don't contradict the rig (stop extending the harness; observe the rig instead). Live dump tool BUILT + VALIDATED on branch `debug/bug-060-surface-dump` (worktree `bug060-dump`, e81696b4): `MANIFOLD_BUG060_DUMP=<N>` overwrites `/tmp/bug060_atlas.png` + `/tmp/bug060_offscreen.png` every N dirty-present frames (default 30) and logs sf + footer/inspector rects; readback verified against a live launch (real UI, sf=2 Retina confirmed, playhead-only atlas/offscreen delta proves the surfaces are independent). Next: Peter reproduces with the flag set, then one look at the atlas PNG splits cache-layer vs composite/present. **2026-07-10 VERDICT (live dump, Peter's audioTesting2 repro): the dirt is IN THE ATLAS — and it is not a stale copy, it is a LIVE UNCLIPPED DRAW.** Pixel measurement on the dump: the blue pill in the top sliver spans rows 170–197 physical, the pixel-exact position EdgeStretch's own ON pill would occupy if unclipped (Glitch reference: pill top = title top − 3), while the header bg + title around it are correctly scissored at the viewport line (~188). So the card-header toggle's bg fill draws WITHOUT the column clip; every scroll leaves the previous unclipped copy in territory the (clipped) self-clearing panel render can never repaint — that is the accumulation, and only `invalidate_all` (tab swap) wipes it. Bottom-edge fragments (slider fills) are the same class: once the clip is lost mid-card, later fill quads in the range draw unclipped too. The `traverse_flat_range` suspect was CLEARED by a clip-topology test (`bug060_every_card_node_renders_under_the_column_clip`, green — fresh-build clip chains are sound). **ROOT CAUSE FOUND + FIXED 2026-07-10 @ `39836352`** via a batch-flush band trace (`MANIFOLD_BUG060_TRACE=x0,y0,x1,y1`) on Peter's live repro: card-shaped rects logged as `immediate ... scissor=None` during the inspector pass. `push/pop_transform` and `push/pop_depth` cut the pending rect run via `flush_immediate_run` even mid-traversal, batching already-enqueued TREE rects under `immediate_clip` (`None`) — every card ON pill drawn before its card's **rotated chevron** (`UIStyle.transform`) lost its scissor. This is also why the 2026-07-08 trace swore all 858 draws were clipped: it observed the clip stack at `draw_node` time, upstream of the flush-time theft. Fix: context-aware `flush_pending_run` (tree clip stack while `in_tree_pass`, immediate clip otherwise); regression test `transform_boundary_keeps_tree_scissor_on_pending_batch` proven red-under-old-flush/green-now. Gates green (workspace, gpu-proofs 1248, clippy). **RIG-VERIFIED by Peter + LANDED on main @ `cc4eeb37` 2026-07-10** (dump/trace tooling landed env-gated with it). **CLASS-KILL follow-up (same day): clip bound per command at enqueue** — `RectCommand` now carries `(clip, depth)` captured at the push site (like `LineCommand`/`ImageCommand`/text `clip_bounds`/per-command depth `22c5d528` already did); batches derive in `prepare()` by run-scanning consecutive equal `(clip, depth)`; ALL flush-time scissor inference (`flush_immediate_run`/`flush_scissor_batch`/`flush_pending_run`/`in_tree_pass`) deleted, so the wrong-flush mistake is unrepresentable. Invariant recorded in `docs/DEVELOPMENT_REFERENCE.md` ("UI Renderer Invariant"). CLOSED. |
-| BUG-025 | **timeline-scissor-bleed** | clip content bleeds across row bounds (MED, repro needed — scrolled headless render 07-07 clean) |
+| ~~BUG-025~~ FIXED | **timeline-scissor-bleed** | FIXED (believed) — Peter attributes the one sighting to the since-fixed GPU-pressure/contention issue behind the timeline blue-flicker; never reproduced across three headless attempts. Closed by Peter's call 2026-07-14; reopen if seen on the rig. |
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | ~~BUG-054~~ FIXED | **renderer-device-ptr-dangles** | FIXED @ `d447ec8d` — `Arc<GpuDevice>` replaces the cached raw pointer end-to-end (`GeneratorRenderer`/`VideoRenderer`/`ImageRenderer`/`MetalBackend`); `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted as structurally unneeded. `rg '\*const GpuDevice' crates/` — zero code hits. |
@@ -139,6 +141,48 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
+**Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
+
+**Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
+playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
+Reference behaviour (Ableton and other professional DAWs): a user scroll takes over — or eases
+against a soft limit — and follow re-engages predictably, never mid-gesture.
+
+**Root cause** — unknown, not investigated. Suspect surface: the playhead-follow auto-scroll
+writing the viewport offset unconditionally every frame during playback, racing the user's
+in-progress scroll gesture instead of being suppressed or eased while one is active.
+
+**Fix shape** — TBD after reading the follow logic; likely a follow-yields-to-gesture rule
+(suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
+or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
+acceptance is Peter's hands on it, not a test.
+
+### BUG-158 (mapped-param-edits-snap-back-no-two-way-binding) — a param mapped to a card slider or driven by another port can't be adjusted in the graph editor; the edit snaps back — MED-HIGH (authoring surface), reported by Peter 2026-07-14
+**Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; mechanism located same session, not fixed.
+
+**Symptom** — in the graph editor, dragging a param that is already mapped to an effect-card
+slider (or wired from another port) appears dead: the control snaps back to the mapped/driven
+value, so the only editable end of a mapping is the source. Peter's expectation: two-way
+behaviour between the node param, the card slider, and other ports — turning either end moves
+both, like a DAW control surface.
+
+**Mechanism (located)** — the port-shadows-param convention:
+`EffectNodeContext::scalar_or_param` (`crates/manifold-renderer/src/node_graph/effect_node.rs:358`)
+resolves a wired scalar input unconditionally before falling back to the param, so while a
+wire/mapping is connected the param write lands in the model but never reaches the render, and
+the UI re-reads the driven value — visual snap-back. This resolution order is the deliberate
+control-wire design (`control-wires-port-shadows-param` memory), so the fix is a binding-layer
+behaviour change, not a bug in `scalar_or_param`.
+
+**Fix shape** — two-way binding where an inverse exists: editing the node param on a
+card-slider mapping writes back through the inverse mapping and moves the slider, keeping both
+ends consistent. For signal-driven ports (LFO, audio, envelope, another node's live output)
+there is no inverse — those should show a legible "driven" state on the param control instead
+of silently snapping back. Implement once at the binding/mapping layer, not per widget. The
+driven-state presentation (how a driven param looks on the node face) is worth one screenshot
+to Peter before landing.
 
 ### BUG-157 (editor-perf-hud-never-ticked-shows-dashes-forever) — the graph-editor window's own `perf_hud` overlay, if opened, would render permanently blank "—" values — LOW (currently unreachable: no keyboard/UI path opens it on the editor's own `UIRoot` today)
 **Status:** OPEN — found 2026-07-14 during `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2, while building the phase's perf-HUD-in-editor acceptance demo. Not fixed this session — out of scope for P2 (redraw-keepalive aggregate), and currently unreachable in the live app so it blocks nothing.
@@ -366,9 +410,15 @@ edge-detector reads the raw conditioned value, never the display-smoothed one); 
 "does the meter look as fast as the audio is," which is why Peter deferred it rather than folding
 it into the round-trip test session.
 
-### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (spike done, Peter's call owed)
-**Status:** OPEN — logged 2026-07-11 while sharpening the codegen-mandate scope test. Half-day spike
-done 2026-07-14 (verdict below) — no conversion landed, this is Peter's call to make.
+### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (decision recorded: stay as-is)
+**Status:** DEFERRED — Peter's call, 2026-07-14: leave `multi_blend` AND `switch_texture` as dynamic-arity
+fusion boundaries. The static-max conversion's runtime costs (always-8 texture samples on multi_blend's
+common 2-wired case; 32 always-bound slots + loss of the 5x→1x branch-pruning short-circuit on
+switch_texture) plus the loss of the shrink-to-fit editor affordance outweigh fusability here — the
+current dynamic kernels are the more optimal shape for live performance. Remains a tracked codegen gap
+(dynamic-arity support), NOT a de-facto exemption from the codegen mandate; revisit only if dynamic-arity
+codegen support is designed for real or the fusion-boundary cost shows up on the rig. Spike evidence below
+kept as the record.
 
 **Symptom** — `node.switch_texture` (mux_texture, 5 shipped presets — and mid-chain by its
 nature, it selects between texture chains) and `node.multi_blend` are fusion boundaries.
@@ -693,7 +743,7 @@ media must never delete a clip" — is **already the behavior**; the rescue-path
 accordingly (a *relink* prompt for missing media would be the higher-value follow-up if any).
 
 ### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
-**Status:** OPEN — 2026-07-13 (`8d37d5e0`): the drawer-tween undercounting theory below was built and tested (a `ParamCardPanel`-level and an `InspectorCompositePanel`-level test with a 9-card stack, several audio-mod drawers armed at `configure()` time, zero `tick_drawers` calls) and RULED OUT — a card's `drawer_height_anim` is already snapped (not eased) to its settled target on first `configure()` for the single-configure/no-tick path, so `compute_height()` does not undercount there. Root cause remains open; next place to look is the real `state_sync`/`build` call ordering in `manifold-app`, or a card-reuse scenario the single-configure fixture doesn't cover. Regression tests for the ruled-out theory are kept as coverage.
+**Status:** OPEN — 2026-07-13 (`8d37d5e0`): the drawer-tween undercounting theory below was built and tested (a `ParamCardPanel`-level and an `InspectorCompositePanel`-level test with a 9-card stack, several audio-mod drawers armed at `configure()` time, zero `tick_drawers` calls) and RULED OUT — a card's `drawer_height_anim` is already snapped (not eased) to its settled target on first `configure()` for the single-configure/no-tick path, so `compute_height()` does not undercount there. Root cause remains open; next place to look is the real `state_sync`/`build` call ordering in `manifold-app`, or a card-reuse scenario the single-configure fixture doesn't cover. Regression tests for the ruled-out theory are kept as coverage. 2026-07-14: not to be confused with BUG-060 (inspector scroll ARTIFACTS, rig-verified FIXED + class-killed) — Peter asked whether this was that; it isn't. This entry is the scroll-RANGE clamp on tall content (can't scroll far enough), still unexplained.
 
 **Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
 session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
@@ -1027,8 +1077,204 @@ non-finite). Parked as a hardening note — if a new param write path ever skips
 this becomes live. Cheapest closure: reject non-finite values at the `SerializedParamValue`
 boundary (the eliminate-bug-class-at-storage-layer pattern).
 
-### BUG-015 — Inspector sections render overlapping / at stale offsets after scroll — MED (repro needed)
+### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
+collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
+exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
+surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
+inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
+
+**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
+never built. Group fold is a *new feature* (group header + child-card filtering + collapse
+toggle), not an animation retrofit — correctly out of the motion layer's scope.
+
+**Fix shape** — build the effect-group inspector UI first (own small design: header row,
+`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
++ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
+
+### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
+`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
+`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
+body the way `build_effect` has.
+
+**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
+then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
+
+### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
+**Status:** DEFERRED
+
+**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
+(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
+`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
+(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
+
+**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
+lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
+
+### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
 **Status:** OPEN
+
+**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
+browser renders the search field, filter chips, and preset cells floating directly over the
+timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
+the background appear and it then looks correct.
+
+**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
+renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
+`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
+modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
+draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
+tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
+The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
+`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
+never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
+re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
+frame — the "no background until mouseover" symptom.
+
+**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
+app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
+`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
+
+**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
+`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
+(open the Add Effect browser, confirm the background is present immediately without moving the
+mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+**Status:** OPEN
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+### BUG-136 — CINEMATIC_POST motion blur has no visible effect despite correct wiring — MED-HIGH
+**Status:** OPEN
+
+**Symptom** — Peter, live in `SceneLadders.manifold` (glb auto-import's physical-camera/
+cinematic-post wiring): with `lens.shutter_angle = 181.05` and `motion_blur.max_blur_px = 128`,
+orbiting the camera produces no visible motion blur.
+
+**Verified correct, NOT the cause** — the graph wiring itself, read directly from the saved
+project (`project.json`'s `wires` array): `camera` (`node.orbit_camera`) → `lens`
+(`node.camera_lens`) → `render` (`node.render_scene`); `lens.out` also feeds
+`motion_blur.camera` directly (so `motion_blur` reads the same lens-modified Camera, not a
+bypassed one); `render.velocity` → `motion_blur.velocity`; `motion_blur` sits last in the chain
+before `final`. Also confirmed the velocity source itself: `render_scene.rs`'s `prev_view_proj`
+frame-to-frame diff (`render_scene.rs:1010-1011`) is only reset by `rebuild()` (object/light count
+change, `render_scene.rs:456`), never by an ordinary param edit — so camera-orbit motion should
+register as nonzero velocity independent of whether it's playback- or slider-driven.
+
+**Root cause — UNKNOWN, needs runtime observation** (static/code-read verification stops here;
+this needs the render observed live, not just re-derived). Suspects, not yet ruled out:
+1. The UI param-edit path may not be live-propagating a dragged slider into the running
+   content-thread graph on every frame (the codebase's known `ui-state-sync-path` bug class —
+   see the memory of the same name).
+2. `node.motion_blur`'s fused-vs-standalone codegen routing may be silently selecting a
+   stale/pass-through kernel — same failure family as BUG-135's fused `wgsl_includes` gap,
+   unconfirmed whether `motion_blur` is affected.
+3. The render loop may not tick continuously while scrubbing a slider outside of active
+   playback, collapsing `prev_view_proj`/current into the same value on each redraw.
+
+**Fix shape** — reproduce live in the running app with the exact `SceneLadders.manifold` values
+above; add temporary `println!`/`eprintln!` in `render_scene.rs`'s velocity fragment output and
+in `node.motion_blur`'s `evaluate()`/derived-uniform recompute path to confirm both are actually
+seeing nonzero `shutter_angle` and nonzero velocity per frame at runtime; narrow from whichever
+one is flat when it shouldn't be.
+
+**Static-read addendum (2026-07-13, Fable)** — also verified correct, NOT the cause: the atom's
+smear math itself (`motion_blur_body.wgsl:62-72` — exact D4 formula; the clip-vs-texture y-sign
+mismatch is provably invariant under the symmetric ±smear/2 tap layout, per the shader's header
+note), and the prev-matrix bookkeeping (`render_scene.rs:1024-1025` stores prev_view_proj every
+evaluate; camera-only orbit IS a valid velocity source — moving the model is not required).
+Load-bearing design fact: `shutter_angle = 0` makes the shader an EXACT no-op (every tap
+collapses onto the same texel), so a zero silently arriving anywhere in the chain produces
+precisely this symptom with no error. The three suspects above therefore reduce to two runtime
+values to probe: (a) `shutter_angle` at uniform-pack time, (b) one velocity texel during an
+orbit. Retest caveat: glb auto-import is SSAO-only since `72135693` (2026-07-12 — lens/DoF/
+motion nodes removed from the import graph), so a fresh import has no motion_blur node at all;
+reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by the
+dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
+
+**Runtime-probe addendum (2026-07-13, Sonnet 5, dof-polish worktree) — ESCALATION, not
+fixed. Both of the addendum's two probe values check out clean across the whole shipped
+pipeline; the bug does not reproduce in `CinematicScene` headlessly.** Method: temporary
+`eprintln!`s in `node.motion_blur`'s `run()` (standalone path) and its D7 fused-recompute
+closure (`motion_blur.rs`), plus a temporary GPU readback of `node.render_scene`'s velocity
+resolve target added inline in `evaluate()` (`render_scene.rs`, immediately after
+`ctx.outputs.texture_2d("velocity")`); rendered via `render-generator-preset` against a
+throwaway copy of `CinematicScene.json` (`CinematicSceneProbe.json`, deleted after the probe,
+never committed) with one extra wire, `system.generator_input.time -> cam.orbit`, so the camera
+actually moves frame-to-frame (the shipped preset's `orbit_camera` has no time input and is
+otherwise static — not itself a bug, see below) — `cargo run -p manifold-renderer --bin
+render-generator-preset -- CinematicSceneProbe --size 320x180 --frames 30 --param
+shutter_angle=181.05` (Peter's own repro value). Printed evidence, representative frames:
+```
+BUG136-RS view_proj_delta_sum=0.073722 velocity_wired=true
+BUG136-RS velocity_center_texel=(9.25e-5, 5.16e-5) nonzero_texels=7103 max_mag=0.0102 max_at=(97,130)
+BUG136-MB run() shutter_angle=181.05
+```
+— repeated every frame, 30/30. `shutter_angle` is nonzero from frame 1 onward (probe (a)
+clean); the velocity buffer has thousands of nonzero texels with realistic magnitude away from
+the orbit's look-at point (probe (b) clean — the near-zero *center* texel is correct physics,
+not a bug: `orbit_camera`'s target is the world origin, so a vertex at screen-center sits on the
+rotation axis and legitimately has ~zero NDC velocity; off-center texels show the real motion).
+`node.motion_blur` ran via its **standalone codegen path 30/30 frames, 0 calls to the D7 fused
+recompute closure** — confirms the shipped `CinematicScene` never routes this atom through the
+fusion mechanism at all (consistent with D7's own honest-scope note: a Gather atom's input can
+never fuse with its producer, so `motion_blur`/`variable_blur`/`bokeh_gather` are always
+standalone in practice), which rules out suspect 2 (fused-vs-standalone routing) outright for
+this preset. Closing the loop past the two committed probes: diffed two full headless renders at
+640x360/30 frames, `shutter_angle=0` vs `shutter_angle=181.05`, everything else identical —
+`ImageChops.difference` bbox `(188,116,478,293)`, max channel delta 7/255, nonzero mean —
+a real, if subtle (the synthetic 1 rad/sec orbit rate is far slower than a live drag), visual
+delta produced by the actual shipped shader dispatch, not just the uniform pack.
+
+**Conclusion: the graph wiring, the shader math, the prev-matrix bookkeeping, the
+derived-uniform packing, AND the velocity buffer are now ALL runtime-confirmed correct on the
+exact path `CinematicScene` ships. The symptom does not reproduce headlessly.** This pushes the
+remaining suspect space outside what a headless graph-execution probe can observe, onto the live
+app's interactive/scheduling layer — the two original suspects this addendum could not exonerate:
+(1) whether a dragged card slider's value (`shutter_angle`, or whatever drives the camera orbit
+live) reaches the content-thread graph on every frame vs. only on drag-end/batched (the
+`ui-state-sync-path` bug class named in the original entry) — our probe drove params through the
+same `ParamManifest`/binding mechanism the UI card path uses, which somewhat weakens this
+suspect but cannot rule out a UI-thread-specific propagation gap our headless harness has no
+analog for; (2) whether the content-thread render loop ticks continuously (and thus keeps
+`prev_view_proj` current) while scrubbing/orbiting outside active transport playback, or only on
+discrete redraw requests — untestable without the live app. Escalating: this needs either a live
+repro session (watch the actual param/frame traffic while Peter orbits) or a design decision on
+which of (1)/(2) to instrument permanently, neither of which is a shallow code fix inside this
+worktree. Status stays OPEN; not changed to FIXED. No code changes shipped this phase — all
+temporary instrumentation and the scratch preset were removed before commit (`git status`
+clean).
+
+## Fixed
+
+### BUG-015 — Inspector sections render overlapping / at stale offsets after scroll — MED (repro needed)
+**Status:** FIXED — closed by Peter's call 2026-07-14 (staleness audit). The root-cause fix for the stale-chrome-state class shipped 2026-07-08 (`738f4e94`/`4319eb8d`, `fix/bug-015-out-of-region-dirt`: the incremental cache path falls back to a full render on out-of-sub-region dirt), with tests and gates. The original 2026-07-04 "sections interleaved" sighting was never reproduced (headless attempts 2026-07-05 and 2026-07-07 ×2). Reopen if the sighting recurs.
 
 **Symptom** — observed once by Peter, 2026-07-04, right after the timeline-P0 / multi-select
 UX changes landed: the layer inspector drew its sections interleaved — the MIDI block
@@ -1229,47 +1475,8 @@ _Verification:_ new device-free unit tests at the cache-manager helper layer —
 stale scrollbar). The 2026-07-04 "sections interleaved" sighting (hole #2 + rebuild-while-scrolled)
 is a separate open thread if it recurs.
 
-### BUG-019 — Motion "group fold" (D17) has no UI surface to fold — DESIGN GAP (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 completing UI motion P2. D17 lists "group fold: children
-collapse into header," but the animation has nothing to animate: `EffectGroup.collapsed`
-exists at the model layer (`crates/manifold-core/src/effects.rs:3194`) with zero rendering
-surface — no group header, no collapse toggle, no child-card grouping by `group_id` in the
-inspector (`rg EffectGroup crates/manifold-ui/src` → 0 hits).
-
-**Root cause** — the design assumed a foldable effect-group UI in the inspector that was
-never built. Group fold is a *new feature* (group header + child-card filtering + collapse
-toggle), not an animation retrofit — correctly out of the motion layer's scope.
-
-**Fix shape** — build the effect-group inspector UI first (own small design: header row,
-`group_id`-keyed child filtering, collapse toggle), THEN the fold animation is a `FlipList`
-+ exit-state retrofit like the other P2 collapses. Needs a design/build decision from Peter.
-
-### BUG-020 — Card collapse animates effect cards but not generator cards — LOW (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 (UI motion P2 batch 1). Effect cards collapse/expand with the
-`collapse_anim` reflow; generator cards do not — their rows parent at root (`None`) in
-`ParamCardPanel::build_generator`, so there is no `ClipRegion` seam to clip the collapsing
-body the way `build_effect` has.
-
-**Fix shape** — give `build_generator` the same parent/clip-region seam `build_effect` uses,
-then reuse the existing `collapse_anim`. Small, localized to `param_card.rs`.
-
-### BUG-021 — Value snap-back is Perform-inspector only, not the graph-editor param cards — LOW (deferred)
-**Status:** DEFERRED
-
-**Symptom** — found 2026-07-04 (UI motion P2 closer). Right-click value-reset eases the fill
-(EASE_SNAP) on Perform-context inspector cards; the graph editor owns a separate
-`ParamCardPanel` instance not reachable from the `ParamRightClick` dispatch site
-(`ui_bridge/inspector.rs:1140`), so its value resets snap without the settle.
-
-**Fix shape** — thread the snap-back trigger to the graph-editor's `ParamCardPanel` too, or
-lift the reset-with-settle into shared `ParamCardPanel` logic both dispatch sites reach.
-
 ### BUG-025 — Timeline layer/header scissoring: clip content bleeds across row bounds — MED (repro needed)
-**Status:** OPEN
+**Status:** FIXED (believed) — closed by Peter's call 2026-07-14: he attributes the sighting to the GPU-pressure/contention issue behind the timeline blue-flicker, since fixed (the UI-present vs content GPU contention work). Never reproduced across three headless attempts (2026-07-05, 2026-07-07 ×2 — the second with a genuinely-applied scroll). Reopen if seen on the rig.
 
 **Symptom** — reported by Peter 2026-07-05 (screenshot in session transcript) as "layer and
 header scissoring": in the arrangement view, the bottom layer's purple clip body renders far
@@ -1304,163 +1511,6 @@ above stands.
 
 **Fix shape** — TBD after repro. If it's the invariant class (likely, given BUG-015 is the same
 family), fix at the single Y-layout source, not per-widget patches.
-
-### BUG-026 — Batch-2 popups: entrance fade freezes at t=0 (transparent bg) until an input re-dirties the frame — MED — FIX LANDED, running-app verification owed
-**Status:** OPEN
-
-**Symptom** — reported by Peter 2026-07-05 (before/after screenshots): opening the Add Effect
-browser renders the search field, filter chips, and preset cells floating directly over the
-timeline — the popup's dark background panel is missing. Moving the mouse over the popup makes
-the background appear and it then looks correct.
-
-**Root cause (FOUND)** — not the alpha math, a missing animation-poll in the dirty-driven
-renderer. The batch-2 popups (browser / ableton picker / settings) run a D17 entrance tween:
-`enter_anim` starts at `t=0` and, while `t<0.999`, `BrowserPopupPanel::build` multiplies the
-modal container's background + border alpha by `t` (browser_popup.rs:451,469-474) — so frame 0
-draws the panel fully transparent while the cells (opaque, not `t`-gated) float on top. The
-tween is ticked inside each popup's `update()`, which only re-runs while the frame stays dirty.
-The inspector drawer + panel-split tweens self-sustain via a `needs_rebuild` poll after
-`UIRoot::update()` (app_render.rs ~2927), but the batch-2 popups were added to `update()` and
-never to that poll. Opening a popup dirties exactly one frame (drawing it invisible); nothing
-re-dirties it, so the fade freezes at `t=0` until an unrelated input (mouseover) re-dirties the
-frame — the "no background until mouseover" symptom.
-
-**Fix (LANDED)** — added `is_animating()` to each batch-2 popup and the matching poll in the
-app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warnings` clean;
-`manifold-ui --lib` 604/604. Commit `01c15213` (branch `fix/popup-enter-anim`).
-
-**Verification owed (L4)** — the headless `--script` driver has no frame loop and its
-`enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
-(open the Add Effect browser, confirm the background is present immediately without moving the
-mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
-
-### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
-**Status:** OPEN
-
-**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
-(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
-deliberately left positional to keep that diff bounded:
-- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
-  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
-  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
-  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
-  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
-  between menu-open and item-click.
-- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
-  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
-  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
-  rename has the same (unchanged) stale window it always had.
-
-**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
-list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
-Same bug class as the migration killed for the primary controls.
-
-**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
-`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
-`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
-
-### BUG-136 — CINEMATIC_POST motion blur has no visible effect despite correct wiring — MED-HIGH
-**Status:** OPEN
-
-**Symptom** — Peter, live in `SceneLadders.manifold` (glb auto-import's physical-camera/
-cinematic-post wiring): with `lens.shutter_angle = 181.05` and `motion_blur.max_blur_px = 128`,
-orbiting the camera produces no visible motion blur.
-
-**Verified correct, NOT the cause** — the graph wiring itself, read directly from the saved
-project (`project.json`'s `wires` array): `camera` (`node.orbit_camera`) → `lens`
-(`node.camera_lens`) → `render` (`node.render_scene`); `lens.out` also feeds
-`motion_blur.camera` directly (so `motion_blur` reads the same lens-modified Camera, not a
-bypassed one); `render.velocity` → `motion_blur.velocity`; `motion_blur` sits last in the chain
-before `final`. Also confirmed the velocity source itself: `render_scene.rs`'s `prev_view_proj`
-frame-to-frame diff (`render_scene.rs:1010-1011`) is only reset by `rebuild()` (object/light count
-change, `render_scene.rs:456`), never by an ordinary param edit — so camera-orbit motion should
-register as nonzero velocity independent of whether it's playback- or slider-driven.
-
-**Root cause — UNKNOWN, needs runtime observation** (static/code-read verification stops here;
-this needs the render observed live, not just re-derived). Suspects, not yet ruled out:
-1. The UI param-edit path may not be live-propagating a dragged slider into the running
-   content-thread graph on every frame (the codebase's known `ui-state-sync-path` bug class —
-   see the memory of the same name).
-2. `node.motion_blur`'s fused-vs-standalone codegen routing may be silently selecting a
-   stale/pass-through kernel — same failure family as BUG-135's fused `wgsl_includes` gap,
-   unconfirmed whether `motion_blur` is affected.
-3. The render loop may not tick continuously while scrubbing a slider outside of active
-   playback, collapsing `prev_view_proj`/current into the same value on each redraw.
-
-**Fix shape** — reproduce live in the running app with the exact `SceneLadders.manifold` values
-above; add temporary `println!`/`eprintln!` in `render_scene.rs`'s velocity fragment output and
-in `node.motion_blur`'s `evaluate()`/derived-uniform recompute path to confirm both are actually
-seeing nonzero `shutter_angle` and nonzero velocity per frame at runtime; narrow from whichever
-one is flat when it shouldn't be.
-
-**Static-read addendum (2026-07-13, Fable)** — also verified correct, NOT the cause: the atom's
-smear math itself (`motion_blur_body.wgsl:62-72` — exact D4 formula; the clip-vs-texture y-sign
-mismatch is provably invariant under the symmetric ±smear/2 tap layout, per the shader's header
-note), and the prev-matrix bookkeeping (`render_scene.rs:1024-1025` stores prev_view_proj every
-evaluate; camera-only orbit IS a valid velocity source — moving the model is not required).
-Load-bearing design fact: `shutter_angle = 0` makes the shader an EXACT no-op (every tap
-collapses onto the same texel), so a zero silently arriving anywhere in the chain produces
-precisely this symptom with no error. The three suspects above therefore reduce to two runtime
-values to probe: (a) `shutter_angle` at uniform-pack time, (b) one velocity texel during an
-orbit. Retest caveat: glb auto-import is SSAO-only since `72135693` (2026-07-12 — lens/DoF/
-motion nodes removed from the import graph), so a fresh import has no motion_blur node at all;
-reproduce via `CinematicScene` or the saved `SceneLadders.manifold`. Owned by the
-dof-polish lane (see `CINEMATIC_POST_DESIGN.md` status line, 2026-07-13 amendment).
-
-**Runtime-probe addendum (2026-07-13, Sonnet 5, dof-polish worktree) — ESCALATION, not
-fixed. Both of the addendum's two probe values check out clean across the whole shipped
-pipeline; the bug does not reproduce in `CinematicScene` headlessly.** Method: temporary
-`eprintln!`s in `node.motion_blur`'s `run()` (standalone path) and its D7 fused-recompute
-closure (`motion_blur.rs`), plus a temporary GPU readback of `node.render_scene`'s velocity
-resolve target added inline in `evaluate()` (`render_scene.rs`, immediately after
-`ctx.outputs.texture_2d("velocity")`); rendered via `render-generator-preset` against a
-throwaway copy of `CinematicScene.json` (`CinematicSceneProbe.json`, deleted after the probe,
-never committed) with one extra wire, `system.generator_input.time -> cam.orbit`, so the camera
-actually moves frame-to-frame (the shipped preset's `orbit_camera` has no time input and is
-otherwise static — not itself a bug, see below) — `cargo run -p manifold-renderer --bin
-render-generator-preset -- CinematicSceneProbe --size 320x180 --frames 30 --param
-shutter_angle=181.05` (Peter's own repro value). Printed evidence, representative frames:
-```
-BUG136-RS view_proj_delta_sum=0.073722 velocity_wired=true
-BUG136-RS velocity_center_texel=(9.25e-5, 5.16e-5) nonzero_texels=7103 max_mag=0.0102 max_at=(97,130)
-BUG136-MB run() shutter_angle=181.05
-```
-— repeated every frame, 30/30. `shutter_angle` is nonzero from frame 1 onward (probe (a)
-clean); the velocity buffer has thousands of nonzero texels with realistic magnitude away from
-the orbit's look-at point (probe (b) clean — the near-zero *center* texel is correct physics,
-not a bug: `orbit_camera`'s target is the world origin, so a vertex at screen-center sits on the
-rotation axis and legitimately has ~zero NDC velocity; off-center texels show the real motion).
-`node.motion_blur` ran via its **standalone codegen path 30/30 frames, 0 calls to the D7 fused
-recompute closure** — confirms the shipped `CinematicScene` never routes this atom through the
-fusion mechanism at all (consistent with D7's own honest-scope note: a Gather atom's input can
-never fuse with its producer, so `motion_blur`/`variable_blur`/`bokeh_gather` are always
-standalone in practice), which rules out suspect 2 (fused-vs-standalone routing) outright for
-this preset. Closing the loop past the two committed probes: diffed two full headless renders at
-640x360/30 frames, `shutter_angle=0` vs `shutter_angle=181.05`, everything else identical —
-`ImageChops.difference` bbox `(188,116,478,293)`, max channel delta 7/255, nonzero mean —
-a real, if subtle (the synthetic 1 rad/sec orbit rate is far slower than a live drag), visual
-delta produced by the actual shipped shader dispatch, not just the uniform pack.
-
-**Conclusion: the graph wiring, the shader math, the prev-matrix bookkeeping, the
-derived-uniform packing, AND the velocity buffer are now ALL runtime-confirmed correct on the
-exact path `CinematicScene` ships. The symptom does not reproduce headlessly.** This pushes the
-remaining suspect space outside what a headless graph-execution probe can observe, onto the live
-app's interactive/scheduling layer — the two original suspects this addendum could not exonerate:
-(1) whether a dragged card slider's value (`shutter_angle`, or whatever drives the camera orbit
-live) reaches the content-thread graph on every frame vs. only on drag-end/batched (the
-`ui-state-sync-path` bug class named in the original entry) — our probe drove params through the
-same `ParamManifest`/binding mechanism the UI card path uses, which somewhat weakens this
-suspect but cannot rule out a UI-thread-specific propagation gap our headless harness has no
-analog for; (2) whether the content-thread render loop ticks continuously (and thus keeps
-`prev_view_proj` current) while scrubbing/orbiting outside active transport playback, or only on
-discrete redraw requests — untestable without the live app. Escalating: this needs either a live
-repro session (watch the actual param/frame traffic while Peter orbits) or a design decision on
-which of (1)/(2) to instrument permanently, neither of which is a shallow code fix inside this
-worktree. Status stays OPEN; not changed to FIXED. No code changes shipped this phase — all
-temporary instrumentation and the scratch preset were removed before commit (`git status`
-clean).
-
-## Fixed
 
 ### BUG-151 (graph-editor-node-browser-container-fill-not-drawn) — the graph editor's node-spawn browser renders its cell rows but not the popup container fill/scrim, so the graph and inspector show through between the cells — MED (authoring surface looks broken; main-window instance of the same component is fine)
 **Status:** FIXED — `docs/EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1, completed 2026-07-14 in two passes: the first pass (`9e3d710e`) landed D1 (the shared `tree_passes.rs::render_tree_overlay_passes`) but hit a genuine escalation on D2, logged below and superseded by this fix. Second pass (this commit) closed the gap D1 exposed: `UIRoot::overlay_draw`/`overlay_region_start` are populated only inside `UIRoot::build_overlays()`, which was reachable only from `UIRoot::build()` — a MAIN-window-only method the editor's `Workspace::ui_root` never called (it clears + lays out the entire main-window panel set, which would stomp the editor's per-frame tree). Fix: a new `pub(crate) fn build_overlays_for_screen(&mut self, w, h)` wrapper on `UIRoot` (`ui_root.rs`) sets `screen_width`/`screen_height` (the editor's `UIRoot` never gets `resize()` either, so this was also load-bearing) then calls the existing `build_overlays()` unchanged — safe standalone since it only reads screen size and the live open-overlay set. The editor's per-frame render (`app_render.rs`'s `present_graph_editor_window`) now calls this wrapper in place of the old hand-rolled `begin_region`/`browser_popup.build`/`end_region` block that bypassed the overlay system entirely; `editor_frame.rs`'s `composite_editor_frame` now narrows its base tree render to `[0, ui_root.overlay_region_start)` (D2, now meaningful) so the node browser renders ONLY through the shared tree-overlay pass, region-aware at OVERLAY depth — identically to the main window. Verified with a headless PNG (`ui-snap editor --open-picker`, saved at `docs/landings/BUG-151_editor_after_open_picker.png`): opaque popup container with search bar + full node grid over the graph, not bare cells.
