@@ -318,6 +318,15 @@ pub fn render_graph_editor_to_png(
     // captured next to (or instead of) its expanded rows. Empty for every
     // caller that doesn't care (byte-identical to the pre-D6 behavior).
     force_collapsed: &[u32],
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: open this
+    // window's own `browser_popup` (Node mode, the same widget
+    // `GraphEditCommand::OpenNodePicker` opens live) BEFORE
+    // `build_overlays_for_screen` runs below, so the overlay driver records
+    // its region and the shared tree-overlay pass has something to draw —
+    // proves BUG-151 is fixed on the real headless path, not just by
+    // inspection. `false` for every existing caller (byte-identical to the
+    // pre-P1 PNGs).
+    open_node_picker: bool,
 ) {
     use manifold_ui::graph_canvas::GraphCanvas;
     use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
@@ -458,10 +467,49 @@ pub fn render_graph_editor_to_png(
         canvas.set_node_preview_src(src);
     }
 
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: open the node picker (if
+    // asked) and record it into the tree via the SAME driver
+    // `present_graph_editor_window` calls each frame — `build_overlays_for_
+    // screen`, not a parallel `begin_region`/`.build()` reimplementation.
+    // Minimal `PickerItem` list from `palette_atoms()` — enough to populate
+    // the grid; live app additionally threads descriptor aliases into
+    // `search_text`, irrelevant to this static PNG.
+    if open_node_picker {
+        use manifold_ui::panels::browser_popup::{BrowserPopupMode, BrowserPopupRequest};
+        use manifold_ui::panels::picker_core::PickerItem;
+        let items: Vec<PickerItem> = manifold_renderer::node_graph::palette_atoms()
+            .into_iter()
+            .map(|a| PickerItem {
+                label: a.label,
+                type_id: a.type_id,
+                category: None,
+                search_text: None,
+                badge: None,
+                source: None,
+                missing_from_library: false,
+                thumbnail: None,
+            })
+            .collect();
+        ui_root.browser_popup.set_screen_size(logical_w, logical_h);
+        ui_root.browser_popup.open(BrowserPopupRequest {
+            mode: BrowserPopupMode::Node,
+            tab: manifold_ui::panels::InspectorTab::Master,
+            layer_id: None,
+            items,
+            category_names: Vec::new(),
+            spawn_graph_pos: None,
+            paste_count: 0,
+            screen_anchor: manifold_ui::Vec2::new(logical_w * 0.5, logical_h * 0.5),
+        });
+    }
+    ui_root.build_overlays_for_screen(logical_w, logical_h);
+
     // Same paint order as `present_graph_editor_window` because it's the
     // SAME function: clear + canvas immediate-mode draws + the merged
-    // sidebar/inspector `UITree` (ONE tree-range render call) + dock +
-    // mini-timeline + (closed) popover/text-input overlays + prepare/render.
+    // sidebar/inspector `UITree` (ONE tree-range render call, narrowed to
+    // `[0, overlay_region_start)`, D2) + dock + mini-timeline + the shared
+    // tree-overlay pass (open overlays, if any) + popover/text-input +
+    // prepare/render.
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
     let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
         crate::app_render::mini_timeline_data(project, 0.0);

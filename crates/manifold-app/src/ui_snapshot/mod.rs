@@ -77,6 +77,12 @@ pub fn run(args: &[String]) {
     let want_dump = args.iter().any(|a| a == "--dump");
     let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: `editor`-scene
+    // only (checked at the dispatch site below) — opens the graph editor's own
+    // node picker before the render, through the same `build_overlays_for_
+    // screen` seam the live window uses, so the PNG proves BUG-151 fixed on
+    // the real headless path.
+    let want_open_picker = args.iter().any(|a| a == "--open-picker");
     let interact = arg_value(args, "--interact");
     let script_path = arg_value(args, "--script");
     // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
@@ -129,7 +135,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
-        run_editor_preset("FluidSim2D", want_dump);
+        run_editor_preset("FluidSim2D", want_dump, false);
         return;
     }
 
@@ -146,7 +152,7 @@ pub fn run(args: &[String]) {
     // only (see `fixtures::generator_editor_fixture`).
     if scene == "editor" {
         let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSim2D".to_string());
-        run_editor_preset(&preset, want_dump);
+        run_editor_preset(&preset, want_dump, want_open_picker);
         return;
     }
 
@@ -452,7 +458,7 @@ fn run_graph_preset(preset: &str) {
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
 /// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
-fn run_editor_preset(preset: &str, want_dump: bool) {
+fn run_editor_preset(preset: &str, want_dump: bool, open_node_picker: bool) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
     let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
         eprintln!(
@@ -491,6 +497,7 @@ fn run_editor_preset(preset: &str, want_dump: bool) {
         png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("editor.tree.json")).as_deref(),
         &[],
+        open_node_picker,
     );
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
@@ -566,6 +573,7 @@ fn run_gltf_editor(want_dump: bool) {
         png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("gltfeditor.tree.json")).as_deref(),
         &[],
+        false,
     );
     println!("ui-snap: wrote {}", png.display());
 }
@@ -621,6 +629,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         before_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join(format!("{scene_name}.before.tree.json"))).as_deref(),
         &[],
+        false,
     );
     println!("ui-snap: wrote {}", before_png.display());
 
@@ -707,6 +716,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         after_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join(format!("{scene_name}.after.tree.json"))).as_deref(),
         &[],
+        false,
     );
     println!("ui-snap: wrote {}", after_png.display());
 }
@@ -875,6 +885,7 @@ fn run_group_demo(want_dump: bool) {
         expanded_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("groupdemo-expanded.tree.json")).as_deref(),
         &[],
+        false,
     );
     println!("ui-snap: wrote {}", expanded_png.display());
 
@@ -894,6 +905,7 @@ fn run_group_demo(want_dump: bool) {
         collapsed_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("groupdemo-collapsed.tree.json")).as_deref(),
         &[10],
+        false,
     );
     println!("ui-snap: wrote {}", collapsed_png.display());
 }
@@ -1629,6 +1641,12 @@ mod editor_window_harness {
         let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
         let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+
+        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: same driver the live
+        // window and `render_graph_editor_to_png` use — no overlay is open
+        // here, so this only records `overlay_region_start == tree.count()`
+        // (D2's narrowed base render below still covers the whole tree).
+        ui_root.build_overlays_for_screen(logical_w, logical_h);
 
         composite_editor_frame(
             &device,
