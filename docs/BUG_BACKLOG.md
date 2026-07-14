@@ -137,7 +137,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 ## Open
 
 ### BUG-151 (graph-editor-node-browser-container-fill-not-drawn) — the graph editor's node-spawn browser renders its cell rows but not the popup container fill/scrim, so the graph and inspector show through between the cells — MED (authoring surface looks broken; main-window instance of the same component is fine)
-**Status:** OPEN — observed 2026-07-14 (Peter screenshot, discussed with Fable); mechanism NOT yet traced — needs a runtime look, static reading ruled out the obvious suspects.
+**Status:** OPEN — fix owned by `docs/EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 (2026-07-14; supersedes the standalone hunt prompt). Root class identified same day: the editor window has NO overlay pass — `composite_editor_frame` renders one flat root scan (`editor_frame.rs:264`) and never reads `overlay_draw`; P1 extracts the main window's overlay pass into a shared `tree_passes.rs` both windows call. Do not point-fix a copy of the loop into `editor_frame.rs`.
 
 **Symptom** — opening the node browser inside the graph editor shows floating search bar + cell rows with the graph canvas and the inspector panel bleeding through between and behind them. The SAME component opened from the main window (+ Add Effect) draws correctly: opaque `MODAL_BG` well, scrim, border.
 
