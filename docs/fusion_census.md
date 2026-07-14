@@ -18,8 +18,8 @@ Corpus: 57 bundled effect/generator presets + Liveschool fixture (0 embedded_pre
 | multi-output | 3 | 3 |
 | resample | 4 | 2 |
 | stencil-depth | 6 | 6 |
-| buffer-index-shaped | 22 | 12 |
-| other | 650 | 69 |
+| buffer-index-shaped | 16 | 10 |
+| other | 650 | 72 |
 
 ## Reading the numbers against D4's defaults
 

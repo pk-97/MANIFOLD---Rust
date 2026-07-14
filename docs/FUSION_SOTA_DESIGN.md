@@ -5,8 +5,10 @@ P1–P3 SHIPPED (markers module, segment worker robustness, refusal census commi
 `docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
 (Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
 `classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended,
-`fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). P4b,
-P6–P7 remain.
+`fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). **P4b
+SHIPPED** (closes BUG-114): the remaining five `draw_*` atoms + `blob_overlay` converted onto the
+codegen path; `BlobTracking.json` now forms a real 6-member fused region (18→13 estimated
+dispatches, `graph-tool fusion` measured). P6–P7 remain.
 **Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
 (BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
 BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
@@ -238,11 +240,19 @@ per GIT_TREE_DISCIPLINE.
   `Color` param independently boundary-cuts it until P5 lands; P4a instead proved the mechanism
   at the classify/region layer directly (wire never unions, producer stays external) plus the
   before/after `graph_tool fusion` dispatch count on `BlobTracking.json` (unchanged, as expected,
-  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b — the remaining five
-  `draw_*` + `blob_overlay`**, parity oracle each, `Blocked` reasons removed, BUG-114 Status →
-  FIXED, `docs/node_catalog.json` regenerated. Gate: gpu-proofs on touched modules; freeze suite;
-  `explain_presets` shows the HUD preset ACTUALLY fusing (region forms, dispatch count drops —
-  this is now reachable because P5 lands first and lifts the Color param that was blocking it).
+  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b — SHIPPED.** The remaining
+  five `draw_*` atoms (`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/
+  `draw_connections`) + `blob_overlay` converted per ADDING_PRIMITIVES (`wgsl_body` +
+  `fusion_kind`/`input_access` + generated-vs-hand parity oracle each), every `Blocked` reason
+  removed, BUG-114 Status → FIXED, `docs/node_catalog.json`/`NODE_CATALOG.md` and
+  `docs/fusion_census.md` regenerated. `draw_connections` proves the BufferIndex mechanism
+  generalizes to two tagged array inputs on one atom (`detections` + `edges`); `draw_scanlines`
+  needed no BufferIndex tag (no array input) — only P5's Color-param lift. Gate: gpu-proofs full
+  suite + `--lib` full suite clean; freeze suite clean; `graph-tool fusion` on `BlobTracking.json`
+  shows the HUD preset ACTUALLY fusing — region forms (6 members: both `draw_markers` + `draw_dots`
+  + `draw_gauge` + `draw_ticks` + `draw_connections`), estimated dispatch count 18→13.
+  `draw_scanlines` stays unfused in this preset (topologically isolated by two `value_overlay`
+  draw-call boundaries, not a param/array gap) — expected, not a regression.
   Demo: before/after dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
 - **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope). SHIPPED.** `classify_node`'s param
   gate (`region.rs`, was `:954–961`) narrowed via a new shared predicate

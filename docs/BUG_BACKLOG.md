@@ -314,7 +314,26 @@ edge-detector reads the raw conditioned value, never the display-smoothed one); 
 it into the round-trip test session.
 
 ### BUG-114 (draw-family-blocked-on-array-into-texture-codegen-read-path) — `draw_*` atoms pass the codegen-mandate scope test but the compiler can't express them — LOW (tracked codegen gap)
-**Status:** OPEN — scheduled: `docs/FUSION_SOTA_DESIGN.md` P4 (the `BufferIndex` read path + draw-family conversion) owns the fix. Peter, 2026-07-14: "I never made a call about post release. No need to defer this fusion work" — the earlier "default post-release" framing was never his decision. Logged 2026-07-11 while sharpening the codegen-mandate scope test.
+**Status:** FIXED — `docs/FUSION_SOTA_DESIGN.md` P4a+P4b+P5. P4a (`ae9ab74c`) built the
+`InputAccess::BufferIndex` mechanism (classify variant, region-grow rule, standalone+fused codegen
+struct synthesis from a port's `Channels[…]` layout, `buf_<port>` binding) and proved it on
+`node.draw_dots`. P5 (`1b013b0e`) lifted the Vec3/Vec4/Color param gate the six atoms' `color`
+param independently tripped. P4b converts the remaining five `draw_*` atoms
+(`draw_markers`/`draw_ticks`/`draw_gauge`/`draw_scanlines`/`draw_connections`) + `blob_overlay` per
+the ADDING_PRIMITIVES recipe (`wgsl_body` fragment + `fusion_kind`/`input_access` + generated-vs-hand
+parity oracle), removing every `boundary_reason: Blocked`. `draw_connections` additionally proves
+the BufferIndex mechanism generalizes to TWO tagged array inputs on one atom (`detections` +
+`edges`) — P4a only exercised one. `draw_scanlines` needed no BufferIndex tag at all (no array
+input) — it was purely gated by the Color param P5 lifted. Measured on `BlobTracking.json` (the
+real HUD preset all six/seven atoms and their overlay chain live in): `graph-tool fusion` — before
+18 nodes / 0 regions / 18 estimated dispatches; after 18 nodes / **1 region (6 members: both
+draw_markers instances + draw_dots + draw_gauge + draw_ticks + draw_connections) / 13 estimated
+dispatches**. `draw_scanlines` stays isolated in this preset (topologically separated from the HUD
+chain by two `value_overlay` draw-call boundaries, not a param/array gap) — a genuine, expected
+non-fusion, not a regression. `docs/node_catalog.json`/`NODE_CATALOG.md` and
+`docs/fusion_census.md` regenerated (buffer-index-shaped family: 22→16 refusals, 12→10
+dispatches-saved-if-lifted — the six/seven converted atoms leaving the bucket). Logged 2026-07-11
+while sharpening the codegen-mandate scope test.
 
 **Symptom** — the six `draw_*` atoms (draw_dots/markers/ticks/gauge/scanlines/connections) remain
 plain-WGSL fusion boundaries despite being per-element in shape: each dispatches one thread per

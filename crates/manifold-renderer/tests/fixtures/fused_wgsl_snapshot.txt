@@ -42,6 +42,366 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
+=== effect:BlobTracking node:18 ===
+struct Element {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+struct Element2 {
+    a_index: u32,
+    b_index: u32,
+}
+
+struct Params {
+    n0_symbol: u32,
+    n0_color_x: f32,
+    n0_color_y: f32,
+    n0_color_z: f32,
+    n0_color_w: f32,
+    n0_alpha: f32,
+    n0_size_fraction: f32,
+    n0_thickness_px: f32,
+    n1_symbol: u32,
+    n1_color_x: f32,
+    n1_color_y: f32,
+    n1_color_z: f32,
+    n1_color_w: f32,
+    n1_alpha: f32,
+    n1_size_fraction: f32,
+    n1_thickness_px: f32,
+    n2_color_x: f32,
+    n2_color_y: f32,
+    n2_color_z: f32,
+    n2_color_w: f32,
+    n2_alpha: f32,
+    n2_radius_px: f32,
+    n3_color_x: f32,
+    n3_color_y: f32,
+    n3_color_z: f32,
+    n3_color_w: f32,
+    n3_alpha: f32,
+    n3_bottom_offset_px: f32,
+    n3_bar_height_px: f32,
+    n3_min_bar_width_px: f32,
+    n3_fill_scale: f32,
+    n3_thickness_px: f32,
+    n4_color_x: f32,
+    n4_color_y: f32,
+    n4_color_z: f32,
+    n4_color_w: f32,
+    n4_alpha: f32,
+    n4_right_offset_px: f32,
+    n4_long_tick_px: f32,
+    n4_short_tick_px: f32,
+    n4_thickness_px: f32,
+    n5_color_x: f32,
+    n5_color_y: f32,
+    n5_color_z: f32,
+    n5_color_w: f32,
+    n5_alpha: f32,
+    n5_thickness_px: f32,
+    n5_dash_period_px: f32,
+    n5_dash_fill: f32,
+    n5_midpoint_radius_px: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<Element2>;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let len_sq = dot(ba, ba);
+    if len_sq < 0.000001 { return 0.0; }
+    let h = saturate(dot(pa, ba) / len_sq);
+    let d = length(pa - ba * h);
+    return 1.0 - saturate(d / thickness);
+}
+
+fn n0_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * (1.0 / dims.x) * dpi_scale;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(uv, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n1_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    symbol: u32,
+    color: vec4<f32>,
+    alpha: f32,
+    size_fraction: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let thickness = thickness_px * (1.0 / dims.x) * dpi_scale;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+        let arm = min(half_size.x, half_size.y) * size_fraction;
+
+        if symbol == 0u {
+            let tl = center - half_size;
+            let tr = vec2<f32>(center.x + half_size.x, center.y - half_size.y);
+            let bl = vec2<f32>(center.x - half_size.x, center.y + half_size.y);
+            let br = center + half_size;
+
+            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, tl, tl + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, tr, tr - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, tr, tr + vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, bl, bl + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, bl, bl - vec2<f32>(0.0, arm), thickness));
+            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, br, br - vec2<f32>(0.0, arm), thickness));
+        } else {
+            coverage = max(coverage, line_seg(uv, center - vec2<f32>(arm, 0.0), center + vec2<f32>(arm, 0.0), thickness));
+            coverage = max(coverage, line_seg(uv, center - vec2<f32>(0.0, arm), center + vec2<f32>(0.0, arm), thickness));
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n2_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let radius = radius_px * (1.0 / dims.x) * dpi_scale;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let center = vec2<f32>(d.x + d.width * 0.5, d.y + d.height * 0.5);
+        let dist = length(uv - center);
+        coverage = max(coverage, 1.0 - saturate(dist / radius));
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n3_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    bottom_offset_px: f32,
+    bar_height_px: f32,
+    min_bar_width_px: f32,
+    fill_scale: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let px_v = (1.0 / dims.y) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let bar_height = bar_height_px * px_v;
+    let bottom_offset = bottom_offset_px * px_v;
+    let min_bar_w = min_bar_width_px * px_u;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+
+        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);
+        let bar_w = max(d.width, min_bar_w);
+        let fill_frac = saturate(d.width * d.height * fill_scale);
+
+        let tl = origin;
+        let tr = origin + vec2<f32>(bar_w, 0.0);
+        let bl = origin + vec2<f32>(0.0, bar_height);
+        let br = origin + vec2<f32>(bar_w, bar_height);
+        coverage = max(coverage, line_seg(uv, tl, tr, thickness));
+        coverage = max(coverage, line_seg(uv, bl, br, thickness));
+        coverage = max(coverage, line_seg(uv, tl, bl, thickness));
+        coverage = max(coverage, line_seg(uv, tr, br, thickness));
+
+        let rel = uv - origin;
+        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {
+            coverage = max(coverage, 0.4);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n4_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    right_offset_px: f32,
+    long_tick_px: f32,
+    short_tick_px: f32,
+    thickness_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let right_offset = right_offset_px * px_u;
+
+    var coverage = 0.0;
+    let n = arrayLength(&src_1);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let d = src_1[i];
+        if d.width < 0.0001 && d.height < 0.0001 { continue; }
+        let half_size = vec2<f32>(d.width, d.height) * 0.5;
+        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
+
+        let tick_base = vec2<f32>(center.x + half_size.x + right_offset, center.y - half_size.y);
+        let tick_spacing = half_size.y * 0.5;
+
+        for (var t: u32 = 0u; t < 4u; t = t + 1u) {
+            let tick_start = tick_base + vec2<f32>(0.0, tick_spacing * f32(t));
+            let tick_len = select(short_tick_px * px_u, long_tick_px * px_u, (t % 2u) == 0u);
+            coverage = max(coverage, line_seg(uv, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thickness) * 0.5);
+        }
+    }
+
+    let add = coverage * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+fn n5_body(
+    c_in: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    color: vec4<f32>,
+    alpha: f32,
+    thickness_px: f32,
+    dash_period_px: f32,
+    dash_fill: f32,
+    midpoint_radius_px: f32,
+) -> vec4<f32> {
+    let dpi_scale = dims.y / 1080.0;
+    let px_u = (1.0 / dims.x) * dpi_scale;
+    let thickness = thickness_px * px_u;
+    let dash_period = dash_period_px * px_u;
+    let mid_radius = midpoint_radius_px * px_u;
+    let det_count = arrayLength(&src_1);
+
+    var line_cov = 0.0;
+    var mid_cov = 0.0;
+    let n = arrayLength(&src_2);
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        let e = src_2[i];
+        if e.a_index == 0xFFFFFFFFu { continue; }
+        if e.a_index >= det_count || e.b_index >= det_count { continue; }
+        let da = src_1[e.a_index];
+        let db = src_1[e.b_index];
+        let center_a = vec2<f32>(da.x + da.width * 0.5, da.y + da.height * 0.5);
+        let center_b = vec2<f32>(db.x + db.width * 0.5, db.y + db.height * 0.5);
+
+        let ba = center_b - center_a;
+        let len_sq = dot(ba, ba);
+        if len_sq < 0.000001 { continue; }
+        let pa = uv - center_a;
+        let t_val = saturate(dot(pa, ba) / len_sq);
+        let len = sqrt(len_sq);
+        let dash_phase = fract(t_val * len / dash_period);
+        let dash_mask = step(dash_fill, dash_phase);
+
+        line_cov = max(line_cov, line_seg(uv, center_a, center_b, thickness) * 0.5 * dash_mask);
+
+        if mid_radius > 0.0 {
+            let mid = (center_a + center_b) * 0.5;
+            let mid_dist = length(uv - mid);
+            mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
+        }
+    }
+
+    let add = (line_cov + mid_cov) * alpha;
+    return vec4<f32>(c_in.rgb + color.rgb * add, c_in.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_symbol, vec4<f32>(params.n0_color_x, params.n0_color_y, params.n0_color_z, params.n0_color_w), params.n0_alpha, params.n0_size_fraction, params.n0_thickness_px);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_symbol, vec4<f32>(params.n1_color_x, params.n1_color_y, params.n1_color_z, params.n1_color_w), params.n1_alpha, params.n1_size_fraction, params.n1_thickness_px);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), vec4<f32>(params.n2_color_x, params.n2_color_y, params.n2_color_z, params.n2_color_w), params.n2_alpha, params.n2_radius_px);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), vec4<f32>(params.n3_color_x, params.n3_color_y, params.n3_color_z, params.n3_color_w), params.n3_alpha, params.n3_bottom_offset_px, params.n3_bar_height_px, params.n3_min_bar_width_px, params.n3_fill_scale, params.n3_thickness_px);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), vec4<f32>(params.n4_color_x, params.n4_color_y, params.n4_color_z, params.n4_color_w), params.n4_alpha, params.n4_right_offset_px, params.n4_long_tick_px, params.n4_short_tick_px, params.n4_thickness_px);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), vec4<f32>(params.n5_color_x, params.n5_color_y, params.n5_color_z, params.n5_color_w), params.n5_alpha, params.n5_thickness_px, params.n5_dash_period_px, params.n5_dash_fill, params.n5_midpoint_radius_px);
+    textureStore(dst, coord, r5);
+}
+
 === effect:ChromaticAberration node:6 ===
 // @static_param: n2_mode
 struct Params {

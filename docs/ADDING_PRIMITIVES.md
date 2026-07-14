@@ -122,10 +122,13 @@ name which one when you claim an exemption:
    compute.
 5. **BLOCKED is not exempt.** An atom that PASSES the test but has an input the codegen
    cannot yet express is *blocked on a tracked codegen gap* — the mandate still
-   applies, and the debt lives in the compiler, not the atom. Today's case: the
+   applies, and the debt lives in the compiler, not the atom. Past case (closed): the
    `draw_*` family (per-pixel bodies that index a marks `Array` — texture-domain
-   codegen has no storage-array read-path; `freeze/classify.rs` names the planned
-   `BufferIndex` kind). Tracked as BUG-114 in `docs/BUG_BACKLOG.md`.
+   codegen had no storage-array read-path). Fixed by `InputAccess::BufferIndex`
+   (FUSION_SOTA_DESIGN.md D3/P4a+P4b, BUG-114) — a texture-domain atom now tags such
+   an input `BufferIndex` and the codegen binds it as `buf_<port>: array<Element>`,
+   synthesized from the port's `Channels[…]` layout; see `draw_dots.rs`/
+   `draw_connections.rs` (the latter proves two BufferIndex-tagged inputs on one atom).
 
 Non-GPU primitives (control-rate `value`/`math`/`lfo`, DNN/FFI/CPU atoms) are outside
 the rule entirely.
