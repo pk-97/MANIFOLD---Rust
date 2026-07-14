@@ -1,6 +1,8 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** APPROVED design, not built · 2026-07-14 · Fable 5 (with Peter in the room)
+**Status:** IN PROGRESS · 2026-07-14 · Fable 5 (with Peter in the room) · Sonnet 5 executing
+P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
+`docs/fusion_census.md` — no D4 default flipped, all four stand). P4–P7 remain.
 **Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
 (BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
 BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
@@ -191,17 +193,20 @@ gpu-proofs <module>` (never nextest); every phase runs the freeze suite
 `cargo test -p manifold-renderer --lib node_graph::freeze` + scoped clippy; full sweep at landing
 per GIT_TREE_DISCIPLINE.
 
-- **P1 — `freeze/markers.rs` (D1).** Deliverables: the module (enum + emit/parse + roundtrip
+- **P1 — `freeze/markers.rs` (D1). SHIPPED `3dac02c7`.** Deliverables: the module (enum + emit/parse + roundtrip
   test), all emit/parse sites rewritten through it (inventory in §1 — re-derive with
   `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from §1, stop and list),
   `marker_literals_live_in_one_module`, `fused_wgsl_snapshot_unchanged`. Gate: freeze suite green;
   snapshot test proves byte-identical emission; negative gate zero stray literals. Demo: none — L1
   (pure refactor proven by snapshot).
-- **P2 — segment worker robustness (D2).** Deliverables: catch_unwind wrap, timestamped
+- **P2 — segment worker robustness (D2). SHIPPED `6297946b`.** Deliverables: catch_unwind wrap, timestamped
   `SEGMENT_PENDING`, `SEGMENT_COMPILE_DEADLINE=60s` expiry in `pump_segment_results`, the two unit
   tests, the at-cap refresh nit fix (all three caches). Gate: freeze suite; new tests green.
   Demo: none — L1 (the observable surface is a log line on a fault path).
-- **P3 — refusal census (D4 instrument).** Deliverables: `audit_all_presets` extended to bucket
+- **P3 — refusal census (D4 instrument). SHIPPED `c7ff8ebc`, `docs/fusion_census.md` committed.
+  No trigger crossed (buffer-fan-out measured 0 refusals vs. trigger ≥3; resample's trigger is
+  runtime hot-chain evidence, not a static count) — all four D4 defaults stand unchanged.**
+  Deliverables: `audit_all_presets` extended to bucket
   refusals by family (fan-out / stencil-depth / multi-output / param-type / resample / arity /
   BufferIndex-shaped / other) and count dispatches-saved-per-lift; run over bundled presets + the
   Liveschool fixture; committed `docs/fusion_census.md` with the numbers + one paragraph reading
