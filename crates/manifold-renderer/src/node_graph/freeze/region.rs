@@ -2848,13 +2848,18 @@ mod tests {
     /// single storage-texture output it synthesizes.
     #[test]
     fn wgsl_compute_fragment_fuses_with_atoms() {
+        use crate::node_graph::freeze::markers::Marker;
+        // Same placeholder-substitution convention as the proof.rs sibling of this
+        // fixture — the `@fusion: pointwise` marker is routed through `Marker::emit`
+        // rather than hand-typed, so this test stays off the single-sourced grammar's
+        // negative gate.
         let json = r#"{
             "version": 1, "name": "frag", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
                   "params": { "gain": { "type": "Float", "value": 1.2 } } },
                 { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
-                  "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
+                  "wgslSource": "FUSION_MARKER\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
                   "params": { "scale": { "type": "Float", "value": 0.75 } } },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -2864,8 +2869,9 @@ mod tests {
                 { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
             ]
-        }"#;
-        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        }"#
+        .replacen("FUSION_MARKER", &Marker::Fusion { kind: "pointwise".to_string() }.emit(), 1);
+        let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
         let regions = partition_regions(&def, &registry());
         assert_eq!(regions.len(), 1, "gain + fragment + invert form one region");
         assert_eq!(

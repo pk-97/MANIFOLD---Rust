@@ -47,6 +47,7 @@ use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
 };
 use crate::node_graph::freeze::classify::FusionKind;
+use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
     ArrayType, ChannelElementType, ChannelSpec, NodeInput, NodeOutput, NodePort, PortKind,
@@ -1080,13 +1081,10 @@ fn extract_static_params(source: &str) -> Vec<String> {
     let stripped = strip_block_comments(source);
     let mut fields = Vec::new();
     for line in stripped.lines() {
-        if let (_, Some(c)) = split_line_comment(line)
-            && let Some(rest) = c.trim().strip_prefix("@static_param:")
+        if let Some(Marker::StaticParam { field }) = Marker::parse(line)
+            && !fields.iter().any(|f| f == &field)
         {
-            let name = rest.trim();
-            if !name.is_empty() && !fields.iter().any(|f| f == name) {
-                fields.push(name.to_string());
-            }
+            fields.push(field);
         }
     }
     fields
@@ -1540,16 +1538,13 @@ fn is_channel_skip_marker(comment: &str) -> bool {
 fn parse_sampler_address_mode(source: &str) -> GpuAddressMode {
     let stripped = strip_block_comments(source);
     for line in stripped.lines() {
-        let (_, comment) = split_line_comment(line);
-        let Some(c) = comment else { continue };
-        let Some(token) = c.trim().strip_prefix("@sampler_address_mode:") else {
-            continue;
-        };
-        return match token.trim() {
-            "repeat" => GpuAddressMode::Repeat,
-            "mirror" => GpuAddressMode::MirrorRepeat,
-            _ => GpuAddressMode::ClampToEdge,
-        };
+        if let Some(Marker::SamplerAddressMode { mode }) = Marker::parse(line) {
+            return match mode.as_str() {
+                "repeat" => GpuAddressMode::Repeat,
+                "mirror" => GpuAddressMode::MirrorRepeat,
+                _ => GpuAddressMode::ClampToEdge,
+            };
+        }
     }
     GpuAddressMode::ClampToEdge
 }
@@ -1562,17 +1557,10 @@ fn parse_sampler_address_mode(source: &str) -> GpuAddressMode {
 /// count, capping the array dispatch grid below the buffer capacity.
 fn extract_dispatch_count_param(source: &str) -> Option<String> {
     let stripped = strip_block_comments(source);
-    for line in stripped.lines() {
-        if let (_, Some(c)) = split_line_comment(line)
-            && let Some(rest) = c.trim().strip_prefix("@dispatch_count_param:")
-        {
-            let name = rest.trim();
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
+    stripped.lines().find_map(|line| match Marker::parse(line) {
+        Some(Marker::DispatchCountParam { field }) => Some(field),
+        _ => None,
+    })
 }
 
 /// Scan for `// @camera_external: <name>` markers (emitted by the fused-region
@@ -1586,13 +1574,10 @@ fn extract_camera_externals(source: &str) -> Vec<String> {
     let stripped = strip_block_comments(source);
     let mut names = Vec::new();
     for line in stripped.lines() {
-        if let (_, Some(c)) = split_line_comment(line)
-            && let Some(rest) = c.trim().strip_prefix("@camera_external:")
+        if let Some(Marker::CameraExternal { name }) = Marker::parse(line)
+            && !names.iter().any(|n| n == &name)
         {
-            let name = rest.trim();
-            if !name.is_empty() && !names.iter().any(|n| n == name) {
-                names.push(name.to_string());
-            }
+            names.push(name);
         }
     }
     names
@@ -1621,30 +1606,18 @@ fn extract_derived_uniform_markers(source: &str) -> Vec<RawDerivedUniformMarker>
     let stripped = strip_block_comments(source);
     let mut markers = Vec::new();
     for line in stripped.lines() {
-        let Some((_, Some(c))) = Some(split_line_comment(line)) else { continue };
-        let Some(rest) = c.trim().strip_prefix("@derived_uniform_member:") else { continue };
-        let mut parts = rest.split_whitespace();
-        let Some(first_field) = parts.next() else { continue };
-        let Some(words_tok) = parts.next() else { continue };
-        let Some(words_str) = words_tok.strip_prefix("words=") else { continue };
-        let Ok(words) = words_str.parse::<u32>() else { continue };
-        let Some(type_id) = parts.next() else { continue };
-        let camera_port = parts.next().map(|s| s.to_string());
-        markers.push(RawDerivedUniformMarker {
-            first_field: first_field.to_string(),
-            words,
-            type_id: type_id.to_string(),
-            camera_port,
-        });
+        if let Some(Marker::DerivedUniformMember { first_field, words, type_id, camera_port }) =
+            Marker::parse(line)
+        {
+            markers.push(RawDerivedUniformMarker { first_field, words, type_id, camera_port });
+        }
     }
     markers
 }
 
 fn source_has_reset_gated_marker(source: &str) -> bool {
     let stripped = strip_block_comments(source);
-    stripped
-        .lines()
-        .any(|line| matches!(split_line_comment(line).1, Some(c) if c.trim() == "@reset_gated"))
+    stripped.lines().any(|line| matches!(Marker::parse(line), Some(Marker::ResetGated)))
 }
 
 /// Whether the source carries a `// @pure` line-comment marker — the author's
@@ -1653,9 +1626,7 @@ fn source_has_reset_gated_marker(source: &str) -> bool {
 /// state). Same own-line comment convention as `@reset_gated`.
 fn source_has_pure_marker(source: &str) -> bool {
     let stripped = strip_block_comments(source);
-    stripped
-        .lines()
-        .any(|line| matches!(split_line_comment(line).1, Some(c) if c.trim() == "@pure"))
+    stripped.lines().any(|line| matches!(Marker::parse(line), Some(Marker::Pure)))
 }
 
 fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
@@ -1664,12 +1635,10 @@ fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
     let mut pending = false;
     for raw_line in stripped.lines() {
         let line = raw_line.trim_start();
-        let (code, comment) = split_line_comment(line);
+        let (code, _comment) = split_line_comment(line);
         let code = code.trim();
         if code.is_empty() {
-            if let Some(c) = comment
-                && c.trim() == "@fused_output"
-            {
+            if matches!(Marker::parse(line), Some(Marker::FusedOutput)) {
                 pending = true;
             }
             continue;
@@ -1806,10 +1775,16 @@ impl FusionFragment {
             };
             let c = c.trim();
             if let Some(rest) = c.strip_prefix("@fusion:") {
-                kind = match rest.trim() {
-                    "pointwise" => Some(FusionKind::Pointwise),
-                    "source" => Some(FusionKind::Source),
-                    other => {
+                kind = match Marker::parse(line) {
+                    Some(Marker::Fusion { kind }) => match kind.as_str() {
+                        "pointwise" => Some(FusionKind::Pointwise),
+                        "source" => Some(FusionKind::Source),
+                        // Marker::parse only yields Fusion for these two kinds —
+                        // unreachable, kept as a fail-closed match arm.
+                        _ => return None,
+                    },
+                    _ => {
+                        let other = rest.trim();
                         log::warn!("[node.wgsl_compute] unknown @fusion kind '{other}'");
                         return None;
                     }
@@ -2688,12 +2663,20 @@ mod tests {
         node.inputs.iter().map(|i| i.name.as_ref()).collect()
     }
 
-    const FRAGMENT_SRC: &str = "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n";
+    // Built through `Marker::emit` rather than hand-typed, so this fixture stays
+    // off the single-sourced marker grammar's negative gate.
+    fn fragment_src() -> String {
+        format!(
+            "{}\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {{\n    return vec4<f32>(c.rgb * scale, c.a);\n}}\n",
+            Marker::Fusion { kind: "pointwise".to_string() }.emit()
+        )
+    }
 
     #[test]
     fn fragment_form_introspects_and_reports_fusion_contract() {
+        let fragment_src = fragment_src();
         let mut node = WgslCompute::new();
-        node.set_wgsl_source(FRAGMENT_SRC);
+        node.set_wgsl_source(&fragment_src);
         assert!(!node.compile_failed, "fragment must synthesize + introspect");
         assert_eq!(node.fusion_kind(), FusionKind::Pointwise);
         let body = node.wgsl_body().expect("fragment exposes a body");
@@ -2711,7 +2694,7 @@ mod tests {
         assert_eq!(node.params[0].default, ParamValue::Float(0.75));
         assert_eq!(node.params[0].range, Some((0.0, 2.0)));
         // wgsl_source() round-trips the AUTHORED fragment, not the kernel.
-        assert_eq!(node.wgsl_source(), Some(FRAGMENT_SRC));
+        assert_eq!(node.wgsl_source(), Some(fragment_src.as_str()));
     }
 
     /// BUG-010: a stray leftover `@compute fn` BEFORE the synthesized `cs_main`
@@ -2844,19 +2827,22 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn reset_gated_marker_exposes_synthetic_reset_trigger_input() {
         // A `// @reset_gated` source gains an OPTIONAL `reset_trigger` input that
         // edge-gates the dispatch (the seed-pattern pattern: cheap to skip between
-        // clip resets). Unmarked sources never get the port.
-        let gated = r#"// @reset_gated
-struct U { pattern: u32, };
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var density: texture_storage_2d<r32float, write>;
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    _ = u.pattern;
-    textureStore(density, vec2<i32>(id.xy), vec4<f32>(1.0));
-}
-"#;
+        // clip resets). Unmarked sources never get the port. Built through
+        // `Marker::emit` so this fixture stays off the negative gate.
+        let gated = format!(
+            "{}\n\
+             struct U {{ pattern: u32, }};\n\
+             @group(0) @binding(0) var<uniform> u: U;\n\
+             @group(0) @binding(1) var density: texture_storage_2d<r32float, write>;\n\
+             @compute @workgroup_size(16, 16)\n\
+             fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+             _ = u.pattern;\n\
+             textureStore(density, vec2<i32>(id.xy), vec4<f32>(1.0));\n\
+             }}\n",
+            Marker::ResetGated.emit()
+        );
         let mut node = WgslCompute::new();
-        node.set_wgsl_source(gated);
+        node.set_wgsl_source(&gated);
         assert!(!node.compile_failed, "gated shader must parse");
         assert!(node.reset_gated, "marker sets reset_gated");
         let rt = node
@@ -2868,7 +2854,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         assert!(!rt.required, "reset_trigger is optional (unwired ⇒ every frame)");
 
         // Same shader without the marker: no synthetic port, runs every frame.
-        let ungated = gated.replace("// @reset_gated\n", "");
+        let ungated = gated.replace(&format!("{}\n", Marker::ResetGated.emit()), "");
         let mut plain = WgslCompute::new();
         plain.set_wgsl_source(&ungated);
         assert!(!plain.reset_gated);
@@ -2877,9 +2863,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             "no marker ⇒ no reset_trigger port"
         );
 
-        // `// @pure` (same own-line marker convention): author-asserted
+        // `@pure` (same own-line marker convention): author-asserted
         // memoizable kernel. Marked ⇒ is_pure; unmarked ⇒ not.
-        let pure_src = format!("// @pure\n{ungated}");
+        let pure_src = format!("{}\n{ungated}", Marker::Pure.emit());
         let mut pure_node = WgslCompute::new();
         pure_node.set_wgsl_source(&pure_src);
         assert!(!pure_node.compile_failed, "pure shader must parse");
@@ -3554,36 +3540,42 @@ mod gpu_tests {
     // mode-branch (the kind of dead branch spirv-opt's CCP/DCE strips once the
     // selector is a const), and a SURVIVING dynamic param so the shrunk uniform
     // path is covered too.
-    const SPEC_KERNEL: &str = "\
-// @static_param: n0_k
-// @static_param: n0_mode
-struct Params {
+    // Built through `Marker::emit` (the two `@static_param` lines) rather than
+    // hand-typed, so this fixture stays off the negative gate.
+    fn spec_kernel() -> String {
+        format!(
+            "{}\n{}\n\
+struct Params {{
     n0_k: f32,
     n0_mode: i32,
     n0_gain: f32,
     _pad0: u32,
-}
+}}
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
     let dims = textureDimensions(dst);
-    if id.x >= dims.x || id.y >= dims.y { return; }
+    if id.x >= dims.x || id.y >= dims.y {{ return; }}
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let c = textureLoad(src_0, coord, 0);
     var r: vec4<f32>;
-    if (params.n0_mode == 0) {
+    if (params.n0_mode == 0) {{
         r = c * params.n0_k;
-    } else {
+    }} else {{
         r = vec4<f32>(1.0) - c * params.n0_k;
-    }
+    }}
     r = r * params.n0_gain;
     textureStore(dst, coord, r);
-}
-";
+}}
+",
+            Marker::StaticParam { field: "n0_k".to_string() }.emit(),
+            Marker::StaticParam { field: "n0_mode".to_string() }.emit(),
+        )
+    }
 
     fn spec_gradient(device: &manifold_gpu::GpuDevice, w: u32, h: u32) -> manifold_gpu::GpuTexture {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
@@ -3677,7 +3669,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Parse the kernel through the node so static_param_fields + uniform_layout
         // come from the real introspection path.
         let mut node = WgslCompute::new();
-        node.reparse(SPEC_KERNEL.to_string());
+        node.reparse(spec_kernel());
         assert_eq!(
             node.static_param_fields,
             vec!["n0_k".to_string(), "n0_mode".to_string()],
@@ -3730,26 +3722,31 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // and recompiles a fresh variant. Drives a Source kernel (output = n0_k*n0_gain)
     // through the real chain runtime so the node persists its spec cache across
     // frames, exactly as on stage.
-    const SPEC_SOURCE_KERNEL: &str = "\
-// @static_param: n0_k
-struct Params {
+    // Built through `Marker::emit`, same convention as `spec_kernel` above.
+    fn spec_source_kernel() -> String {
+        format!(
+            "{}\n\
+struct Params {{
     n0_k: f32,
     n0_gain: f32,
     _pad0: u32,
     _pad1: u32,
-}
+}}
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
     let dims = textureDimensions(dst);
-    if id.x >= dims.x || id.y >= dims.y { return; }
+    if id.x >= dims.x || id.y >= dims.y {{ return; }}
     let v = params.n0_k * params.n0_gain;
     textureStore(dst, vec2<i32>(i32(id.x), i32(id.y)), vec4<f32>(v, v, v, 1.0));
-}
-";
+}}
+",
+            Marker::StaticParam { field: "n0_k".to_string() }.emit(),
+        )
+    }
 
     #[test]
     fn knob_tweak_reflects_next_frame_via_generic_fallback() {
@@ -3761,7 +3758,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut node = WgslCompute::new();
-        node.reparse(SPEC_SOURCE_KERNEL.to_string());
+        node.reparse(spec_source_kernel());
         assert_eq!(node.static_param_fields, vec!["n0_k".to_string()]);
 
         let mut g = Graph::new();

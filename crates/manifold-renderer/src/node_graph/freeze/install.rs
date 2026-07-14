@@ -61,6 +61,7 @@ use manifold_core::effect_graph_def::{
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
+use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
@@ -1468,7 +1469,8 @@ pub(crate) fn fuse_canonical_def_masked(
                 // targets: both are dynamic, so baking either thrashes the
                 // pipeline cache on every value change (the slider-drag stutter).
                 if !controlled.contains(field.as_str()) && !bound_fields.contains(field.as_str()) {
-                    markers.push_str(&format!("// @static_param: {field}\n"));
+                    markers.push_str(&Marker::StaticParam { field: field.clone() }.emit());
+                    markers.push('\n');
                 }
             }
             if markers.is_empty() {
@@ -2378,12 +2380,12 @@ mod tests {
         let wgsl = node.wgsl_source.as_deref().expect("fused source");
         // gain_a is member 1 (field n1_gain) and is the binding target → uniform.
         assert!(
-            !wgsl.contains("// @static_param: n1_gain"),
+            !wgsl.contains(&Marker::StaticParam { field: "n1_gain".to_string() }.emit()),
             "a bound (live) param must never be baked static:\n{wgsl}"
         );
         // gain_b is member 2 (field n2_gain), unbound + unwired → still bakes.
         assert!(
-            wgsl.contains("// @static_param: n2_gain"),
+            wgsl.contains(&Marker::StaticParam { field: "n2_gain".to_string() }.emit()),
             "an unbound constant param should still bake (perf win preserved):\n{wgsl}"
         );
     }
