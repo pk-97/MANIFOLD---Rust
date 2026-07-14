@@ -1,14 +1,21 @@
-//! Freeze / fusion compiler (design: `docs/GRAPH_FREEZE_COMPILER_DESIGN.md`).
+//! Freeze / fusion compiler — the production compiler on the live render
+//! path (design: `docs/GRAPH_FREEZE_COMPILER_DESIGN.md`; current-state map:
+//! `docs/FREEZE_COMPILER_MAP.md`, the authoritative reference for this
+//! module).
 //!
-//! Collapses chains of pure per-element GPU atoms into one kernel — read once,
-//! math in registers, write once — to eliminate the VRAM round-trips that make
-//! the node-graph runtime ~5× slower than the old fused-Rust effects (Phase 0
-//! findings: `docs/archive/GRAPH_FREEZE_PHASE0_FINDINGS.md`).
-//!
-//! Built bottom-up, oracle first (build sequence §9): the verification oracle
-//! gates everything downstream, so it lands before the compiler it checks. The
-//! oracle's foundation is [`diff`] — a GPU texture-diff reducer that compares
-//! two renders (unfused = exact oracle, fused = candidate) to a tiny verdict.
+//! Collapses maximal runs of pure per-element GPU atoms into one generated
+//! WGSL kernel per region — read once, math in registers, write once — to
+//! eliminate the VRAM round-trips that make the naive node-graph runtime ~5×
+//! slower than the old hand-fused Rust effects (Phase 0 findings:
+//! `docs/archive/GRAPH_FREEZE_PHASE0_FINDINGS.md`). [`classify`] tags every
+//! primitive's fusion eligibility; [`region`] partitions a graph into maximal
+//! fusable regions (texture and buffer domains); [`codegen`] and [`install`]
+//! generate the fused kernel per region and swap it into the graph as one
+//! `node.wgsl_compute` node; [`segment`]/[`space`] handle cross-card
+//! concatenation and element-space bookkeeping. [`diff`] is the foundational
+//! verification primitive underneath all of it — a GPU texture-diff reducer
+//! that compares two renders (unfused = free exact oracle, fused = candidate)
+//! to a tiny verdict — and backs both the `proof` test suite and the fuzzers.
 
 pub mod classify;
 pub mod codegen;
