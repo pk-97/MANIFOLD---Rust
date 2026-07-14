@@ -3463,6 +3463,7 @@ mod gpu_tests {
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::Slot;
+    use crate::node_graph::freeze::markers::Marker;
     use crate::node_graph::{
         FinalOutput, FrameTime, Graph, MetalBackend, Executor, compile,
     };

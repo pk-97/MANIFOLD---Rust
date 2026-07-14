@@ -12,17 +12,25 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
+/// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
+/// site), `alpha`, `bottom_offset_px`, `bar_height_px`, `min_bar_width_px`,
+/// `fill_scale`, `thickness_px` — then padded to a 16-byte multiple (10
+/// header words + 2 pad = 12 words = 48 bytes). NOT the pre-conversion hand
+/// layout (`vec3<f32>` + separate alpha, 3×u32 pad); the `[f32; 4]` here
+/// matches the codegen's 4 scalar fields byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GaugeUniforms {
-    color: [f32; 3],
+    color: [f32; 4],
     alpha: f32,
     bottom_offset_px: f32,
     bar_height_px: f32,
     min_bar_width_px: f32,
     fill_scale: f32,
     thickness_px: f32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
 }
 
 crate::primitive! {
@@ -103,93 +111,10 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw gauge", "hud", "overlay", "size bar", "meter"],
-    boundary_reason: Blocked,
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/draw_gauge_body.wgsl"),
+    input_access: [Coincident, BufferIndex],
 }
-
-const GAUGE_SHADER: &str = r#"
-struct U {
-    color: vec3<f32>,
-    alpha: f32,
-    bottom_offset_px: f32,
-    bar_height_px: f32,
-    min_bar_width_px: f32,
-    fill_scale: f32,
-    thickness_px: f32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-};
-
-struct Detection {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-};
-
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var<storage, read> detections: array<Detection>;
-@group(0) @binding(2) var source_tex: texture_2d<f32>;
-@group(0) @binding(3) var src_sampler: sampler;
-@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;
-
-fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
-    let pa = p - a;
-    let ba = b - a;
-    let len_sq = dot(ba, ba);
-    if len_sq < 0.000001 { return 0.0; }
-    let h = saturate(dot(pa, ba) / len_sq);
-    let d = length(pa - ba * h);
-    return 1.0 - saturate(d / thickness);
-}
-
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = textureDimensions(output_tex);
-    if gid.x >= dims.x || gid.y >= dims.y { return; }
-    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
-    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);
-
-    let dpi_scale = f32(dims.y) / 1080.0;
-    let px_u = (1.0 / f32(dims.x)) * dpi_scale;
-    let px_v = (1.0 / f32(dims.y)) * dpi_scale;
-    let thickness = u.thickness_px * px_u;
-    let bar_height = u.bar_height_px * px_v;
-    let bottom_offset = u.bottom_offset_px * px_v;
-    let min_bar_w = u.min_bar_width_px * px_u;
-
-    var coverage = 0.0;
-    let n = arrayLength(&detections);
-    for (var i: u32 = 0u; i < n; i = i + 1u) {
-        let d = detections[i];
-        if d.width < 0.0001 && d.height < 0.0001 { continue; }
-        let half_size = vec2<f32>(d.width, d.height) * 0.5;
-        let center = vec2<f32>(d.x + half_size.x, d.y + half_size.y);
-
-        let origin = vec2<f32>(center.x - half_size.x, center.y + half_size.y + bottom_offset);
-        let bar_w = max(d.width, min_bar_w);
-        let fill_frac = saturate(d.width * d.height * u.fill_scale);
-
-        let tl = origin;
-        let tr = origin + vec2<f32>(bar_w, 0.0);
-        let bl = origin + vec2<f32>(0.0, bar_height);
-        let br = origin + vec2<f32>(bar_w, bar_height);
-        coverage = max(coverage, line_seg(uv, tl, tr, thickness));
-        coverage = max(coverage, line_seg(uv, bl, br, thickness));
-        coverage = max(coverage, line_seg(uv, tl, bl, thickness));
-        coverage = max(coverage, line_seg(uv, tr, br, thickness));
-
-        let rel = uv - origin;
-        if rel.x >= 0.0 && rel.x <= bar_w * fill_frac && rel.y >= 0.0 && rel.y <= bar_height {
-            coverage = max(coverage, 0.4);
-        }
-    }
-
-    let add = coverage * u.alpha;
-    src = vec4<f32>(src.rgb + u.color * add, src.a);
-    textureStore(output_tex, vec2<i32>(gid.xy), src);
-}
-"#;
 
 impl Primitive for DrawGauge {
     fn empty_skip_input_ports(&self) -> &'static [&'static str] {
@@ -202,8 +127,8 @@ impl Primitive for DrawGauge {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let color = match ctx.params.get("color") {
-            Some(ParamValue::Color(c)) => [c[0], c[1], c[2]],
-            _ => [0.85, 0.92, 1.0],
+            Some(ParamValue::Color(c)) => [c[0], c[1], c[2], 1.0],
+            _ => [0.85, 0.92, 1.0, 1.0],
         };
         let alpha = ctx.scalar_or_param("alpha", 1.0);
         let bottom_offset_px = ctx.scalar_or_param("bottom_offset_px", 50.0);
@@ -227,14 +152,27 @@ impl Primitive for DrawGauge {
         }
 
         let gpu = ctx.gpu_encoder();
+        // Codegen path (mandatory for per-element GPU atoms, D3/BUG-114): the
+        // kernel is generated from `wgsl_body` so the atom fuses into a
+        // texture region via the `BufferIndex` read path. `shaders/draw_gauge.wgsl`
+        // is retained only as the gpu_tests parity oracle.
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device
-                .create_compute_pipeline(GAUGE_SHADER, "cs_main", "node.draw_gauge")
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.draw_gauge standalone codegen");
+            gpu.device.create_compute_pipeline(
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
+                "node.draw_gauge",
+            )
         });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
+        // Uniform layout matches the generated Params struct: PARAMS order
+        // (color → vec4, alpha, bottom_offset_px, bar_height_px,
+        // min_bar_width_px, fill_scale, thickness_px) — 10 header words + 2
+        // pad = 12 words.
         let uniforms = GaugeUniforms {
             color,
             alpha,
@@ -243,16 +181,20 @@ impl Primitive for DrawGauge {
             min_bar_width_px,
             fill_scale,
             thickness_px,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
         };
 
+        // Bindings match the generated standalone layout: uniform(0), texture
+        // input `in`(1), sampler(2), array input `detections`→`buf_detections`(3),
+        // output(4).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: det_buf, offset: 0 },
-                GpuBinding::Texture { binding: 2, texture: in_tex },
-                GpuBinding::Sampler { binding: 3, sampler },
+                GpuBinding::Texture { binding: 1, texture: in_tex },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Buffer { binding: 3, buffer: det_buf, offset: 0 },
                 GpuBinding::Texture { binding: 4, texture: out_tex },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
@@ -279,5 +221,192 @@ mod tests {
     #[test]
     fn uniforms_are_48_bytes() {
         assert_eq!(std::mem::size_of::<GaugeUniforms>(), 48);
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    //! **Generated-vs-hand parity** (D3, BUG-114 — `docs/ADDING_PRIMITIVES.md`
+    //! "The codegen path is mandatory"): the standalone kernel `run()`
+    //! actually dispatches (built via `standalone_for_spec::<DrawGauge>()`)
+    //! must reproduce `shaders/draw_gauge.wgsl` (the hand oracle) texel-for-texel.
+    use manifold_gpu::{
+        GpuBinding, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+        GpuTextureFormat, GpuTextureUsage,
+    };
+
+    use super::{DrawGauge, GaugeUniforms};
+    use crate::render_target::RenderTarget;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Detection {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    }
+
+    fn solid_source(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+        use half::f16;
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for i in 0..(w * h) as usize {
+            px[i * 4] = f16::from_f32(0.05);
+            px[i * 4 + 1] = f16::from_f32(0.05);
+            px[i * 4 + 2] = f16::from_f32(0.05);
+            px[i * 4 + 3] = f16::from_f32(1.0);
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "draw-gauge-source",
+            mip_levels: 1,
+        });
+        let bytes =
+            unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
+        use half::f16;
+        let bytes_per_row = w * 8;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("draw-gauge-readback");
+        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize)
+            .map(|i| {
+                let o = i * 4;
+                [
+                    f16::from_bits(halves[o]).to_f32(),
+                    f16::from_bits(halves[o + 1]).to_f32(),
+                    f16::from_bits(halves[o + 2]).to_f32(),
+                    f16::from_bits(halves[o + 3]).to_f32(),
+                ]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generated_draw_gauge_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (32u32, 32u32);
+        let src = solid_source(&device, w, h);
+
+        let detections = [
+            Detection { x: 0.25, y: 0.25, width: 0.1, height: 0.1 },
+            Detection { x: 0.6, y: 0.5, width: 0.08, height: 0.08 },
+            Detection { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
+        ];
+        let det_bytes_len = std::mem::size_of_val(&detections) as u64;
+        let hand_buf = device.create_buffer_shared(det_bytes_len);
+        let gen_buf = device.create_buffer_shared(det_bytes_len);
+        unsafe {
+            hand_buf.write(0, bytemuck::bytes_of(&detections));
+            gen_buf.write(0, bytemuck::bytes_of(&detections));
+        }
+
+        let color = [0.85_f32, 0.92, 1.0, 1.0];
+        let alpha = 1.0_f32;
+        let bottom_offset_px = 50.0_f32;
+        let bar_height_px = 8.0_f32;
+        let min_bar_width_px = 80.0_f32;
+        let fill_scale = 20.0_f32;
+        let thickness_px = 1.5_f32;
+
+        // Hand layout (`shaders/draw_gauge.wgsl`'s `struct U`): color as
+        // vec3<f32> + alpha + rest + 3×u32 pad — NOT the generated Params
+        // layout (`GaugeUniforms`, PARAMS order: color as 4×f32 then the
+        // scalar fields + 2×u32 pad).
+        let mut hand_bytes = Vec::new();
+        hand_bytes.extend_from_slice(&color[0].to_le_bytes());
+        hand_bytes.extend_from_slice(&color[1].to_le_bytes());
+        hand_bytes.extend_from_slice(&color[2].to_le_bytes());
+        hand_bytes.extend_from_slice(&alpha.to_le_bytes());
+        hand_bytes.extend_from_slice(&bottom_offset_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&bar_height_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&min_bar_width_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&fill_scale.to_le_bytes());
+        hand_bytes.extend_from_slice(&thickness_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&[0u8; 12]); // 3×u32 pad
+
+        let gen_uniforms = GaugeUniforms {
+            color,
+            alpha,
+            bottom_offset_px,
+            bar_height_px,
+            min_bar_width_px,
+            fill_scale,
+            thickness_px,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        let gen_bytes = bytemuck::bytes_of(&gen_uniforms).to_vec();
+
+        let hand_wgsl = include_str!("shaders/draw_gauge.wgsl");
+        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "draw-gauge-hand");
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<DrawGauge>()
+            .expect("node.draw_gauge standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "draw-gauge-generated",
+        );
+
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+
+        let hand_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "hand-out");
+        let mut enc = device.create_encoder("draw-gauge-hand-dispatch");
+        enc.dispatch_compute(
+            &hand_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: &hand_bytes },
+                GpuBinding::Buffer { binding: 1, buffer: &hand_buf, offset: 0 },
+                GpuBinding::Texture { binding: 2, texture: &src },
+                GpuBinding::Sampler { binding: 3, sampler: &sampler },
+                GpuBinding::Texture { binding: 4, texture: &hand_out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "draw-gauge-hand-dispatch",
+        );
+        enc.commit_and_wait_completed();
+
+        let gen_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "gen-out");
+        let mut enc = device.create_encoder("draw-gauge-gen-dispatch");
+        enc.dispatch_compute(
+            &gen_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: &gen_bytes },
+                GpuBinding::Texture { binding: 1, texture: &src },
+                GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                GpuBinding::Buffer { binding: 3, buffer: &gen_buf, offset: 0 },
+                GpuBinding::Texture { binding: 4, texture: &gen_out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "draw-gauge-gen-dispatch",
+        );
+        enc.commit_and_wait_completed();
+
+        let hand_px = readback_rgba(&device, &hand_out.texture, w, h);
+        let gen_px = readback_rgba(&device, &gen_out.texture, w, h);
+        for (i, (hp, gp)) in hand_px.iter().zip(gen_px.iter()).enumerate() {
+            for c in 0..4 {
+                assert!(
+                    (hp[c] - gp[c]).abs() < 1e-5,
+                    "texel={i} ch={c}: hand={} gen={}",
+                    hp[c],
+                    gp[c]
+                );
+            }
+        }
     }
 }
