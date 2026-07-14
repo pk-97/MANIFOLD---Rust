@@ -50,7 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-161 | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` errors in `ui_snapshot/mod.rs` (`view.canonical_def` is `Arc<EffectGraphDef>`, callees want `&EffectGraphDef`) — the headless ui-snap tool, the prescribed oracle for BUG-160 and others, is currently unusable. Found bug-wave lane A 2026-07-14 trying to bisect BUG-160; pre-existing on origin/main, unrelated to this session's diff. Not part of the default `nextest` sweep (feature-gated), so it went unnoticed. LOW-effort fix (add `&`/`.as_ref()` at 8 call sites) but blocks any UI-regression bisection until fixed. |
+| ~~BUG-161~~ FIXED | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | FIXED 2026-07-14 (bug-wave3 lane C) — `&view.canonical_def` / `(*view.canonical_def).clone()` at all 8 sites; unblocks BUG-160's prescribed oracle. |
 | BUG-160 | **editor-window-unification-inspector-card-layout-regressions** | Inspector cards misfit their buttons/controls after the EDITOR_WINDOW_UNIFICATION landing (2026-07-14) — regression per Peter's live report; P1's byte-diff verification passed, so it's P2/P3 or a fixture-uncovered configuration. Not investigated. MED-HIGH (UI regression). |
 | BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
 | BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
@@ -100,7 +100,7 @@ or human can read it, and it needs no external tool.
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | ~~BUG-072~~ FIXED | **audio-mixdown-all-targets-clippy-debt** | FIXED @ `78e97d4a` — same fix as BUG-088: `std::slice::from_ref` + `.iter().zip().enumerate()` rewrites in `audio_mixdown.rs`. |
 | ~~BUG-046~~ FIXED | **low-band-kick-deafness-on-mixes** | resolved by the dedicated ridge-only Kick channel (KICK_SWEEP_EVENT P1/P2/P4/P5, shipped 2026-07-07) — reads the kick's FM sweep, breaks the bad_guy deafness at equal bass-false-fire cost; kick-triggering binds Kick now, not Low; Peter confirmed 2026-07-11; live feel-pass = design P3 |
-| BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
+| ~~BUG-101~~ FIXED | **setup-spectrogram-scroll-offset** | FIXED 2026-07-14 (bug-wave3 lane C) — `scope_rect` now shifts with the body scroll offset; `update_band_meters` fixed by the same change. |
 | ~~BUG-039~~ FIXED | **saw-rotation-wrap** | FIXED 2026-07-11 — `ParamSpecDef.wraps` (explicit tag) + `constrain_to_range` helper, wired into driver evaluation and automation-lane sampling; 10 preset card params tagged periodic after auditing all 49 presets. Rendered saw sweep across the wrap boundary confirms no hitch. |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
@@ -113,19 +113,20 @@ or human can read it, and it needs no external tool.
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | ~~BUG-054~~ FIXED | **renderer-device-ptr-dangles** | FIXED @ `d447ec8d` — `Arc<GpuDevice>` replaces the cached raw pointer end-to-end (`GeneratorRenderer`/`VideoRenderer`/`ImageRenderer`/`MetalBackend`); `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted as structurally unneeded. `rg '\*const GpuDevice' crates/` — zero code hits. |
-| BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
-| BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
+| ~~BUG-048~~ FIXED | **arm-two-reds** | FIXED 2026-07-14 (bug-wave3 lane C) — armed = amber `STATUS_WARNING`, idle = neutral, never red vs red. |
+| ~~BUG-049~~ FIXED | **child-row-right-indent** | FIXED 2026-07-14 (bug-wave3 lane C) — right-anchored x's use `right_pad = PAD`, not the indented `pad`; oracle updated. |
+| ~~BUG-012~~ FIXED | **tex-rename-corrupt** | FIXED 2026-07-14 (bug-wave lane A) — fragment-form rename filtered to texture-typed ports, mirroring the sibling binding-key rename. |
 | ~~BUG-018~~ FIXED | **catalog-stale** | FIXED @ `38ec595f` — regenerated; stale entry was the ApricotBloom `wireAmount` card (scene-3 morph revert leftover) |
-| BUG-081 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) |
-| BUG-031 | **layer-menu-positional** | Layer context-menu + rename still address layers positionally (LOW, follow-up to the LayerId migration `877852a9`) |
-| BUG-053 | **hdr-live-recording-structural** | HDR live recording can't work: pool format mismatches the native pixel buffer, nothing PQ-encodes (LOW today, blocks HDR capture) |
+| ~~BUG-081~~ FIXED | **audio-load-blip** | FIXED 2026-07-14 (bug-wave3 lane C) — voice built silent (`.volume(0.0)`) instead of played-then-paused. |
+| ~~BUG-031~~ FIXED | **layer-menu-positional** | FIXED 2026-07-14 (bug-wave3 lane C) — Context*Layer family + `TextInputField::LayerName` now LayerId-keyed, resolved at dispatch time. |
+| BUG-053 | **hdr-live-recording-structural** | PARKED — decision owed from Peter (does live HDR capture matter for the rig); fix turns out cheap (wire the existing `PqEncoder` export already uses) once he says yes (LOW today, blocks HDR capture) |
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | ~~BUG-056~~ FIXED | **audio-mixdown-clippy-debt** | no longer reproduces — verified 2026-07-11: `cargo clippy --workspace -- -D warnings` green (9.8s warm), no `#[allow(clippy)]` in the file. Almost certainly rewritten away by the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07), the last substantive change to `audio_mixdown.rs`; not bisected to the exact commit (LOW stakes) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
 | ~~BUG-066~~ FIXED | **fluid3d-corner-drift** | FIXED 2026-07-10 @ `eebac94d`, Peter rig-confirmed 2026-07-11 — root cause: `edge_slope_3d`/`swirl_force_3d` sized dispatch for the legacy 8³ workgroup while codegen emits 4³, so forces only ever existed in the (0..64)³ octant of the 128³ volume, which projects to the TR quadrant. Class killed: all volume nodes size grids from codegen's exported `VOLUME_WORKGROUP_3D`, emission pinned by test. The same-day "root cause NOT found" correction predates the fix (15:03 vs 16:51); the entry's falsification record stands as history |
-| BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
+| ~~BUG-068~~ FIXED | **inspector-scene-cliphit-overlap** | FIXED 2026-07-14 (bug-wave3 lane C) — `inspector_scene`'s GLOW/PLASMA/RETURN clips shortened to clear the 600px-wide inspector column; regression test pins every clip's hit rect clear of `ui.layout.inspector().x`. |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
@@ -139,17 +140,8 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-161 (ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch) — the headless `ui-snap` tool's own compile is broken — LOW-effort mechanical fix, but blocks the prescribed oracle for UI-regression bugs
-**Status:** OPEN — found bug-wave lane A 2026-07-14, trying to bisect BUG-160 with `cargo run --features ui-snapshot --bin manifold -- ui-snap inspector` per that bug's own fix-shape ("ui-snap PNG diff is the oracle"). Not fixed this session (out of lane-A's exact bug scope) and not caused by this session's diff.
-
-**Symptom** — `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` mismatched-type errors in `ui_snapshot/mod.rs` (lines 454, 504, 581, 638, 660, 670, 896, 917): `view.canonical_def` is passed where callees (`render::render_graph_to_png`, `render::render_graph_editor_to_png`, others) expect `&EffectGraphDef`, but `canonical_def` is now `Arc<EffectGraphDef>` — a plain `&` no longer coerces. The whole `ui-snap` binary target fails to compile, so no headless UI scene can be rendered at all right now.
-
-**Root cause** — unknown which change flipped `canonical_def` from an owned `EffectGraphDef` to `Arc<EffectGraphDef>` (likely a preset-loading or graph-caching change elsewhere that made the canonical def shared); `ui_snapshot/mod.rs`'s 8 call sites were never updated to match. Confirmed pre-existing on `origin/main` (identical content on the commit this lane branched from) — this session's diff never touches `ui_snapshot/mod.rs`. Not caught by the default `nextest` sweep because `ui-snapshot` is a separate cargo feature, not compiled by a plain build.
-
-**Fix shape** — mechanical: at each of the 8 sites, deref the Arc (`&*view.canonical_def` or `view.canonical_def.as_ref()`) instead of `view.canonical_def`. No behavior change. Worth a follow-up: fold `--features ui-snapshot --bin manifold` into a routine check (even just a compile-only CI job) so this class doesn't recur silently, same gap as BUG-124's `--tests` clippy blind spot.
-
 ### BUG-160 (editor-window-unification-inspector-card-layout-regressions) — inspector cards no longer lay out properly (buttons and controls don't fit) after the editor-window-unification landing — MED-HIGH UI regression, reported by Peter 2026-07-14
-**Status:** PARKED 2026-07-14 (bug-wave lane A) — investigated via code reading only; the prescribed oracle (ui-snap PNG bisection) is blocked by BUG-161 (`ui-snapshot` feature doesn't compile). Reopen once BUG-161 is fixed: `ui-snap inspector` on `a0eba10c` (post-unification) vs its parent `6698e7c4` (pre-unification) is the actual next step. This session's code-reading pass, for the record: `InspectorCompositePanel::build_in_rect` (the editor host, `inspector.rs:2041`) shares the same per-card build logic as `build` (the main-window host, `:2349`) — no obvious divergent code path found. Width isn't an obvious culprit either: the editor's card-lane range (`Dock::editor()`'s `right_range = (240.0, 560.0)`, default `EDITOR_RIGHT_DEFAULT = 340.0`) sits inside the main window's own tested range (`MIN_INSPECTOR_WIDTH = 232.0` .. `MAX_INSPECTOR_WIDTH = 900.0`, default `500.0`) — if cards render correctly at the main window's 232px floor, 340px shouldn't be new territory, so a width-only theory doesn't explain the symptom on its own. Genuinely unconfirmed without pixels on screen — do not treat the above as ruling anything out, just as what didn't pan out on a code-only pass.
+**Status:** PARKED 2026-07-14 (bug-wave lane A) — investigated via code reading only; the prescribed oracle (ui-snap PNG bisection) was blocked by BUG-161 (`ui-snapshot` feature doesn't compile) at the time. **BUG-161 is now FIXED (bug-wave3 lane C, same day)** — the oracle is unblocked: `ui-snap inspector` on `a0eba10c` (post-unification) vs its parent `6698e7c4` (pre-unification) is the actual next step. This session's code-reading pass, for the record: `InspectorCompositePanel::build_in_rect` (the editor host, `inspector.rs:2041`) shares the same per-card build logic as `build` (the main-window host, `:2349`) — no obvious divergent code path found. Width isn't an obvious culprit either: the editor's card-lane range (`Dock::editor()`'s `right_range = (240.0, 560.0)`, default `EDITOR_RIGHT_DEFAULT = 340.0`) sits inside the main window's own tested range (`MIN_INSPECTOR_WIDTH = 232.0` .. `MAX_INSPECTOR_WIDTH = 900.0`, default `500.0`) — if cards render correctly at the main window's 232px floor, 340px shouldn't be new territory, so a width-only theory doesn't explain the symptom on its own. Genuinely unconfirmed without pixels on screen — do not treat the above as ruling anything out, just as what didn't pan out on a code-only pass.
 
 **Symptom** — after EDITOR_WINDOW_UNIFICATION landed (P1–P3, on main 2026-07-14, merge
 `a0eba10c`), inspector cards show layout misfits: buttons and controls don't fit their
@@ -678,16 +670,6 @@ are NOT affected — eval-only, never bundled.
 
 COMMERCIALIZATION_DESIGN's license review must consume this entry wholesale.
 
-### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
-**Status:** OPEN
-
-**Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
-`inspector` snapshot scene at its narrower zoom overlaps clip surfaces with the inspector
-column, so no clip in it is simultaneously uniquely-labeled and safely draggable — which is why
-P1's `drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline`
-scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime impact. Fix shape:
-adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
-
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
 
@@ -792,7 +774,41 @@ unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
 gap for every future script that arms something mid-flow, not just this one.
 
 ### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
-**Status:** OPEN
+**Status:** PARKED 2026-07-14 (bug-wave3 lane C) — root-fix contract routes this to Peter, not
+code, since it's a capability/roadmap call ("does live HDR capture matter for the rig") not just
+an engineering tradeoff. Fable re-audit this session found the picture is cheaper than the
+original 2026-07-07 framing assumed:
+
+**Root cause reconfirmed against current code, unchanged:** pool still unconditionally
+`Bgra8Unorm` (`session.rs:105`), converter still unconditionally linear→sRGB
+(`format_converter.rs`), native blit dest is `RGBA16Float` when `isHDR`
+(`LiveRecordingPlugin.m:395`) — format-mismatched blit, first HDR frame dies. Guard test
+`hdr_blocked_by_bug_053` (`tests/recording_proofs.rs:583`) pins it; `recording_soak.rs:61` also
+hard-blocks `--hdr`.
+
+**What's changed since the original framing:** the "PQ-encode compute stage or linear handoff"
+choice the original entry left open ("decide at design time") turns out to be a false choice —
+linear handoff isn't viable (AVFoundation's HEVC HDR delivery has no linear transfer tag; the
+writer config demands PQ or HLG). More importantly, **a finished, shipping PQ encoder already
+exists**: `manifold-renderer/src/pq_encoder.rs` + `linear_to_pq_compute.wgsl`, used today by the
+OFFLINE HDR export path (`content_pipeline.rs:3216`'s `pq_encode_for_export`, paper_white=200,
+max_nits=10000), and the native plugin already tags HDR output correctly (BT.2020 + ST.2084,
+`LiveRecordingPlugin.m:218-219`). The only missing piece for LIVE recording is
+`content_pipeline.rs`'s live-capture block (~line 2668) dispatching the existing `FormatConverter`
+unconditionally instead of `PqEncoder` when `config.hdr`, plus the pool format following the
+flag. So this is no longer "design a PQ pipeline" — it's "wire an existing, proven component into
+a second call site," a small mechanical change, not a design project.
+
+**The actual decision left for Peter:** given the fix is now cheap, is live HDR capture worth
+building at all — does the rig need it, on what timeline? If yes: wire `PqEncoder` into live
+recording (reuse export's nits constants), flip `hdr_blocked_by_bug_053` to the HDR twin of
+`nominal_video_only` as the acceptance test. Note for whoever picks this up: the PQ shader
+encodes without a BT.709→2020 gamut matrix (slightly oversaturated under a 2020 tag) — a
+pre-existing gap shared with export, not new to this fix, worth flagging separately. If no: this
+entry can be downgraded to DEFERRED or the HDR flag path removed outright as dead code.
+Recommendation (engineering, not product): (a), wiring the existing encoder — but the yes/no is
+Peter's, not mine to improvise.
+
 
 **Found 2026-07-07 by Fable during the LIVE_RECORDING_PROOFS design audit (statically
 derived, not yet observed — no runtime repro attempted).** The recording texture pool is
@@ -836,62 +852,6 @@ on the rig answers it. **Escaped:** ABLETON_TRANSPORT_SYNC wave, P2 stage — th
 harness's FakeAbleton was fixture-overfit (instant first listener report, atomic
 play+seek apply, prompt query replies); no scenario modeled a starved ack channel.
 
-### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
-**Status:** OPEN
-
-**Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
-Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
-`pad = PAD + CHILD_INDENT`, but the indent only moves the card's LEFT edge — so child
-cards get a ~28px interior right margin vs 8px on top-level rows. Drag handles and Blend
-chips sit ~20px left of their top-level siblings, and the collapsed name budget is 20px
-tighter than necessary (it contributed to how early BUG-fixed label truncation kicks in).
-**Fix shape:** right-anchored x's use `PAD`, not the indented pad. Moves rects pinned by
-`layout_matches_frozen_oracle`, so it needs the oracle updated in the same commit — its
-own small pass, not a drive-by. **Oracle:** the frozen-layout test + a child-row render.
-
-### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
-**Status:** OPEN
-
-**Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
-idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
-active/idle pair. But REC's two states are "recording or not", while ARM's decide what
-touching a param DOES (override the lane vs punch automation INTO the arrangement) —
-a wrong read on stage silently writes automation into the show. Headless renders show
-the two reds are close at 1× (timeline vs automation scenes). **Fix shape:** give the
-armed state a non-red or clearly distinct treatment (AUTOMATION_LINE_COLOR family per
-the audit doc), or Peter rules the REC-pair consistency wins. UX call, not mechanical —
-see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
-`automation_state_toggles_update_styles_in_place` test pins current colors; it changes
-with the fix.
-
-### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
-**Status:** OPEN
-
-**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
-at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
-computed at build time in `audio_setup_panel.rs`, and that rect does not add the
-`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
-P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
-its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
-detaches from its section header when the panel body is scrolled. **Fix shape:** offset
-`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
-rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
-doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
-blit; a scrolled-body render test would guard it.
-
-**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
-explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
-now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
-(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
-before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
-anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
-scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
-signature change threading `&UITree` through every caller (the present-pass blit, both
-hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
-scope for a geometry-sourcing-only pass. Currently dormant either way:
-`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
-`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
-
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
 **Status:** OPEN
 
@@ -934,27 +894,6 @@ pre-warm at startup, pipeline archive).
 is loaded (or armed on a timeline), run its first-frame resource creation off the hot
 path so frame 1 of the clip renders at steady-state cost. Verify with the same
 MANIFOLD_RENDER_TRACE run: no >20ms frame on first clip render.
-
-### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
-**Status:** OPEN
-
-**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
-loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
-
-**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
-`make_voice` calls `manager.play(data)` at full volume and only then
-`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
-is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
-~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
-Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
-used everywhere else in this module doesn't apply here; this is the one edge built on
-kira's default tween.)
-
-**Fix shape** — build the voice silent instead of pausing it after the fact: apply
-`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
-per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
-so activation is unaffected. This kills the whole class including the race where an audio
-callback fires between play and pause. One-line-ish, `manifold-playback` only.
 
 ### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
 **Status:** OPEN
@@ -1074,31 +1013,6 @@ app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warni
 `enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
 (open the Add Effect browser, confirm the background is present immediately without moving the
 mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
-
-### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
-**Status:** OPEN
-
-**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
-(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
-deliberately left positional to keep that diff bounded:
-- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
-  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
-  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
-  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
-  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
-  between menu-open and item-click.
-- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
-  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
-  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
-  rename has the same (unchanged) stale window it always had.
-
-**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
-list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
-Same bug class as the migration killed for the primary controls.
-
-**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
-`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
-`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ### BUG-136 — CINEMATIC_POST motion blur has no visible effect despite correct wiring — MED-HIGH
 **Status:** OPEN
@@ -1234,6 +1148,181 @@ in-progress scroll gesture instead of being suppressed or eased while one is act
 (suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
 or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
 acceptance is Peter's hands on it, not a test.
+
+### BUG-161 (ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch) — the headless `ui-snap` tool's own compile is broken — LOW-effort mechanical fix, but blocks the prescribed oracle for UI-regression bugs
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — found independently by two concurrent lanes the
+same day (lane A while trying to bisect BUG-160, lane C while capturing before/after PNGs for
+BUG-048/049/068); this is one bug, lane C's fix landed first. At each of the 8 `E0308` sites in
+`ui_snapshot/mod.rs`: `view.canonical_def` → `&view.canonical_def` (6 by-reference call sites) or
+`(*view.canonical_def).clone()` (2 by-value sites) — pure borrow/deref through the `Arc`, no
+semantic change. `cargo build`/`cargo clippy --features ui-snapshot -- -D warnings` clean.
+**Unblocks BUG-160**: its prescribed oracle (`ui-snap inspector` bisection between `a0eba10c` and
+its parent) can now actually run.
+
+**Symptom** — `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` mismatched-type errors in `ui_snapshot/mod.rs` (lines 454, 504, 581, 638, 660, 670, 896, 917): `view.canonical_def` is passed where callees (`render::render_graph_to_png`, `render::render_graph_editor_to_png`, others) expect `&EffectGraphDef`, but `canonical_def` is now `Arc<EffectGraphDef>` — a plain `&` no longer coerces. The whole `ui-snap` binary target fails to compile, so no headless UI scene can be rendered at all right now.
+
+**Root cause** — unknown which change flipped `canonical_def` from an owned `EffectGraphDef` to `Arc<EffectGraphDef>` (likely a preset-loading or graph-caching change elsewhere that made the canonical def shared); `ui_snapshot/mod.rs`'s 8 call sites were never updated to match. Confirmed pre-existing on `origin/main` (identical content on the commit this lane branched from) — this session's diff never touches `ui_snapshot/mod.rs`. Not caught by the default `nextest` sweep because `ui-snapshot` is a separate cargo feature, not compiled by a plain build.
+
+### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `layer_header.rs` split `pad` (left-anchor,
+still `PAD + CHILD_INDENT`) from a new `right_pad = PAD` used by every right-anchored x/width in
+`compute_layer_row`/`compute_audio_row`: `handle_x`, `dd_w` (Blend dropdown), and both
+`right_edge` computations (routing form + audio Gain/Send row). Class-swept: `rg '\bpad\b'` in
+the file found no other right-anchored use outside these five. `layout_matches_frozen_oracle`'s
+hand-copied oracle updated identically in the same commit (mirrors the live fix rect-for-rect);
+`manifold-ui --lib` green (26/26 in the file).
+
+**Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
+Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
+`pad = PAD + CHILD_INDENT`, but the indent only moves the card's LEFT edge — so child
+cards get a ~28px interior right margin vs 8px on top-level rows. Drag handles and Blend
+chips sit ~20px left of their top-level siblings, and the collapsed name budget is 20px
+tighter than necessary (it contributed to how early BUG-fixed label truncation kicks in).
+
+### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — ARM no longer shares REC's red pair.
+`transport.rs::automation_group`: idle = `BUTTON_INACTIVE_C32` (matches sibling LANES/BACK idle
+chrome), armed = `STATUS_WARNING` (amber) — never red, so it can't be mistaken for REC's
+recording/not-recording pair at stage distance. Class-swept (`rg RECORD_RED RECORD_ACTIVE`):
+the only other survivors are REC itself (a genuine on/off pair, correctly red) and BACK's
+override-latch (red vs neutral gray, not two reds against each other — no ambiguity). UX call
+made without Peter (he's away): amber/`STATUS_WARNING` chosen over reusing
+`AUTOMATION_LINE_COLOR` because that token is itself `RED_ACTIVE` (would have reintroduced the
+exact bug). `automation_state_updates_in_place` test updated to pin the new colors; before/after
+PNGs saved for Peter's look-pass (see session report).
+
+**Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
+idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
+active/idle pair. But REC's two states are "recording or not", while ARM's decide what
+touching a param DOES (override the lane vs punch automation INTO the arrangement) —
+a wrong read on stage silently writes automation into the show.
+
+### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `audio_setup_panel.rs::build_nodes` now shifts
+`self.scope_rect` by the same `-offset` applied to the scrolled tree content, right after
+`self.scroll.offset_content(tree, -offset)`. `update_band_meters` derives its geometry from
+`scope_rect()` too, so the 2026-07-11 follow-up note (band meters sharing this root cause) is
+fixed by the same one-line change. New regression test
+`scope_rect_follows_body_scroll_offset` scrolls the docked body via `handle_scroll` and asserts
+`scope_rect().y == unscrolled_y - offset`; still dormant in the shipped app per the existing
+note (`AudioSetupPanel::handle_scroll` has zero call sites), so this closes the mechanism ahead
+of it being wired up.
+
+**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
+at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
+computed at build time in `audio_setup_panel.rs`, and that rect does not add the
+`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
+P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
+its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
+detaches from its section header when the panel body is scrolled. **Fix shape:** offset
+`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
+rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
+doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
+blit; a scrolled-body render test would guard it.
+
+**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
+explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
+now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
+(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
+before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
+anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
+scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
+signature change threading `&UITree` through every caller (the present-pass blit, both
+hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
+scope for a geometry-sourcing-only pass. Currently dormant either way:
+`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
+`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
+
+### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `make_voice` now applies `.volume(0.0)` to the
+`StaticSoundData` before `manager.play`, so the voice is built silent instead of played-then-
+paused; the per-tick sync path already restores the real volume via `set_volume(volume,
+declick())`, so activation is unaffected. Kills the whole class, including the race window a
+pause-based fix wouldn't close. `manifold-playback` builds clean.
+
+**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
+loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
+
+**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
+`make_voice` calls `manager.play(data)` at full volume and only then
+`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
+is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
+~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
+Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
+used everywhere else in this module doesn't apply here; this is the one edge built on
+kira's default tween.)
+
+**Fix shape** — build the voice silent instead of pausing it after the fact: apply
+`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
+per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
+so activation is unaffected. This kills the whole class including the race where an audio
+callback fires between play and pause. One-line-ish, `manifold-playback` only.
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — both clusters now carry `LayerId` end to end.
+`ContextAddVideoLayer/GeneratorLayer/AudioLayer/DeleteLayer/DuplicateLayer/PasteAtLayer/
+ImportMidi/Ungroup/SetLayerColor` and `DropdownContext::LayerContext` all switched from `usize`
+to `LayerId`; consumers re-resolve the live index via `project.timeline.find_layer_by_id`/
+`find_layer_by_id_mut` at dispatch (execution) time instead of baking in the index at menu-open
+time — mirrors the pattern `DeleteLayerClicked(LayerId)` already used. `TextInputField::
+LayerName(usize)` became a bare `LayerName` variant with the id stored on `TextInputState::
+layer_id` (mirrors the existing `MarkerName`/`marker_id` and `AudioSendLabel`/`audio_send_id`
+idiom already on this `Copy` enum) — no `Copy`-dropping cascade needed. Class-swept the
+`TrackRightClicked` menu-build site too (a second, separate constructor for the same shared
+`Context*` actions) — it now resolves a `LayerId` from the row-under-cursor before building menu
+items, closing the same window there. `cargo check --workspace --tests` and `cargo clippy -p
+manifold-ui -p manifold-app -- -D warnings` clean; `manifold-app` test suite 189/189.
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C)
+
+**Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
+`inspector` snapshot scene forces a generous `inspector_width` (600px of the 1536px canvas, set
+in `ui_snapshot::mod` for the inspector-subject scenes) so the selected layer's param cards have
+room — at the fixed 24px/beat zoom that leaves only ~29 beats of clip area before the inspector
+column starts. GLOW's clip (48 beats), PLASMA's clip (48 beats), and TEXT BOT L's RETURN clip (24
+beats starting at beat 24) all extended past that boundary. `TimelineViewportPanel::
+visible_clip_rects` only culls clips fully outside the tracks rect — it returns each surviving
+clip's FULL, unclamped pixel width (the comment notes "the GPU scissor clamps partials at the
+edges" for *rendering*, but the returned hit-test rect is unclamped) — so those three clips' hit
+rects genuinely overlapped the inspector column's screen region, meaning no clip in the scene was
+simultaneously uniquely-labeled and safely draggable near the inspector edge. This is why P1's
+`drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline` scene
+(drag past the tracks' right edge) instead. Fixture-only, no app runtime impact.
+
+**Fix (FIXED @ this session):** shortened GLOW's and PLASMA's clips from 48 to 20 beats and
+TEXT BOT L's two clips from 24+24 to 10+10 beats (`fixtures.rs::inspector_scene`) — every clip
+now ends by x≈710, well clear of the inspector's left edge at x=936 (226px margin). Regression
+test `bug068_clip_panel_overlap::inspector_scene_clips_clear_the_inspector_column`
+(`ui_snapshot/mod.rs`) builds the real scene, reads `ui.viewport.visible_clip_rects`, and asserts
+every clip's right edge stays left of `ui.layout.inspector().x` — fails red on the pre-fix
+48-beat clips, green post-fix. **Class swept:** `bug060`/`gltfscene`/`bug047`/`paramsteps` share
+the same `inspector_width = 600.0` override and could in principle grow a similarly long clip,
+but none of them are used for clip-drag/hit-test flows today (their subject is inspector
+scroll/param display) — not touched; revival trigger is a future script that drags a clip in one
+of those scenes.
 
 ### BUG-125 (preset-runtime-generator-picks-first-final-output-nondeterministically) — a generator preset JSON with more than one `system.final_output` node has its tracked output picked via `AHashMap` iteration order, not graph position — LOW today (no shipped preset has two), but a real correctness trap
 **Status:** FIXED 2026-07-14 (bug-wave lane A, `bug/wave3-lane-a`), option (a) from the fix shape — reject at load. `PresetRuntime::from_def`'s generator path (`preset_runtime.rs:2617`) now counts `FINAL_OUTPUT_TYPE_ID` matches before resolving the tracked output; a count > 1 returns a new `JsonGeneratorLoadError::MultipleFinalOutputs { count }` instead of silently picking one via `.find()`. Threaded through `graph_tool validate`'s error → `ValidationIssue` conversion too (`validate.rs:216`), so a bad preset JSON is caught by the pre-flight tool as well as the runtime loader — the invariant is enforced at both entry points, not just one. Regression test `dual_final_output_is_rejected_at_load` builds a real two-`final_output` generator graph and asserts the new error. Gated: `cargo clippy -p manifold-renderer -- -D warnings` clean; `cargo nextest run -p manifold-renderer` full crate sweep 1265/1265 passed.

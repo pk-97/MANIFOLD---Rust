@@ -1086,9 +1086,14 @@ impl Application {
                     }
                 }
             }
-            TextInputField::LayerName(idx) => {
-                if let Some(layer) = self.local_project.timeline.layers.get(idx) {
-                    let layer_id = layer.layer_id.clone();
+            TextInputField::LayerName => {
+                // Resolved by id, not a baked-in index (BUG-031): a layer-list
+                // change between the double-click and this commit can't rename
+                // the wrong row.
+                if let Some(layer_id) = self.text_input.layer_id.take()
+                    && let Some((_, layer)) =
+                        self.local_project.timeline.find_layer_by_id(layer_id.as_str())
+                {
                     let old_name = layer.name.clone();
                     let new_name = text.to_string();
                     if old_name != new_name {

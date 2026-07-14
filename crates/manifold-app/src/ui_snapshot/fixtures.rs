@@ -535,19 +535,26 @@ fn inspector_scene() -> SceneData {
     let kick_send = AudioSend::new("Kick");
     let kick_send_id = kick_send.id.clone();
 
+    // BUG-068: this scene forces a generous `inspector_width` (600px of the
+    // 1536px canvas, set below in `ui_snapshot::mod`) so the selected layer's
+    // param cards have room — at the fixed 24px/beat zoom that leaves only
+    // ~29 beats of clip area before the inspector column starts. Every clip
+    // below is kept at or under 20 beats (480px, ~226px of clearance) so it
+    // renders and hit-tests entirely within the track area — none of them
+    // bleed under the inspector the way the old 48-beat clips did.
     let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
     text.layer_id = lid("text-bot-l");
     text.clips
-        .push(TimelineClip::new_video("EXILE".into(), Beats(0.0), Beats(24.0), Seconds::ZERO));
+        .push(TimelineClip::new_video("EXILE".into(), Beats(0.0), Beats(10.0), Seconds::ZERO));
     text.clips
-        .push(TimelineClip::new_video("RETURN".into(), Beats(24.0), Beats(24.0), Seconds::ZERO));
+        .push(TimelineClip::new_video("RETURN".into(), Beats(10.0), Beats(10.0), Seconds::ZERO));
 
     // The subject: a video layer with a three-effect chain. Selected, so the
     // inspector shows its layer card + the Mirror, Bloom, and Strobe cards.
     let mut glow = Layer::new("GLOW".into(), LayerType::Video, 1);
     glow.layer_id = lid("glow");
     glow.clips
-        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(20.0), Seconds::ZERO));
     let mut mirror = effect("Mirror");
     arm_lfo(&mut mirror); // arms the driver on Mirror's FIRST param.
     // The automation lane goes on a DIFFERENT param (second, if Mirror has
@@ -628,7 +635,7 @@ fn inspector_scene() -> SceneData {
     // §9 U3) — drawer open, badge reads "Both".
     let mut plasma = Layer::new_generator("PLASMA".into(), manifold_core::PresetTypeId::PLASMA, 2);
     plasma.layer_id = lid("plasma");
-    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(20.0)));
     let mut plasma_trigger = ParameterAudioMod::new(
         "clip_trigger".into(),
         kick_send_id,

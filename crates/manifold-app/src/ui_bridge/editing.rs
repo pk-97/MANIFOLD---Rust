@@ -224,60 +224,70 @@ pub(super) fn dispatch_editing(
         }
         PanelAction::ContextAddVideoLayer(after_layer) => {
             {
-                let idx = after_layer + 1;
-                let name = format!("Layer {}", project.timeline.layers.len() + 1);
-                let cmd =
-                    AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, idx, None);
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                // Re-resolve the target layer's current index at execution time
+                // (BUG-031) — the id survives any reordering between menu-open
+                // and click; a baked-in index wouldn't.
+                if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
+                    let idx = idx + 1;
+                    let name = format!("Layer {}", project.timeline.layers.len() + 1);
+                    let cmd =
+                        AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, idx, None);
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ContextAddGeneratorLayer(after_layer) => {
             {
-                let idx = after_layer + 1;
-                let name = format!("Gen {}", project.timeline.layers.len() + 1);
-                let cmd = AddLayerCommand::new(
-                    name,
-                    LayerType::Generator,
-                    PresetTypeId::PLASMA,
-                    idx,
-                    None,
-                );
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
+                    let idx = idx + 1;
+                    let name = format!("Gen {}", project.timeline.layers.len() + 1);
+                    let cmd = AddLayerCommand::new(
+                        name,
+                        LayerType::Generator,
+                        PresetTypeId::PLASMA,
+                        idx,
+                        None,
+                    );
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ContextAddAudioLayer(after_layer) => {
             {
-                let idx = after_layer + 1;
-                let name = format!("Audio {}", project.timeline.layers.len() + 1);
-                let cmd =
-                    AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                if let Some((idx, _)) = project.timeline.find_layer_by_id(after_layer.as_str()) {
+                    let idx = idx + 1;
+                    let name = format!("Audio {}", project.timeline.layers.len() + 1);
+                    let cmd =
+                        AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
+                    {
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    }
                 }
             }
             DispatchResult::structural()
         }
 
-        PanelAction::ContextDeleteLayer(layer_idx) => {
+        PanelAction::ContextDeleteLayer(layer_id) => {
             {
-                let idx = *layer_idx;
-                if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
-                    let layer = project.timeline.layers[idx].clone();
+                if project.timeline.layers.len() > 1
+                    && let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
+                {
+                    let layer = layer.clone();
                     let cmd = DeleteLayerCommand::new(layer);
                     {
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -290,17 +300,19 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::ContextDuplicateLayer(layer_idx) => {
+        PanelAction::ContextDuplicateLayer(layer_id) => {
             {
-                let idx = *layer_idx;
-                if idx < project.timeline.layers.len() {
-                    let layer_id = project.timeline.layers[idx].layer_id.clone();
+                if project
+                    .timeline
+                    .find_layer_by_id(layer_id.as_str())
+                    .is_some()
+                {
                     // If the right-clicked layer is among the selected layers, duplicate the
                     // full selection; otherwise duplicate just this layer.
-                    let ids: Vec<LayerId> = if selection.selected_layer_ids.contains(&layer_id) {
+                    let ids: Vec<LayerId> = if selection.selected_layer_ids.contains(layer_id) {
                         selection.selected_layer_ids.iter().cloned().collect()
                     } else {
-                        vec![layer_id]
+                        vec![layer_id.clone()]
                     };
                     if let Some(mut cmd) = EditingService::duplicate_layers(project, &ids) {
                         cmd.execute(project);
@@ -320,14 +332,18 @@ pub(super) fn dispatch_editing(
         }
 
         // Context menu items — not yet wired to subsystems
-        PanelAction::ContextPasteAtLayer(layer_idx) => {
+        PanelAction::ContextPasteAtLayer(layer_id) => {
             // Paste at the current playhead beat on the right-clicked layer.
+            // Re-resolve the id to its current index at execution time (BUG-031).
+            let Some((idx, _)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
+                return DispatchResult::structural();
+            };
             let (tx, rx) = std::sync::mpsc::channel();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::PasteClips {
                     target_beat: content_state.current_beat,
-                    target_layer: *layer_idx as i32,
+                    target_layer: idx as i32,
                     result_tx: tx,
                 },
             );
@@ -338,7 +354,7 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextImportMidi(layer_idx) => {
+        PanelAction::ContextImportMidi(layer_id) => {
             // Open file dialog for MIDI import
             let last_dir =
                 dialog_path_memory::get_last_directory(DialogContext::MidiImport, user_prefs);
@@ -358,12 +374,8 @@ pub(super) fn dispatch_editing(
                 // Parse MIDI file and import to layer
                 let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&path_str);
                 if !notes.is_empty() {
-                    let target_layer_id = project
-                        .timeline
-                        .layers
-                        .get(*layer_idx)
-                        .map(|l| l.layer_id.clone())
-                        .unwrap_or_default();
+                    // `layer_id` is already the stable target — no index resolution needed.
+                    let target_layer_id = layer_id.clone();
                     let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
                         &notes,
                         &target_layer_id,
@@ -414,9 +426,8 @@ pub(super) fn dispatch_editing(
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
             DispatchResult::structural()
         }
-        PanelAction::ContextUngroup(layer_idx) => {
-            let idx = *layer_idx;
-            if let Some(layer) = project.timeline.layers.get(idx)
+        PanelAction::ContextUngroup(layer_id) => {
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
                 && layer.is_group()
             {
                 let group_layer = layer.clone();
@@ -445,22 +456,24 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
-        PanelAction::ContextSetLayerColor(layer_idx, color) => {
+        PanelAction::ContextSetLayerColor(layer_id, color) => {
             use crate::content_command::ContentCommand;
-            let idx = *layer_idx;
             let r = color.r as f32 / 255.0;
             let g = color.g as f32 / 255.0;
             let b = color.b as f32 / 255.0;
             let a = color.a as f32 / 255.0;
-            // Local project mutation
-            if let Some(layer) = project.timeline.layers.get_mut(idx) {
+            // Local project mutation — resolved by id, not a baked-in index (BUG-031).
+            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) {
                 layer.layer_color = manifold_core::color::Color { r, g, b, a };
             }
-            // Mirror to content thread
+            // Mirror to content thread — this closure runs later, on a different
+            // thread, so it re-resolves the id there too rather than capturing
+            // an index that may be stale by the time it executes.
+            let layer_id = layer_id.clone();
             ContentCommand::send(
                 content_tx,
                 ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some(layer) = p.timeline.layers.get_mut(idx) {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
                         layer.layer_color = manifold_core::color::Color { r, g, b, a };
                     }
                 })),

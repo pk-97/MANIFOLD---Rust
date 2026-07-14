@@ -22,7 +22,11 @@
 pub enum TextInputField {
     Bpm,
     Fps,
-    LayerName(usize),
+    /// Layer rename. LayerId stored in `TextInputState::layer_id` (not `Copy`,
+    /// so kept off this `Copy` enum — mirrors `MarkerName`/`AudioSendLabel`).
+    /// Was index-based (BUG-031): a layer-list change between double-click and
+    /// commit could rename the wrong row.
+    LayerName,
     ClipBpm,
     MacroLabel(usize),
     /// Effect parameter: (effect_index, param_index). DEAD. On revival,
@@ -260,6 +264,8 @@ pub struct TextInputState {
     pub font_size: f32,
     /// When true, Shift+Enter inserts a newline instead of committing.
     pub multiline: bool,
+    /// LayerId for the LayerName field (not Copy, so stored separately).
+    pub layer_id: Option<manifold_core::LayerId>,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
     pub marker_id: Option<manifold_core::MarkerId>,
     /// AudioSendId for the AudioSendLabel field (Arc<str> not Copy).
@@ -309,6 +315,7 @@ impl TextInputState {
             anchor: AnchorRect::zero(),
             font_size: 12.0,
             multiline: false,
+            layer_id: None,
             marker_id: None,
             audio_send_id: None,
             graph_param_name: None,

@@ -132,7 +132,7 @@ pub enum DropdownContext {
     // GenStringParamDropdown, AudioSendRoutings (§7.2 item 7, P8, 2026-07-11 —
     // the Cap chip that opened it is gone, its content lives in the Inputs
     // section's read-only routing display now).
-    LayerContext(usize), // survives only for its color swatches (text items are typed)
+    LayerContext(manifold_core::LayerId), // survives only for its color swatches (text items are typed)
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -2403,56 +2403,78 @@ impl UIRoot {
                 true
             }
             PanelAction::TrackRightClicked(beat, layer) => {
-                // Typed (2b.11): each item carries its track action.
-                let items = vec![
+                // Typed (2b.11): each item carries its track action. Paste stays
+                // index-based (`ContextPasteAtTrack` targets the clicked track
+                // slot, not a specific layer's identity) but the Context*Layer
+                // family is LayerId-keyed (BUG-031) — resolve the row-under-
+                // cursor's id once, synchronously, same as the layer-header menu.
+                let mut items = vec![
                     DropdownItem::new("Paste")
                         .with_action(PanelAction::ContextPasteAtTrack(*beat, *layer)),
-                    DropdownItem::new("Import MIDI File")
-                        .with_action(PanelAction::ContextImportMidi(*layer)),
-                    DropdownItem::new("Insert Video Layer")
-                        .with_action(PanelAction::ContextAddVideoLayer(*layer)),
-                    DropdownItem::new("Insert Generator Layer")
-                        .with_action(PanelAction::ContextAddGeneratorLayer(*layer)),
-                    DropdownItem::new("Insert Audio Layer")
-                        .with_action(PanelAction::ContextAddAudioLayer(*layer)),
                 ];
+                if let Some(layer_id) = self
+                    .layer_headers
+                    .layer_info(*layer)
+                    .map(|info| manifold_core::LayerId::new(&info.layer_id))
+                {
+                    items.push(
+                        DropdownItem::new("Import MIDI File")
+                            .with_action(PanelAction::ContextImportMidi(layer_id.clone())),
+                    );
+                    items.push(
+                        DropdownItem::new("Insert Video Layer")
+                            .with_action(PanelAction::ContextAddVideoLayer(layer_id.clone())),
+                    );
+                    items.push(
+                        DropdownItem::new("Insert Generator Layer")
+                            .with_action(PanelAction::ContextAddGeneratorLayer(layer_id.clone())),
+                    );
+                    items.push(
+                        DropdownItem::new("Insert Audio Layer")
+                            .with_action(PanelAction::ContextAddAudioLayer(layer_id)),
+                    );
+                }
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::LayerHeaderRightClicked(layer_id) => {
-                // The action carries a stable LayerId; resolve it to the current
-                // row for the still-positional context-menu items opened
-                // synchronously below (the Context*Layer family is a separate
-                // index-based cluster — follow-up BUG-031).
+                // The action carries a stable LayerId; every context-menu item
+                // below carries that same id (not a resolved row index), so a
+                // layer-list change between menu-open and item-click can't make
+                // an item address the wrong layer — see BUG-031. `li` is used
+                // only for the synchronous, read-only display decisions below
+                // (is_group / can_group), which are inherently open-time snapshots.
                 let Some(li) = self.layer_headers.index_of_layer(layer_id) else {
                     return true;
                 };
                 let layer_info = self.layer_headers.layer_info(li);
                 let is_group = layer_info.is_some_and(|l| l.is_group);
-                let mut items =
-                    vec![DropdownItem::new("Paste").with_action(PanelAction::ContextPasteAtLayer(li))];
+                let mut items = vec![
+                    DropdownItem::new("Paste")
+                        .with_action(PanelAction::ContextPasteAtLayer(layer_id.clone())),
+                ];
                 if !is_group {
                     items.push(
                         DropdownItem::new("Import MIDI File")
-                            .with_action(PanelAction::ContextImportMidi(li)),
+                            .with_action(PanelAction::ContextImportMidi(layer_id.clone())),
                     );
                 }
                 items.push(
                     DropdownItem::new("Insert Video Layer")
-                        .with_action(PanelAction::ContextAddVideoLayer(li)),
+                        .with_action(PanelAction::ContextAddVideoLayer(layer_id.clone())),
                 );
                 items.push(
                     DropdownItem::new("Insert Generator Layer")
-                        .with_action(PanelAction::ContextAddGeneratorLayer(li)),
+                        .with_action(PanelAction::ContextAddGeneratorLayer(layer_id.clone())),
                 );
                 items.push(
                     DropdownItem::new("Insert Audio Layer")
-                        .with_action(PanelAction::ContextAddAudioLayer(li)),
+                        .with_action(PanelAction::ContextAddAudioLayer(layer_id.clone())),
                 );
                 items.push(
                     DropdownItem::new("Duplicate Layer")
-                        .with_action(PanelAction::ContextDuplicateLayer(li)),
+                        .with_action(PanelAction::ContextDuplicateLayer(layer_id.clone())),
                 );
                 // "Group" only when 2+ non-group, non-nested layers are selected
                 let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
@@ -2464,21 +2486,22 @@ impl UIRoot {
                 }
                 if is_group {
                     items.push(
-                        DropdownItem::new("Ungroup").with_action(PanelAction::ContextUngroup(li)),
+                        DropdownItem::new("Ungroup")
+                            .with_action(PanelAction::ContextUngroup(layer_id.clone())),
                     );
                 }
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
                     items.push(
                         DropdownItem::new("Delete Layer")
-                            .with_action(PanelAction::ContextDeleteLayer(li)),
+                            .with_action(PanelAction::ContextDeleteLayer(layer_id.clone())),
                     );
                 }
                 // Last text item gets a separator before the color grid
                 if let Some(last) = items.last_mut() {
                     last.separator_after = true;
                 }
-                self.dropdown_context = Some(DropdownContext::LayerContext(li));
+                self.dropdown_context = Some(DropdownContext::LayerContext(layer_id.clone()));
                 self.dropdown.open_context_with_colors(
                     items,
                     manifold_ui::color::COLOR_GRID.to_vec(),
@@ -2707,9 +2730,9 @@ impl UIRoot {
         color_idx: usize,
     ) -> Option<PanelAction> {
         match ctx {
-            DropdownContext::LayerContext(layer_idx) => {
+            DropdownContext::LayerContext(layer_id) => {
                 let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
-                Some(PanelAction::ContextSetLayerColor(layer_idx, *color))
+                Some(PanelAction::ContextSetLayerColor(layer_id, *color))
             }
         }
     }

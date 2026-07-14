@@ -892,17 +892,21 @@ pub enum PanelAction {
     ContextSplitAtPlayhead(String),  // clip_id
     ContextDeleteClip(String),       // clip_id
     ContextDuplicateClip(String),    // clip_id
-    ContextPasteAtTrack(f32, usize), // beat, layer
-    ContextAddVideoLayer(usize),     // after_layer
-    ContextAddGeneratorLayer(usize), // after_layer
-    ContextAddAudioLayer(usize),     // after_layer
-    ContextDeleteLayer(usize),       // layer_index
-    ContextDuplicateLayer(usize),    // layer_index
-    ContextPasteAtLayer(usize),      // layer_index
-    ContextImportMidi(usize),        // layer_index
+    ContextPasteAtTrack(f32, usize), // beat, layer (track-content click; positional by design — no stable layer identity at that hit-test site)
+    // Layer-header context-menu family — LayerId-keyed (BUG-031: index-based
+    // addressing let a menu item resolved at open time hit the wrong layer if
+    // the list changed before the click). Consumers re-resolve the current
+    // index from the id at dispatch time, mirroring `DeleteLayerClicked`.
+    ContextAddVideoLayer(LayerId),     // after_layer
+    ContextAddGeneratorLayer(LayerId), // after_layer
+    ContextAddAudioLayer(LayerId),     // after_layer
+    ContextDeleteLayer(LayerId),       // layer
+    ContextDuplicateLayer(LayerId),    // layer
+    ContextPasteAtLayer(LayerId),      // layer
+    ContextImportMidi(LayerId),        // layer
     ContextGroupSelectedLayers,
-    ContextUngroup(usize),                             // layer_index
-    ContextSetLayerColor(usize, crate::node::Color32), // layer_index, color
+    ContextUngroup(LayerId),                             // layer
+    ContextSetLayerColor(LayerId, crate::node::Color32), // layer, color
 
     // Timeline Markers
     MarkerClicked(String, Modifiers), // marker_id, modifiers (Shift for multi-select)

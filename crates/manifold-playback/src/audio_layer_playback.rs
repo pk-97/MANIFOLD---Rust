@@ -166,8 +166,10 @@ fn make_voice(
             return None;
         }
     };
-    // Route to the layer's sub-track so the tap sees this voice's output.
-    let data = pre.sound_data.output_destination(track);
+    // Route to the layer's sub-track so the tap sees this voice's output. Built silent
+    // (rather than played-then-paused) so kira's default 10ms pause fade-out never renders
+    // the file's first samples audibly — see BUG-081.
+    let data = pre.sound_data.output_destination(track).volume(0.0_f64);
     let mut handle = match manager.play(data.clone()) {
         Ok(h) => h,
         Err(e) => {
