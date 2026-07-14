@@ -167,7 +167,22 @@ affected scenes pinned into the fixture set (extend a fixture to cover the faili
 configuration if the current ones render clean).
 
 ### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
-**Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
+**Status:** FIXED 2026-07-14 (bug-wave lane B). Root cause: `check_auto_scroll`
+(`crates/manifold-app/src/ui_bridge/state_sync.rs`) unconditionally overwrote the
+viewport's scroll offset every playback frame with zero suppression mechanism —
+not a broken existing flag, there was none. Fix: `TimelineViewportPanel` tracks
+the last user-driven horizontal scroll gesture (`note_user_scroll_x`/
+`user_scroll_x_recent`, `crates/manifold-ui/src/panels/viewport.rs`), noted from
+both wheel-scroll write sites in `window_input.rs` (Shift+scroll pan, native
+trackpad horizontal swipe); `check_auto_scroll` yields (returns without moving
+the viewport) while a scrollbar drag is active OR a gesture happened within an
+800ms grace window — re-engage is automatic and implicit (the very next call
+after the grace window elapses resumes following, no separate event). Tests:
+`viewport::tests::user_scroll_x_recent_reflects_a_note_then_expires`,
+`state_sync::bug159_auto_scroll_yield_tests::{auto_scroll_moves_when_no_user_gesture_is_active,
+auto_scroll_yields_to_a_recent_user_scroll_gesture}`. Feel (the 800ms grace
+value, whether it matches Ableton closely enough) is Peter's call on the rig —
+not test-provable, flagged for his pass.
 
 **Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
 playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
@@ -954,7 +969,7 @@ raising SETTLE_STREAK (swept 2/3/4 — 69.2/87.6/86.1, K=3 is the plateau), or
 re-clamping super-slew continuation (resurrects the 7-st gap-chase).
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
-**Status:** PARTIAL — `render_scene`'s and `gltf_texture_source`'s GPU pipeline compiles (both asset-independent, fixed shader source) are now prewarmed at app startup via `GeneratorRegistry::prewarm_all` (`dea66221`). A live, headless `MANIFOLD_RENDER_TRACE` proof against a real glTF fixture (`crates/manifold-app/src/bug037_verify.rs`, `7fdf25d0`, uses the `BlossomField` preset over `apricot_blossom_cluster_lod.glb`) shows a real, repeatable ~37% reduction on frame 0 (308.5ms → 194.5ms, range 194-278ms across runs) — but does NOT bring this preset's frame 0 under the 20ms bar the original entry asked for, and the backlog's original 37.1ms was measured on a much lighter asset than BlossomField's ~80k-tri scene, so the two numbers aren't apples-to-apples. **Remaining gap, owed to a future session:** on a graph this size the dominant frame-0 cost is very likely elsewhere — `scatter_on_mesh`, `push_mesh`, `mesh_edges`, the shadow pass, and the genuinely per-asset mesh/texture buffer upload (not addressed by this fix, which only covers shader/PSO compile) — closing this fully needs a broader look at which of those primitives also compile/allocate lazily on first use.
+**Status:** PARTIAL, further reduced 2026-07-14 (bug-wave lane B) — `render_scene`'s and `gltf_texture_source`'s GPU pipeline compiles (both asset-independent, fixed shader source) are prewarmed at app startup via `GeneratorRegistry::prewarm_all` (`dea66221`). BUG-146 (landed after this entry was first written, not previously cross-referenced here — supersession-sweep gap, now closed) added `prewarm_all_atom_codegen_pipelines`, sweeping all ~144 codegen-path atoms and independently cutting BlossomField's frame 0 to ~95ms. This session found and closed the next-largest remaining gap: `node.scatter_on_mesh` (a barriered multi-pass scan/reduce, exempt from the codegen path per CLAUDE.md, so BUG-146's sweep never reached its three hand-written pipelines) was still compiling `area_main`/`scan_main`/`place_main` lazily on first `run()` — confirmed the dominant remaining cost via `freeze-profile attribute BlossomField` (steady-state: `node.render_scene` 80.8%, `node.scatter_on_mesh` 15.0% of frame time). Fix: `ScatterOnMesh::prewarm_pipelines` (`crates/manifold-renderer/src/node_graph/primitives/scatter_on_mesh.rs`), wired into `GeneratorRegistry::prewarm_all` alongside the other two. The shadow-pass pipeline (`ensure_shadow_pass`) was *already* covered by `RenderScene::prewarm_pipelines` from an earlier VOLUMETRIC_LIGHT_DESIGN P3 pass — the backlog's "remaining gap" list above was stale on that item. Fresh `MANIFOLD_RENDER_TRACE=1` frame-0 measurement on BlossomField: **95.1ms → 40.6ms**. Full chain: 308.5ms (original) → 194.5ms (P1) → 95.1ms (BUG-146) → 40.6ms (this session). Still over the 20ms bar. **Remaining gap:** `push_mesh`/`mesh_edges`/`gltf_mesh_source` were not contributors on this trace (mesh_edges isn't even in this preset's graph); the per-asset mesh/texture buffer upload (`gltf_mesh_source.rs`, `gltf_texture_source.rs`) is genuinely per-asset and already backgrounds via a spawned thread — only amortizable via an "arm before play" phase, not a startup prewarm. Test: `scatter_on_mesh::gpu_tests::prewarm_pipelines_populates_the_shared_compute_cache` (order-independent per the BUG-144 cross-test-ordering class).
 
 **Symptom** — trace run 2026-07-06 (`meshImportTests.manifold`): the first frame after the
 project's glp layer became active showed `generators=37.1ms` (RENDER_TRACE frame=421) —
