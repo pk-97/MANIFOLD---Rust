@@ -102,6 +102,22 @@ pub(crate) fn param_word_count(p: &ParamDef) -> Result<usize, CodegenError> {
     }
 }
 
+/// Whether a param can lay out in the fused per-node namespaced uniform AT
+/// ALL — scalar (via [`param_wgsl_type`]) OR Vec3/Vec4/Color (P5/D4 lift:
+/// Vec3 packs as three consecutive `_x`/`_y`/`_z` f32 fields, Vec4/Color as
+/// four `_x`/`_y`/`_z`/`_w`, both already word-aligned — see the struct- and
+/// arg-emission blocks in `generate_fused`/`generate_fused_buffer`).
+/// Table/String stay unrepresentable (Table needs a fixed-size
+/// array-of-vec4 the per-node namespacing doesn't extend to; String has no
+/// GPU representation) — `region.rs`'s `classify_node`/`classify_refusal`
+/// param gate (cut rule 4) is the only caller; kept `pub(crate)` for the
+/// same reason. Distinct from `param_wgsl_type`, which must keep returning
+/// `Err` for Vec3/Vec4/Color — its callers (e.g. the `dispatch_count_field`
+/// zero-literal) need a single scalar WGSL type name, not a vector.
+pub(crate) fn param_is_fusable(p: &ParamDef) -> bool {
+    matches!(p.ty, ParamType::Vec3 | ParamType::Vec4 | ParamType::Color) || param_wgsl_type(p).is_ok()
+}
+
 pub(crate) fn wgsl_safe_field(name: &str) -> std::borrow::Cow<'_, str> {
     // WGSL keywords a short param name could realistically collide with.
     const RESERVED: &[&str] = &[
@@ -1919,10 +1935,28 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     let mut field_count = 0usize;
     for (i, node) in region.nodes.iter().enumerate() {
         for p in node.params {
-            let ty = param_wgsl_type(p)?;
-            writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            if p.ty == ParamType::Vec3 {
+                // Vec3 param → three consecutive namespaced f32 fields
+                // (wgsl-vec3-alignment convention; matches the standalone
+                // path's `<name>_x/_y/_z` packing, P5/D4).
+                writeln!(struct_body, "    n{i}_{}_x: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_y: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_z: f32,", p.name).unwrap();
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                // Vec4/Color param → four consecutive namespaced f32 fields,
+                // already word-aligned (no padding needed) — P5/D4 scope
+                // expansion, same mechanism the standalone path's "P3 wave 2"
+                // reassembly already proved.
+                writeln!(struct_body, "    n{i}_{}_x: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_y: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_z: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_w: f32,", p.name).unwrap();
+            } else {
+                let ty = param_wgsl_type(p)?;
+                writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            }
             param_order.push((node.node_id, crate::node_graph::intern_name(&p.name)));
-            field_count += 1;
+            field_count += param_word_count(p)?;
         }
     }
     // Frame-derived uniform fields (`dt_scaled`, `frame_count:u32`, a camera's
@@ -2179,7 +2213,19 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             }
         }
         for p in node.params {
-            args.push(format!("params.n{i}_{}", p.name));
+            if p.ty == ParamType::Vec3 {
+                args.push(format!(
+                    "vec3<f32>(params.n{i}_{}_x, params.n{i}_{}_y, params.n{i}_{}_z)",
+                    p.name, p.name, p.name
+                ));
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                args.push(format!(
+                    "vec4<f32>(params.n{i}_{}_x, params.n{i}_{}_y, params.n{i}_{}_z, params.n{i}_{}_w)",
+                    p.name, p.name, p.name, p.name
+                ));
+            } else {
+                args.push(format!("params.n{i}_{}", p.name));
+            }
         }
         // Frame-derived uniforms trail the params (same body-arg order the
         // standalone path uses); a vec3 is reassembled from its three f32 fields.
@@ -2380,10 +2426,28 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     let mut field_count = 0usize;
     for (i, node) in region.nodes.iter().enumerate() {
         for p in node.params {
-            let ty = param_wgsl_type(p)?;
-            writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            if p.ty == ParamType::Vec3 {
+                // Vec3 param → three consecutive namespaced f32 fields
+                // (wgsl-vec3-alignment convention; matches the standalone
+                // path's `<name>_x/_y/_z` packing, P5/D4).
+                writeln!(struct_body, "    n{i}_{}_x: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_y: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_z: f32,", p.name).unwrap();
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                // Vec4/Color param → four consecutive namespaced f32 fields,
+                // already word-aligned (no padding needed) — P5/D4 scope
+                // expansion, same mechanism the standalone path's "P3 wave 2"
+                // reassembly already proved.
+                writeln!(struct_body, "    n{i}_{}_x: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_y: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_z: f32,", p.name).unwrap();
+                writeln!(struct_body, "    n{i}_{}_w: f32,", p.name).unwrap();
+            } else {
+                let ty = param_wgsl_type(p)?;
+                writeln!(struct_body, "    n{i}_{}: {ty},", p.name).unwrap();
+            }
             param_order.push((node.node_id, crate::node_graph::intern_name(&p.name)));
-            field_count += 1;
+            field_count += param_word_count(p)?;
         }
     }
     // Frame-derived uniform fields (D7/P0) — see the identical block in
@@ -2805,7 +2869,19 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         args.push("uv".to_string());
         args.push("vec2<f32>(dims)".to_string());
         for p in node.params {
-            args.push(format!("params.n{i}_{}", p.name));
+            if p.ty == ParamType::Vec3 {
+                args.push(format!(
+                    "vec3<f32>(params.n{i}_{}_x, params.n{i}_{}_y, params.n{i}_{}_z)",
+                    p.name, p.name, p.name
+                ));
+            } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+                args.push(format!(
+                    "vec4<f32>(params.n{i}_{}_x, params.n{i}_{}_y, params.n{i}_{}_z, params.n{i}_{}_w)",
+                    p.name, p.name, p.name, p.name
+                ));
+            } else {
+                args.push(format!("params.n{i}_{}", p.name));
+            }
         }
         // Frame-derived uniforms trail the params (D7/P0) — same body-arg order
         // the standalone path uses; a vec3 is reassembled from its three packed
@@ -2925,7 +3001,19 @@ fn chain_member_args(
     args.push("vuv".to_string());
     args.push("vd".to_string());
     for p in node.params {
-        args.push(format!("params.n{j}_{}", p.name));
+        if p.ty == ParamType::Vec3 {
+            args.push(format!(
+                "vec3<f32>(params.n{j}_{}_x, params.n{j}_{}_y, params.n{j}_{}_z)",
+                p.name, p.name, p.name
+            ));
+        } else if matches!(p.ty, ParamType::Vec4 | ParamType::Color) {
+            args.push(format!(
+                "vec4<f32>(params.n{j}_{}_x, params.n{j}_{}_y, params.n{j}_{}_z, params.n{j}_{}_w)",
+                p.name, p.name, p.name, p.name
+            ));
+        } else {
+            args.push(format!("params.n{j}_{}", p.name));
+        }
     }
     // Frame-derived uniforms trail the params (D7/P0) — same convention as the
     // non-virtual cs_main marshaller above; a stencil-absorbed chain member with

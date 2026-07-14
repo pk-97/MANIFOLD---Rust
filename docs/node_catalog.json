@@ -4657,7 +4657,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",

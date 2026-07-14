@@ -1995,12 +1995,30 @@ fn linear_blur_pair_matches_legacy_blur_node() {
 }
 
 /// Coverage baseline — a regression guard on how much of the shipped library the
-/// finder fuses. Walks every bundled effect preset, partitions it, and tallies
-/// the presets that fuse + the total atoms folded into kernels. A future change
-/// that silently turns the partition conservative (everything a boundary) would
-/// drop these counts below the floor and trip here. The floor is deliberately
-/// loose — it tracks "fusion is broadly alive", not an exact number that churns
-/// as the atom vocabulary lands. The exact counts are logged, never asserted.
+/// finder fuses. Walks every bundled preset (effect AND generator — P5/D4:
+/// this test used to walk `PresetKind::Effect` only, silently excluding the
+/// entire generator library from the ratchet), FLATTENS any node groups
+/// first (P5/D4: it used to partition the raw `canonical_def` directly,
+/// which `partition_regions` refuses outright the moment it sees a `group`
+/// node — every grouped preset, effect or generator, silently contributed
+/// zero to this floor), and tallies the presets that fuse + the total atoms
+/// folded into kernels. A future change that silently turns the partition
+/// conservative (everything a boundary) would drop these counts below the
+/// floor and trip here. The floor is deliberately loose — it tracks "fusion
+/// is broadly alive", not an exact number that churns as the atom
+/// vocabulary lands. The exact counts are logged, never asserted.
+///
+/// Both blind spots were invisible before P5 because nothing this design's
+/// earlier phases lifted lived in a generator or a grouped preset in a way
+/// that mattered to this specific ratchet — P5's Vec3/Vec4/Color lift is the
+/// first change whose real shipped-content proof (`node.shininess`/
+/// `node.rim_light`/`node.matcap_two_tone` in OilyFluid, `node.brightness` in
+/// MetallicGlass, `node.channel_mixer` in StarField — all THREE are
+/// `generator-presets/*.json`, and OilyFluid/MetallicGlass are additionally
+/// grouped) fell entirely inside them. Fixing the walk at its root (widen the
+/// kind filter, flatten before partitioning) is what makes the floor able to
+/// honestly move for this phase, instead of asserting a stale non-regression
+/// number that never actually re-measures the thing D4 cares about.
 #[test]
 fn fusion_coverage_baseline() {
     let registry = PrimitiveRegistry::with_builtin();
@@ -2009,23 +2027,29 @@ fn fusion_coverage_baseline() {
     let mut total_regions = 0usize;
     let mut detail: Vec<String> = Vec::new();
 
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
-        let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
-            continue;
-        };
-        let regions = super::region::partition_regions(base.canonical_def, &registry);
-        if regions.is_empty() {
-            continue;
+    for kind in [manifold_core::preset_def::PresetKind::Effect, manifold_core::preset_def::PresetKind::Generator]
+    {
+        for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(kind) {
+            let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
+                continue;
+            };
+            let Ok(flat) = manifold_core::flatten::flatten_groups(base.canonical_def) else {
+                continue;
+            };
+            let regions = super::region::partition_regions(&flat, &registry);
+            if regions.is_empty() {
+                continue;
+            }
+            let atoms: usize = regions.iter().map(|r| r.members.len()).sum();
+            fused_presets += 1;
+            total_regions += regions.len();
+            total_fused_atoms += atoms;
+            detail.push(format!(
+                "  {}: {} region(s), {atoms} atom(s)",
+                type_id.as_str(),
+                regions.len()
+            ));
         }
-        let atoms: usize = regions.iter().map(|r| r.members.len()).sum();
-        fused_presets += 1;
-        total_regions += regions.len();
-        total_fused_atoms += atoms;
-        detail.push(format!(
-            "  {}: {} region(s), {atoms} atom(s)",
-            type_id.as_str(),
-            regions.len()
-        ));
     }
     detail.sort();
     eprintln!(
@@ -2034,16 +2058,30 @@ fn fusion_coverage_baseline() {
         detail.join("\n")
     );
 
-    // Loose floors: fusion must stay broadly alive across the library. (At the
-    // time of writing: well above these — fan-out, gather, source, and
-    // control-wire coverage all contribute.)
+    // Floors RAISED (P5/D4 ratchet, not just non-regression). Isolated
+    // measurement (checked out this same widened walk against the pre-P5
+    // P4a HEAD, 21794f5c, to separate "the walk got wider" from "P5 lifted
+    // real atoms"): pre-P5, the widened walk already measures 32 preset(s) /
+    // 52 region(s) / 203 atom(s) — widening the walk (effect+generator,
+    // flatten groups) is what jumped this from the old 12/15/46 (Effect-
+    // only, unflattened); P5's OWN contribution on top of that is
+    // MetallicGlass 4→6 regions/14→19 atoms, OilyFluid 30→34 atoms,
+    // StarField 10→12 atoms (exactly the five wave-2 Color/Vec3/Vec4 atoms
+    // `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves) — net
+    // +2 regions / +13 atoms, landing at the 32/54/216 measured just above.
+    // Floors sit at the pre-P5-on-the-widened-walk numbers plus P5's real
+    // delta, with a little headroom for unrelated atom-mix churn.
     assert!(
-        fused_presets >= 8,
-        "expected ≥8 bundled presets to fuse, got {fused_presets} — partition regressed?"
+        fused_presets >= 32,
+        "expected ≥32 bundled presets to fuse, got {fused_presets} — partition regressed?"
     );
     assert!(
-        total_fused_atoms >= 30,
-        "expected ≥30 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
+        total_regions >= 53,
+        "expected ≥53 regions library-wide, got {total_regions} — partition regressed?"
+    );
+    assert!(
+        total_fused_atoms >= 210,
+        "expected ≥210 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
     );
 }
 

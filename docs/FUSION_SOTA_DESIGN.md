@@ -2,7 +2,11 @@
 
 **Status:** IN PROGRESS · 2026-07-14 · Fable 5 (with Peter in the room) · Sonnet 5 executing
 P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
-`docs/fusion_census.md` — no D4 default flipped, all four stand). P4–P7 remain.
+`docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
+(Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
+`classify_node`'s param gate narrowed, fused codegen + install-time param seeding extended,
+`fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). P4b,
+P6–P7 remain.
 **Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
 (BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
 BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
@@ -240,17 +244,36 @@ per GIT_TREE_DISCIPLINE.
   `explain_presets` shows the HUD preset ACTUALLY fusing (region forms, dispatch count drops —
   this is now reachable because P5 lands first and lifts the Color param that was blocking it).
   Demo: before/after dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
-- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope).** Deliverables: Vec3 → vec4-padded
-  uniform field in the shared packer (existing plan); Vec4/Color → the SAME uniform field shape,
-  no padding needed (already 4 words) — `param_wgsl_type` (`region.rs:954–961`) stops rejecting
-  `ParamType::Vec4`/`ParamType::Color`, reusing the standalone-codegen reassembly the companion
-  sweep already built (`codegen.rs`, "P3 wave 2" — vec4<f32> from four packed fields) on the fused
-  path too; cut rule 4 narrowed for all three types; affected atoms re-classified (census names
-  the Vec3 ones; draw_dots + the five P4b atoms are the Color-param set — re-derive at execution,
-  don't hard-code this list); per-atom parity where a shipped preset is affected. Gate: gpu-proofs
-  on touched modules; freeze suite; `fusion_coverage_baseline` floor RAISED to the new region
-  count (ratchet, not just non-regression). Demo: census re-run showing the family's refusal
-  count at zero for Vec3 AND the draw_dots proving atom now actually forming a region — L2.
+- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope). SHIPPED.** `classify_node`'s param
+  gate (`region.rs`, was `:954–961`) narrowed via a new shared predicate
+  `codegen::param_is_fusable` (Vec3/Vec4/Color pass, Table/String still cut); `classify_refusal`'s
+  mirror updated in lockstep (`refusal_census_matches_classify_node` invariant), including a
+  second drift found there — the D3 `buffer_index_ports` wire exemption existed in `classify_node`
+  but was missing from its census mirror, invisible until the param gate stopped short-circuiting
+  before that wire loop for `draw_dots`. Both `generate_fused` and `generate_fused_buffer` extended
+  with the same Vec3 (3 namespaced `_x/_y/_z` fields) / Vec4+Color (4 `_x/_y/_z/_w` fields, no
+  padding) struct + arg emission the standalone path already proved. A second layer this phase
+  found necessary beyond codegen text: `install.rs`'s param-seeding loop only ever seeded ONE
+  scalar field per param — extended with `effective_param_vec3`/`effective_param_vec4` to seed the
+  3/4 sub-fields from the atom's default/override, with a fail-closed refusal if a control wire
+  ever targets a Vec3/Vec4/Color param (structurally unreachable today — `ParamConvert` has no
+  non-scalar variant, so no outer-card binding can target one either). Re-classification (census,
+  real-preset probe): `node.shininess`/`node.rim_light`/`node.matcap_two_tone` (OilyFluid),
+  `node.brightness` (MetallicGlass), `node.channel_mixer` (StarField), and `node.gradient_map`
+  (synthetic pair, no bundled preset) all flip Boundary → Eligible; `draw_dots` flips to
+  `[pointwise]`/Eligible in `graph_tool fusion` output on `BlobTracking.json`, though that preset
+  still shows 0 regions — its neighbors are the five still-unconverted `draw_*` atoms, P4b's job,
+  not a new gap. `fusion_coverage_baseline` had two of its own blind spots found and fixed at the
+  root (Effect-only + no group-flatten, both silently excluding every atom this phase's real proof
+  lives in — OilyFluid/MetallicGlass/StarField are grouped GENERATOR presets); floor raised on the
+  widened, isolated-measured numbers (32/52/203 pre-P5 → 32/54/216 post-P5 on the same walk).
+  Gate: gpu-proofs full suite + `--lib` full suite, both clean modulo 8 pre-existing failures
+  verified unchanged at P4a HEAD (21794f5c) — 6 synthetic `codegen::gpu_tests` cases and 2
+  prewarm-cache tests that fail only under full-suite contention, not in isolation; clippy clean.
+  Demo: census refusal count for the param-type family 19→10 (the 9 real Vec3/Vec4/Color flips);
+  `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves all 5 real-preset atoms now fuse;
+  `buffer_index_external_stays_external` proves `draw_dots` forms a real 2-member region with a
+  synthetic neighbor via `partition_regions` — L2.
 - **P6 — multi-output texture atoms (D4).** Deliverables: struct-return texture wrapper (precedent
   `codegen.rs:1001`), voronoi converted, cut rule 6 narrowed to "multi-output without struct-return
   body". Gate: parity oracle; freeze suite; coverage ratchet. Demo: census delta — L2. Ordered

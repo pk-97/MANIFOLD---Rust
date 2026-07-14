@@ -14,16 +14,16 @@ Corpus: 57 bundled effect/generator presets + Liveschool fixture (0 embedded_pre
 
 | Family | Refusals | Dispatches saved if lifted |
 |---|---:|---:|
-| param-type | 19 | 9 |
+| param-type | 10 | 0 |
 | multi-output | 3 | 3 |
 | resample | 4 | 2 |
-| stencil-depth | 2 | 2 |
-| buffer-index-shaped | 23 | 10 |
-| other | 650 | 68 |
+| stencil-depth | 6 | 6 |
+| buffer-index-shaped | 22 | 12 |
+| other | 650 | 69 |
 
 ## Reading the numbers against D4's defaults
 
-**Vec3 params — LIFT (default stands).** `param-type` bucket also includes Table/String (boundary by nature per D4, not debt) so this count is an upper bound on Vec3-specifically; 19 refusal(s) / 9 dispatch(es) potentially saved support building the lift as scoped for P5.
+**Vec3 params — LIFT (default stands).** `param-type` bucket also includes Table/String (boundary by nature per D4, not debt) so this count is an upper bound on Vec3-specifically; 10 refusal(s) / 0 dispatch(es) potentially saved support building the lift as scoped for P5.
 
 **Multi-output texture atoms — LIFT, census-gated (default stands).** 3 refusal(s) / 3 dispatch(es). Non-zero — P6 has shipped-preset cuts to point at, strengthening (not just capability-justifying) the case to build it.
 
