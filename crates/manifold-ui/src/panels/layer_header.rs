@@ -445,6 +445,11 @@ fn compute_layer_row(
 
     let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
     let pad = PAD + left_indent;
+    // Right-anchored controls sit against the card's right edge, which stays at `w`
+    // regardless of indent (only the card's LEFT edge moves for a child row) — so right
+    // margins use plain `PAD`, never the indented `pad`, or a child row's right-anchored
+    // controls (drag handle, blend dropdown, routing form) double-pay the indent. BUG-049.
+    let right_pad = PAD;
     let mut y = y_offset + PAD;
 
     // A child layer insets its identity card to the right by `left_indent`,
@@ -486,7 +491,7 @@ fn compute_layer_row(
     // The type badge (* / ▶ glyph) was removed (Peter, 2026-06-28): the name now
     // starts right after the chevron and reclaims the badge's slot.
     let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
-    let handle_x = w - pad - HANDLE_W - 8.0;
+    let handle_x = w - right_pad - HANDLE_W - 8.0;
     // P0.5 collapsed generator label: carve a fixed-width dimmed zone out of
     // the Name rect's right edge (before DragHandle) instead of adding a row —
     // the row's total width is unchanged, Name just gives up some of its own
@@ -521,13 +526,15 @@ fn compute_layer_row(
     btn_x += MS_BTN_W + MSL_GAP;
 
     if is_audio {
-        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y, is_collapsed);
+        return compute_audio_row(
+            d, y_offset, height, w, card_x, pad, right_pad, btn_x, y, is_collapsed,
+        );
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + MSL_GAP;
 
-    let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
+    let dd_w = (w - btn_x - right_pad - RIGHT_GUTTER).max(20.0);
     d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
 
     y += BTN_H;
@@ -552,7 +559,7 @@ fn compute_layer_row(
     // their own spelled-out rows instead of sharing one cramped line. Groups have
     // no routing.
     if !is_group {
-        let right_edge = w - pad - RIGHT_GUTTER;
+        let right_edge = w - right_pad - RIGHT_GUTTER;
         // §K divider: a contrast-aware rule separating the M/S/L/Blend mix row from
         // the routing form — the mockup's clean section break. MIX_DIVIDER_PAD of
         // breathing room above and below it (more than the inter-row gap) so it
@@ -624,6 +631,7 @@ fn compute_audio_row(
     w: f32,
     card_x: f32,
     pad: f32,
+    right_pad: f32,
     btn_x: f32,
     y_buttons: f32,
     is_collapsed: bool,
@@ -644,7 +652,7 @@ fn compute_audio_row(
 
     // Gain: dB slider filling the rest of the button row (Blend's slot for
     // video), after Mute | Solo | Analysis.
-    let right_edge = w - pad - RIGHT_GUTTER;
+    let right_edge = w - right_pad - RIGHT_GUTTER;
     let gain_x = btn_x + MS_BTN_W + 6.0;
     d.set(
         C::Gain,
@@ -2994,6 +3002,7 @@ mod tests {
         };
         let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
         let pad = PAD + left_indent;
+        let right_pad = PAD;
         let mut y = y_offset + PAD;
         let card_x = left_indent;
         let card_w = (w - card_x).max(1.0);
@@ -3017,7 +3026,7 @@ mod tests {
         let chevron_w = CHEVRON_W;
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
         let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
-        let handle_x = w - pad - HANDLE_W - 8.0;
+        let handle_x = w - right_pad - HANDLE_W - 8.0;
         if is_collapsed && has_gen_label {
             let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
             let name_w = (label_x - TOP_GAP - name_left).max(20.0);
@@ -3046,7 +3055,7 @@ mod tests {
                 );
                 return d;
             }
-            let right_edge = w - pad - RIGHT_GUTTER;
+            let right_edge = w - right_pad - RIGHT_GUTTER;
             let gain_x = btn_x + MS_BTN_W + 6.0;
             d.set(
                 C::Gain,
@@ -3065,7 +3074,7 @@ mod tests {
         }
         d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
         btn_x += MS_BTN_W + 6.0;
-        let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
+        let dd_w = (w - btn_x - right_pad - RIGHT_GUTTER).max(20.0);
         d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
         y += BTN_H;
         let sep_h = if is_group {
@@ -3083,7 +3092,7 @@ mod tests {
         // §D routing form — aligned [label | value] rows (mirrors compute_layer_row
         // rect-for-rect; the equivalence gate enforces it).
         if !is_group {
-            let right_edge = w - pad - RIGHT_GUTTER;
+            let right_edge = w - right_pad - RIGHT_GUTTER;
             let div_y = (y + MIX_DIVIDER_PAD).round();
             d.set(
                 C::MixDivider,
