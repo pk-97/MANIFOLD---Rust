@@ -2923,20 +2923,20 @@ mod tests {
         );
     }
 
-    /// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D5: the same fixture
-    /// built into a Perform-context and an Author-context panel at the SAME
-    /// rect must lay out its slider row identically — the chevron lane is
-    /// reserved in both (D1), so a Perform card's row is exactly as wide as
-    /// an Author card's at the same content width, by construction. This is
-    /// the "fundamentally not possible to drift" check: any future
-    /// context-gated row rect breaks it. Narrower in scope than a full
-    /// tree-equivalence walk (that's the `inspector_rows_fit_card_bounds_
-    /// across_widths` width-sweep test still owed, per the design doc's
-    /// P1 deliverables) — this proves the specific D1/D2 fix (the chevron
-    /// lane fork that used to make Perform and Author slider rows different
-    /// widths) rather than every possible future divergence.
+    /// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D5 (superseded by the
+    /// BUG-160 follow-up): the same fixture built into a Perform-context and
+    /// an Author-context panel at the SAME rect must place its param LABEL
+    /// identically — only the chevron lane, and therefore the slider track
+    /// width, differs (Author reserves it, Perform doesn't, since Perform
+    /// never draws the glyph). The label rect is upstream of that lane, so it
+    /// can't drift regardless of which context reserves the chevron. Narrower
+    /// in scope than a full tree-equivalence walk (that's the
+    /// `inspector_rows_fit_card_bounds_across_widths` width-sweep test still
+    /// owed, per the design doc's P1 deliverables) — this proves the shared
+    /// `row_geometry` label math (D2) rather than every possible future
+    /// divergence.
     #[test]
-    fn perform_and_author_slider_rows_are_geometry_identical() {
+    fn perform_and_author_slider_row_labels_are_geometry_identical() {
         use super::super::param_card::ParamCardKind;
         let rect = Rect::new(0.0, 0.0, 400.0, 600.0);
 
@@ -2968,9 +2968,9 @@ mod tests {
 
         assert_eq!(
             author_row, perform_row,
-            "the same fixture at the same rect must lay out its slider row \
-             identically in both contexts (D1: the chevron lane is reserved \
-             in both, never context-gated)"
+            "the same fixture at the same rect must place its param label \
+             identically in both contexts — the chevron lane only affects \
+             the slider track, not the label upstream of it"
         );
     }
 
