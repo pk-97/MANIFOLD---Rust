@@ -404,9 +404,17 @@ and edges #3/#7 below, which no lens engaged.
    tolerances; there is no single tolerance constant tied to the contract.
 4. `classify.rs` **doc-comment drift** (see header) — an agent trusting those
    comments will mis-reason about gathers and buffers.
-5. `def_content_key` hashes the FULL serde encoding — `editor_pos` and `title`
-   changes miss the cache (recompiles on node drag if a graph re-fuses while
-   not watched). Correctness fine; minor churn.
+5. FIXED (2026-07-14): `def_content_key` normalizes a cloned def — clearing
+   `editor_pos`/`title` on every node, including nodes nested inside group
+   bodies — before hashing, so a node drag or rename no longer perturbs the
+   key. Same "serialize the whole thing and hash the bytes" mechanism as
+   before, just fed a cosmetic-fields-cleared clone. Tests:
+   `content_key_ignores_editor_pos_drag`, `content_key_ignores_title_rename`,
+   `content_key_changes_on_wire_param_or_topology_edit` in
+   `node_graph/freeze/install.rs`. Residual: `GroupDef::tint` (the group
+   header accent colour) is also purely cosmetic and still participates in
+   the hash — left alone since it wasn't in this fix's scope; same minor-churn
+   character as the original issue, just narrower.
 6. Buffer fan-out regions, nested stencils, multi-output texture atoms
    (voronoi), Vec3/Table params, and resampler-into-region remain deliberate
    boundaries — under-fusing by design.
