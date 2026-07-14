@@ -142,6 +142,11 @@ pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
 pub const SHADOW_BLUR: f32 = 18.0;
 pub const SHADOW_OFFSET_Y: f32 = 4.0;
 
+/// Peter, 2026-07-14: no shadows anywhere for now — dark-on-dark shadows read
+/// as smudge, not elevation. Flip to re-enable; call sites are gated, the
+/// draw_shadow primitive stays.
+pub const SHADOWS_ENABLED: bool = false;
+
 // ── Semantic colour ramp (§15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
 // The state colours below ALIAS onto these, so the same red/green/amber
@@ -1003,6 +1008,11 @@ pub const CARD_RADIUS: f32 = 5.0;
 pub const SQUARE_RADIUS: f32 = 0.0;
 pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
+/// Peter, 2026-07-14: the dropdown/menu-item hover-or-checked highlight —
+/// up from `SMALL_RADIUS` now that unchecked rows are transparent (see
+/// `DropdownPanel::build_nodes`) and the highlight needs to read as a
+/// distinct rounded chip rather than a flush-edged box.
+pub const MENU_ITEM_RADIUS: f32 = 4.0;
 // The §14.2-rule-6 hairline exception, realised as a token instead of scattered
 // `1.0` literals: thin bars, tracks, fills, and ≤6px overlay handles that read
 // crisper left near-square (slider track, progress fill, drop indicator, the

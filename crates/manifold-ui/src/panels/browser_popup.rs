@@ -19,7 +19,6 @@ use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::picker_core::{PickerCore, PickerItem, PickerNav, Source};
 use super::popup_shell;
-use crate::anim::AnimF32;
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::Color32;
@@ -228,13 +227,6 @@ pub struct BrowserSession {
     pub picker: PickerCore,
     pub pending_spawn_graph_pos: Option<(f32, f32)>,
     pub paste_count: usize,
-    /// D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — same
-    /// scale 0.98→1 + fade `enter_anim` `DropdownPanel` uses, started fresh
-    /// on every genuine open (never carried over from a prior session).
-    enter_anim: AnimF32,
-    /// Wall-clock timestamp `update()` last ticked from — mirrors
-    /// `DropdownPanel::last_tick`.
-    last_tick: Option<std::time::Instant>,
     layout: BrowserLayout,
 }
 
@@ -262,41 +254,20 @@ impl BrowserPopupPanel {
         }
     }
 
-    /// Advance the entrance tween by real elapsed wall-clock time and, while
-    /// still animating, rebuild at the current (still-settling) scale — a
-    /// no-op once settled or closed. Mirrors `DropdownPanel::update`; call
-    /// every frame from `UiRoot::update()`.
-    pub fn update(&mut self, tree: &mut UITree) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if !session.enter_anim.is_animating() {
-            session.last_tick = None;
-            return;
-        }
-        let now = std::time::Instant::now();
-        let dt_ms = session
-            .last_tick
-            .map(|t| (now - t).as_secs_f32() * 1000.0)
-            .unwrap_or(0.0)
-            .min(100.0);
-        session.last_tick = Some(now);
-        session.enter_anim.tick(dt_ms);
-        self.build(tree);
-    }
+    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// enter/exit motion). Kept as a no-op so callers can still poll/call it
+    /// unconditionally every frame without special-casing.
+    pub fn update(&mut self, _tree: &mut UITree) {}
 
     pub fn is_open(&self) -> bool {
         self.session.is_some()
     }
 
-    /// True while the entrance tween is still settling. The app polls this
-    /// after `UIRoot::update()` to keep forcing a per-frame rebuild until the
-    /// fade-in completes — without it the dirty-driven renderer draws the
-    /// popup once at `t=0` (fully transparent background, see `build`) and
-    /// never ticks the tween again until an unrelated input re-dirties the
-    /// frame. Mirrors `InspectorCompositePanel::drawer_anim_active`.
+    /// Always `false` now — popups no longer have an entrance tween to
+    /// settle. Kept so call sites polling it (to force a rebuild while
+    /// animating) don't need special-casing.
     pub fn is_animating(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| s.enter_anim.is_animating())
+        false
     }
 
     pub fn set_screen_size(&mut self, w: f32, h: f32) {
@@ -322,8 +293,6 @@ impl BrowserPopupPanel {
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
-        let mut enter_anim = AnimF32::new(0.0, color::MOTION_FAST_MS);
-        enter_anim.set_target(1.0);
         self.session = Some(BrowserSession {
             mode: req.mode,
             tab: req.tab,
@@ -331,8 +300,6 @@ impl BrowserPopupPanel {
             picker: PickerCore::new(req.items, req.category_names),
             pending_spawn_graph_pos: req.spawn_graph_pos,
             paste_count: req.paste_count,
-            enter_anim,
-            last_tick: None,
             layout: BrowserLayout::new(),
         });
         self.compute_layout(req.screen_anchor);
@@ -454,18 +421,14 @@ impl BrowserPopupPanel {
         session.layout.cell_ids.clear();
         session.layout.chip_ids.clear();
 
-        // D17 "modal/dropdown enter": scale the whole popup 0.98→1 about its
-        // own center. Every position below derives from these four locals
-        // (never `session.layout.popup_x`/`total_height` directly), so
-        // scaling them here scales the search bar, chips, and grid for free.
-        let t = session.enter_anim.value().clamp(0.0, 1.0);
-        let scale = 0.98 + 0.02 * t;
-        let full_cx = session.layout.popup_x + POPUP_WIDTH * 0.5;
-        let full_cy = session.layout.popup_y + session.layout.total_height * 0.5;
-        let px = full_cx - POPUP_WIDTH * 0.5 * scale;
-        let py = full_cy - session.layout.total_height * 0.5 * scale;
-        let pw = POPUP_WIDTH * scale;
-        let ph = session.layout.total_height * scale;
+        // Popups appear instantly at full size/opacity (Peter, 2026-07-14 —
+        // no enter/exit motion). Every position below derives from these
+        // four locals (never `session.layout.popup_x`/`total_height`
+        // directly), so this is just the plain popup rect now.
+        let px = session.layout.popup_x;
+        let py = session.layout.popup_y;
+        let pw = POPUP_WIDTH;
+        let ph = session.layout.total_height;
 
         // Scrim + modal container via the shared shell (§17 lifts it with a
         // soft shadow; search bar / chips / grid are added on top as siblings).
@@ -476,13 +439,6 @@ impl BrowserPopupPanel {
             &popup_shell::PopupStyle::MODAL,
         );
         session.layout.backdrop_id = Some(shell.backdrop);
-        if t < 0.999
-            && let Some(mut cs) = tree.get_node(shell.container).map(|n| n.style)
-        {
-            cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
-            cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
-            tree.set_style(shell.container, cs);
-        }
 
         let cx = px + BORDER + PADDING;
         let content_w = pw - BORDER * 2.0 - PADDING * 2.0;
