@@ -93,36 +93,6 @@ pub fn build(tree: &mut UITree, screen: (f32, f32), rect: Rect, style: &PopupSty
     PopupShell { backdrop, container }
 }
 
-/// Scale every node created since `first_node` about `center`, by `scale` —
-/// the D17 "modal/dropdown enter" 0.98→1 pop for a popup whose content isn't
-/// already parameterized by a single scaled rect the way `DropdownPanel`'s
-/// `bounds` (or `ableton_picker`/`browser_popup`'s scaled `px`/`py`/`pw`/`ph`
-/// locals) are. A geometric post-pass over the popup's own just-built node
-/// range: correct regardless of how that layout code computed its absolute
-/// positions, and cheap (one popup's node count, run only while its
-/// `enter_anim` is still mid-flight). `SettingsPopup` is the one caller —
-/// its rows are built from `ChromeHost`'s flex layout, not one resizable
-/// rect. A no-op once `scale` settles at 1.0.
-pub fn scale_nodes_about(tree: &mut UITree, first_node: usize, center: (f32, f32), scale: f32) {
-    if (scale - 1.0).abs() < 0.0005 {
-        return;
-    }
-    let (cx, cy) = center;
-    for i in first_node..tree.count() {
-        let id = tree.id_at(i);
-        let Some(b) = tree.get_node(id).map(|n| n.bounds) else {
-            continue;
-        };
-        let new_b = Rect::new(
-            cx + (b.x - cx) * scale,
-            cy + (b.y - cy) * scale,
-            b.width * scale,
-            b.height * scale,
-        );
-        tree.set_bounds(id, new_b);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
