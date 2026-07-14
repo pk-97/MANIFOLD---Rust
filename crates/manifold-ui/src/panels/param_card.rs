@@ -268,10 +268,35 @@ const CORNER_RADIUS: f32 = color::CARD_RADIUS;
 const CARD_BOTTOM_MARGIN: f32 = 0.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;
-/// Width of the right-edge mapping-drawer chevron lane (Author context). Rows
-/// that show it shrink their slider by this much so the chevron sits past the
-/// D/E buttons at the row's right edge.
+/// Width of the right-edge mapping-drawer chevron lane. Rows shrink their
+/// slider by this much so the chevron sits past the D/E buttons at the row's
+/// right edge.
 const MAP_CHEVRON_W: f32 = 14.0;
+
+/// A row's label/slider/chevron-lane geometry for a given available content
+/// width — the single source both `build_effect_sliders` and
+/// `build_generator` consume instead of each doing their own lane arithmetic
+/// inline (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D2: "one
+/// row-geometry helper... no builder does lane arithmetic inline"). D1: the
+/// chevron lane is reserved in EVERY context — `CardContext` may change
+/// which glyph draws in it (Author + mappable only), never the rect itself —
+/// so a Perform card's slider is exactly as wide as an Author card's at the
+/// same content width, by construction, not by a parity test.
+struct RowGeometry {
+    /// Width of the param-name label column.
+    label_width: f32,
+    /// Width of the draggable slider track (content width minus the D/E/A
+    /// button lane and the chevron lane).
+    slider_w: f32,
+}
+
+fn row_geometry(content_w: f32) -> RowGeometry {
+    let chevron_lane = MAP_CHEVRON_W + DE_BUTTON_GAP;
+    let label_width = crate::slider::label_width_for_row(content_w);
+    let slider_w =
+        content_w - MOD_LANE_GAP - DE_BUTTON_SIZE * 3.0 - DE_BUTTON_GAP * 2.0 - chevron_lane;
+    RowGeometry { label_width, slider_w }
+}
 
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
@@ -816,20 +841,25 @@ impl ParamCardPanel {
         self.mod_active_tab.truncate(n);
         // P1 drawer tween targets. Preserve existing tweens across the rebuild (a
         // mid-flight tween must not reset), grow for new params. Then point each at
-        // its settled drawer height: a *new* param (or an Author/editor card that
-        // nothing ticks) snaps so it never stalls half-open; an existing param on a
-        // Perform (inspector) card eases (set_target no-ops when the target is
+        // its settled drawer height: a *new* param snaps so it never stalls
+        // half-open; an existing param eases (set_target no-ops when the target is
         // unchanged, so the per-frame rebuild that drives the tween doesn't reset
         // it). Targets are read into a temp first — `row_drawer_height` borrows
         // `&self` while the loop needs `&mut self.drawer_height_anim`.
+        //
+        // Both contexts ease identically since
+        // `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (D4): the editor's
+        // `UIRoot` now ticks its inspector every frame it presents
+        // (`UIRoot::tick_inspector`), so an Author card's tween advances the
+        // same as a Perform card's — the old never-ticked-Author snap
+        // workaround is gone because the workaround is.
         let prev_anim_len = self.drawer_height_anim.len();
         self.drawer_height_anim
             .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS));
         self.drawer_height_anim.truncate(n);
         let drawer_targets: Vec<f32> = (0..n).map(|i| self.row_drawer_height(i)).collect();
-        let eases = self.context != CardContext::Author;
         for (i, &target) in drawer_targets.iter().enumerate() {
-            if eases && i < prev_anim_len {
+            if i < prev_anim_len {
                 self.drawer_height_anim[i].set_target(target);
             } else {
                 self.drawer_height_anim[i].snap(target);
@@ -1077,17 +1107,16 @@ impl ParamCardPanel {
     /// Point `collapse_anim` at the target implied by `is_collapsed`/`kind`.
     /// Called from `configure()` — the real per-rebuild path a model-driven
     /// collapse toggle (`PanelAction::EffectCollapseToggle`) round-trips
-    /// through. Effect cards on a ticked (Perform) context ease once already
-    /// configured once (mirrors `drawer_height_anim`'s "don't slide in on
-    /// first appearance" rule); every other case (first-ever configure,
-    /// Author context which nothing ticks, or a Generator card whose
-    /// `build_generator` can't render a partial-height body) snaps instantly
-    /// so `compute_height`/`build` never disagree.
+    /// through. Effect cards ease once already configured once (mirrors
+    /// `drawer_height_anim`'s "don't slide in on first appearance" rule,
+    /// and — since `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (D4) —
+    /// identically in both contexts, now that the editor ticks its
+    /// inspector every frame); every other case (first-ever configure, or a
+    /// Generator card whose `build_generator` can't render a partial-height
+    /// body) snaps instantly so `compute_height`/`build` never disagree.
     fn sync_collapse_anim(&mut self) {
         let target = if self.is_collapsed { 0.0 } else { 1.0 };
-        let eases = self.kind == ParamCardKind::Effect
-            && self.collapse_configured
-            && self.context != CardContext::Author;
+        let eases = self.kind == ParamCardKind::Effect && self.collapse_configured;
         if eases {
             self.collapse_anim.set_target(target);
         } else {
@@ -2462,27 +2491,16 @@ impl ParamCardPanel {
         w: f32,
     ) {
         let mut cy = start_y;
-        // Author mode reserves a uniform right-edge lane for the mapping-drawer
-        // chevron (drawn only on mappable rows, but reserved on all so slider
-        // widths stay even). Perform mode keeps the full slider width.
+        // The chevron lane is reserved in EVERY context (D1); only the glyph
+        // draw is gated on Author + mappable, below. `author` still gates
+        // that glyph and the row-id scheme.
         let author = self.context == CardContext::Author;
-        let chevron_lane = if author {
-            MAP_CHEVRON_W + DE_BUTTON_GAP
-        } else {
-            0.0
-        };
         // Label column grows with the row so a wide inspector card gives the
         // param name more room (not just a longer track). Floored at the
         // default, so narrow timeline cards keep the timeline's width exactly.
-        let label_width = crate::slider::label_width_for_row(w - PADDING * 2.0);
-        // Three buttons in the lane now: E (envelope), → (driver), A (audio).
-        // Lane = slider→group gap + 3 buttons + 2 inter-button gaps.
-        let slider_w = w
-            - PADDING * 2.0
-            - MOD_LANE_GAP
-            - DE_BUTTON_SIZE * 3.0
-            - DE_BUTTON_GAP * 2.0
-            - chevron_lane;
+        // Shared with `build_generator` via `row_geometry` (D2) so the two
+        // builders' lane math can't drift from each other.
+        let RowGeometry { label_width, slider_w } = row_geometry(w - PADDING * 2.0);
 
         self.section_header_ids.clear();
         let runs = self.section_runs();
@@ -2693,24 +2711,15 @@ impl ParamCardPanel {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP;
-            // Author mode reserves the same right-edge mapping-drawer chevron
-            // lane the effect card does, so generator slider rows shrink to
-            // match and the chevron sits past the D/E buttons. Generators are
-            // remappable too (reshape on the per-instance graph), so this
-            // unifies the surface — same chevron, same drawer.
+            // The chevron lane is reserved in EVERY context (D1) — same
+            // `row_geometry` helper the effect card uses (D2), so generator
+            // slider rows can't drift from the effect card's lane math.
+            // Generators are remappable too (reshape on the per-instance
+            // graph), so the reserved lane unifies the surface — same
+            // chevron, same drawer. `author` still gates the glyph draw
+            // below and the row-id scheme.
             let author = self.context == CardContext::Author;
-            let chevron_lane = if author {
-                MAP_CHEVRON_W + DE_BUTTON_GAP
-            } else {
-                0.0
-            };
-            let slider_w = content_w
-                - MOD_LANE_GAP
-                - DE_BUTTON_SIZE * 3.0
-                - DE_BUTTON_GAP * 2.0
-                - chevron_lane;
-            // Same growth rule as the effect card (see build_effect_sliders).
-            let label_width = crate::slider::label_width_for_row(content_w);
+            let RowGeometry { label_width, slider_w } = row_geometry(content_w);
 
             self.section_header_ids.clear();
             let runs = self.section_runs();
@@ -5627,23 +5636,6 @@ mod tests {
             (height_before_any_tick - settled_height).abs() < 0.1,
             "first-configure height ({height_before_any_tick}) must already equal the fully- \
              settled height ({settled_height}) — no undercounting before any tick"
-        );
-    }
-
-    #[test]
-    fn drawer_tween_snaps_on_author_cards() {
-        // Author (graph-editor) cards are not ticked by the inspector, so they must
-        // never enter an animating state (a stalled half-open drawer would be a
-        // layout bug). Arming a mod snaps straight to full.
-        let mut panel = ParamCardPanel::new();
-        panel.set_context(CardContext::Author);
-        panel.configure(&effect_config());
-        let mut armed = effect_config();
-        armed.driver_active[0] = true;
-        panel.configure(&armed);
-        assert!(
-            !panel.drawer_height_anim[0].is_animating(),
-            "author cards snap — no tween to stall"
         );
     }
 

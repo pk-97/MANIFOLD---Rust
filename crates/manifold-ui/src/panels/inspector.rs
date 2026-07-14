@@ -2923,6 +2923,57 @@ mod tests {
         );
     }
 
+    /// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D5: the same fixture
+    /// built into a Perform-context and an Author-context panel at the SAME
+    /// rect must lay out its slider row identically — the chevron lane is
+    /// reserved in both (D1), so a Perform card's row is exactly as wide as
+    /// an Author card's at the same content width, by construction. This is
+    /// the "fundamentally not possible to drift" check: any future
+    /// context-gated row rect breaks it. Narrower in scope than a full
+    /// tree-equivalence walk (that's the `inspector_rows_fit_card_bounds_
+    /// across_widths` width-sweep test still owed, per the design doc's
+    /// P1 deliverables) — this proves the specific D1/D2 fix (the chevron
+    /// lane fork that used to make Perform and Author slider rows different
+    /// widths) rather than every possible future divergence.
+    #[test]
+    fn perform_and_author_slider_rows_are_geometry_identical() {
+        use super::super::param_card::ParamCardKind;
+        let rect = Rect::new(0.0, 0.0, 400.0, 600.0);
+
+        let config = mk_config(ParamCardKind::Effect, "Mirror", 2);
+        let param_id = config.params[0].param_id.to_string();
+
+        let mut author_tree = UITree::new();
+        let mut author_panel = InspectorCompositePanel::new();
+        author_panel.set_card_context(CardContext::Author);
+        author_panel.configure_master_effects(&[config.clone()]);
+        author_panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        author_panel.build_in_rect(&mut author_tree, rect);
+        let author_row = author_panel
+            .master_effect_mut(0)
+            .expect("author card configured")
+            .param_row_rect(&author_tree, &param_id)
+            .expect("author row built");
+
+        let mut perform_tree = UITree::new();
+        let mut perform_panel = InspectorCompositePanel::new();
+        perform_panel.configure_master_effects(&[config]);
+        perform_panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        perform_panel.build_in_rect(&mut perform_tree, rect);
+        let perform_row = perform_panel
+            .master_effect_mut(0)
+            .expect("perform card configured")
+            .param_row_rect(&perform_tree, &param_id)
+            .expect("perform row built");
+
+        assert_eq!(
+            author_row, perform_row,
+            "the same fixture at the same rect must lay out its slider row \
+             identically in both contexts (D1: the chevron lane is reserved \
+             in both, never context-gated)"
+        );
+    }
+
     /// Regression: add-effect button ids are reassigned by node index every
     /// rebuild, but each is only *set* inside its own `!collapsed`/`*_visible`
     /// build branch. When a section stops being built (tab switch, collapse),
