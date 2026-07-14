@@ -13,7 +13,6 @@
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::popup_shell;
 use super::PanelAction;
-use crate::anim::AnimF32;
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -21,14 +20,21 @@ use crate::tree::UITree;
 
 // ── Layout constants ───────────────────────────────────────────────
 
-const ITEM_HEIGHT: f32 = 24.0;
-const PADDING_H: f32 = 8.0;
+// Peter, 2026-07-14 professional pass: 24px rows / 8px padding read cramped
+// once rows lost their per-item box (see the transparent-bg_color change in
+// `build_nodes`) — 28px/12px gives labels room to breathe against the
+// container edge and the hover/checked highlight.
+const ITEM_HEIGHT: f32 = 28.0;
+const PADDING_H: f32 = 12.0;
 const PADDING_V: f32 = 4.0;
 const MIN_WIDTH: f32 = 120.0;
 const MAX_DROPDOWN_HEIGHT: f32 = 400.0;
 const SCROLL_SPEED: f32 = 3.0;
 const SEPARATOR_HEIGHT: f32 = 9.0; // pad + 1px line + pad
 const CHAR_WIDTH: f32 = 7.0; // approximate glyph width for width estimation
+/// Left inset for item label text inside its row, so it never sits flush
+/// against the hover/checked highlight's rounded edge.
+const ITEM_TEXT_INSET_X: f32 = 8.0;
 
 /// A single item in a dropdown menu.
 #[derive(Debug, Clone)]
@@ -139,16 +145,6 @@ pub struct DropdownPanel {
     /// driver. Selection lowering (`DropdownContext` → `PanelAction`) needs
     /// `UIRoot`'s cached device/resolution lists, so it stays app-side.
     pending_action: Option<DropdownAction>,
-    /// D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — a 0..1
-    /// entrance progress: `0.0` the instant `open_at` fires (small + faded),
-    /// `1.0` once settled (full size + opaque). Scale and fade are both
-    /// derived from this single value (see `build_nodes`'s use of it) rather
-    /// than two separate tweens. `AnimF32::new(1.0, ..)`'s default means a
-    /// dropdown that's never actually been opened reads as already-settled.
-    enter_anim: AnimF32,
-    /// Wall-clock timestamp `update()` last ticked from — same self-
-    /// contained-dt pattern as `ToastPanel::last_tick`.
-    last_tick: Option<std::time::Instant>,
 }
 
 impl DropdownPanel {
@@ -175,46 +171,13 @@ impl DropdownPanel {
             color_grid_cols: 0,
             color_swatch_ids: Vec::new(),
             pending_action: None,
-            enter_anim: AnimF32::new(1.0, color::MOTION_FAST_MS),
-            last_tick: None,
         }
     }
 
-    /// Advance the entrance tween by real elapsed wall-clock time and, while
-    /// still animating, rebuild the popup at the current (still-settling)
-    /// scale — this is the one place a P2 "spawn"-style effect rebuilds
-    /// nodes every animating frame rather than restyling in place (unlike
-    /// `ToastPanel::update`): the container's scale changes ITEM positions
-    /// too (they're laid out relative to `container_bounds`), and a fresh
-    /// `open()` is cheap for a dropdown's typical item count. Call every
-    /// frame from `UIRoot::update()` while `is_open()` — a no-op once
-    /// settled. D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
-    pub fn update(&mut self, tree: &mut UITree) {
-        if !self.is_open || !self.enter_anim.is_animating() {
-            self.last_tick = None;
-            return;
-        }
-        let now = std::time::Instant::now();
-        let dt_ms = self
-            .last_tick
-            .map(|t| (now - t).as_secs_f32() * 1000.0)
-            .unwrap_or(0.0)
-            .min(100.0);
-        self.last_tick = Some(now);
-        // Rebuild unconditionally, even on the settling frame where
-        // `tick_enter` returns `false` — that frame's rebuild is what paints
-        // the final (exactly 1.0 scale/alpha) settled state; skipping it
-        // would leave the popup one frame short of full size/opacity.
-        self.tick_enter(dt_ms);
-        self.build_nodes(tree);
-    }
-
-    /// Advance the underlying entrance tween by `dt_ms`. Split out from
-    /// `update` so unit tests can drive timing without building a `UITree`
-    /// (mirrors `ToastPanel::tick`). Returns `true` while still animating.
-    pub fn tick_enter(&mut self, dt_ms: f32) -> bool {
-        self.enter_anim.tick(dt_ms)
-    }
+    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// enter/exit motion). Kept as a no-op so `UIRoot::update()` can still
+    /// call it unconditionally every frame without special-casing.
+    pub fn update(&mut self, _tree: &mut UITree) {}
 
     /// Drain the action captured since the last call (set by `Overlay::on_event`).
     /// The app lowers `Selected`/`ColorSelected` against its dropdown context.
@@ -302,12 +265,6 @@ impl DropdownPanel {
         self.hovered_index = -1;
         self.scroll_offset = 0.0;
         self.is_open = true;
-        // D17 "modal/dropdown enter": restart the entrance tween on every
-        // genuine open (not just the first) — a dropdown re-opened a moment
-        // after closing pops in fresh each time, same as a toast re-firing.
-        self.enter_anim = AnimF32::new(0.0, color::MOTION_FAST_MS);
-        self.enter_anim.set_target(1.0);
-        self.last_tick = None;
 
         // Compute content dimensions.
         let content_width = self.compute_content_width();
@@ -347,7 +304,13 @@ impl DropdownPanel {
         let h = h.min(MAX_DROPDOWN_HEIGHT).min(self.screen_height);
         self.viewport_height = h - PADDING_V * 2.0;
 
-        // Edge clamping — clamp both position AND size to screen.
+        // Edge clamping — clamp both position AND size to screen. Right/
+        // bottom overflow is handled first (bottom tries flipping above the
+        // anchor), then a final `.clamp(0.0, ...)` on BOTH axes catches the
+        // left/top case too — an anchor that's itself off-screen (e.g. a
+        // trigger scrolled partly past the left edge) used to leave `x`/`y`
+        // negative here with nothing pulling them back on-screen (Peter's
+        // note-picker screenshot, 2026-07-14: menu ran off both edges).
         let w = w.min(self.screen_width);
         let mut x = anchor.x;
         let mut y = anchor.y;
@@ -363,6 +326,8 @@ impl DropdownPanel {
                 y = (self.screen_height - h).max(0.0);
             }
         }
+        x = x.clamp(0.0, (self.screen_width - w).max(0.0));
+        y = y.clamp(0.0, (self.screen_height - h).max(0.0));
 
         self.anchor = Vec2::new(x, y);
         self.container_bounds = Rect::new(x, y, w, h);
@@ -413,26 +378,9 @@ impl DropdownPanel {
         self.separator_ids.clear();
         self.color_swatch_ids.clear();
 
-        // D17 "modal/dropdown enter": scale the CONTAINER (never the
-        // full-screen scrim, which stays fixed) about its own center, 0.98→1
-        // over the entrance progress. Items below are laid out relative to
-        // this same (possibly still-shrunk) `bounds`, so they scale with it
-        // for free — no separate per-item transform.
-        let t = self.enter_anim.value().clamp(0.0, 1.0);
-        let scale = 0.98 + 0.02 * t;
-        let bounds = if (scale - 1.0).abs() > 0.0005 {
-            let full = self.container_bounds;
-            let cx = full.x + full.width * 0.5;
-            let cy = full.y + full.height * 0.5;
-            Rect::new(
-                cx - full.width * 0.5 * scale,
-                cy - full.height * 0.5 * scale,
-                full.width * scale,
-                full.height * scale,
-            )
-        } else {
-            self.container_bounds
-        };
+        // Popups appear instantly at full size/opacity (Peter, 2026-07-14 —
+        // no enter/exit motion). `bounds` is just the container rect.
+        let bounds = self.container_bounds;
 
         // Scrim + bordered container via the shared shell. The §17 overlay loop
         // lifts the container with a soft drop-shadow (it skips the scrim).
@@ -444,16 +392,6 @@ impl DropdownPanel {
         );
         self.backdrop_id = Some(shell.backdrop);
         self.root_id = Some(shell.container);
-        // Fade the container's own fill/border alpha by the same progress —
-        // items build at full opacity (a 90ms MOTION_FAST fade on the small
-        // item text is imperceptible; the container's fade is what reads).
-        if t < 0.999
-            && let Some(mut cs) = tree.get_node(shell.container).map(|n| n.style)
-        {
-            cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
-            cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
-            tree.set_style(shell.container, cs);
-        }
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.
@@ -485,21 +423,26 @@ impl DropdownPanel {
                 label
             };
 
+            // Peter, 2026-07-14: unchecked rows are TRANSPARENT, not an
+            // opaque per-row rect — the old DROPDOWN_BG fill on every row
+            // created AA seams between rows ("rows with pixel gaps"). The
+            // menu container is the only opaque surface; rows only paint
+            // on hover/press/checked.
             let item_style = UIStyle {
                 bg_color: if checked {
                     color::DROPDOWN_ITEM_SELECTED
                 } else {
-                    color::DROPDOWN_BG
+                    color::TRANSPARENT
                 },
                 hover_bg_color: if enabled {
                     color::DROPDOWN_HIGHLIGHT
                 } else {
-                    color::DROPDOWN_BG
+                    color::TRANSPARENT
                 },
                 pressed_bg_color: if enabled {
                     color::DROPDOWN_PRESSED_BG
                 } else {
-                    color::DROPDOWN_BG
+                    color::TRANSPARENT
                 },
                 text_color: if checked {
                     color::DROPDOWN_CHECK_COLOR
@@ -508,7 +451,12 @@ impl DropdownPanel {
                 },
                 font_size: color::FONT_BODY,
                 text_align: TextAlign::Left,
-                corner_radius: color::SMALL_RADIUS,
+                // Peter, 2026-07-14: MENU_ITEM_RADIUS, up from SMALL_RADIUS
+                // (2.0) — the hover/checked highlight reads as a distinct
+                // rounded chip against the flat container now that rows
+                // aren't boxed.
+                corner_radius: color::MENU_ITEM_RADIUS,
+                text_inset_x: ITEM_TEXT_INSET_X,
                 ..UIStyle::default()
             };
 
@@ -918,33 +866,102 @@ mod tests {
     }
 
     #[test]
-    fn opening_starts_the_enter_tween_faded_and_settles_to_full_opacity() {
+    fn opening_appears_instantly_at_full_size_and_opacity() {
+        // Peter, 2026-07-14: no enter/exit motion — a popup is fully sized
+        // and fully opaque on the very first frame it opens, no tween to
+        // settle over subsequent frames.
         let mut tree = UITree::new();
         let mut dd = DropdownPanel::new();
         dd.set_screen_size(1920.0, 1080.0);
 
         dd.open_context(make_items(), Vec2::new(100.0, 200.0), &mut tree);
-        assert!(dd.enter_anim.is_animating(), "entrance tween starts mid-flight");
-        let container = tree.get_node(dd.root_id.unwrap()).unwrap();
-        assert!(
-            container.style.bg_color.a < popup_shell::PopupStyle::DROPDOWN.bg.a,
-            "container starts faded: {} vs full {}",
-            container.style.bg_color.a,
-            popup_shell::PopupStyle::DROPDOWN.bg.a
-        );
-
-        // Drive the tween directly with an explicit dt (deterministic, no
-        // wall-clock sleep) — `tick_enter` is split out from `update`
-        // exactly for this, mirroring `ToastPanel::tick`.
-        dd.tick_enter(color::MOTION_FAST_MS);
-        dd.build_nodes(&mut tree);
-        assert!(!dd.enter_anim.is_animating(), "settles after a full MOTION_FAST window");
         let container = tree.get_node(dd.root_id.unwrap()).unwrap();
         assert_eq!(
             container.style.bg_color.a,
             popup_shell::PopupStyle::DROPDOWN.bg.a,
-            "settled container is back at full opacity"
+            "container is at full opacity from the first opened frame"
         );
+        assert_eq!(
+            container.bounds.width, dd.container_bounds.width,
+            "container is at full size from the first opened frame"
+        );
+
+        // `update()` is a no-op now (no tween to advance) — calling it
+        // repeatedly must not change anything.
+        dd.update(&mut tree);
+        let container = tree.get_node(dd.root_id.unwrap()).unwrap();
+        assert_eq!(container.style.bg_color.a, popup_shell::PopupStyle::DROPDOWN.bg.a);
+    }
+
+    #[test]
+    fn long_menu_opened_near_screen_edge_stays_fully_on_screen() {
+        // Peter's note-picker screenshot (2026-07-14): a long menu (the
+        // MIDI note picker opens 128 items via this same `open()` path)
+        // triggered near a screen edge ran off both the top/bottom AND the
+        // left/right edges. A 40-item menu is plenty to blow past
+        // MAX_DROPDOWN_HEIGHT and exercise the same edge-clamp + internal
+        // scroll path.
+        let mut tree = UITree::new();
+        let mut dd = DropdownPanel::new();
+        let (screen_w, screen_h) = (1920.0, 1080.0);
+        dd.set_screen_size(screen_w, screen_h);
+
+        let items: Vec<DropdownItem> =
+            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+
+        // Trigger hugging the bottom-right corner — the pathological case
+        // for both the vertical flip-above clamp and horizontal clamp.
+        let trigger = Rect::new(screen_w - 40.0, screen_h - 24.0, 40.0, 24.0);
+        dd.open(items, trigger, 120.0, &mut tree);
+
+        let b = dd.container_bounds();
+        assert!(b.x >= 0.0, "container left edge on-screen: x={}", b.x);
+        assert!(b.y >= 0.0, "container top edge on-screen: y={}", b.y);
+        assert!(
+            b.x_max() <= screen_w + 0.01,
+            "container right edge on-screen: x_max={} vs screen_w={}",
+            b.x_max(),
+            screen_w
+        );
+        assert!(
+            b.y_max() <= screen_h + 0.01,
+            "container bottom edge on-screen: y_max={} vs screen_h={}",
+            b.y_max(),
+            screen_h
+        );
+        // Content taller than the viewport scrolls internally rather than
+        // growing the container past the screen.
+        assert!(
+            dd.content_height > dd.viewport_height,
+            "40 items should overflow the capped viewport, exercising internal scroll"
+        );
+
+        // Same check, hugging the TOP-LEFT corner.
+        let mut dd2 = DropdownPanel::new();
+        dd2.set_screen_size(screen_w, screen_h);
+        let items2: Vec<DropdownItem> =
+            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let trigger2 = Rect::new(0.0, 0.0, 40.0, 24.0);
+        dd2.open(items2, trigger2, 120.0, &mut tree);
+        let b2 = dd2.container_bounds();
+        assert!(b2.x >= 0.0 && b2.y >= 0.0);
+        assert!(b2.x_max() <= screen_w + 0.01);
+        assert!(b2.y_max() <= screen_h + 0.01);
+
+        // A trigger scrolled PARTLY OFF the top-left edge (negative anchor) —
+        // the case the plain right/bottom clamp above missed before the
+        // final `.clamp(0.0, ..)` was added.
+        let mut dd3 = DropdownPanel::new();
+        dd3.set_screen_size(screen_w, screen_h);
+        let items3: Vec<DropdownItem> =
+            (0..40).map(|i| DropdownItem::new(&format!("Item {i}"))).collect();
+        let trigger3 = Rect::new(-30.0, -10.0, 40.0, 24.0);
+        dd3.open(items3, trigger3, 120.0, &mut tree);
+        let b3 = dd3.container_bounds();
+        assert!(b3.x >= 0.0, "left edge on-screen despite negative anchor: x={}", b3.x);
+        assert!(b3.y >= 0.0, "top edge on-screen despite negative anchor: y={}", b3.y);
+        assert!(b3.x_max() <= screen_w + 0.01);
+        assert!(b3.y_max() <= screen_h + 0.01);
     }
 
     #[test]
