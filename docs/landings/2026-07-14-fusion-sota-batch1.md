@@ -1,4 +1,4 @@
-# FUSION_SOTA batch 1 (P1-P3) — landed 2026-07-14 @ <merge SHA filled in post-merge>
+# FUSION_SOTA batch 1 (P1-P3) — landed 2026-07-14 @ ce6dcba8
 
 **Branch:** feat/fusion-sota · **Level reached:** L1 / target L1 (§10 — all three phases are
 pure-refactor / fault-path / instrumentation phases with no user-visible surface; each phase
@@ -33,8 +33,10 @@ Docs-index freshness test: pass after `python3 scripts/gen_docs_index.py`.
 Full crate re-verification after P3 (orchestrating session): `cargo test -p manifold-renderer
 --lib`: 1216 passed, 0 failed, 4 ignored.
 
-Full workspace sweep at landing (this file's SHA, run in the main checkout):
-<filled in below, post-merge>
+Full workspace sweep at landing (run in the main checkout at merge `ce6dcba8`):
+`cargo clippy --workspace -- -D warnings`: clean (only pre-existing Objective-C SDK deprecation
+warnings from `manifold-media`'s native decoder plugin, unrelated to this wave). `cargo nextest
+run --workspace`: 3325 tests run, 3325 passed, 12 skipped. `cargo deny check bans`: ok.
 
 ## Deviations from brief
 
