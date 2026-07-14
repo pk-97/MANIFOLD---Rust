@@ -404,24 +404,23 @@ The mechanism, read from code:
   (a cog that opens the graph editor from inside the graph editor is circular);
   header chrome presence may differ, header GEOMETRY may not. The mapping chevron
   remains the only Author extra, per Peter's directive.
-- **D7 — One width source (Peter, 2026-07-14: "The inspector should be identical,
-  width, all cards, tabs, etc. Not just identical but FUNDAMENTALLY the same
-  object in code so they can't drift or differ by design").** The editor's right
-  lane stops owning its own width policy: `Dock::editor()`'s
-  `right_range = (240.0, 560.0)` / `EDITOR_RIGHT_DEFAULT = 340.0` are DELETED and
-  the lane reads the same width constants and the same live width value as the
-  main window's inspector (`MIN_INSPECTOR_WIDTH`..`MAX_INSPECTOR_WIDTH`, default
-  500; one owner for the current width so resizing one window's inspector resizes
-  the other's). After D7, the two windows' inspectors build from the same panel
-  type, same sync data, same geometry function, same tick path, AND same width —
-  every layout-determining input has exactly one owner. The one remaining duality
-  is two panel *instances*, forced by each window owning its own `UITree` (node
-  ids are per-tree — the Change 3 ruling above; cross-tree shared state is
-  forbidden). That duality carries zero layout information, and the D5
-  equivalence test pins it: two instances, identical output, enforced by machine.
-  Consequence, stated honestly: the editor's canvas loses ~160px of default width
-  to the wider inspector lane; if that hurts on the rig, the knob to turn is the
-  SHARED default, never a per-window fork.
+- **D7 — Width is the ONE sanctioned per-window difference; the width POLICY is
+  shared.** Peter, 2026-07-14, two rulings, the second superseding the first on
+  width only: "Not just identical but FUNDAMENTALLY the same object in code so
+  they can't drift or differ by design" — then "the width can differ as the user
+  may want different widths for the editor and main page, everything else should
+  be fundamentally the same." Resolution: each window keeps its own user-set
+  width VALUE (the editor's lane and the main inspector's lane resize
+  independently), but both draw from the same width POLICY — one shared min/max
+  range (`MIN_INSPECTOR_WIDTH`..`MAX_INSPECTOR_WIDTH`; `Dock::editor()`'s
+  `right_range` narrows to nothing more restrictive than that shared range) and
+  identical layout at any given width (D3's fit rule + D5's equivalence test,
+  which already compares at the SAME rect — width being per-window is why the
+  fit rule must hold across the whole range, not at one blessed default). After
+  D7: same panel type, same sync data, same geometry function, same tick path,
+  same width policy; the two per-window facts are the width value (sanctioned,
+  user-owned) and the panel instance (forced by per-window `UITree` node ids —
+  the Change 3 ruling; carries zero layout information, pinned by D5).
 
 ### Invariants & enforcement
 
@@ -450,9 +449,9 @@ The mechanism, read from code:
 Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
 section whole + `feedback_single_source_y_layout`; restate D1–D3 + forbidden moves
 before code. Deliverables: the D2 helper; all row builders ported; D1 both-context
-lane reservation; D3 elide/min-width/chip-fit behavior; D7 width unification (delete
-`Dock::editor()`'s own right-lane range/default, read the main inspector's width
-source; negative gate: `rg -n "EDITOR_RIGHT_DEFAULT" crates/` = 0 hits); the D5
+lane reservation; D3 elide/min-width/chip-fit behavior; D7 width-policy sharing
+(the editor lane's clamp range widens to the shared `MIN_INSPECTOR_WIDTH`..
+`MAX_INSPECTOR_WIDTH`; each window keeps its own width value); the D5
 equivalence test; the width-
 sweep containment test; fixture extension covering BOTH observed failing shapes —
 an effect card with its audio-mod drawer OPEN including the eight-chip Feature
@@ -493,7 +492,7 @@ main-window-only structure); calling full `update()` on the editor root.
 4. Editor ticks the inspector; snap fork deleted (D4).
 5. Gates are tree asserts; PNGs are for Peter, never for Sonnet judgment (D5).
 6. Cog stays suppressed in Author; BUG-121 stands (D6).
-7. One width source — the editor lane reads the main inspector's width constants
-   and live value; `EDITOR_RIGHT_DEFAULT` and the editor-own `right_range` are
-   deleted, never re-forked (D7). The fit fix (D3) is the primary fix; the chevron
-   lane was never the bug, only a secondary identity violation.
+7. Width VALUE is per-window (user preference, Peter's explicit call); width
+   POLICY (min/max clamp) and layout-at-any-width are shared (D7). The fit fix
+   (D3) is the primary fix; the chevron lane was never the bug, only a secondary
+   identity violation.
