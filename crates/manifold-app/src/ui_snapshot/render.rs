@@ -327,6 +327,13 @@ pub fn render_graph_editor_to_png(
     // inspection. `false` for every existing caller (byte-identical to the
     // pre-P1 PNGs).
     open_node_picker: bool,
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2 acceptance demo: toggle this
+    // window's own `perf_hud` visible (placeholder metrics — no `ContentState`
+    // exists on this headless path) BEFORE `build_overlays_for_screen` runs
+    // below, same driver as `open_node_picker` — proves row 6's "whatever
+    // `overlay_draw` holds" claim on a SECOND overlay type. `false` for every
+    // existing caller (byte-identical to the pre-P2 PNGs).
+    open_perf_hud: bool,
 ) {
     use manifold_ui::graph_canvas::GraphCanvas;
     use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
@@ -502,7 +509,36 @@ pub fn render_graph_editor_to_png(
             screen_anchor: manifold_ui::Vec2::new(logical_w * 0.5, logical_h * 0.5),
         });
     }
+    if open_perf_hud {
+        ui_root.perf_hud.toggle();
+        ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
+            ui_fps: 60.0,
+            ui_frame_time_ms: 16.6,
+            render_fps: 60.0,
+            render_frame_time_ms: 16.6,
+            gpu_fence_wait_ms: 0.0,
+            render_target_fps: 60.0,
+            active_clips: 0,
+            preparing_clips: 0,
+            current_beat: manifold_core::Beats::ZERO,
+            current_time_secs: 0.0,
+            bpm: manifold_core::Bpm(120.0),
+            clock_source: "Internal".to_string(),
+            is_playing: false,
+            data_version: 0,
+            profiling_active: false,
+            profiling_frame_count: 0,
+        });
+    }
     ui_root.build_overlays_for_screen(logical_w, logical_h);
+    if open_perf_hud {
+        // `build_overlays_for_screen` just minted the value-label node ids
+        // `push_values` writes into (`build_at_xy`'s rows start at "—" until
+        // a values pass fills them in — the same two-step the live main
+        // window drives via `Panel::update`/`UIRoot::update()`, which this
+        // headless path never calls, so it's done explicitly here).
+        ui_root.perf_hud.push_values(&mut ui_root.tree);
+    }
 
     // Same paint order as `present_graph_editor_window` because it's the
     // SAME function: clear + canvas immediate-mode draws + the merged

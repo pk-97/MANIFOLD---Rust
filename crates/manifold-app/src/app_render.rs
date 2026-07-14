@@ -3112,21 +3112,20 @@ impl Application {
             self.needs_rebuild = true;
         }
 
-        // 6·motion. Batch-2 popup entrance tweens (browser / ableton picker /
-        // settings — `UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4). Same poll shape
-        // as `drawer_anim_active` above: these popups start their fade-in at
-        // t=0 (fully transparent background — `BrowserPopupPanel::build`) and
-        // tick the tween inside their own `update()`, but the dirty-driven
-        // renderer only re-runs `update()` while the frame stays dirty. Opening
-        // a popup dirties exactly one frame (drawing it invisible), so without
-        // this poll the fade never advances until an unrelated input re-dirties
-        // the frame — the "no background until mouseover" bug (BUG-026). Keeping
-        // needs_rebuild set while animating lets the tween settle on its own.
-        if self.ws.ui_root.browser_popup.is_animating()
-            || self.ws.ui_root.ableton_picker.is_animating()
-            || self.ws.ui_root.settings_popup.is_animating()
-        {
-            self.needs_rebuild = true;
+        // 6·motion. `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw
+        // keepalive aggregate — while any tree overlay is still animating
+        // (today: the D11 toast's enter/hold/fade), force `offscreen_dirty`
+        // so the overlay pass (gated on it, `present_all_windows`) keeps
+        // recomposing every frame instead of freezing the moment an
+        // unrelated input stops re-dirtying the frame. Supersedes the old
+        // per-popup poll here (`UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4,
+        // BUG-026's fix): the popup professional pass deleted the browser /
+        // Ableton picker / settings popups' entrance tweens, so that poll's
+        // three `is_animating()` calls were permanently `false` — dead code
+        // this replaces with the general aggregate rather than leaving in
+        // place.
+        if self.ws.ui_root.overlay_redraw_needed() {
+            self.ws.offscreen_dirty = true;
         }
 
         // 6·fire-meter. D6 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
@@ -3472,6 +3471,20 @@ impl Application {
         let Some(ws) = self.graph_editor.as_mut() else {
             return;
         };
+
+        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same aggregate the
+        // main window ORs into its own `offscreen_dirty` above (tick_and_
+        // render's step 6·motion) — one predicate, both windows, no per-
+        // window keepalive list. This window's own `UIRoot` never opens the
+        // toast today (only `self.ws.ui_root.toast.show()` is ever called),
+        // so this is currently a no-op read, kept for when it does — and
+        // this window recomposites every vsync pulse regardless (D5,
+        // cacheless), so `offscreen_dirty` isn't a redraw gate here the way
+        // it is on the main window; this OR keeps the two windows' policy
+        // identical rather than special-casing the editor's redraw path.
+        if ws.ui_root.overlay_redraw_needed() {
+            ws.offscreen_dirty = true;
+        }
 
         // Consume editor vsync signal — skip when no pulse fired.
         // (Falls through to render when there's no display link, e.g.
