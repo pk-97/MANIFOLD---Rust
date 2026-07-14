@@ -1,6 +1,6 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** IN PROGRESS · 2026-07-14 · Fable 5 (with Peter in the room) · Sonnet 5 executing
+**Status:** SHIPPED · 2026-07-14 · Fable 5 design (with Peter in the room) · Sonnet 5 executing
 P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
 `docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
 (Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
@@ -21,7 +21,13 @@ cycle-convexity check) so the two components stay separate and connect via the s
 gather the multi-region model already relies on. Real-preset wins: VoronoiPrism, StarField (both
 fold voronoi_2d in) and Glitch (folds block_displace_field into its existing 2-region split) each
 gain a member; `fusion_coverage_baseline` raised 33/55/222→33/55/225. Census multi-output family:
-3→0 refusals (both real atoms no longer refused). P7 remains.
+3→0 refusals (both real atoms no longer refused). **P7 SHIPPED**: `FUSED_EFFECT_CACHE` /
+`FUSED_GENERATOR_CACHE` / `SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to
+`Arc<T>` with owned interiors (no more `leak_params`/`leak_ports`); LRU eviction at cap replaces
+refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate
+`rg 'Box::leak' .../freeze/` returns zero hits. Canonical/bundled-preset views deliberately stay
+as they were — only fused (runtime-computed, evictable) artifacts moved. All seven phases (P1–P7)
+now shipped; the design is closed.
 **Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
 (BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
 BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing

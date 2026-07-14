@@ -404,9 +404,13 @@ fallback, `diff.rs` (can the oracle itself false-pass?), `reference.rs` golden-u
 discipline, `graph_loader.rs`'s consumption of fused defs, the segment Pending-hang path,
 and edges #3/#7 below, which no lens engaged.
 
-1. The **marker ABI** (§5) has no type-level enforcement; producer/consumer
-   drift is a silent-wrong-output class. (Mitigated by oracles that assert
-   markers, e.g. the fluidsim oracle asserts `@dispatch_count_param`.)
+1. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P1): the **marker ABI** (§5) now has
+   type-level enforcement — `freeze/markers.rs`'s `Marker` enum with `emit`/`parse`
+   as the sole wire-format implementation, both codegen/install (producer) and
+   `wgsl_compute::introspect` (consumer) compile against it. Negative gate
+   `marker_literals_live_in_one_module` proves no stray marker literal exists
+   outside `markers.rs`; `fused_wgsl_snapshot_unchanged` proves the refactor
+   changed zero emitted bytes.
 2. The **suite-parallelism GPU flake** is an eroding safety net — worth a root
    cause before trusting any future red/green signal.
 3. FIXED (2026-07-14): **Out-of-loop ≈ulp** now has one named constant pair,
@@ -435,10 +439,19 @@ and edges #3/#7 below, which no lens engaged.
    resampler-into-region remain deliberate boundaries — under-fusing by
    design. (Vec3/Vec4/Color params lifted P5; multi-output texture atoms
    — voronoi_2d, block_displace_field — lifted P6, FUSION_SOTA_DESIGN.md D4.)
-7. `leak_params`/`leak_ports`/`Box::leak` of views: bounded by cache caps +
-   distinct shapes per session, but "bounded" rests on `FUSED_CACHE_CAP`
-   stopping *insertion* while recompute-on-miss keeps leaking per miss past
-   the cap. Pathological edit-spam past 512 shapes leaks per rebuild.
-8. Segment `Pending` never resolves in test builds by design; in production a
-   worker panic refuses the key — but a *hung* worker leaves Pending forever
-   (chain renders per-card: correct, silently slower).
+7. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P7): `leak_params`/`leak_ports`/
+   `Box::leak` of views are gone — fused caches (`FUSED_EFFECT_CACHE`/
+   `FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE`) hold `Arc<T>` with owned
+   `Vec`/`String` interiors; at cap, LRU evicts the least-recently-hit entry
+   instead of refusing to insert. Negative gate: `rg 'Box::leak'
+   crates/manifold-renderer/src/node_graph/freeze/` returns zero hits
+   (`freeze_has_no_leaks`). Pathological edit-spam past 512 shapes now evicts
+   and frees instead of leaking per rebuild.
+8. FIXED (2026-07-14, FUSION_SOTA_DESIGN.md P2): segment `Pending` can no
+   longer hang forever — `SEGMENT_PENDING` carries enqueue timestamps;
+   `pump_segment_results` expires anything past `SEGMENT_COMPILE_DEADLINE`
+   (60s) into the negative cache with one log line, and a worker panic is now
+   caught (`catch_unwind`) and negative-caches the key instead of killing the
+   thread. A genuinely hung (not panicking) OS thread still can't be reaped —
+   the fix makes the CHAIN stop waiting and the state visible, not the thread
+   reclaimed.
