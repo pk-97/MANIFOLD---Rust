@@ -1,4 +1,4 @@
-# FUSION_SOTA batch 2 (P4a + P5 + P4b) — landed 2026-07-14 @ <filled in post-merge>
+# FUSION_SOTA batch 2 (P4a + P5 + P4b) — landed 2026-07-14 @ 78d897cb
 
 **Branch:** feat/fusion-sota · **Level reached:** L2 / target L2 (§10 — P4a/P4b have a
 user-visible-in-editor surface via `graph_tool fusion`'s dispatch-count delta, actually observed
@@ -50,8 +50,12 @@ Full crate re-verification after P4b (orchestrating session): `cargo test -p man
 --lib`: 1220 passed, 0 failed, 4 ignored. Freeze suite: 73 passed, 0 failed, 3 ignored. Clippy
 (`-p manifold-renderer -- -D warnings`): clean.
 
-Full workspace sweep at landing (this file's merge SHA, run in the main checkout):
-<filled in below, post-merge>
+Full workspace sweep at landing (run in the main checkout at merge `78d897cb`): `cargo clippy
+--workspace -- -D warnings`: clean (only pre-existing manifold-media Objective-C SDK deprecation
+warnings). `cargo nextest run --workspace`: 3330 tests run, 3330 passed (1 leaky), 12 skipped.
+`cargo deny check bans`: ok. Origin/main had moved (another session landed BUG-151 docs +
+popup/menu professional pass) between batch 1 and batch 2 — merged origin/main into
+feat/fusion-sota first (`f466566f`), reran the freeze suite + touched-crate clippy, then landed.
 
 ## Deviations from brief
 
