@@ -17,6 +17,7 @@
 //! perturbation, and gives the eventual codegen a known-good reference target.
 
 use super::TextureDiff;
+use super::markers::Marker;
 use super::reference::{ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade};
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
@@ -2380,9 +2381,10 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // derived-uniform region stayed unfused and this test would pass vacuously.
     let has_derived_uniform_member = fused_def.nodes.iter().any(|n| {
         n.type_id == "node.wgsl_compute"
-            && n.wgsl_source
-                .as_deref()
-                .is_some_and(|s| s.contains("// @derived_uniform_member:"))
+            && n.wgsl_source.as_deref().is_some_and(|s| {
+                s.lines()
+                    .any(|l| matches!(Marker::parse(l), Some(Marker::DerivedUniformMember { .. })))
+            })
     });
     assert!(
         has_derived_uniform_member,
@@ -2397,10 +2399,12 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // standalone atoms' 1.37 at show scale). The render diff below then proves
     // the capped kernel leaves the pool tail bit-identical to unfused.
     assert!(
-        fused_def.nodes.iter().any(|n| n
-            .wgsl_source
-            .as_deref()
-            .is_some_and(|s| s.contains("// @dispatch_count_param: n0_active_count"))),
+        fused_def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| {
+            s.lines().any(|l| matches!(
+                Marker::parse(l),
+                Some(Marker::DispatchCountParam { field }) if field == "n0_active_count"
+            ))
+        })),
         "fused particle kernel must carry the live-count dispatch marker"
     );
 
@@ -4074,13 +4078,17 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let (w, h) = (256u32, 256u32);
     let input = gradient_input_varying_alpha(&device, w, h);
 
+    // The fragment's `wgslSource` needs a `@fusion: pointwise` marker — routed
+    // through `Marker::emit` (a placeholder token, substituted below) rather
+    // than a hand-typed literal, so this fixture stays on the single-sourced
+    // grammar like every other marker-producing/consuming call site.
     let json = r#"{
         "version": 1, "name": "frag-parity", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
             { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
               "params": { "gain": { "type": "Float", "value": 1.2 } } },
             { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
-              "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
+              "wgslSource": "FUSION_MARKER\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
               "params": { "scale": { "type": "Float", "value": 0.75 } } },
             { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -4090,8 +4098,9 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
             { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
             { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
         ]
-    }"#;
-    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+    }"#
+    .replacen("FUSION_MARKER", &Marker::Fusion { kind: "pointwise".to_string() }.emit(), 1);
+    let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
     // Unfused: all three atoms dispatch; the fragment runs its synthesized kernel.
     let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");

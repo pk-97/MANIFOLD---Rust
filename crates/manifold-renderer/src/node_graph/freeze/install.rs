@@ -61,6 +61,7 @@ use manifold_core::effect_graph_def::{
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::codegen::{self, FusionRegion, InputSource, RegionNode};
+use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
@@ -276,7 +277,7 @@ pub fn fused_view_for(
     let compiled = compile_fused_view(def, base);
     FUSED_EFFECT_CACHE.with(|c| {
         let mut m = c.borrow_mut();
-        if m.len() < FUSED_CACHE_CAP {
+        if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
             m.insert(key, compiled);
         }
     });
@@ -309,7 +310,7 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGr
     let compiled = fuse_generator_def(def, &registry).map(|d| &*Box::leak(Box::new(d)));
     FUSED_GENERATOR_CACHE.with(|c| {
         let mut m = c.borrow_mut();
-        if m.len() < FUSED_CACHE_CAP {
+        if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
             m.insert(key, compiled);
         }
     });
@@ -394,10 +395,23 @@ thread_local! {
     static SEGMENT_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static SegmentView>>> =
         std::cell::RefCell::new(AHashMap::default());
     /// Keys currently in flight on the worker — dedupes enqueues across the
-    /// rebuilds that happen while a compile is pending.
-    static SEGMENT_PENDING: std::cell::RefCell<AHashSet<u64>> =
-        std::cell::RefCell::new(AHashSet::default());
+    /// rebuilds that happen while a compile is pending. Value is the enqueue
+    /// time, so [`pump_segment_results`] can expire a wedged key (D2,
+    /// FUSION_SOTA_DESIGN §2): a panic already survives via `catch_unwind` in
+    /// the worker, but a truly hung compile (infinite loop, not a panic) would
+    /// otherwise leave the key `Pending` forever.
+    static SEGMENT_PENDING: std::cell::RefCell<AHashMap<u64, std::time::Instant>> =
+        std::cell::RefCell::new(AHashMap::default());
 }
+
+/// How long a segment compile may sit `Pending` before the pump gives up
+/// waiting and negative-caches the key as `Refused`. Segment codegen is pure
+/// CPU and measured in milliseconds (§8 of the map), so 60s crossing means the
+/// worker is genuinely wedged, not just busy. A late result landing after
+/// expiry still overwrites the negative-cache entry (`pump_segment_results`'s
+/// insert path), so a slow-but-alive worker self-heals back to fused on its
+/// next successful compile.
+const SEGMENT_COMPILE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Bumped once per worker result landed by [`pump_segment_results`]. A runtime
 /// built while any of its segments were `Pending` records the generation it
@@ -453,7 +467,7 @@ fn segment_worker() -> &'static SegmentWorker {
                 while let Ok(job) = rx_job.recv() {
                     let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
                         job.cards.iter().map(|(d, v)| (d, *v)).collect();
-                    let view = compile_segment_view(&card_refs, &registry);
+                    let view = compile_segment_view_panic_safe(&card_refs, &registry);
                     if tx_res.send(SegmentResult { key: job.key, view }).is_err() {
                         return;
                     }
@@ -480,7 +494,7 @@ pub fn pump_segment_results() {
     while let Ok(res) = rx.try_recv() {
         SEGMENT_CACHE.with(|c| {
             let mut m = c.borrow_mut();
-            if m.len() < FUSED_CACHE_CAP {
+            if m.len() < FUSED_CACHE_CAP || m.contains_key(&res.key) {
                 m.insert(res.key, res.view);
             }
         });
@@ -495,6 +509,39 @@ pub fn pump_segment_results() {
                 v.def.nodes.len(),
             );
         }
+    }
+    expire_stale_segment_pending(std::time::Instant::now());
+}
+
+/// Expire `Pending` segment keys that have outlived [`SEGMENT_COMPILE_DEADLINE`]
+/// into the negative cache (D2): the chain stops waiting on a wedged worker and
+/// renders per-card, visibly (one log line per expired key, not per-frame spam —
+/// the key is removed from `SEGMENT_PENDING` so it can't re-fire). Only walks
+/// the pending map when it's non-empty, so this is zero-cost in the steady
+/// state. `now` is injected so the unit test doesn't need a real 60s sleep.
+fn expire_stale_segment_pending(now: std::time::Instant) {
+    let expired: Vec<u64> = SEGMENT_PENDING.with(|p| {
+        let pending = p.borrow();
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        pending
+            .iter()
+            .filter(|(_, enqueued)| now.saturating_duration_since(**enqueued) >= SEGMENT_COMPILE_DEADLINE)
+            .map(|(k, _)| *k)
+            .collect()
+    });
+    for key in expired {
+        SEGMENT_PENDING.with(|p| {
+            p.borrow_mut().remove(&key);
+        });
+        SEGMENT_CACHE.with(|c| {
+            let mut m = c.borrow_mut();
+            if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
+                m.insert(key, None);
+            }
+        });
+        eprintln!("[freeze] chain segment compile timed out — rendering per-card …");
     }
 }
 
@@ -511,7 +558,9 @@ pub fn fused_segment_view_for(
             None => SegmentLookup::Refused,
         };
     }
-    let newly_queued = SEGMENT_PENDING.with(|p| p.borrow_mut().insert(key));
+    let newly_queued = SEGMENT_PENDING
+        .with(|p| p.borrow_mut().insert(key, std::time::Instant::now()))
+        .is_none();
     // Tests must stay deterministic: no worker thread, no 4K gate measurement
     // contending with the GPU-bound suite. Un-seeded segments stay Pending
     // forever (per-card render — today's path); fused paths are exercised via
@@ -545,6 +594,42 @@ pub fn fused_segment_view_for(
     }
 }
 
+// Test-only panic injection for `compile_segment_view` (D2, FUSION_SOTA_DESIGN
+// §2): armed by `segment_worker_panic_refuses_key` to prove the worker survives
+// a panicking compile. Compiled only under `#[cfg(test)]` — no production code
+// path can reach it.
+#[cfg(test)]
+thread_local! {
+    static PANIC_HOOK_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn arm_segment_compile_panic_hook_for_test(armed: bool) {
+    PANIC_HOOK_ARMED.with(|c| c.set(armed));
+}
+
+/// Panic-contained wrapper around [`compile_segment_view`] (D2): a malformed
+/// segment definition or a codegen bug that panics mid-compile must refuse the
+/// in-flight key (negative-caches as `Refused` via the `None` result) rather
+/// than kill the `chain-fusion-worker` thread — every other pending/future
+/// segment this session still gets serviced. Not a substitute for a genuine
+/// hang (Rust can't kill a wedged thread); the pump-side deadline in
+/// `pump_segment_results` handles that case.
+fn compile_segment_view_panic_safe(
+    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    registry: &PrimitiveRegistry,
+) -> Option<&'static SegmentView> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_segment_view(cards, registry)
+    })) {
+        Ok(view) => view,
+        Err(_) => {
+            eprintln!("[freeze] chain segment compile panicked — refusing key, worker continues");
+            None
+        }
+    }
+}
+
 /// Compile one segment: concat the member cards, fuse the seam-spanning regions
 /// the partition finds, retarget bindings. Pure CPU codegen — the fuse decision
 /// is structural (the region partition), so there is no GPU measurement. Runs on
@@ -553,6 +638,10 @@ pub(crate) fn compile_segment_view(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<&'static SegmentView> {
+    #[cfg(test)]
+    if PANIC_HOOK_ARMED.with(|c| c.get()) {
+        panic!("compile_segment_view: test panic hook armed (segment_worker_panic_refuses_key)");
+    }
     let defs: Vec<&EffectGraphDef> = cards.iter().map(|(d, _)| *d).collect();
     let concat = super::segment::concat_defs(&defs)?;
 
@@ -1468,7 +1557,8 @@ pub(crate) fn fuse_canonical_def_masked(
                 // targets: both are dynamic, so baking either thrashes the
                 // pipeline cache on every value change (the slider-drag stutter).
                 if !controlled.contains(field.as_str()) && !bound_fields.contains(field.as_str()) {
-                    markers.push_str(&format!("// @static_param: {field}\n"));
+                    markers.push_str(&Marker::StaticParam { field: field.clone() }.emit());
+                    markers.push('\n');
                 }
             }
             if markers.is_empty() {
@@ -2378,12 +2468,12 @@ mod tests {
         let wgsl = node.wgsl_source.as_deref().expect("fused source");
         // gain_a is member 1 (field n1_gain) and is the binding target → uniform.
         assert!(
-            !wgsl.contains("// @static_param: n1_gain"),
+            !wgsl.contains(&Marker::StaticParam { field: "n1_gain".to_string() }.emit()),
             "a bound (live) param must never be baked static:\n{wgsl}"
         );
         // gain_b is member 2 (field n2_gain), unbound + unwired → still bakes.
         assert!(
-            wgsl.contains("// @static_param: n2_gain"),
+            wgsl.contains(&Marker::StaticParam { field: "n2_gain".to_string() }.emit()),
             "an unbound constant param should still bake (perf win preserved):\n{wgsl}"
         );
     }
@@ -2493,5 +2583,64 @@ mod tests {
             "surviving-node binding keeps its enum convert — the real node still \
              declares a real Enum param"
         );
+    }
+
+    /// D2: a `Pending` segment key that outlives `SEGMENT_COMPILE_DEADLINE`
+    /// expires into the negative cache (`Refused`) instead of waiting forever
+    /// for a wedged worker. Injects `now` past the deadline rather than
+    /// sleeping 60s for real.
+    #[test]
+    fn segment_pending_expires_to_refused() {
+        // A key unlikely to collide with any other test's segment content key
+        // sharing this thread-local (thread_local state persists across tests
+        // run on the same libtest worker thread).
+        const TEST_KEY: u64 = 0xF00D_BEEF_DEAD_0001;
+        let enqueued_at = std::time::Instant::now() - std::time::Duration::from_secs(120);
+        SEGMENT_PENDING.with(|p| {
+            p.borrow_mut().insert(TEST_KEY, enqueued_at);
+        });
+        SEGMENT_CACHE.with(|c| {
+            c.borrow_mut().remove(&TEST_KEY);
+        });
+
+        expire_stale_segment_pending(std::time::Instant::now());
+
+        SEGMENT_PENDING.with(|p| {
+            assert!(
+                !p.borrow().contains_key(&TEST_KEY),
+                "expired key must leave the pending map"
+            );
+        });
+        SEGMENT_CACHE.with(|c| {
+            assert!(
+                matches!(c.borrow().get(&TEST_KEY), Some(None)),
+                "expired key must negative-cache as Refused"
+            );
+        });
+
+        // Cleanup — don't leak test state into whatever test runs next on
+        // this thread.
+        SEGMENT_CACHE.with(|c| {
+            c.borrow_mut().remove(&TEST_KEY);
+        });
+    }
+
+    /// D2: a panic mid-compile must refuse the in-flight key (return `None`,
+    /// same as any other refusal) rather than propagate and kill the
+    /// `chain-fusion-worker` thread. Exercises the panic-contained wrapper
+    /// directly (tests never feed the real worker thread, per the segment
+    /// cache's test convention) via the `#[cfg(test)]`-only injection hook.
+    #[test]
+    fn segment_worker_panic_refuses_key() {
+        arm_segment_compile_panic_hook_for_test(true);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_segment_view_panic_safe(&[], &registry())
+        }));
+        arm_segment_compile_panic_hook_for_test(false);
+
+        let view = result.expect(
+            "compile_segment_view_panic_safe must itself never unwind — it is the containment",
+        );
+        assert!(view.is_none(), "a panicking compile refuses (None), it doesn't propagate");
     }
 }

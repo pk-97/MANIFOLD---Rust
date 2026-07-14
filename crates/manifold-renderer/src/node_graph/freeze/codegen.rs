@@ -17,6 +17,7 @@
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
+use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::parameters::{ParamDef, ParamType};
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, NodeInput, NodeOutput, PortType};
 use std::fmt::Write as _;
@@ -1616,13 +1617,14 @@ fn is_top_level_decl(line: &str) -> bool {
 /// a region with no derived-uniform members — byte-identical to prior codegen.
 fn emit_derived_uniform_markers(out: &mut String, region: &FusionRegion<'_>) {
     for e in 0..region.camera_externals {
-        writeln!(out, "// @camera_external: camera_ext_{e}").unwrap();
+        writeln!(out, "{}", Marker::CameraExternal { name: format!("camera_ext_{e}") }.emit())
+            .unwrap();
     }
     for (i, node) in region.nodes.iter().enumerate() {
         if node.derived_uniforms.is_empty() {
             continue;
         }
-        let words: usize = node
+        let words: u32 = node
             .derived_uniforms
             .iter()
             .map(|d| {
@@ -1637,20 +1639,13 @@ fn emit_derived_uniform_markers(out: &mut String, region: &FusionRegion<'_>) {
         } else {
             format!("n{i}_{first_dname}")
         };
-        match node.derived_camera_ext {
-            Some(e) => writeln!(
-                out,
-                "// @derived_uniform_member: {first_field} words={words} {} camera_ext_{e}",
-                node.type_id
-            )
-            .unwrap(),
-            None => writeln!(
-                out,
-                "// @derived_uniform_member: {first_field} words={words} {}",
-                node.type_id
-            )
-            .unwrap(),
-        }
+        let marker = Marker::DerivedUniformMember {
+            first_field,
+            words,
+            type_id: node.type_id.to_string(),
+            camera_port: node.derived_camera_ext.map(|e| format!("camera_ext_{e}")),
+        };
+        writeln!(out, "{}", marker.emit()).unwrap();
     }
 }
 
@@ -1965,29 +1960,28 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         } else {
-            writeln!(
-                out,
-                "@group(0) @binding({binding}) var samp: sampler; // @sampler_address_mode: {}",
-                region.sampler_address_mode
-            )
-            .unwrap();
+            let marker =
+                Marker::SamplerAddressMode { mode: region.sampler_address_mode.to_string() };
+            writeln!(out, "@group(0) @binding({binding}) var samp: sampler; {}", marker.emit())
+                .unwrap();
         }
         binding += 1;
     }
     if in_place.is_none() {
-        out.push_str("// @fused_output\n");
+        writeln!(out, "{}", Marker::FusedOutput.emit()).unwrap();
         writeln!(
             out,
             "@group(0) @binding({binding}) var<storage, read_write> dst: array<{out_ty}>;"
         )
         .unwrap();
     }
-    // `// @dispatch_count_param: <field>` — node.wgsl_compute reads this marker
-    // and sizes the dispatch grid from the named uniform field's live value
-    // (min'd with capacity) instead of the array length. cs_main carries the
-    // matching in-kernel guard.
+    // `@dispatch_count_param` — node.wgsl_compute reads this marker and sizes
+    // the dispatch grid from the named uniform field's live value (min'd with
+    // capacity) instead of the array length. cs_main carries the matching
+    // in-kernel guard.
     if let Some((mi, pname)) = region.dispatch_count_field {
-        writeln!(out, "// @dispatch_count_param: n{mi}_{pname}").unwrap();
+        let marker = Marker::DispatchCountParam { field: format!("n{mi}_{pname}") };
+        writeln!(out, "{}", marker.emit()).unwrap();
     }
     out.push('\n');
 
@@ -2348,10 +2342,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         } else {
+            let marker =
+                Marker::SamplerAddressMode { mode: region.sampler_address_mode.to_string() };
             writeln!(
                 out,
-                "@group(0) @binding({next_binding}) var samp: sampler; // @sampler_address_mode: {}",
-                region.sampler_address_mode
+                "@group(0) @binding({next_binding}) var samp: sampler; {}",
+                marker.emit()
             )
             .unwrap();
         }
@@ -3409,7 +3405,7 @@ mod gpu_tests {
             "external input bound read-only:\n{}",
             g.wgsl
         );
-        assert!(g.wgsl.contains("// @fused_output"), "fresh output tagged @fused_output");
+        assert!(g.wgsl.contains(&Marker::FusedOutput.emit()), "fresh output tagged @fused_output");
         assert!(
             g.wgsl.contains("var<storage, read_write> dst:"),
             "fresh dst output array declared:\n{}",
