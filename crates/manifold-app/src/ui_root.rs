@@ -1063,6 +1063,31 @@ impl UIRoot {
         self.built && self.current_overlay_open_mask() != self.overlay_open_snapshot
     }
 
+    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw keepalive as ONE
+    /// aggregate predicate, OR-ed into each window's own `offscreen_dirty` by
+    /// its caller (never a per-window keepalive list). Replaces the old
+    /// pattern of each animation source hand-wiring its own poll into the
+    /// main tick — a missed wire there was a frozen animation in exactly one
+    /// window, the redraw-side sibling of BUG-151.
+    ///
+    /// Membership re-derived at P2 impl via `rg "is_animating|tick\(" crates/
+    /// manifold-ui/src/panels/`, not assumed from the design doc's original
+    /// "toast timers and any remaining overlay tween" guess: the popup
+    /// professional pass already stubbed `browser_popup`/`ableton_picker`/
+    /// `settings_popup`'s `is_animating()` to a hardcoded `false` (their own
+    /// doc comments say so — "no tween to settle"/"no tween to advance"), and
+    /// `dropdown` never had one. Calling those permanently-false stubs here
+    /// would be dead weight this predicate can never observe going `true` —
+    /// so they're deliberately NOT OR-ed in; reviving any of their tweens is
+    /// a one-line addition to this function, not a design change. The one
+    /// live member today is the toast: its `Transient` keeps progressing
+    /// through enter/hold/fade after `show()` fires and needs a tick each
+    /// frame to detect completion — exactly the "hand-wired keepalive" this
+    /// predicate exists to centralize.
+    pub fn overlay_redraw_needed(&self) -> bool {
+        self.toast.is_animating()
+    }
+
     /// Build every open overlay into the tree, bottom→top, recording each one's
     /// node range for the draw pass. A modal that requests a dim background gets
     /// a full-screen scrim node first (and a click on it dismisses the modal,
@@ -3179,6 +3204,49 @@ fn trace_kind(event: &UIEvent) -> &'static str {
         UIEvent::DragBegin { .. } => "DragBegin",
         UIEvent::DragEnd { .. } => "DragEnd",
         _ => "other",
+    }
+}
+
+/// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2: `UIRoot::overlay_redraw_needed()`
+/// unit tests — proves the aggregate's wiring to its one live member (the
+/// toast; see that function's doc comment for why the popup professional
+/// pass's now-permanently-`false` `is_animating()` stubs aren't OR-ed in).
+#[cfg(test)]
+mod overlay_redraw_needed_tests {
+    use super::*;
+
+    #[test]
+    fn false_on_a_fresh_root_with_nothing_open() {
+        let ui = UIRoot::new();
+        assert!(!ui.overlay_redraw_needed());
+    }
+
+    /// The named per-member proof from the phase brief: an animating overlay
+    /// (here, the toast just fired) flips the aggregate `true`.
+    #[test]
+    fn toast_animating_flips_the_aggregate_true() {
+        let mut ui = UIRoot::new();
+        assert!(!ui.overlay_redraw_needed(), "idle toast contributes nothing");
+
+        ui.toast.show("Undo");
+        assert!(
+            ui.overlay_redraw_needed(),
+            "a freshly-fired toast is still ramping in — the aggregate must \
+             see it as needing a keepalive redraw"
+        );
+    }
+
+    /// Once the toast's whole enter/hold/fade timeline elapses, the
+    /// aggregate drops back to `false` — the keepalive isn't permanent.
+    #[test]
+    fn settles_back_to_false_once_the_toast_finishes() {
+        let mut ui = UIRoot::new();
+        ui.toast.show("Redo");
+        assert!(ui.overlay_redraw_needed());
+
+        // Comfortably longer than the toast's total enter+hold+fade timeline.
+        ui.toast.tick(10_000.0);
+        assert!(!ui.overlay_redraw_needed(), "toast settled — no more keepalive needed");
     }
 }
 

@@ -165,6 +165,20 @@ impl ToastPanel {
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         self.transient.tick(dt_ms)
     }
+
+    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: whether this overlay still
+    /// needs a per-frame tick to progress (enter/hold/fade) or to detect its
+    /// own completion. Named to match the sibling popups' `is_animating()`
+    /// (`browser_popup`/`ableton_picker`/`settings_popup`), which the popup
+    /// professional pass stubbed permanently `false` (their entrance tweens
+    /// are gone) — this one is still live, since the transient keeps
+    /// progressing through its hold/fade segments after `show()` fires.
+    /// Equivalent to `is_open()` (both read `self.transient.progress()`), but
+    /// named for the redraw-keepalive call site's intent, not the overlay
+    /// driver's open/close-edge one.
+    pub fn is_animating(&self) -> bool {
+        self.transient.progress().is_some()
+    }
 }
 
 fn with_alpha(c: Color32, a: f32) -> Color32 {
@@ -281,6 +295,23 @@ mod tests {
         toast.tick(FADE_MS * 0.5);
         assert_eq!(toast.alpha(), 0.0);
         assert!(!toast.is_open(), "closed once the whole timeline elapses");
+    }
+
+    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6/P2: `is_animating()` is the
+    /// sole live member of `UIRoot::overlay_redraw_needed()`'s aggregate —
+    /// this is the "animating overlay ⇒ predicate true" proof the phase
+    /// brief asks for, at the panel level (the aggregate itself is a
+    /// one-line OR over this).
+    #[test]
+    fn is_animating_true_while_showing_false_once_idle() {
+        let mut toast = ToastPanel::new();
+        assert!(!toast.is_animating(), "idle before any show()");
+
+        toast.show("Undo");
+        assert!(toast.is_animating(), "just fired — still has enter/hold/fade to run");
+
+        toast.tick(ENTER_MS + HOLD_MS + FADE_MS); // run the whole timeline out
+        assert!(!toast.is_animating(), "settled back to idle once the timeline elapses");
     }
 
     #[test]

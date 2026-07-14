@@ -83,6 +83,12 @@ pub fn run(args: &[String]) {
     // screen` seam the live window uses, so the PNG proves BUG-151 fixed on
     // the real headless path.
     let want_open_picker = args.iter().any(|a| a == "--open-picker");
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2 acceptance demo: `editor`-scene
+    // only (checked at the dispatch site below) — toggles the perf HUD open
+    // before the render, through the SAME `build_overlays_for_screen` seam
+    // `--open-picker` uses, proving row 6's "whatever overlay_draw holds"
+    // claim on a SECOND overlay type (the P1 demo covered the browser popup).
+    let want_open_perf_hud = args.iter().any(|a| a == "--open-perf-hud");
     let interact = arg_value(args, "--interact");
     let script_path = arg_value(args, "--script");
     // P0.0 evidence flag (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): seed BOTH scroll
@@ -135,7 +141,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None, None, None, None);
         }
         run_graph_preset("Mirror");
-        run_editor_preset("FluidSim2D", want_dump, false);
+        run_editor_preset("FluidSim2D", want_dump, false, false);
         return;
     }
 
@@ -152,7 +158,7 @@ pub fn run(args: &[String]) {
     // only (see `fixtures::generator_editor_fixture`).
     if scene == "editor" {
         let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSim2D".to_string());
-        run_editor_preset(&preset, want_dump, want_open_picker);
+        run_editor_preset(&preset, want_dump, want_open_picker, want_open_perf_hud);
         return;
     }
 
@@ -458,7 +464,12 @@ fn run_graph_preset(preset: &str) {
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
 /// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
-fn run_editor_preset(preset: &str, want_dump: bool, open_node_picker: bool) {
+fn run_editor_preset(
+    preset: &str,
+    want_dump: bool,
+    open_node_picker: bool,
+    open_perf_hud: bool,
+) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
     let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
         eprintln!(
@@ -498,6 +509,7 @@ fn run_editor_preset(preset: &str, want_dump: bool, open_node_picker: bool) {
         want_dump.then(|| dir.join("editor.tree.json")).as_deref(),
         &[],
         open_node_picker,
+        open_perf_hud,
     );
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
@@ -574,6 +586,7 @@ fn run_gltf_editor(want_dump: bool) {
         want_dump.then(|| dir.join("gltfeditor.tree.json")).as_deref(),
         &[],
         false,
+        false,
     );
     println!("ui-snap: wrote {}", png.display());
 }
@@ -629,6 +642,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         before_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join(format!("{scene_name}.before.tree.json"))).as_deref(),
         &[],
+        false,
         false,
     );
     println!("ui-snap: wrote {}", before_png.display());
@@ -716,6 +730,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         after_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join(format!("{scene_name}.after.tree.json"))).as_deref(),
         &[],
+        false,
         false,
     );
     println!("ui-snap: wrote {}", after_png.display());
@@ -886,6 +901,7 @@ fn run_group_demo(want_dump: bool) {
         want_dump.then(|| dir.join("groupdemo-expanded.tree.json")).as_deref(),
         &[],
         false,
+        false,
     );
     println!("ui-snap: wrote {}", expanded_png.display());
 
@@ -905,6 +921,7 @@ fn run_group_demo(want_dump: bool) {
         collapsed_png.to_str().expect("utf-8 path"),
         want_dump.then(|| dir.join("groupdemo-collapsed.tree.json")).as_deref(),
         &[10],
+        false,
         false,
     );
     println!("ui-snap: wrote {}", collapsed_png.display());

@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
 | BUG-156 | **fluidsim3d-4k-perf-regression-suspect-bug066-fix** | FluidSim3D no longer holds smooth 60FPS at 4K — regressed, and the change under suspicion is the BUG-066 fix (`eebac94d`), which resized volume-node dispatch grids from the legacy 8³ workgroup to the codegen 4³ workgroup (8x more dispatched groups per volume kernel). Reported by Peter 2026-07-14. Not investigated. HIGH (live-rig performance). |
 | BUG-155 | **camera-rotation-params-missing-smooth-360-wrap** | Camera orbit/tilt/rotation params jump at the wrap boundary instead of wrapping smoothly through 0/360 degrees, so a saw wave can't drive a clean continuous spin. Reported by Peter 2026-07-14. Root cause unknown — may share a cause with BUG-096. MED. |
 | BUG-154 | **removing-group-with-slider-bound-nodes-leaves-stale-effect-card** | Deleting a node group containing a node bound to an effect card slider doesn't warn or remove the stale slider — group deletion likely skips the card-binding cleanup that single-node deletion runs. Reported by Peter 2026-07-14. MED. |
@@ -138,6 +139,17 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-157 (editor-perf-hud-never-ticked-shows-dashes-forever) — the graph-editor window's own `perf_hud` overlay, if opened, would render permanently blank "—" values — LOW (currently unreachable: no keyboard/UI path opens it on the editor's own `UIRoot` today)
+**Status:** OPEN — found 2026-07-14 during `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P2, while building the phase's perf-HUD-in-editor acceptance demo. Not fixed this session — out of scope for P2 (redraw-keepalive aggregate), and currently unreachable in the live app so it blocks nothing.
+
+**Symptom** — `PerfHudPanel::build_at_xy` seeds every value row with the placeholder text `"—"`; real numbers only appear once `PerfHudPanel::push_values(tree)` runs (called via `Panel::update` → `UIRoot::update()` on the MAIN window's `self.ws.ui_root`, `app_render.rs:3087`). The graph editor's own `UIRoot` (`self.graph_editor.as_mut().ui_root`, a separate instance) never gets `.update()` called on it — and even if it did, `UIRoot::update()` early-returns on `if !self.built`, which the editor's `UIRoot` never sets (it's built via `build_overlays_for_screen`, never the main-window-only `UIRoot::build()`). So if the editor's own `perf_hud` were ever toggled visible, it would render its full chrome (background, rows, graph bars) but every value would sit at `"—"` forever, un-ticking.
+
+**Root cause** — two compounding gaps: (1) no call site anywhere in `manifold-app` invokes `perf_hud.push_values()` outside the `built`-gated `UIRoot::update()` path; (2) the editor's `UIRoot` is permanently `!built` by design (P1's `build_overlays_for_screen` wrapper deliberately avoids the main-window-only `build()`), so the one existing route to `push_values` can never fire for it.
+
+**Currently unreachable, so LOW:** confirmed via `rg "toggle_performance_hud"` — the only call site is `input_host.rs`'s `AppInputHost`, constructed exclusively with `self.ws.ui_root` (the main window) inside `window_input.rs`'s `is_primary`-gated `InputHandler` shortcut-dispatch block. There is no keyboard shortcut, button, or other path that opens the perf HUD on the *editor's own* `UIRoot` instance today — this was only surfaced by directly calling `ui_root.perf_hud.toggle()` in the P2 headless demo harness (`ui_snapshot/render.rs`'s new `open_perf_hud` param), which also had to call `push_values` explicitly to get real numbers into the demo PNG (`docs/landings/EDITOR_WINDOW_UNIFICATION_P2_perf_hud_in_editor.png`).
+
+**Fix shape** — either (a) give the editor window its own perf-HUD toggle path plus a per-frame `ws.ui_root.perf_hud.push_values(&mut ws.ui_root.tree)` call in `present_graph_editor_window` (gated on `is_visible()`, no `built` dependency needed since it's a targeted call, not the whole `update()`), if a live editor-window perf HUD is ever wanted; or (b) leave it unreachable and out of scope until that's asked for. Low priority either way — no live path exercises it.
 
 ### BUG-156 (fluidsim3d-4k-perf-regression-suspect-bug066-fix) — FluidSim3D no longer holds smooth 60FPS at 4K — HIGH, reported by Peter 2026-07-14
 **Status:** OPEN — found not fixed 2026-07-14, reported by Peter during live-rig use.
