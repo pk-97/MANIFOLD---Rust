@@ -81,9 +81,21 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(kind: WorkspaceKind) -> Self {
+        let mut ui_root = UIRoot::new();
+        if kind == WorkspaceKind::GraphEditor {
+            // BUG-121 root fix: the editor window's inspector column is the
+            // authoring surface (right-lane cards + mapping drawer), never
+            // the perform-surface's own cards — set once here so every card
+            // this instance builds (`InspectorCompositePanel::reconcile_cards`
+            // / `configure_gen_params`) draws the mapping-drawer chevron
+            // instead of the cog/perform chrome.
+            ui_root.inspector.set_card_context(
+                manifold_ui::panels::param_card::CardContext::Author,
+            );
+        }
         Self {
             kind,
-            ui_root: UIRoot::new(),
+            ui_root,
             ui_offscreen: None,
             #[cfg(target_os = "macos")]
             ui_display_link: None,

@@ -2015,12 +2015,71 @@ impl Application {
                 manifold_core::effect_graph_def::EffectGraphDef,
                 crate::text_input::SavePresetDestination,
             )> = None;
+            // BUG-121 root fix: the mapping-drawer chevron (Author-context
+            // cards only, now that the editor's inspector carries
+            // `CardContext::Author`) resolves to `OpenCardMapping`, but
+            // nothing ever opened the popover it names — `ui_bridge::
+            // dispatch` just marks it handled as a no-op. Resolve the
+            // watched target's current reshape here, before `ed` borrows
+            // `self.graph_editor` mutably (`watched_full_reshape` needs
+            // `&self`); the loop below anchors it off the clicked card's
+            // own chevron rect and actually opens the popover.
+            let pending_mapping_open = actions[editor_card_seg_start..]
+                .iter()
+                .find_map(|a| match a {
+                    PanelAction::OpenCardMapping(pid) => {
+                        Some((pid.to_string(), self.watched_full_reshape(pid.as_ref())))
+                    }
+                    _ => None,
+                });
+            let (screen_w, screen_h) = self
+                .graph_editor_window_id
+                .and_then(|wid| self.window_registry.get(&wid))
+                .map(|ws| {
+                    let s = ws.window.scale_factor();
+                    let sz = ws.window.inner_size();
+                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
+                })
+                .unwrap_or((1280.0, 720.0));
             if let Some(ed) = self.graph_editor.as_mut() {
                 let content_tx = self.content_tx.as_ref().unwrap();
                 for action in &actions[editor_card_seg_start..] {
                     match action {
                         PanelAction::EffectCardClicked(ei) => retarget_effect = Some(*ei),
                         PanelAction::GenCardClicked => retarget_generator = true,
+                        PanelAction::OpenCardMapping(param_id) => {
+                            if let Some((_, Some((label, min, max, invert, curve, scale, offset)))) =
+                                pending_mapping_open
+                                    .as_ref()
+                                    .filter(|(pid, _)| pid == param_id.as_ref())
+                                && let Some(anchor) = ed
+                                    .ui_root
+                                    .inspector
+                                    .mapping_chevron_rect(&ed.ui_root.tree, param_id.as_ref())
+                            {
+                                self.editor_mapping_popover.open(
+                                    param_id.to_string(),
+                                    label.clone(),
+                                    *min,
+                                    *max,
+                                    *invert,
+                                    crate::ui_translate::macro_curve_to_ui(*curve),
+                                    *scale,
+                                    *offset,
+                                    None,
+                                    None,
+                                    manifold_ui::graph_canvas::Rect::new(
+                                        anchor.x,
+                                        anchor.y,
+                                        anchor.width,
+                                        anchor.height,
+                                    ),
+                                    manifold_ui::graph_canvas::Rect::new(
+                                        0.0, 0.0, screen_w, screen_h,
+                                    ),
+                                );
+                            }
+                        }
                         _ => {}
                     }
                     let result = crate::ui_bridge::dispatch(

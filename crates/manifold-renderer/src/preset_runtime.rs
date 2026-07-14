@@ -272,6 +272,14 @@ pub enum JsonGeneratorLoadError {
     /// The preset's JSON contains no `system.final_output` node, or it
     /// isn't wired.
     MissingFinalOutput,
+    /// BUG-125: the preset's JSON contains MORE THAN ONE `system.final_output`
+    /// node. The tracked-output resolution (`graph.nodes().find(...)`) is a
+    /// single, unordered lookup — a second `final_output` would be picked
+    /// nondeterministically per process, and the per-frame canvas-target
+    /// rebind (`replace_texture_2d`) would silently overwrite whichever one
+    /// lost with the host canvas's format, up to a real GPU command-buffer
+    /// fault. Rejected at load rather than silently picked.
+    MultipleFinalOutputs { count: usize },
     /// A primitive declared an `Array<T>` output but
     /// `EffectNode::array_output_capacity` returned `None` for that port.
     UnsizedArrayOutput { node_type: String, port: String },
@@ -300,6 +308,13 @@ impl std::fmt::Display for JsonGeneratorLoadError {
             Self::MissingFinalOutput => write!(
                 f,
                 "preset has no `{FINAL_OUTPUT_TYPE_ID}` node, or it is not wired"
+            ),
+            Self::MultipleFinalOutputs { count } => write!(
+                f,
+                "preset has {count} `{FINAL_OUTPUT_TYPE_ID}` nodes — exactly one is \
+                 required; the tracked-output resolution can't disambiguate more than \
+                 one (see BUG-125). Wire extra outputs to a non-FinalOutput dead-end \
+                 sink and inspect via `dump_textures_all` instead."
             ),
             Self::UnsizedArrayOutput { node_type, port } => write!(
                 f,
@@ -2637,6 +2652,19 @@ impl PresetRuntime {
             .find(|inst| inst.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID)
             .map(|inst| inst.id)
             .ok_or(JsonGeneratorLoadError::MissingGeneratorInput)?;
+        // BUG-125: `.find()` over the graph's unordered node map is only safe
+        // when at most one node matches — count first so a second
+        // `final_output` is rejected loudly at load instead of one of the
+        // two being picked nondeterministically per process.
+        let final_output_count = graph
+            .nodes()
+            .filter(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
+            .count();
+        if final_output_count > 1 {
+            return Err(JsonGeneratorLoadError::MultipleFinalOutputs {
+                count: final_output_count,
+            });
+        }
         let final_output_id = graph
             .nodes()
             .find(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
@@ -5921,6 +5949,37 @@ mod generator_runtime_tests {
         ));
         assert!(
             matches!(err, JsonGeneratorLoadError::MissingFinalOutput),
+            "got {err:?}"
+        );
+    }
+
+    /// BUG-125: a generator JSON with TWO `system.final_output` nodes used to
+    /// have its tracked output resolved via `.find()` over an unordered
+    /// `AHashMap`, picking one nondeterministically per process and silently
+    /// overwriting the loser's texture with the canvas format at render
+    /// time. Rejected loudly at load instead.
+    #[test]
+    fn dual_final_output_is_rejected_at_load() {
+        let json = r#"{
+            "version": 1,
+            "name": "Bad",
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input" },
+                { "id": 1, "typeId": "node.uv_field" },
+                { "id": 2, "typeId": "system.final_output" },
+                { "id": 3, "typeId": "system.final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let err = unwrap_err(PresetRuntime::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        ));
+        assert!(
+            matches!(err, JsonGeneratorLoadError::MultipleFinalOutputs { count: 2 }),
             "got {err:?}"
         );
     }

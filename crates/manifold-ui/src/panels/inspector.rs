@@ -3,7 +3,7 @@ use super::layer_chrome::LayerChromePanel;
 use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
-use super::param_card::{ParamCardConfig, ParamCardPanel};
+use super::param_card::{CardContext, ParamCardConfig, ParamCardPanel};
 use super::{InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
 use crate::color;
@@ -159,6 +159,14 @@ pub struct InspectorCompositePanel {
     /// panel reuse on the layer id.
     layer_effects_scope: Option<LayerId>,
 
+    /// Chrome context applied to every card this panel owns (Perform on the
+    /// main window's inspector, Author on the graph-editor window's — set
+    /// once by the host at construction, per `ParamCardPanel::set_context`'s
+    /// doc comment). Stored here (not just pushed to existing cards) so a
+    /// freshly-created card picks it up too — `reconcile_cards` and
+    /// `configure_gen_params` apply it to every card they build.
+    card_context: CardContext,
+
     // ── Tabs ──
     /// The single scope currently shown. Drives the section-visibility bools
     /// below (only the active scope renders). Mirrors the timeline selection;
@@ -273,6 +281,7 @@ impl InspectorCompositePanel {
             master_dying: Vec::new(),
             layer_dying: Vec::new(),
             layer_effects_scope: None,
+            card_context: CardContext::Perform,
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),
@@ -562,7 +571,8 @@ impl InspectorCompositePanel {
 
     pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
         let existing = std::mem::take(&mut self.master_effects);
-        self.master_effects = Self::reconcile_cards(existing, configs, &mut self.master_dying);
+        self.master_effects =
+            Self::reconcile_cards(existing, configs, &mut self.master_dying, self.card_context);
     }
 
     pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig], scope: Option<&LayerId>) {
@@ -580,7 +590,8 @@ impl InspectorCompositePanel {
             self.layer_effects_scope = scope.cloned();
         }
         let existing = std::mem::take(&mut self.layer_effects);
-        self.layer_effects = Self::reconcile_cards(existing, configs, &mut self.layer_dying);
+        self.layer_effects =
+            Self::reconcile_cards(existing, configs, &mut self.layer_dying, self.card_context);
     }
 
     pub fn configure_gen_params(
@@ -600,10 +611,45 @@ impl InspectorCompositePanel {
                 .take()
                 .filter(|p| p.owning_layer_id() == layer_id.as_ref());
             let mut panel = reused.unwrap_or_default();
+            panel.set_context(self.card_context);
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
             panel
         });
+    }
+
+    /// Set the chrome context applied to every card this panel owns —
+    /// `CardContext::Author` for the graph-editor window's inspector
+    /// instance, `CardContext::Perform` (the default) for the main window's.
+    /// Set once by the host at construction (mirrors
+    /// `ParamCardPanel::set_context`'s doc comment); applies immediately to
+    /// every card currently held (including dying ones, so an in-flight
+    /// collapse doesn't flash back to Perform chrome) and every card built
+    /// afterward via `reconcile_cards` / `configure_gen_params`.
+    pub fn set_card_context(&mut self, context: CardContext) {
+        self.card_context = context;
+        for card in self
+            .master_effects
+            .iter_mut()
+            .chain(self.layer_effects.iter_mut())
+            .chain(self.gen_params.iter_mut())
+            .chain(self.master_dying.iter_mut())
+            .chain(self.layer_dying.iter_mut())
+        {
+            card.set_context(context);
+        }
+    }
+
+    /// Screen-space rect of the mapping-drawer chevron for `param_id`,
+    /// searched across every card this panel owns (master/layer effects,
+    /// generator). `None` when no card currently exposes that param as a
+    /// mappable row (wrong context, not built yet, or param unknown).
+    pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
+        self.master_effects
+            .iter()
+            .chain(self.layer_effects.iter())
+            .chain(self.gen_params.iter())
+            .find_map(|card| card.mapping_chevron_rect(tree, param_id))
     }
 
     /// Reconcile the existing card panels against the new configs, **reusing** a
@@ -626,6 +672,7 @@ impl InspectorCompositePanel {
         mut existing: Vec<ParamCardPanel>,
         configs: &[ParamCardConfig],
         dying: &mut Vec<ParamCardPanel>,
+        card_context: CardContext,
     ) -> Vec<ParamCardPanel> {
         let reconciled = configs
             .iter()
@@ -637,6 +684,7 @@ impl InspectorCompositePanel {
                 }
                 None => {
                     let mut card = ParamCardPanel::default();
+                    card.set_context(card_context);
                     card.configure(cfg);
                     card.fire_spawn_pop();
                     card
@@ -2792,6 +2840,55 @@ mod tests {
                 "gen-card node {i} must route to GenParam on the Layer tab, got {target:?}",
             );
         }
+    }
+
+    /// BUG-121 host-level regression: a graph-editor-window inspector
+    /// (`set_card_context(Author)`, mirroring `Workspace::new`'s wiring)
+    /// must draw a resolvable mapping-drawer chevron for a mappable param —
+    /// and a main-window inspector (default `Perform`) must not. Guards
+    /// against the exact live gap this bug shipped with: `set_context`
+    /// itself worked (covered by `param_card.rs`'s own unit tests), but no
+    /// production host ever called it, so the drawer was unreachable
+    /// app-wide despite the widget code being correct in isolation.
+    #[test]
+    fn author_context_host_draws_resolvable_mapping_chevron() {
+        use super::super::param_card::ParamCardKind;
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        let mut config = mk_config(ParamCardKind::Effect, "Mirror", 2);
+        config.params[1].mappable = true;
+        let mappable_id = config.params[1].param_id.to_string();
+
+        // Author-context host (the graph-editor window's inspector).
+        let mut author_tree = UITree::new();
+        let mut author_panel = InspectorCompositePanel::new();
+        author_panel.set_card_context(CardContext::Author);
+        author_panel.configure_master_effects(&[config.clone()]);
+        author_panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        author_panel.build(&mut author_tree, &layout);
+        assert!(
+            author_panel
+                .mapping_chevron_rect(&author_tree, &mappable_id)
+                .is_some(),
+            "Author-context host must draw a resolvable mapping chevron"
+        );
+
+        // Perform-context host (the main window's inspector, the default).
+        let mut perform_tree = UITree::new();
+        let mut perform_panel = InspectorCompositePanel::new();
+        perform_panel.configure_master_effects(&[config]);
+        perform_panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        perform_panel.build(&mut perform_tree, &layout);
+        assert!(
+            perform_panel
+                .mapping_chevron_rect(&perform_tree, &mappable_id)
+                .is_none(),
+            "Perform-context host must never draw the mapping chevron"
+        );
     }
 
     /// Regression: add-effect button ids are reassigned by node index every
