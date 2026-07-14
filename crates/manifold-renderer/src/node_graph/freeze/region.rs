@@ -3928,7 +3928,7 @@ mod audit {
             manifold_core::preset_def::PresetKind::Effect,
         ) {
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
-                let json = serde_json::to_string(view.canonical_def).unwrap();
+                let json = serde_json::to_string(&view.canonical_def).unwrap();
                 census_json(&json);
                 preset_count += 1;
             }
@@ -4123,7 +4123,7 @@ mod audit {
             manifold_core::preset_def::PresetKind::Effect,
         ) {
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
-                defs.push(view.canonical_def.clone());
+                defs.push((*view.canonical_def).clone());
             }
         }
         for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
@@ -4178,7 +4178,7 @@ mod audit {
         for name in ["DepthOfField", "Watercolor", "Bloom"] {
             let type_id = manifold_core::PresetTypeId::new(name);
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
-                let json = serde_json::to_string(view.canonical_def).unwrap();
+                let json = serde_json::to_string(&view.canonical_def).unwrap();
                 explain_preset(name, &json, &registry);
             } else {
                 eprintln!("=== {name}: NO LOADED VIEW ===");
@@ -4193,7 +4193,7 @@ mod audit {
         eprintln!("=== EFFECT PRESETS ===");
         for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
             if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
-                let json = serde_json::to_string(view.canonical_def).unwrap();
+                let json = serde_json::to_string(&view.canonical_def).unwrap();
                 audit_one(type_id.as_str(), &json, &registry);
             }
         }

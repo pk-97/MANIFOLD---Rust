@@ -1024,7 +1024,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
                 continue;
             }
         };
-        let fused_ms = match time_def(fused_view.canonical_def, w, h, "auto-cg-fused-timed") {
+        let fused_ms = match time_def(&fused_view.canonical_def, w, h, "auto-cg-fused-timed") {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: fused build");
@@ -1233,7 +1233,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
         if is_gen {
             match install::fused_generator_def_for(&def) {
                 Some(fused) => {
-                    attribute_def(registry, device, &sampler, fused, &format!("{name} — fused"));
+                    attribute_def(registry, device, &sampler, &fused, &format!("{name} — fused"));
                 }
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
             }
@@ -1246,7 +1246,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
                     registry,
                     device,
                     &sampler,
-                    view.canonical_def,
+                    &view.canonical_def,
                     &format!("{name} — fused"),
                 ),
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),

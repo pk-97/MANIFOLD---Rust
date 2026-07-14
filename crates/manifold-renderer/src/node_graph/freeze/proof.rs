@@ -1034,7 +1034,7 @@ fn every_fused_preset_executes_one_frame() {
         let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
             continue;
         };
-        let Some(fused) = super::install::fuse_canonical_def(base.canonical_def, &registry) else {
+        let Some(fused) = super::install::fuse_canonical_def(&base.canonical_def, &registry) else {
             continue; // no fusable region — nothing to validate
         };
         fused_count += 1;
@@ -1885,7 +1885,7 @@ fn watercolor_inloop_chain_fusion_matches_unfused() {
         "Watercolor",
     ))
     .expect("Watercolor view");
-    let def = base.canonical_def;
+    let def = &*base.canonical_def;
 
     let fused = super::install::fuse_canonical_def(def, &registry)
         .expect("Watercolor fuses")
@@ -2033,7 +2033,7 @@ fn fusion_coverage_baseline() {
             let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
                 continue;
             };
-            let Ok(flat) = manifold_core::flatten::flatten_groups(base.canonical_def) else {
+            let Ok(flat) = manifold_core::flatten::flatten_groups(&base.canonical_def) else {
                 continue;
             };
             let regions = super::region::partition_regions(&flat, &registry);
@@ -2155,7 +2155,7 @@ fn every_fused_generator_executes_one_frame() {
         fused_count += 1;
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let mut g = PresetRuntime::from_def_with_device(
-                fused_def.clone(),
+                (*fused_def).clone(),
                 &registry,
                 device.arc(),
                 w,

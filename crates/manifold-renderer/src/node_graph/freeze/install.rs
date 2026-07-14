@@ -49,6 +49,7 @@
 //! - This is "freeze = render-only binary, graph = source" (the §12 framing).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use ahash::{AHashMap, AHashSet};
@@ -65,7 +66,7 @@ use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::parameters::{ParamType, ParamValue};
 use crate::node_graph::param_binding::ParamConvert;
 use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry};
 
@@ -115,9 +116,9 @@ pub fn should_render_fused(is_watched: bool) -> bool {
 /// same door edited shapes use. `None` for any effect whose canonical graph has
 /// no fusable region. Startup `tune_all` calls this, warming the canonical
 /// entries; the live gate fills edited entries on demand.
-pub fn fused_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
+pub fn fused_view_by_id(id: &PresetTypeId) -> Option<Arc<LoadedPresetView>> {
     let base = crate::node_graph::loaded_preset_view_by_id(id)?;
-    fused_view_for(base.canonical_def, base)
+    fused_view_for(&base.canonical_def, base)
 }
 
 /// Fuse an arbitrary `canonical_def` (shipped, edited, or created) carrying the
@@ -161,11 +162,10 @@ fn fuse_view_parts(
         retarget,
         ..
     } = fused;
-    let def_static: &'static EffectGraphDef = Box::leak(Box::new(fused_def));
     Some(LoadedPresetView {
         type_id: type_id.clone(),
-        canonical_def: def_static,
-        bindings: Box::leak(bindings.into_boxed_slice()),
+        canonical_def: Arc::new(fused_def),
+        bindings,
         skip_mode,
         // Carry the full retarget map so the chain builder can repoint a
         // per-instance user binding (off-def, invisible to the content-keyed
@@ -236,28 +236,102 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
     }
 }
 
-/// Leak-guard cap on each content cache. The cached values are CPU codegen
-/// artifacts (a `LoadedPresetView` / fused `EffectGraphDef` — WGSL text + def
-/// structure, a few KB), NOT GPU pipelines: the pipeline lives in the chain
-/// executor / generator, bounded by the recycled per-layer chain pool. So the
-/// only thing growing here is small CPU memory, one entry per *distinct* edited
-/// shape — a handful in any real authoring session. The cap exists only to bound
-/// a pathological edit-spam session (since values are `Box::leak`'d `&'static`,
-/// matching the canonical fused views, they can't be reclaimed). Past the cap we
-/// stop *inserting* and recompute on miss (still correct, just uncached) rather
-/// than leak without limit. A real LRU would need Arc-valued views threaded
-/// through the whole `&'static LoadedPresetView` plumbing — deferred with the
-/// background-compile step.
+/// Cap on each content cache (effect view / generator def / segment view). The
+/// cached values are CPU codegen artifacts (a `LoadedPresetView` / fused
+/// `EffectGraphDef` — WGSL text + def structure, a few KB), NOT GPU pipelines:
+/// the pipeline lives in the chain executor / generator, bounded by the
+/// recycled per-layer chain pool. So the only thing bounded here is small CPU
+/// memory, one entry per *distinct* edited shape.
+///
+/// FUSION_SOTA_DESIGN D5: values are `Arc`-owned now (not a leaked
+/// `&'static`), so past the cap the cache evicts the least-recently-hit entry
+/// instead of refusing to insert — an evicted `Arc`'s memory genuinely frees
+/// once every clone (the render path never holds one past a single chain
+/// build/rebuild) drops. Raising this cap doesn't remove the leak class it
+/// used to bound (rejected in the design) — it isn't a leak class anymore.
 const FUSED_CACHE_CAP: usize = 512;
+
+/// Bounded, LRU-evicting content-keyed cache — the shape every fused-artifact
+/// cache in this module shares (effect view / generator def / segment view).
+/// Same precedent as the chain pool's `last_used_frame` + eviction
+/// (`docs/EFFECT_CHAIN_LIFECYCLE.md`): a monotonic tick recorded per access
+/// instead of a frame counter (this cache is hit at chain-rebuild time, an
+/// editing-time event, not every frame — there's no frame counter to reuse
+/// here), least-recently-*hit* eviction instead of a time-based idle grace (a
+/// codegen cache has no "the operator muted this and may come back" story —
+/// the only failure mode being bounded is pathological edit-spam, so recency
+/// alone is the right signal).
+struct LruCache<V> {
+    entries: AHashMap<u64, V>,
+    last_hit: AHashMap<u64, u64>,
+    tick: u64,
+    cap: usize,
+}
+
+impl<V: Clone> LruCache<V> {
+    fn new(cap: usize) -> Self {
+        Self {
+            entries: AHashMap::default(),
+            last_hit: AHashMap::default(),
+            tick: 0,
+            cap,
+        }
+    }
+
+    /// Look up `key`, bumping its recency on a hit so a hot entry survives
+    /// eviction even under edit-spam on other content.
+    fn get(&mut self, key: u64) -> Option<V> {
+        let v = self.entries.get(&key)?.clone();
+        self.tick += 1;
+        self.last_hit.insert(key, self.tick);
+        Some(v)
+    }
+
+    /// Insert (or refresh) `value` at `key`. A refresh of an existing key
+    /// never evicts (P2's at-cap refresh fix, still correct under LRU — this
+    /// supersedes it: a key already present just gets a new value + a bumped
+    /// tick). A genuinely new key at cap evicts the single least-recently-hit
+    /// entry first — D5's replacement for "stop inserting past the cap".
+    fn insert(&mut self, key: u64, value: V) {
+        if !self.entries.contains_key(&key)
+            && self.entries.len() >= self.cap
+            && let Some(evict_key) = self.last_hit.iter().min_by_key(|(_, t)| **t).map(|(k, _)| *k)
+        {
+            self.entries.remove(&evict_key);
+            self.last_hit.remove(&evict_key);
+        }
+        self.tick += 1;
+        self.last_hit.insert(key, self.tick);
+        self.entries.insert(key, value);
+    }
+
+    /// Drop `key` outright. Test-only: used by the segment-pending-expiry
+    /// test to reset state between test runs sharing this thread_local.
+    #[cfg(test)]
+    fn remove(&mut self, key: u64) {
+        self.entries.remove(&key);
+        self.last_hit.remove(&key);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: u64) -> bool {
+        self.entries.contains_key(&key)
+    }
+}
 
 thread_local! {
     /// Content-keyed fused-effect-view cache. `None` is cached too (negative
     /// cache) so a non-fusable shape isn't recompiled every rebuild.
-    static FUSED_EFFECT_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static LoadedPresetView>>> =
-        std::cell::RefCell::new(AHashMap::default());
+    static FUSED_EFFECT_CACHE: std::cell::RefCell<LruCache<Option<Arc<LoadedPresetView>>>> =
+        std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Generator twin — values are fused defs (generators compile via `from_def`).
-    static FUSED_GENERATOR_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static EffectGraphDef>>> =
-        std::cell::RefCell::new(AHashMap::default());
+    static FUSED_GENERATOR_CACHE: std::cell::RefCell<LruCache<Option<Arc<EffectGraphDef>>>> =
+        std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
 }
 
 /// On-demand fused view for ANY effect shape, keyed by the def's structural
@@ -266,21 +340,13 @@ thread_local! {
 /// for an edited def these still address inner nodes by stable NodeId, and the
 /// fuse retargets them onto the fused nodes (refusing, → `None` → unfused, if one
 /// would strand). Selection reads only this; the blocking is just memoize-on-miss.
-pub fn fused_view_for(
-    def: &EffectGraphDef,
-    base: &LoadedPresetView,
-) -> Option<&'static LoadedPresetView> {
+pub fn fused_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
     let key = def_content_key(def);
-    if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow().get(&key).copied()) {
+    if let Some(cached) = FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
     let compiled = compile_fused_view(def, base);
-    FUSED_EFFECT_CACHE.with(|c| {
-        let mut m = c.borrow_mut();
-        if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
-            m.insert(key, compiled);
-        }
-    });
+    FUSED_EFFECT_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
     compiled
 }
 
@@ -288,32 +354,24 @@ pub fn fused_view_for(
 /// skip mode to carry. No device, no UI state, no thread assumption — the unit
 /// that relocates to a background worker later. `None` when the def has no
 /// fusable region or a binding would strand.
-fn compile_fused_view(
-    def: &EffectGraphDef,
-    base: &LoadedPresetView,
-) -> Option<&'static LoadedPresetView> {
+fn compile_fused_view(def: &EffectGraphDef, base: &LoadedPresetView) -> Option<Arc<LoadedPresetView>> {
     let registry = PrimitiveRegistry::with_builtin();
     let fused =
-        fuse_view_parts(def, base.bindings, &base.type_id, base.skip_mode, &registry, None)?;
-    Some(Box::leak(Box::new(fused)))
+        fuse_view_parts(def, &base.bindings, &base.type_id, base.skip_mode, &registry, None)?;
+    Some(Arc::new(fused))
 }
 
 /// Generator twin of [`fused_view_for`]: a generator carries its modulation
 /// bindings inside `def.preset_metadata.bindings`, so fusing is self-contained
 /// (no separate `base`). Content-keyed, compile-on-miss, negative-cached.
-pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGraphDef> {
+pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<Arc<EffectGraphDef>> {
     let key = def_content_key(def);
-    if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow().get(&key).copied()) {
+    if let Some(cached) = FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().get(key)) {
         return cached;
     }
     let registry = PrimitiveRegistry::with_builtin();
-    let compiled = fuse_generator_def(def, &registry).map(|d| &*Box::leak(Box::new(d)));
-    FUSED_GENERATOR_CACHE.with(|c| {
-        let mut m = c.borrow_mut();
-        if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
-            m.insert(key, compiled);
-        }
-    });
+    let compiled = fuse_generator_def(def, &registry).map(Arc::new);
+    FUSED_GENERATOR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
     compiled
 }
 
@@ -332,12 +390,12 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGr
 // failure — negative-caches and the chain stays per-card forever (never-worse).
 // ===========================================================================
 
-/// Fused view of one chain segment. Leaked `&'static` like every fused
-/// artifact (bounded by [`FUSED_CACHE_CAP`]).
+/// Fused view of one chain segment. `Arc`-owned like every fused artifact
+/// (bounded + LRU-evicted by [`FUSED_CACHE_CAP`] / [`LruCache`], D5).
 pub struct SegmentView {
     /// The fused concatenated def — an ordinary Source→…→FinalOutput effect
     /// def, spliced into the chain ONCE in place of the member cards' splices.
-    pub def: &'static EffectGraphDef,
+    pub def: EffectGraphDef,
     /// Per-card static bindings (same order as the segment's cards), already
     /// namespaced (`c{i}.`) and retargeted onto the fused nodes. Each card's
     /// `EffectSlot` resolves its own slice against the segment splice, so
@@ -353,7 +411,7 @@ pub struct SegmentView {
 /// Lookup outcome for a segment this frame.
 pub enum SegmentLookup {
     /// Compiled and spliceable — render through the fused segment.
-    Ready(&'static SegmentView),
+    Ready(Arc<SegmentView>),
     /// Codegen in flight on the worker — render per-card, a later rebuild
     /// swaps in.
     Pending,
@@ -392,8 +450,8 @@ pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u6
 thread_local! {
     /// Content-keyed segment cache (content thread). `Some` = ready winner,
     /// `None` = refused (negative cache).
-    static SEGMENT_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static SegmentView>>> =
-        std::cell::RefCell::new(AHashMap::default());
+    static SEGMENT_CACHE: std::cell::RefCell<LruCache<Option<Arc<SegmentView>>>> =
+        std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
     /// Keys currently in flight on the worker — dedupes enqueues across the
     /// rebuilds that happen while a compile is pending. Value is the enqueue
     /// time, so [`pump_segment_results`] can expire a wedged key (D2,
@@ -431,7 +489,7 @@ struct SegmentJob {
 
 struct SegmentResult {
     key: u64,
-    view: Option<&'static SegmentView>,
+    view: Option<Arc<SegmentView>>,
 }
 
 struct SegmentWorker {
@@ -492,23 +550,18 @@ pub fn pump_segment_results() {
     let worker = segment_worker();
     let rx = worker.rx.lock().expect("segment worker rx poisoned");
     while let Ok(res) = rx.try_recv() {
-        SEGMENT_CACHE.with(|c| {
-            let mut m = c.borrow_mut();
-            if m.len() < FUSED_CACHE_CAP || m.contains_key(&res.key) {
-                m.insert(res.key, res.view);
-            }
-        });
-        SEGMENT_PENDING.with(|p| {
-            p.borrow_mut().remove(&res.key);
-        });
-        SEGMENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(v) = res.view {
+        if let Some(v) = &res.view {
             eprintln!(
                 "[freeze] chain segment ready: {} cards fused into {} nodes",
                 v.card_bindings.len(),
                 v.def.nodes.len(),
             );
         }
+        SEGMENT_CACHE.with(|c| c.borrow_mut().insert(res.key, res.view));
+        SEGMENT_PENDING.with(|p| {
+            p.borrow_mut().remove(&res.key);
+        });
+        SEGMENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     expire_stale_segment_pending(std::time::Instant::now());
 }
@@ -535,12 +588,7 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
         SEGMENT_PENDING.with(|p| {
             p.borrow_mut().remove(&key);
         });
-        SEGMENT_CACHE.with(|c| {
-            let mut m = c.borrow_mut();
-            if m.len() < FUSED_CACHE_CAP || m.contains_key(&key) {
-                m.insert(key, None);
-            }
-        });
+        SEGMENT_CACHE.with(|c| c.borrow_mut().insert(key, None));
         eprintln!("[freeze] chain segment compile timed out — rendering per-card …");
     }
 }
@@ -552,7 +600,7 @@ pub fn fused_segment_view_for(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
 ) -> SegmentLookup {
     let key = segment_key(cards);
-    if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow().get(&key).copied()) {
+    if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
             Some(view) => SegmentLookup::Ready(view),
             None => SegmentLookup::Refused,
@@ -618,7 +666,7 @@ pub(crate) fn arm_segment_compile_panic_hook_for_test(armed: bool) {
 fn compile_segment_view_panic_safe(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
-) -> Option<&'static SegmentView> {
+) -> Option<Arc<SegmentView>> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         compile_segment_view(cards, registry)
     })) {
@@ -637,7 +685,7 @@ fn compile_segment_view_panic_safe(
 pub(crate) fn compile_segment_view(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
-) -> Option<&'static SegmentView> {
+) -> Option<Arc<SegmentView>> {
     #[cfg(test)]
     if PANIC_HOOK_ARMED.with(|c| c.get()) {
         panic!("compile_segment_view: test panic hook armed (segment_worker_panic_refuses_key)");
@@ -710,7 +758,7 @@ pub(crate) fn compile_segment_view(
                 if let ParamTarget::Node { node_id, param } = &b.target {
                     nb.target = ParamTarget::Node {
                         node_id: NodeId::new(format!("{prefix}{}", node_id.as_str())),
-                        param,
+                        param: param.clone(),
                     };
                 }
                 nb
@@ -728,11 +776,11 @@ pub(crate) fn compile_segment_view(
     }
 
     let FusedDef { def, retarget, .. } = fused;
-    Some(Box::leak(Box::new(SegmentView {
-        def: Box::leak(Box::new(def)),
+    Some(Arc::new(SegmentView {
+        def,
         card_bindings,
         retarget,
-    })))
+    }))
 }
 
 /// The production-fallback chain as one def: each card swapped for its
@@ -743,11 +791,11 @@ pub(crate) fn compile_segment_view(
 pub(crate) fn seed_segment_cache_for_test(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
-) -> Option<&'static SegmentView> {
+) -> Option<Arc<SegmentView>> {
     let view = compile_segment_view(cards, registry);
     let key = segment_key(cards);
     SEGMENT_CACHE.with(|c| {
-        c.borrow_mut().insert(key, view);
+        c.borrow_mut().insert(key, view.clone());
     });
     view
 }
@@ -770,7 +818,7 @@ pub(crate) fn seed_segment_cache_for_test(
 /// `None` for any generator whose canonical graph has no fusable region, or whose
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
-pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<&'static EffectGraphDef> {
+pub fn fused_generator_def_by_id(id: &PresetTypeId) -> Option<Arc<EffectGraphDef>> {
     let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
     fused_generator_def_for(&def)
@@ -868,10 +916,12 @@ fn retarget_bindings(
         if let ParamTarget::Node { node_id, param } = &b.target {
             let key = (node_id.as_str().to_string(), (*param).to_string());
             if let Some((fused_id, field)) = retarget.get(&key) {
-                let field_static: &'static str = Box::leak(field.clone().into_boxed_str());
                 nb.target = ParamTarget::Node {
                     node_id: fused_id.clone(),
-                    param: field_static,
+                    // Owned, not leaked (D5): `ParamTarget::Node::param` is
+                    // `Cow` — a per-fuse field name owns its `String` instead
+                    // of leaking one per fuse-build.
+                    param: std::borrow::Cow::Owned(field.clone()),
                 };
                 nb.convert = convert_for_fused_field(nb.convert);
             } else if !surviving.contains(node_id.as_str()) {
@@ -1288,31 +1338,36 @@ pub(crate) fn fuse_canonical_def_masked(
         // `emit_derived_uniform_markers` in codegen.rs / `introspect` in
         // `primitives/wgsl_compute.rs`).
         let mut camera_ext_producers: Vec<(u32, String)> = Vec::new();
+        // FUSION_SOTA_DESIGN P7 (D5): `RegionNode<'a>` is already
+        // lifetime-generic, so the params/inputs/outputs it borrows off each
+        // constructed `node` don't need `'static` — they only need to outlive
+        // this region's `codegen::generate_fused` call below. The old code
+        // leaked (`leak_params`/`leak_ports`/the substituted body) because
+        // `node: Box<dyn EffectNode>` would otherwise drop at the end of each
+        // loop iteration while `region_nodes` (built across iterations) still
+        // borrowed from it. Fix: keep every member's `node` alive in
+        // `node_keepalive` for the region's whole codegen call instead of
+        // leaking. Pass 1 does every "may bail to unfused" check (order is
+        // irrelevant — a bail aborts the whole function regardless of which
+        // member triggered it) and stashes the per-member owned side-data;
+        // pass 2 (below, once `node_keepalive` has no more pushes coming)
+        // builds `region_nodes` borrowing straight off it.
+        struct BuiltMember {
+            body: std::borrow::Cow<'static, str>,
+            derived_camera_ext: Option<usize>,
+        }
+        let mut node_keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> =
+            Vec::with_capacity(all_members.len());
+        let mut built: Vec<BuiltMember> = Vec::with_capacity(all_members.len());
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::node_graph::freeze::region::configured_construct(registry, doc_node)?;
             // Specialization tokens baked from the def's static params (classify
-            // already gated binding-targeted / control-wired ones). A substituted
-            // body is leaked like the params/ports below — one-time at fuse-build.
-            let body: &str =
-                match crate::node_graph::freeze::region::substituted_body(node.as_ref(), doc_node)?
-                {
-                    std::borrow::Cow::Borrowed(b) => b,
-                    std::borrow::Cow::Owned(s) => Box::leak(s.into_boxed_str()),
-                };
-            let inputs: Vec<InputSource> = member
-                .inputs
-                .iter()
-                .map(|ri| match ri {
-                    RegionInput::External(e) => InputSource::External(*e),
-                    RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
-                    RegionInput::MemberPort(doc, port) => {
-                        InputSource::NodeOutput(NodeInstanceId(*doc), port.clone())
-                    }
-                    RegionInput::Unwired => InputSource::Unwired,
-                    RegionInput::Virtual(ci) => InputSource::Virtual(*ci),
-                })
-                .collect();
+            // already gated binding-targeted / control-wired ones).
+            // `substituted_body` already returns `Cow<'static, str>` (the
+            // `Borrowed` arm is a compile-time WGSL const; the `Owned` arm is
+            // a per-fuse-formatted `String`) — own it, no leak needed.
+            let body = crate::node_graph::freeze::region::substituted_body(node.as_ref(), doc_node)?;
             let derived = node.derived_uniforms();
             // D7/P0: a member with declared derived uniforms must have a
             // registered recompute or the whole region bails to unfused — the
@@ -1358,22 +1413,41 @@ pub(crate) fn fuse_canonical_def_masked(
                     None => None,
                 }
             };
+            built.push(BuiltMember { body, derived_camera_ext });
+            node_keepalive.push(node);
+        }
+        // Pass 2: `node_keepalive` has every member's node, fully populated —
+        // no more pushes, so borrowing off it (and off `built`) for the rest
+        // of this region's codegen is sound.
+        for (idx, member) in all_members.iter().enumerate() {
+            let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
+            let node = &node_keepalive[idx];
+            let inputs: Vec<InputSource> = member
+                .inputs
+                .iter()
+                .map(|ri| match ri {
+                    RegionInput::External(e) => InputSource::External(*e),
+                    RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
+                    RegionInput::MemberPort(doc, port) => {
+                        InputSource::NodeOutput(NodeInstanceId(*doc), port.clone())
+                    }
+                    RegionInput::Unwired => InputSource::Unwired,
+                    RegionInput::Virtual(ci) => InputSource::Virtual(*ci),
+                })
+                .collect();
             region_nodes.push(RegionNode {
                 node_id: NodeInstanceId(member.doc_id),
                 fusion_kind: node.fusion_kind(),
-                body,
-                params: leak_params(node.parameters()),
+                body: built[idx].body.as_ref(),
+                params: node.parameters(),
                 inputs,
                 input_access: member.input_access.clone(),
-                // Leaked so the buffer codegen path can read each Array port's
-                // element ChannelSpecs after `node` drops. Texture regions ignore
-                // these. One-time at fuse-build, cached &'static, so the leak is bounded.
-                node_inputs: leak_ports(node.inputs()),
-                node_outputs: leak_ports(node.outputs()),
+                node_inputs: node.inputs(),
+                node_outputs: node.outputs(),
                 node_includes: node.wgsl_includes(),
-                derived_uniforms: derived,
+                derived_uniforms: node.derived_uniforms(),
                 type_id: doc_node.type_id.clone(),
-                derived_camera_ext,
+                derived_camera_ext: built[idx].derived_camera_ext,
                 output_storage: resolve_output_storage(doc_node, node.as_ref()),
                 stencil_fetch: node.stencil_fetch(),
                 quantize_f16: member.quantize_f16,
@@ -1877,23 +1951,6 @@ fn effective_param_vec4(
     }
 }
 
-/// Leak a node's param-def slice to `'static`. The slice is already `&'static`
-/// for converted atoms (the `primitive!` macro emits a `const`), but it's
-/// borrowed through the boxed node — copy the slice out so the `RegionNode`
-/// can hold it for the codegen call. Bounded leak (one per atom per fused view).
-fn leak_params(params: &[ParamDef]) -> &'static [ParamDef] {
-    let owned: Vec<ParamDef> = params.to_vec();
-    Box::leak(owned.into_boxed_slice())
-}
-
-/// Leak a node's port defs to `&'static` so a [`RegionNode`] can carry them past
-/// the constructed node's drop (the buffer codegen reads Array element specs from
-/// them). One-time at fuse-build, the result is cached `&'static`, so bounded.
-fn leak_ports(ports: &[crate::node_graph::ports::NodePort]) -> &'static [crate::node_graph::ports::NodePort] {
-    let owned: Vec<crate::node_graph::ports::NodePort> = ports.to_vec();
-    Box::leak(owned.into_boxed_slice())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1963,6 +2020,46 @@ mod tests {
         );
     }
 
+    /// FUSION_SOTA_DESIGN D5: at cap, `LruCache` evicts the single
+    /// least-recently-*hit* entry rather than refusing the insert — the
+    /// replacement for the old "stop inserting past `FUSED_CACHE_CAP`"
+    /// behavior, now safe because values are `Arc`-owned (an eviction's
+    /// `Arc` frees for real, unlike the old leaked `&'static` statics).
+    #[test]
+    fn lru_cache_evicts_least_recently_hit_at_cap() {
+        let mut cache: LruCache<u32> = LruCache::new(2);
+        cache.insert(1, 10);
+        cache.insert(2, 20);
+        assert_eq!(cache.len(), 2);
+        // Touch key 1 so it's more recently hit than key 2.
+        assert_eq!(cache.get(1), Some(10));
+        // Cache is at cap; inserting a third, genuinely new key must evict
+        // the least-recently-hit entry — key 2, never touched since insert.
+        cache.insert(3, 30);
+        assert_eq!(cache.len(), 2, "cap must not be exceeded");
+        assert!(cache.contains_key(1), "recently-hit key survives eviction");
+        assert!(!cache.contains_key(2), "least-recently-hit key is evicted");
+        assert!(cache.contains_key(3), "the new insert is present");
+    }
+
+    /// A refresh of an already-present key must never evict — only a
+    /// genuinely new key at cap triggers eviction. This is the LRU
+    /// replacement for P2's at-cap refresh fix
+    /// (`m.len() < CAP || m.contains_key(&key)`): the old insert-skip logic
+    /// is gone, but a key's own refresh still always lands.
+    #[test]
+    fn lru_cache_refresh_of_existing_key_never_evicts() {
+        let mut cache: LruCache<u32> = LruCache::new(2);
+        cache.insert(1, 10);
+        cache.insert(2, 20);
+        // Refresh key 1 with a new value — key 1 was already present, so
+        // this must not evict key 2 even though the cache is at cap.
+        cache.insert(1, 11);
+        assert_eq!(cache.len(), 2, "refreshing a present key must not grow past cap");
+        assert!(cache.contains_key(2), "refresh must not evict the other entry");
+        assert_eq!(cache.get(1), Some(11), "refresh must update the value");
+    }
+
     #[test]
     fn shared_gate_keeps_watched_target_unfused_both_arms() {
         // The single home for the fuse-or-not decision. The watched
@@ -1988,29 +2085,29 @@ mod tests {
             .expect("ColorGrade canonical view");
 
         // Canonical content key fuses and is stable across calls (cache hit).
-        let canon_a = fused_view_for(base.canonical_def, base);
-        let canon_b = fused_view_for(base.canonical_def, base);
+        let canon_a = fused_view_for(&base.canonical_def, base);
+        let canon_b = fused_view_for(&base.canonical_def, base);
         assert!(canon_a.is_some(), "canonical ColorGrade must fuse");
         assert!(
-            std::ptr::eq(canon_a.unwrap(), canon_b.unwrap()),
-            "same def content must return the same cached &'static view",
+            Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_b.as_ref().unwrap()),
+            "same def content must return the same cached Arc view",
         );
 
         // Mutating the def's content (duplicate a node → a structurally distinct
         // def) must route to a *different* cache entry, proving keying is by
         // content, not type id. We don't assert it fuses (the malformed dup may
         // strand → None); we assert the canonical entry is untouched afterward.
-        let mut edited = base.canonical_def.clone();
+        let mut edited = (*base.canonical_def).clone();
         edited.nodes.push(edited.nodes[0].clone());
         assert_ne!(
-            def_content_key(base.canonical_def),
+            def_content_key(&base.canonical_def),
             def_content_key(&edited),
             "a structural edit must change the content key",
         );
         let _ = fused_view_for(&edited, base);
-        let canon_c = fused_view_for(base.canonical_def, base);
+        let canon_c = fused_view_for(&base.canonical_def, base);
         assert!(
-            std::ptr::eq(canon_a.unwrap(), canon_c.unwrap()),
+            Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_c.as_ref().unwrap()),
             "an edited def's entry must not clobber the canonical entry",
         );
     }
@@ -2123,7 +2220,7 @@ mod tests {
             "unfused view must carry an empty retarget map",
         );
 
-        let fused = fused_view_for(base.canonical_def, base).expect("ColorGrade fuses");
+        let fused = fused_view_for(&base.canonical_def, base).expect("ColorGrade fuses");
         // Same routing the standalone `fuse_canonical_def` retarget asserts —
         // proving the map survived onto the cached view rather than being
         // dropped after the static-binding rewrite.
@@ -2387,7 +2484,7 @@ mod tests {
         let view = fused_view_by_id(&PresetTypeId::new("ColorGrade"))
             .expect("ColorGrade has a fused view");
         assert_eq!(view.bindings.len(), 9, "all outer-card sliders survive");
-        for b in view.bindings {
+        for b in &view.bindings {
             match &b.target {
                 ParamTarget::Node { node_id, param } => {
                     assert_eq!(node_id.as_str(), "fused_region_0");
@@ -2402,13 +2499,13 @@ mod tests {
                 .iter()
                 .find(|b| AsRef::<str>::as_ref(&b.id) == id)
                 .and_then(|b| match &b.target {
-                    ParamTarget::Node { param, .. } => Some(*param),
+                    ParamTarget::Node { param, .. } => Some(param.clone()),
                     _ => None,
                 })
         };
-        assert_eq!(field_for("amount"), Some("n5_amount"));
-        assert_eq!(field_for("gain"), Some("n0_gain"));
-        assert_eq!(field_for("tint_focus"), Some("n4_focus"));
+        assert_eq!(field_for("amount").as_deref(), Some("n5_amount"));
+        assert_eq!(field_for("gain").as_deref(), Some("n0_gain"));
+        assert_eq!(field_for("tint_focus").as_deref(), Some("n4_focus"));
     }
 
     /// An effect with no fusable node has no region — left entirely unfused, safe
@@ -2726,7 +2823,7 @@ mod tests {
             id: ParamId::from("m"),
             label: "Mode",
             default_value: 0.0,
-            target: ParamTarget::Node { node_id: NodeId::new(node), param },
+            target: ParamTarget::Node { node_id: NodeId::new(node), param: std::borrow::Cow::Borrowed(param) },
             convert: ParamConvert::EnumRound,
             scale: 1.0,
             offset: 0.0,
@@ -2746,7 +2843,7 @@ mod tests {
         match &out[0].target {
             ParamTarget::Node { node_id, param } => {
                 assert_eq!(node_id.as_str(), "fused_region_0");
-                assert_eq!(*param, "n2_mode");
+                assert_eq!(param.as_ref(), "n2_mode");
             }
             other => panic!("not retargeted: {other:?}"),
         }
@@ -2773,7 +2870,7 @@ mod tests {
             p.borrow_mut().insert(TEST_KEY, enqueued_at);
         });
         SEGMENT_CACHE.with(|c| {
-            c.borrow_mut().remove(&TEST_KEY);
+            c.borrow_mut().remove(TEST_KEY);
         });
 
         expire_stale_segment_pending(std::time::Instant::now());
@@ -2786,7 +2883,7 @@ mod tests {
         });
         SEGMENT_CACHE.with(|c| {
             assert!(
-                matches!(c.borrow().get(&TEST_KEY), Some(None)),
+                matches!(c.borrow_mut().get(TEST_KEY), Some(None)),
                 "expired key must negative-cache as Refused"
             );
         });
@@ -2794,7 +2891,7 @@ mod tests {
         // Cleanup — don't leak test state into whatever test runs next on
         // this thread.
         SEGMENT_CACHE.with(|c| {
-            c.borrow_mut().remove(&TEST_KEY);
+            c.borrow_mut().remove(TEST_KEY);
         });
     }
 
@@ -2815,5 +2912,65 @@ mod tests {
             "compile_segment_view_panic_safe must itself never unwind — it is the containment",
         );
         assert!(view.is_none(), "a panicking compile refuses (None), it doesn't propagate");
+    }
+
+    /// Recursively collect every `.rs` file under `dir` (std::fs only — no
+    /// `walkdir`, no shelling out to `rg`/`find`; same convention as
+    /// `freeze/markers.rs`'s `marker_literals_live_in_one_module`).
+    fn rust_files_under(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rust_files_under(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// FUSION_SOTA_DESIGN P7 (D5) negative gate: the fused-cache leak model is
+    /// gone. Every fused artifact (effect view / generator def / segment
+    /// view) is `Arc`-owned now, and every leaked interior was replaced by
+    /// owned data borrowed for exactly the fuse-build call that needs it —
+    /// so the process-leak primitive this module used to lean on should not
+    /// remain anywhere under `node_graph/freeze/`. The exact byte pattern
+    /// this scans for is deliberately never written contiguously in this
+    /// file's own source (built from separately-literal fragments below) so
+    /// the gate can scan every file under `freeze/`, itself included, with
+    /// no self-exclusion — the authoritative version of this check is
+    /// `rg` over the same directory (see the phase brief), which this test
+    /// mirrors in-process so it runs under `cargo test` too.
+    #[test]
+    fn freeze_has_no_leaks() {
+        // CARGO_MANIFEST_DIR = <repo>/crates/manifold-renderer
+        let freeze_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/node_graph/freeze");
+        let mut files = Vec::new();
+        rust_files_under(&freeze_dir, &mut files);
+        assert!(!files.is_empty(), "freeze/ file walk found nothing — path broke");
+
+        // Assembled from fragments, none of which is the leak-call name
+        // itself, so this file's own source never contains the searched-for
+        // byte sequence contiguously — the reason no file (including this
+        // one) needs to be excluded from the walk below.
+        let leak_type = ["B", "o", "x"].concat();
+        let leak_fn = ["l", "e", "a"].concat() + "k";
+        let needle = format!("{leak_type}::{leak_fn}");
+        let mut violations = Vec::new();
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            for (i, line) in text.lines().enumerate() {
+                if line.contains(&needle) {
+                    violations.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "a process-leak call was found under node_graph/freeze/ — the fused-cache \
+             leak model (FUSION_SOTA_DESIGN D5) must stay fully Arc/owned, not leaked:\n{}",
+            violations.join("\n")
+        );
     }
 }

@@ -350,7 +350,7 @@ mod tests {
             let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
                 continue;
             };
-            let Some(fused) = fuse_canonical_def(view.canonical_def, &registry) else {
+            let Some(fused) = fuse_canonical_def(&view.canonical_def, &registry) else {
                 continue;
             };
             let mut nodes: Vec<_> =

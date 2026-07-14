@@ -313,7 +313,7 @@ mod tests {
             default_value: 0.5,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "scale",
+                param: Cow::Borrowed("scale"),
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
