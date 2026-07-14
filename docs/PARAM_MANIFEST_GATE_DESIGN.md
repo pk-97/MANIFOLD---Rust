@@ -1,6 +1,6 @@
 # PARAM_MANIFEST_GATE — make a half-built param manifest unobservable at runtime (BUG-080)
 
-**Status:** APPROVED design, not built · 2026-07-14 · Fable 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible")
+**Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-renderer/src/preset_runtime.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-renderer -p manifold-io`).
 **Prerequisites:** PARAM_STORAGE_BOUNDARIES_DESIGN.md P1 (SHIPPED — the reconcile stage this design hardens)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
 
