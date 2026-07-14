@@ -3667,30 +3667,20 @@ impl Application {
             show_image,
         );
 
-        // Node picker overlays the whole editor window when open. Keep its
-        // screen size in lockstep with the editor logical size (drives the
-        // backdrop extent + edge-clamp), then build it last so its nodes
-        // sit on top of palette + sidebar in the additive overlay below.
-        ws.ui_root
-            .browser_popup
-            .set_screen_size(logical_w as f32, logical_h as f32);
-        if ws.ui_root.browser_popup.is_open() {
-            // Protective wrap, same reasoning as the preview-column region
-            // above: `BrowserPopupPanel::build` roots its own content at
-            // `None` and is called directly here (not through the main
-            // window's `build_overlays()` driver), so without this it is
-            // exactly the un-migrated root-parenting D4's debug assertion
-            // exists to catch — not P2's editor-window region work.
-            let region = ws.ui_root.tree.begin_region(
-                manifold_ui::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32),
-                manifold_ui::ZTier::Overlay,
-                "editor_node_picker",
-                manifold_ui::UIFlags::empty(),
-            );
-            let start = ws.ui_root.tree.count();
-            ws.ui_root.browser_popup.build(&mut ws.ui_root.tree);
-            ws.ui_root.tree.end_region(region, start);
-        }
+        // Overlays (node picker + any other top-level overlay open on this
+        // window's `UIRoot`) build at the tail of the tree via the SAME
+        // driver the main window uses (`EDITOR_WINDOW_UNIFICATION_DESIGN.md`
+        // D1/D2, P1 fix-shape spec 2026-07-14) — `build_overlays_for_screen`
+        // sets `screen_width`/`screen_height` (this `UIRoot` never gets
+        // `resize()`) then runs `build_overlays()`, which records
+        // `overlay_draw`/`overlay_region_start` for real. Replaces the old
+        // hand-rolled `begin_region`/`browser_popup.build`/`end_region`
+        // block that bypassed the overlay system entirely — that block is
+        // BUG-151's root cause: `overlay_draw` was permanently empty for the
+        // editor, so the shared tree-overlay pass (D1) had nothing to draw.
+        // Built last, same as before, so its nodes sit on top of
+        // palette/sidebar/preview column.
+        ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
 
         // The editor rebuilt its whole tree above, clearing every node's flags.
         // Re-apply HOVERED / PRESSED from the input system's durable widget state
@@ -3804,7 +3794,7 @@ impl Application {
         crate::editor_frame::composite_editor_frame(
             &gpu.device,
             self.ui_renderer.as_mut(),
-            &ws.ui_root,
+            &mut ws.ui_root,
             &ws.dock,
             editor_area,
             self.graph_canvas.as_ref(),

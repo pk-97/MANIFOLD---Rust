@@ -791,12 +791,10 @@ pub struct LayerHeaderPanel {
     cached_colors: Vec<Color32>,
 
     // ── Mute chip motion (UI_CRAFT_AND_MOTION_PLAN.md P1 demonstration) ──
-    // Background hover/press tween + 1px press drop for the Mute chip, one
-    // per row. `mute_base_y` is the resting (unpressed) Y captured right
-    // after `build_layer_row` places the node — the press-drop offset is
-    // always applied relative to this, never compounded frame over frame.
+    // Background hover/press colour tween for the Mute chip, one per row.
+    // Colour-only per Peter's rule (2026-07-14, BUG-150): animations never
+    // move hit geometry, only how a node looks.
     mute_motion: Vec<components::ChipMotion>,
-    mute_base_y: Vec<f32>,
     /// Wall-clock anchor for this frame's `dt_ms` — the same self-timed
     /// pattern `tick_record_pulse` uses (`recording_since.elapsed()`), just
     /// measuring a delta instead of a since-start duration.
@@ -868,7 +866,6 @@ impl LayerHeaderPanel {
             cached_selected: Vec::new(),
             cached_colors: Vec::new(),
             mute_motion: Vec::new(),
-            mute_base_y: Vec::new(),
             motion_last_tick: Instant::now(),
             active_layer: None,
             cached_active_layer: None,
@@ -1057,10 +1054,6 @@ impl LayerHeaderPanel {
                 },
             );
 
-            let base_y = self.mute_base_y.get(i).copied().unwrap_or(0.0);
-            let mut bounds = tree.get_bounds(mute_id);
-            bounds.y = base_y + motion.press_offset_y(1.0);
-            tree.set_bounds(mute_id, bounds);
         }
     }
 
@@ -2316,7 +2309,6 @@ impl LayerHeaderPanel {
         self.cached_selected.resize(layer_count, false);
         self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
         self.mute_motion.resize(layer_count, components::ChipMotion::new());
-        self.mute_base_y.resize(layer_count, 0.0);
 
         // Swap layers out to avoid borrow conflict in build_layer_row
         // (takes O(1), avoids cloning the entire Vec)
@@ -2365,13 +2357,6 @@ impl LayerHeaderPanel {
             self.cached_led[i] = layer.is_led;
             self.cached_selected[i] = layer.is_selected;
             self.cached_colors[i] = layer.color;
-            // Resting Y for the mute chip's 1px press drop — captured fresh
-            // right after placement, before any press offset is ever applied,
-            // so the drop always computes from the true rest position rather
-            // than compounding across frames.
-            if let Some(mute_id) = self.rows[i].id(LayerControl::Mute) {
-                self.mute_base_y[i] = tree.get_bounds(mute_id).y;
-            }
         }
 
         // Swap layers back
@@ -2787,10 +2772,12 @@ mod tests {
     }
 
     #[test]
-    fn mute_chip_hover_tweens_background_and_press_drops_then_settles() {
-        // P1 motion foundation, applied: the Mute chip's background eases
-        // toward hover/press instead of jump-cutting, and drops 1px while
-        // held — then returns exactly to rest with no drift.
+    fn mute_chip_hover_tweens_background_only_bounds_never_move() {
+        // Colour-only motion, per Peter's rule (2026-07-14, BUG-150):
+        // animations may change how a node looks, never where it is. The
+        // Mute chip's background eases toward hover/press instead of
+        // jump-cutting; its bounds (draw + hit geometry) must stay fixed
+        // throughout.
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = LayerHeaderPanel::new();
@@ -2801,38 +2788,89 @@ mod tests {
 
         let mute_id = panel.rows[0].id(LayerControl::Mute).expect("mute chip built");
         let rest_bg = tree.get_node(mute_id).unwrap().style.bg_color;
-        let rest_y = tree.get_bounds(mute_id).y;
+        let rest_bounds = tree.get_bounds(mute_id);
 
         // Hover in: background eases partway, not an instant jump.
         tree.set_flag(mute_id, UIFlags::HOVERED);
         panel.tick_mute_motion(&mut tree, 45.0); // halfway through MOTION_FAST (90ms)
         let mid_bg = tree.get_node(mute_id).unwrap().style.bg_color;
         assert_ne!(mid_bg, rest_bg, "background should have moved partway toward hover");
+        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds must not move on hover");
 
         panel.tick_mute_motion(&mut tree, 45.0); // finishes the hover-in tween
 
-        // Press: 1px drop on top of the settled hover.
+        // Press: colour settles fully pressed, bounds still untouched.
         tree.set_flag(mute_id, UIFlags::PRESSED);
         panel.tick_mute_motion(&mut tree, 90.0); // full MOTION_FAST press-in
-        let pressed_y = tree.get_bounds(mute_id).y;
-        assert!(
-            (pressed_y - (rest_y + 1.0)).abs() < 0.01,
-            "fully pressed should sit at rest_y + 1px: got {pressed_y}, rest {rest_y}"
-        );
+        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds must not move on press");
 
-        // Release: eases back, no permanent drift in position or colour.
+        // Release: eases back, no permanent drift in colour, bounds fixed throughout.
         tree.clear_flag(mute_id, UIFlags::PRESSED);
         tree.clear_flag(mute_id, UIFlags::HOVERED);
         panel.tick_mute_motion(&mut tree, 90.0);
         panel.tick_mute_motion(&mut tree, 90.0);
-        assert!(
-            (tree.get_bounds(mute_id).y - rest_y).abs() < 0.01,
-            "must return exactly to rest Y, no drift"
-        );
         assert_eq!(
             tree.get_node(mute_id).unwrap().style.bg_color,
             rest_bg,
             "background returns exactly to rest"
+        );
+        assert_eq!(tree.get_bounds(mute_id), rest_bounds, "bounds never moved, start to finish");
+    }
+
+    /// BUG-150 regression: scrolling the layer list must not leave the Mute
+    /// chip's hit geometry stale. Before the fix, `tick_mute_motion` snapped
+    /// the chip's bounds back to a build-time-cached Y (`mute_base_y`) on the
+    /// first hover after any scroll, desyncing draw + hit bounds from the
+    /// row's true (scrolled) position — the exact sequence that made mute
+    /// require two clicks on stage.
+    #[test]
+    fn mute_chip_bounds_stay_in_row_after_scroll_then_hover() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 2160.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("Layer 1"), make_video_layer("Layer 2")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        let mute_id = panel.rows[0].id(LayerControl::Mute).expect("row 0 has a mute control");
+        let row_bounds_before = panel.rows[0]
+            .clip
+            .map(|clip_id| tree.get_bounds(clip_id))
+            .expect("row 0 has a clip");
+
+        // Scroll the layer list — the fast path shifts every row (and its
+        // clip) by delta_y in lockstep.
+        assert!(panel.try_update_vertical_scroll(&mut tree, &layout, 50.0));
+        let row_bounds_after_scroll = tree.get_bounds(panel.rows[0].clip.unwrap());
+        let scrolled_mute_y = tree.get_bounds(mute_id).y;
+        assert!(
+            (row_bounds_after_scroll.y - (row_bounds_before.y - 50.0)).abs() < 0.01,
+            "sanity: row actually moved by the scroll"
+        );
+
+        // Hover the chip immediately after scrolling — this is the exact
+        // BUG-150 trigger (first tick of the press/hover tween post-scroll).
+        tree.set_flag(mute_id, UIFlags::HOVERED);
+        panel.tick_mute_motion(&mut tree, 45.0);
+
+        let mute_bounds = tree.get_bounds(mute_id);
+        assert!(
+            (mute_bounds.y - scrolled_mute_y).abs() < 0.01,
+            "mute chip's Y must stay at the scrolled position, not snap back to a stale build-time Y: \
+             got {}, expected {}",
+            mute_bounds.y,
+            scrolled_mute_y
+        );
+        assert!(
+            mute_bounds.y >= row_bounds_after_scroll.y
+                && mute_bounds.y + mute_bounds.height <= row_bounds_after_scroll.y + row_bounds_after_scroll.height,
+            "mute chip bounds must stay inside its row's clip after scroll+hover: \
+             chip y={} h={}, row y={} h={}",
+            mute_bounds.y,
+            mute_bounds.height,
+            row_bounds_after_scroll.y,
+            row_bounds_after_scroll.height
         );
     }
 

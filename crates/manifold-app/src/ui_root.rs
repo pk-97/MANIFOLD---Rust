@@ -1139,6 +1139,29 @@ impl UIRoot {
         self.overlay_open_snapshot = self.current_overlay_open_mask();
     }
 
+    /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 (D2 precondition, fix-shape
+    /// spec 2026-07-14): explicit-size entry point onto `build_overlays` for
+    /// windows that never call `build()`. The graph editor's `Workspace::
+    /// ui_root` is built via plain `UIRoot::new()` (`workspace.rs`) and never
+    /// `.build()` — that method clears the tree and lays out the WHOLE
+    /// main-window panel set (transport/header/footer/inspector-at-main-
+    /// layout/audio-setup dock/timeline viewport) via `self.layout`, which
+    /// would stomp the editor's own per-frame tree build and inject
+    /// main-window UI into the editor. `build_overlays` itself is safe
+    /// standalone: it only reads `screen_width`/`screen_height` and appends
+    /// to the tree tail based on which overlays are open on THIS instance —
+    /// no main-window-only state. The explicit size is load-bearing: the
+    /// editor's `UIRoot` never receives `resize()` either (only `self.ws`
+    /// does, and `resize()` itself calls `build()` — never usable for the
+    /// editor), so `screen_width`/`screen_height` would otherwise be stuck at
+    /// their `UIRoot::new()` default and `build_overlays`' full-screen region
+    /// (`CLIPS_CHILDREN`) would clip the popup to nothing.
+    pub(crate) fn build_overlays_for_screen(&mut self, width: f32, height: f32) {
+        self.screen_width = width;
+        self.screen_height = height;
+        self.build_overlays();
+    }
+
     /// Route one event to the open overlays, top→bottom. Returns true if an
     /// overlay consumed it (or a modal captured it), so the caller skips the
     /// lower panels. Stashed selections are lowered by `drain_overlay_selections`.
