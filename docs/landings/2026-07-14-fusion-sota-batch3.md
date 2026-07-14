@@ -1,4 +1,4 @@
-# FUSION_SOTA batch 3 (P6 + P7, wave close) — landed 2026-07-14 @ <filled in post-merge>
+# FUSION_SOTA batch 3 (P6 + P7, wave close) — landed 2026-07-14 @ d37d1cfc
 
 **Branch:** feat/fusion-sota · **Level reached:** L2 (P6, has a census/dispatch-count-observed
 surface) / L1 (P7, behavior-identical by construction, observable is the negative gate) — both
@@ -36,8 +36,14 @@ manifold-renderer --lib`: 1224 passed, 0 failed, 4 ignored. Freeze suite: 77 pas
 ignored. `cargo check --workspace`: clean. `cargo clippy -p manifold-renderer -- -D warnings`:
 clean.
 
-Full workspace sweep at landing (this file's merge SHA, run in the main checkout):
-<filled in below, post-merge>
+Full workspace sweep at landing (run in the main checkout at merge `d37d1cfc`): `cargo clippy
+--workspace -- -D warnings`: clean (only pre-existing manifold-media Objective-C SDK deprecation
+warnings). `cargo nextest run --workspace`: 3335 tests run, 3335 passed, 12 skipped. `cargo deny
+check bans`: ok. Origin/main had moved twice more during this final batch (BUG-156 backlog entry,
+EDITOR_WINDOW_UNIFICATION P1 landing) — merged origin/main into feat/fusion-sota first
+(`4dc9679f`), reran the freeze suite + touched-crate clippy (renderer + app, since the merge
+touched `app_render.rs`), then landed. This closes the FUSION_SOTA_DESIGN wave: P1–P7 all shipped
+across three landings (`ce6dcba8`, `9ceb4aab` fill-in / `78d897cb`, `7fe110ac` fill-in / `d37d1cfc`).
 
 ## Deviations from brief
 
