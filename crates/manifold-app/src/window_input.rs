@@ -707,6 +707,10 @@ impl Application {
                     {
                         self.scroll_dirty.scroll_x = true;
                     }
+                    // BUG-159: a direct user horizontal gesture — playhead-follow
+                    // yields to it instead of fighting it (state_sync.rs
+                    // check_auto_scroll).
+                    self.ws.ui_root.viewport.note_user_scroll_x();
                 } else {
                     // Plain scroll → vertical track scroll
                     let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
@@ -733,6 +737,8 @@ impl Application {
                     {
                         self.scroll_dirty.scroll_x = true;
                     }
+                    // BUG-159: see the Shift+scroll site above.
+                    self.ws.ui_root.viewport.note_user_scroll_x();
                 }
             }
         }

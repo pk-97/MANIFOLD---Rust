@@ -1,5 +1,5 @@
 use crate::node_graph::{bundled_preset_json, bundled_preset_type_ids};
-use crate::node_graph::primitives::{GltfTextureSource, RenderScene};
+use crate::node_graph::primitives::{GltfTextureSource, RenderScene, ScatterOnMesh};
 use crate::preset_runtime::PresetRuntime;
 use manifold_core::preset_def::PresetKind;
 use crate::node_graph::PrimitiveRegistry;
@@ -66,6 +66,12 @@ impl GeneratorRegistry {
         // (`RENDER_TRACE` showed `generators=37.1ms` on that frame).
         RenderScene::prewarm_pipelines(device);
         GltfTextureSource::prewarm_pipeline(device);
+        // BUG-037 (remaining gap, freeze-profile confirmed 2026-07-14):
+        // `node.scatter_on_mesh` is a barriered multi-pass scan/reduce
+        // (exempt from the codegen path), so `prewarm_all_atom_codegen_pipelines`
+        // below never reaches its three hand-written pipelines either. Same
+        // asset-independent-fixed-source shape as the two lines above.
+        ScatterOnMesh::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never

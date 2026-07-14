@@ -422,6 +422,7 @@ pub use saturation::Saturation;
 pub use scalar_array_accumulator::ScalarArrayAccumulator;
 pub use scale_offset_texture::ScaleOffsetTexture;
 pub use scanline_jitter_field::ScanlineJitterField;
+pub use scatter_on_mesh::ScatterOnMesh;
 pub use scatter_particles::ScatterParticles;
 pub use scatter_particles_3d::ScatterParticles3D;
 pub use seed_particles_from_texture::SeedParticlesFromTexture;

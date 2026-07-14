@@ -1622,6 +1622,17 @@ impl PresetInstance {
         !template_known_for(self.is_generator(), &self.effect_type, &self.graph)
     }
 
+    /// `true` when this instance's manifest was built against an incomplete
+    /// registry and hasn't been reconciled yet (BUG-080). `pending_wire` is
+    /// the structural marker for "provisional" — set at deserialize-time
+    /// build, cleared by [`Self::reconcile_manifest`] once a real template
+    /// resolves. A provisional manifest reaching a runtime seam (chain build,
+    /// UI row translation) means a load/ingest path skipped the reconcile
+    /// call; see `docs/PARAM_MANIFEST_GATE_DESIGN.md` D1.
+    pub fn manifest_provisional(&self) -> bool {
+        self.pending_wire.is_some()
+    }
+
     #[inline]
     pub fn is_generator(&self) -> bool {
         matches!(self.kind, crate::preset_def::PresetKind::Generator)
