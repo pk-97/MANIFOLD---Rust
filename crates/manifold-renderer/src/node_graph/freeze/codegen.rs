@@ -281,6 +281,61 @@ pub fn standalone_for_spec_fmt<P: crate::node_graph::primitive::PrimitiveSpec>(
         ))
 }
 
+/// Dynamic mirror of [`standalone_for_spec`] — generates the same standalone
+/// kernel text, but reads the atom's const metadata through the type-erased
+/// [`EffectNode`](crate::node_graph::effect_node::EffectNode) trait instead of
+/// a compile-time `PrimitiveSpec` type parameter.
+///
+/// `standalone_for_spec::<Self>()` needs the concrete primitive type at the
+/// call site (it's generic over `P: PrimitiveSpec`), which is exactly what a
+/// registry-driven prewarm sweep doesn't have — `PrimitiveRegistry::construct`
+/// only ever hands back a type-erased `Box<dyn EffectNode>`. But every const
+/// `standalone_for_spec` reads (`WGSL_BODY`, `INPUTS`, `OUTPUTS`, `PARAMS`,
+/// `INPUT_ACCESS`, `DERIVED_UNIFORMS`, `WGSL_INCLUDES`, `ATOMIC_OUTPUTS`,
+/// `FUSION_KIND`, `STENCIL_FETCH`) is ALSO exposed as a same-shaped `&dyn
+/// EffectNode` method by the blanket `impl<P: Primitive> EffectNode for P`
+/// (`primitive.rs`) — the trait was already carrying everything codegen
+/// needs, just behind dynamic dispatch instead of a type parameter. This
+/// function is that dynamic path, letting `GeneratorRegistry::prewarm_all`
+/// compile every registered atom's codegen pipeline generically (BUG-146),
+/// without a per-atom `prewarm_pipeline` method or a hand-maintained list.
+///
+/// Returns `Err(CodegenError::NoBody)` for any node with no `wgsl_body` (hand-
+/// written pipelines like `render_scene`/`gltf_texture_source`/`draw_*`, and
+/// `wgsl_compute`'s user-authored kernels) — callers should treat that as
+/// "nothing to prewarm here", not a failure.
+pub fn standalone_for_node(
+    node: &dyn crate::node_graph::effect_node::EffectNode,
+) -> Result<String, CodegenError> {
+    let body = node.wgsl_body().ok_or(CodegenError::NoBody)?;
+    if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return generate_standalone_buffer(
+            body,
+            node.inputs(),
+            node.parameters(),
+            node.input_access(),
+            node.derived_uniforms(),
+            node.wgsl_includes(),
+            node.outputs(),
+            node.atomic_outputs(),
+        );
+    }
+    if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+        return generate_standalone_resolve(body, node.inputs(), node.parameters(), node.outputs());
+    }
+    generate_standalone_ext(
+        node.fusion_kind(),
+        body,
+        node.inputs(),
+        node.parameters(),
+        node.input_access(),
+        node.derived_uniforms(),
+        node.outputs(),
+        node.stencil_fetch(),
+        node.wgsl_includes(),
+    )
+}
+
 /// Generate the standalone `cs_main` kernel for one atom. `body` is the atom's
 /// `wgsl_body` fragment (defines `fn body(...)` plus any helpers, verbatim).
 ///

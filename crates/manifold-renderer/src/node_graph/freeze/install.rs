@@ -205,13 +205,34 @@ fn fuse_view_parts(
 pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
-    match serde_json::to_vec(def) {
+    // Normalize away the purely-cosmetic fields (editor canvas position, node
+    // title) before hashing: neither affects the compiled kernel, so a node
+    // drag or rename must not perturb the key and force a spurious re-fuse.
+    // Same "serialize the whole thing and hash the bytes" mechanism as
+    // before — this just feeds it a cleared clone instead of `def` directly.
+    let mut normalized = def.clone();
+    clear_cosmetic_fields(&mut normalized.nodes);
+    match serde_json::to_vec(&normalized) {
         Ok(bytes) => bytes.hash(&mut h),
         // Unserializable def → distinguished key; `compile_fused_view` will also
         // fail it to `None`, so it renders unfused (always correct).
         Err(_) => return u64::MAX,
     }
     h.finish()
+}
+
+/// Recursively clears `editor_pos` and `title` on every node, including nodes
+/// nested inside group bodies (`EffectGraphNode::group`), which are
+/// themselves `EffectGraphNode`s — a drag or rename anywhere in the tree
+/// must not perturb `def_content_key`.
+fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
+    for node in nodes {
+        node.editor_pos = None;
+        node.title = None;
+        if let Some(group) = node.group.as_mut() {
+            clear_cosmetic_fields(&mut group.nodes);
+        }
+    }
 }
 
 /// Leak-guard cap on each content cache. The cached values are CPU codegen
@@ -1803,6 +1824,96 @@ mod tests {
             std::ptr::eq(canon_a.unwrap(), canon_c.unwrap()),
             "an edited def's entry must not clobber the canonical entry",
         );
+    }
+
+    /// A minimal three-node def (source → gain → final_output) used by the
+    /// content-key cosmetic-field tests below.
+    fn minimal_def() -> EffectGraphDef {
+        let json = r#"{
+            "version": 1, "name": "minimal", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain", "editorPos": [10.0, 20.0], "title": "Gain" },
+                { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn content_key_ignores_editor_pos_drag() {
+        // FREEZE_COMPILER_MAP.md §11 honest-edge #5: a node drag (editor_pos
+        // change only) must not perturb the content key, or a watched graph
+        // re-fuses on every mouse-up.
+        let def = minimal_def();
+        let key_before = def_content_key(&def);
+
+        let mut dragged = def.clone();
+        for node in &mut dragged.nodes {
+            node.editor_pos = Some((999.0, -123.0));
+        }
+        let key_after = def_content_key(&dragged);
+
+        assert_eq!(
+            key_before, key_after,
+            "editor_pos-only change (node drag) must not change the content key",
+        );
+    }
+
+    #[test]
+    fn content_key_ignores_title_rename() {
+        // Same cosmetic-field contract as editor_pos: renaming a node's
+        // display title must not force a re-fuse.
+        let def = minimal_def();
+        let key_before = def_content_key(&def);
+
+        let mut renamed = def.clone();
+        renamed.nodes[1].title = Some("Renamed Gain".to_string());
+        let key_after = def_content_key(&renamed);
+
+        assert_eq!(
+            key_before, key_after,
+            "title-only change (node rename) must not change the content key",
+        );
+    }
+
+    #[test]
+    fn content_key_changes_on_wire_param_or_topology_edit() {
+        // Any *structural* edit — a wire, a baked param value, or node
+        // topology — must change the content key, and each edit must land on
+        // a key distinct from the original AND from the other edits (not all
+        // collapsing to one "something changed" bucket).
+        let def = minimal_def();
+        let key_original = def_content_key(&def);
+
+        // (a) wire edit: retarget the gain node's wire source directly to
+        // final_output, dropping the source → gain hop.
+        let mut wire_edited = def.clone();
+        wire_edited.wires[0].to_node = 2;
+        let key_wire = def_content_key(&wire_edited);
+
+        // (b) baked param edit: set a param value on the gain node.
+        let mut param_edited = def.clone();
+        param_edited.nodes[1].params.insert(
+            "amount".to_string(),
+            SerializedParamValue::Float { value: 2.5 },
+        );
+        let key_param = def_content_key(&param_edited);
+
+        // (c) topology edit: drop the gain node and its wires entirely.
+        let mut topology_edited = def.clone();
+        topology_edited.nodes.retain(|n| n.id != 1);
+        topology_edited.wires.clear();
+        let key_topology = def_content_key(&topology_edited);
+
+        assert_ne!(key_original, key_wire, "a wire edit must change the content key");
+        assert_ne!(key_original, key_param, "a baked param edit must change the content key");
+        assert_ne!(key_original, key_topology, "a topology edit must change the content key");
+        assert_ne!(key_wire, key_param, "distinct edits must not collide on the same key");
+        assert_ne!(key_wire, key_topology, "distinct edits must not collide on the same key");
+        assert_ne!(key_param, key_topology, "distinct edits must not collide on the same key");
     }
 
     /// The fused view must carry the full binding-retarget map so the chain

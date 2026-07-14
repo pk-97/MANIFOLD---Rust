@@ -38,6 +38,19 @@ use manifold_gpu::{
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
+/// The §7.4 "out-of-loop ≈ulp" precision-contract tolerance (freeze §7,
+/// `docs/FREEZE_COMPILER_MAP.md`): the shared per-texel (abs, rel) bound for
+/// every out-of-loop texture-region fusion proof — f16-round-trip drift
+/// through pointwise/gather/warp chains, amplified by discontinuities
+/// (hue wrap, smoothstep edges, PBR specular). Precedent named in the doc:
+/// the quarter-res oracle's 1e-2 band; also covers the known-shipping
+/// MetallicGlass noise-chain ~1 ulp → max_abs≈1.8 specular-shimmer instance.
+/// This is the texel-level bound only — each proof still tunes its own
+/// `passes(max_over_fraction)` / `over_count` budget for that kernel's
+/// discontinuity profile; that fraction is not part of this contract.
+const OUT_OF_LOOP_ULP_ABS_TOL: f32 = 1.0e-2;
+const OUT_OF_LOOP_ULP_REL_TOL: f32 = 3.0e-2;
+
 fn frame_time() -> FrameTime {
     FrameTime {
         beats: Beats(0.0),
@@ -343,7 +356,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     // discontinuities (hue wrap, colorize edges) drift more, and a handful of
     // boundary texels can land on opposite sides of a step. Tolerate ≤0.5% of
     // texels failing both bounds (§11.D discontinuity-aware metric).
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005),
         "fused ColorGrade must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -609,7 +622,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
         let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
         let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
 
-        let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+        let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
         // Hard gate: NO divergent NaN/Inf, ever. Plus a discontinuity-aware
         // fraction budget loose enough to absorb extreme-param boundary bands.
         assert!(
@@ -716,7 +729,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     // Same discontinuity-aware budget as the hand-kernel test, plus an absolute
     // cap on the failing-texel count so a contiguous failure band can't hide in
     // the 0.5% fraction (§12.4 verdict tightening).
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "auto-fused ColorGrade (via executor) must match unfused: \
@@ -843,7 +856,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let differ = TextureDiff::new(&device);
     // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade proof above uses.
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "camera-derived pointwise fusion must match unfused within the \
@@ -976,7 +989,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let differ = TextureDiff::new(&device);
     // Out-of-loop texture tier (freeze §7.4): ≈1 f16 ULP, same tolerance band
     // the ColorGrade / I6 proofs above use.
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "coc_from_depth + invert fusion must match unfused within the \
@@ -1108,7 +1121,7 @@ fn fused_source_region_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "fused Source region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -1414,7 +1427,7 @@ fn fused_gather_region_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.02),
         "fused gather region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -1472,7 +1485,7 @@ fn fused_warp_region_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.02),
         "fused warp region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -2209,7 +2222,7 @@ fn fused_generator_renders_like_unfused() {
     let fused = render(fused_def);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "fused generator must match unfused (binding applied): max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -2289,7 +2302,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     let fused = render(fused_def);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.01) && r.over_count < 256,
         "fused DigitalPlants must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -2992,7 +3005,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
         .expect("fused renders");
         assert_eq!(ud, fd, "region output dims match (frames={frames})");
         let differ = TextureDiff::new(&device);
-        let r = differ.compare(&device, &u.texture, &f.texture, 1.0e-2, 3.0e-2);
+        let r = differ.compare(&device, &u.texture, &f.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
         assert!(
             r.over_count == 0,
             "fused sobel tail must match unfused within ulp tolerance at frames={frames}: \
@@ -3902,7 +3915,7 @@ fn fused_quarter_res_chain_matches_unfused() {
     let f_img = render_graph_at(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out, qw, qh);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 16,
         "fused quarter-res chain must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -3964,7 +3977,7 @@ fn fused_control_wired_param_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005) && r.over_count < 16,
         "fused control-wired param must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -4031,7 +4044,7 @@ fn fused_fanout_region_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.02),
         "fused fan-out region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
@@ -4101,7 +4114,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let f_img = render_graph(&device.arc(), &mut fused, &f_plan, f_src, &input, f_out);
 
     let differ = TextureDiff::new(&device);
-    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
     assert!(
         r.passes(0.005),
         "fused fragment region must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",

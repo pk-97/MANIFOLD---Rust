@@ -40,10 +40,11 @@ pub enum FusionKind {
     /// voronoi, the fold coordinate-fields). The body is `fn body(uv, dims,
     /// ...params)` — no colour arg. Output-sized iteration. The standalone kernel
     /// binds no textures/sampler beyond its output (and no uniform if paramless).
-    /// The region-grower leaves Source atoms unfused (its workers must read the
-    /// upstream source; a 0-input producer doesn't fit the single-external model)
-    /// — fusing a generator as a region producer is a follow-on; v1 Source is
-    /// standalone single-source only.
+    /// A Source atom CAN head a region as its producer — the region-grower
+    /// admits a 0-input generator as the region's sole entry point and threads
+    /// its output to downstream members as a register
+    /// (`source_generator_heads_a_region`); buffer-domain generators fuse the
+    /// same way into buffer regions (FluidSim, DigitalPlants).
     Source,
 }
 
@@ -94,10 +95,14 @@ pub enum InputAccess {
     /// CANNOT pre-sample this into a register (it doesn't know the coord), so the
     /// body receives the texture + sampler as ARGS and samples them itself,
     /// owning the exact filter/address-mode of the unfused atom ("pure modulo
-    /// declared sampled-texture args", design §11.B / line 156). Because the read
-    /// can't be threaded as a register, the region-grower treats a node with any
-    /// Gather input as a boundary — v1 Gather is standalone-only (single-source);
-    /// fusing a gather INTO a multi-atom region is a deeper follow-on.
+    /// declared sampled-texture args", design §11.B / line 156). A node with a
+    /// Gather input CAN be a region member — the region-grower just refuses to
+    /// union the WIRE feeding it (a gather-consumed wire never merges into a
+    /// threaded register; the gathered producer stays an external the body
+    /// samples via its own sampler), not the node itself. Stencil absorption
+    /// (`absorb_virtual_chains`) goes further and can fold a short producer
+    /// chain into the fetch, recomputed at each tap instead of a canvas
+    /// round-trip.
     Gather,
     /// Like [`Gather`], but the body reads via INTEGER `textureLoad` at a voxel/
     /// texel coordinate it computes — NO sampler, no filtering. The neighbourhood
@@ -111,11 +116,13 @@ pub enum InputAccess {
     /// storage `array` (grid neighbours, scatter targets, random-access lookups).
     /// It references the codegen-emitted input array global `buf_<port>` and
     /// computes its own element indices, so — exactly like the texture
-    /// [`Gather`] — it can't be threaded as a fused register. The buffer
-    /// standalone codegen binds the array as `var<storage, read>` and the body
-    /// owns the indexing; the region-grower treats any buffer atom as a boundary
-    /// (the texture region path already refuses a node with no texture output, so
-    /// buffer atoms are standalone single-source only in v1).
+    /// [`Gather`] — the wire feeding it never unions into a threaded register;
+    /// the gathered array stays a bound `var<storage, read>` input the body
+    /// indexes itself. Buffer atoms DO fuse into multi-node buffer regions
+    /// (`classify_buffer_node` in `region.rs`) — FluidSim / FluidSim3D /
+    /// DigitalPlants ship as fused, bit-exact buffer regions (freeze §7.3); a
+    /// `BufferGather` input just means that one wire stays external, same as
+    /// texture `Gather`.
     BufferGather,
 }
 
@@ -179,9 +186,23 @@ pub enum BoundaryReason {
 /// converting it is not permitted (the meta-test below checks both
 /// directions).
 pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
-    "node.rotate_coordinates",  // rotate_2d
-    "node.sine_wave",           // sin_term
-    "node.watercolor",          // watercolor
+    // watercolor — NOT a mechanical wgsl_body conversion candidate: this is
+    // a 7-pass sequential composite (grain+max, flow-gen, displace,
+    // diffusion blur, slope displace, luma blur into persistent
+    // cross-frame feedback, wet/dry blend), not a single barrier-free
+    // per-element function. It fails the codegen-path scope test on two
+    // independent grounds — cross-frame GPU state (the `feedback` texture
+    // must survive into next frame, matching `BoundaryReason::CrossFrameState`'s
+    // own `node.feedback` example) and multi-pass dependent composition
+    // (matching `BoundaryReason::FusedBundle`'s "awaiting decomposition
+    // into atoms" — `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`
+    // already tracks the real fix: decompose into `flow_field_noise` +
+    // `uv_displace_by_flow` (both registered, unused) + existing
+    // blur/displace atoms, composed as a graph). Left in this ledger
+    // (2026-07-14 wave 3) rather than reclassified, pending that
+    // decomposition design — same category as DigitalPlants/NestedCubes,
+    // explicitly out of scope for a mechanical wgsl_body conversion.
+    "node.watercolor",
 ];
 
 impl InputAccess {

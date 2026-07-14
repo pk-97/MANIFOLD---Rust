@@ -67,6 +67,42 @@ impl GeneratorRegistry {
         RenderScene::prewarm_pipelines(device);
         GltfTextureSource::prewarm_pipeline(device);
 
+        // BUG-146: the two mechanisms above only reach atoms a BUNDLED
+        // preset's *structure* happens to reference (the loop above never
+        // calls `run()`) plus RenderScene/GltfTextureSource's two hand-listed
+        // hand-written pipelines. Every atom on the `primitive!` codegen path
+        // — now most atoms, after this session's wave 2-4 conversions —
+        // compiles its GPU pipeline lazily on its OWN first `run()` via
+        // `self.pipeline.get_or_insert_with(standalone_for_spec::<Self>())`,
+        // untouched by either mechanism until some project's live first
+        // frame happens to hit it. `node.cube_mesh` is the confirmed example
+        // named in the backlog root cause (its doc comment names
+        // DigitalPlants/NestedCubes as the intended consumer, though neither
+        // bundled preset's JSON wires it in yet — it's a decomposition
+        // building block, not currently reachable via any shipped preset's
+        // structure, so the bundled-preset loop above could never warm it
+        // even indirectly). The ~41.5ms residual BUG-145 measured is a
+        // SEPARATE scene (2 occluders + 4 lights, shadows/shafts off) hitting
+        // this same class of gap via other codegen-path atoms in that scene's
+        // graph, not cube_mesh specifically — the mechanism generalizes to
+        // any atom in this state, which is exactly why the fix below is
+        // structural (sweep every registered atom) rather than naming one.
+        // Measured directly (fresh, uncached `GpuDevice`, this session):
+        // `node.cube_mesh` alone compiles cold in ~12-15ms vs ~0.02-0.04ms
+        // once this sweep has run; the worst case of touching every one of
+        // the ~144 codegen-path atoms cold in one frame (the shape of the
+        // original BUG-037/145/146 diagnosis) sums to ~1.0-1.1s vs ~1-2ms
+        // prewarmed. Fixed structurally, not atom-by-atom: sweep every
+        // registered primitive type_id, construct it, and compile its
+        // standalone kernel via `codegen::standalone_for_node` — the dynamic
+        // (type-erased) mirror of `standalone_for_spec` (see its doc comment
+        // for why this is possible without a per-atom hook: the blanket
+        // `EffectNode` impl already forwards every const `standalone_for_spec`
+        // needs through `&dyn EffectNode` methods). O(atom count), no GPU
+        // inputs/fixtures required — `standalone_for_spec` only needs WGSL
+        // text + a `PrimitiveSpec`'s consts, never bound resources.
+        prewarm_all_atom_codegen_pipelines(device);
+
         log::info!("Generator pipeline pre-warm complete");
     }
 
@@ -222,6 +258,92 @@ impl GeneratorRegistry {
     }
 }
 
+/// BUG-146: compile every registered primitive's standalone codegen pipeline
+/// into `device`'s shared compute-pipeline cache, unconditionally, ahead of
+/// any real `run()` call. Structural fix, not atom-by-atom — walks
+/// `PrimitiveRegistry::with_builtin()`'s full `known_type_ids()` list (the
+/// same enumeration `freeze/classify.rs`'s meta-tests use to iterate every
+/// shipping atom), constructs a fresh instance of each, and asks
+/// `crate::node_graph::freeze::codegen::standalone_for_node` for its
+/// standalone kernel text.
+///
+/// Atoms with no `wgsl_body` (hand-written pipelines — `render_scene`,
+/// `gltf_texture_source`, `draw_*`, `wgsl_compute`'s user-authored kernels)
+/// return `CodegenError::NoBody` and are silently skipped — nothing to
+/// prewarm generically for those; `render_scene`/`gltf_texture_source` have
+/// their own explicit prewarm calls above, `wgsl_compute`'s kernel is live
+/// user content compiled on demand, and `draw_*` is BUG-114 (tracked
+/// separately, not a de-facto exemption from anything this function claims).
+///
+/// A handful of atoms (`scale_offset_texture`, `gradient_central_diff`,
+/// `rotate_vec2_by_angle`) support a non-default output format via
+/// `standalone_for_spec_fmt` / `set_output_format`; a freshly-constructed
+/// instance's `output_format()` is `None` (the default), so this sweep
+/// compiles their DEFAULT-format kernel — the common case. Only a project
+/// whose JSON sets a non-default `outputFormats` on one of those three still
+/// pays a lazy first-use compile for that specific variant; documented as a
+/// residual, not silently dropped.
+///
+/// One real exemption, found empirically rather than by design: an atom that
+/// declares `wgsl_specialization` (today, exactly one — `node.variable_blur`
+/// / `gaussian_blur_variable_width.rs`) has FREE IDENTIFIERS in its generated
+/// standalone text (`QUALITY_LEVEL`, `WEIGHTING_MODE`) that only resolve once
+/// its own `run()` substitutes live param values via
+/// `device.create_specialized_compute_pipeline` — plain `standalone_for_node`
+/// followed by `create_compute_pipeline` fails a real naga parse on it
+/// (confirmed: `WGSL parse error: no definition in scope for identifier:
+/// WEIGHTING_MODE`).
+/// The substitution VALUES (and their string encoding — `"0u"`/`"1u"`/`"2u"`
+/// for quality, etc.) are genuinely bespoke per atom, not derivable from
+/// `PrimitiveSpec`'s const data the way everything else in this sweep is —
+/// there is no generic "default param value → specialization token string"
+/// mapping to fall back on. Detected dynamically via
+/// `EffectNode::wgsl_specialization()` (non-empty) and skipped rather than
+/// crashing the sweep; `node.variable_blur`'s own first-use compile (up to 6
+/// variants, `quality` × `weighting_mode`) stays a lazy first-frame cost,
+/// same as before this fix. If a future atom adopts `wgsl_specialization`,
+/// it lands in this same skip bucket automatically — no per-atom list to
+/// maintain, just a residual class this sweep can't reach generically.
+fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
+    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_node};
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut warmed = 0usize;
+    let mut skipped_no_body = 0usize;
+    let mut skipped_specialized = 0usize;
+    let mut codegen_failed = 0usize;
+    for type_id in registry.known_type_ids() {
+        let Some(node) = registry.construct(type_id) else {
+            continue;
+        };
+        if !node.wgsl_specialization().is_empty() {
+            skipped_specialized += 1;
+            continue;
+        }
+        match standalone_for_node(node.as_ref()) {
+            Ok(wgsl) => {
+                device.create_compute_pipeline(&wgsl, ENTRY, type_id);
+                warmed += 1;
+            }
+            Err(crate::node_graph::freeze::codegen::CodegenError::NoBody) => {
+                skipped_no_body += 1;
+            }
+            Err(e) => {
+                // Should not happen for any shipping atom (every `wgsl_body`
+                // atom's standalone codegen is proven at conversion time via
+                // the I1 parity test) — log and move on rather than let a
+                // prewarm-time codegen edge case take down startup.
+                log::warn!("Pre-warm codegen failed for atom {type_id}: {e:?}");
+                codegen_failed += 1;
+            }
+        }
+    }
+    log::info!(
+        "Pre-warmed {warmed} atom codegen pipelines ({skipped_no_body} no-body, \
+         {skipped_specialized} specialized-token atoms skipped, {codegen_failed} codegen errors)"
+    );
+}
+
 /// If `def.preset_metadata` is `None`, parse the bundled JSON for
 /// `gen_type` and graft its `preset_metadata` onto `def` in-place.
 /// No-op if the override already carries metadata, or if no bundled
@@ -250,4 +372,77 @@ pub fn graft_preset_metadata_from_bundle(
         return;
     };
     def.preset_metadata = base.preset_metadata;
+}
+
+/// BUG-146 — GPU-backed proof that [`prewarm_all_atom_codegen_pipelines`]
+/// actually populates the device's shared compute-pipeline cache for atoms on
+/// the codegen path, so their first live `run()`'s
+/// `self.pipeline.get_or_insert_with(...)` hits a cache entry instead of
+/// compiling on the content thread. Scoped to one representative atom from
+/// each of this session's three conversion waves — `node.grid_mesh` (wave
+/// 2/mesh atoms), `node.shininess` (wave 2/lighting), `node.rotate_coordinates`
+/// (wave 3) — rather than the full ~135-atom sweep, following the same
+/// before/after + idempotent shape as
+/// `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache`
+/// and `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache`.
+/// Run deliberately: `cargo test -p manifold-renderer --features gpu-proofs
+/// generators::registry::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_node};
+
+    #[test]
+    fn prewarm_populates_the_shared_cache_for_representative_converted_atoms() {
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        let sample = ["node.grid_mesh", "node.shininess", "node.rotate_coordinates"];
+
+        let before = device.compute_pipeline_cache_len();
+        prewarm_all_atom_codegen_pipelines(&device.arc());
+        let after = device.compute_pipeline_cache_len();
+        assert!(
+            after >= before,
+            "prewarm_all_atom_codegen_pipelines must never shrink the cache: before={before} after={after}"
+        );
+
+        // Idempotent: a second sweep must be a pure cache hit, not add more
+        // entries.
+        prewarm_all_atom_codegen_pipelines(&device.arc());
+        assert_eq!(
+            device.compute_pipeline_cache_len(),
+            after,
+            "a second atom-codegen prewarm pass must be a pure cache hit, not add more entries"
+        );
+
+        // After prewarm, each sampled atom's EXACT standalone-kernel compile
+        // call — what its real `run()`'s `get_or_insert_with` would make on
+        // its first live frame — must be a cache hit, not a fresh compile.
+        // Order-independent by design (doesn't require the cache to be
+        // empty beforehand): `device` is process-global across the whole
+        // `--features gpu-proofs --lib` run (`crate::test_device()`), so
+        // another test's `GeneratorRenderer::new` (which itself calls
+        // `GeneratorRegistry::prewarm_all`) may have warmed these same three
+        // atoms before this test runs — the same cross-test-ordering class
+        // BUG-144 documents for the sibling render_scene/gltf_texture_source
+        // prewarm tests. Asserting "warm after MY prewarm call" rather than
+        // "count grew by exactly N" is correct either way: if this test's
+        // own sweep is what warmed them, or another test's did, the
+        // operationally meaningful fact — first live use is a cache hit —
+        // holds either way.
+        for type_id in sample {
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("{type_id} must be registered"));
+            let wgsl = standalone_for_node(node.as_ref())
+                .unwrap_or_else(|e| panic!("{type_id} standalone codegen: {e:?}"));
+            let cache_before_use = device.compute_pipeline_cache_len();
+            device.create_compute_pipeline(&wgsl, ENTRY, type_id);
+            assert_eq!(
+                device.compute_pipeline_cache_len(),
+                cache_before_use,
+                "{type_id}'s standalone pipeline compile after prewarm must be a cache hit"
+            );
+        }
+    }
 }

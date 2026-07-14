@@ -21,10 +21,14 @@ got here, not where we are):
 - `GRAPH_COMPILER.md` — a walked-back 2026-05 brainstorm (`for_each_n`).
   Historical only; nothing in it is the shipped compiler.
 
-Known stale **code comments** (fix opportunistically, don't trust them):
-`freeze/classify.rs` still says gathers make a node a boundary and buffer atoms
-are "standalone single-source only" — both false since tier 3 / buffer-fusion
-shipped. `freeze/mod.rs`'s header still describes the module as "oracle + v1".
+Fixed 2026-07-14 (fusion-sweep phase 8): `freeze/classify.rs`'s `Gather` /
+`BufferGather` / `Source` doc comments no longer claim a gather input or a
+buffer atom forces a node to Boundary, or that Source generators can't head a
+region — all three fuse today (tier 3 buffer-fusion + generator-as-producer
+shipped; only the WIRE feeding a gather/buffer-gather stays external, not the
+node). `freeze/mod.rs`'s header now describes the actual multi-stage compiler
+(classify/region/codegen/install/segment/space) instead of framing the module
+as an oracle-first v1 prototype.
 
 ---
 
@@ -400,13 +404,28 @@ and edges #3/#7 below, which no lens engaged.
    markers, e.g. the fluidsim oracle asserts `@dispatch_count_param`.)
 2. The **suite-parallelism GPU flake** is an eroding safety net — worth a root
    cause before trusting any future red/green signal.
-3. **Out-of-loop ≈ulp** is documented here but enforced only by per-proof
-   tolerances; there is no single tolerance constant tied to the contract.
-4. `classify.rs` **doc-comment drift** (see header) — an agent trusting those
-   comments will mis-reason about gathers and buffers.
-5. `def_content_key` hashes the FULL serde encoding — `editor_pos` and `title`
-   changes miss the cache (recompiles on node drag if a graph re-fuses while
-   not watched). Correctness fine; minor churn.
+3. FIXED (2026-07-14): **Out-of-loop ≈ulp** now has one named constant pair,
+   `OUT_OF_LOOP_ULP_ABS_TOL`/`OUT_OF_LOOP_ULP_REL_TOL` (`freeze/proof.rs`),
+   backing the 15 out-of-loop-texture-region proofs that all already shared
+   the same (1e-2, 3e-2) texel bound (ColorGrade, camera-derived, gather/warp
+   regions, quarter-res, fan-out, etc.) — a name-the-magic-number refactor, no
+   proof's pass/fail behavior changed. The per-proof `passes(max_over_fraction)`
+   budget stays per-proof by design (§7.4) — that fraction is tuned to each
+   kernel's discontinuity profile, not part of the shared texel-level contract.
+4. FIXED (2026-07-14): `classify.rs` doc-comment drift (see header note above)
+   — the `Gather`/`BufferGather`/`Source` comments no longer mis-describe
+   gathers/buffers as forcing Boundary or Source as standalone-only.
+5. FIXED (2026-07-14): `def_content_key` normalizes a cloned def — clearing
+   `editor_pos`/`title` on every node, including nodes nested inside group
+   bodies — before hashing, so a node drag or rename no longer perturbs the
+   key. Same "serialize the whole thing and hash the bytes" mechanism as
+   before, just fed a cosmetic-fields-cleared clone. Tests:
+   `content_key_ignores_editor_pos_drag`, `content_key_ignores_title_rename`,
+   `content_key_changes_on_wire_param_or_topology_edit` in
+   `node_graph/freeze/install.rs`. Residual: `GroupDef::tint` (the group
+   header accent colour) is also purely cosmetic and still participates in
+   the hash — left alone since it wasn't in this fix's scope; same minor-churn
+   character as the original issue, just narrower.
 6. Buffer fan-out regions, nested stencils, multi-output texture atoms
    (voronoi), Vec3/Table params, and resampler-into-region remain deliberate
    boundaries — under-fusing by design.
