@@ -126,6 +126,18 @@ decisions, revisable only by census numbers:
   (the wgsl-vec3-alignment rule; the uniform packer already lays out vec4). Table/String params
   stay boundary — Table is storage-shaped data, String has no GPU representation; both get
   `Enforcement: boundary_reason` and are not debt.
+- **Scope expansion, decided with Peter 2026-07-14 (P4a escalation):** Vec4/Color params ALSO
+  LIFT in P5, not just Vec3. Found during P4a: `classify_node`'s param gate (`region.rs:954–961`)
+  rejects Vec3/Vec4/Color/Table/String uniformly for the fused path — Vec4/Color already gained
+  STANDALONE codegen support in the companion Sonnet sweep (`codegen.rs`, "P3 wave 2", reassembled
+  as `vec4<f32>`) but `param_wgsl_type` still boundary-cuts them for fusion on purpose, pending
+  this design. All six `draw_*` atoms (BUG-114/P4) carry a `Color` param — without this expansion,
+  P4b's conversion would leave them mechanism-correct but still Boundary, and BUG-114 would not
+  actually achieve its promised dispatch reduction. Peter's call: expand P5 to cover Vec4/Color
+  using the same vec4-padded-uniform mechanism as Vec3 (Color/Vec4 are already 4 words — no
+  padding needed, simpler than Vec3's case). **Phase order changed:** P5 now lands BEFORE P4b (was
+  after), so the remaining `draw_*` conversions in P4b land against a param gate that already
+  accepts their Color param and actually fuse.
 - **Multi-output texture atoms (cut rule 6): LIFT, census-gated.** Body returns a struct; the
   standalone wrapper writes each output — the buffer path already ships exactly this
   (`codegen.rs:1001,1030`); extend it to texture kernels. If the census shows zero shipped-preset
@@ -214,19 +226,31 @@ per GIT_TREE_DISCIPLINE.
   numbers in the doc. Demo: the census file itself — L2. **This phase's numbers may flip D4's
   census-gated defaults; flipping a DEFER to LIFT is an escalation to Peter with the number
   attached, not a silent scope change.**
-- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a** the
-  read path (classify variant, region rule, standalone+fused codegen, synthesized `Channels`
-  struct) + `draw_dots` converted as the proving atom, with parity oracle + a fusion proof that a
-  dots-over-video chain actually forms a region (`draw_dots_fuses_into_texture_region`). **P4b**
-  the remaining five `draw_*` + `blob_overlay`, parity oracle each, `Blocked` reasons removed,
-  BUG-114 Status → FIXED, `docs/node_catalog.json` regenerated. Gate: gpu-proofs on touched
-  modules; freeze suite; `explain_presets` shows the HUD preset fusing. Demo: before/after
-  dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
-- **P5 — Vec3 param lift (D4).** Deliverables: Vec3 → vec4-padded uniform field in the shared
-  packer, cut rule 4 narrowed, affected atoms re-classified (census names them), per-atom parity
-  where a shipped preset is affected. Gate: gpu-proofs on touched modules; freeze suite;
-  `fusion_coverage_baseline` floor RAISED to the new region count (ratchet, not just non-regression).
-  Demo: census re-run showing the family's refusal count at zero — L2.
+- **P4 — `BufferIndex` + the draw-family conversion (D3, closes BUG-114).** Split: **P4a —
+  SHIPPED `ae9ab74c`.** The read path (classify variant, region rule, standalone+fused codegen,
+  synthesized `Channels` struct) + `draw_dots` converted as the proving atom, with parity oracle.
+  Escalation found and resolved with Peter (see D4's scope-expansion note): the literal
+  region-formation demo (`draw_dots_fuses_into_texture_region`) is NOT reachable yet — draw_dots'
+  `Color` param independently boundary-cuts it until P5 lands; P4a instead proved the mechanism
+  at the classify/region layer directly (wire never unions, producer stays external) plus the
+  before/after `graph_tool fusion` dispatch count on `BlobTracking.json` (unchanged, as expected,
+  pending P5). **Phase order changed: P5 now runs BEFORE P4b.** **P4b — the remaining five
+  `draw_*` + `blob_overlay`**, parity oracle each, `Blocked` reasons removed, BUG-114 Status →
+  FIXED, `docs/node_catalog.json` regenerated. Gate: gpu-proofs on touched modules; freeze suite;
+  `explain_presets` shows the HUD preset ACTUALLY fusing (region forms, dispatch count drops —
+  this is now reachable because P5 lands first and lifts the Color param that was blocking it).
+  Demo: before/after dispatch count on the Blob Track HUD preset (the census tool prints it) — L2.
+- **P5 — Vec3 + Vec4/Color param lift (D4, expanded scope).** Deliverables: Vec3 → vec4-padded
+  uniform field in the shared packer (existing plan); Vec4/Color → the SAME uniform field shape,
+  no padding needed (already 4 words) — `param_wgsl_type` (`region.rs:954–961`) stops rejecting
+  `ParamType::Vec4`/`ParamType::Color`, reusing the standalone-codegen reassembly the companion
+  sweep already built (`codegen.rs`, "P3 wave 2" — vec4<f32> from four packed fields) on the fused
+  path too; cut rule 4 narrowed for all three types; affected atoms re-classified (census names
+  the Vec3 ones; draw_dots + the five P4b atoms are the Color-param set — re-derive at execution,
+  don't hard-code this list); per-atom parity where a shipped preset is affected. Gate: gpu-proofs
+  on touched modules; freeze suite; `fusion_coverage_baseline` floor RAISED to the new region
+  count (ratchet, not just non-regression). Demo: census re-run showing the family's refusal
+  count at zero for Vec3 AND the draw_dots proving atom now actually forming a region — L2.
 - **P6 — multi-output texture atoms (D4).** Deliverables: struct-return texture wrapper (precedent
   `codegen.rs:1001`), voronoi converted, cut rule 6 narrowed to "multi-output without struct-return
   body". Gate: parity oracle; freeze suite; coverage ratchet. Demo: census delta — L2. Ordered
