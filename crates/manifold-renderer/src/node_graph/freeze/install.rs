@@ -1010,7 +1010,7 @@ fn region_output_aliases_external(
     if region.outputs.len() != 1 {
         return None;
     }
-    let mut cur_doc = region.outputs[0];
+    let mut cur_doc = region.outputs[0].0;
     // Bounded walk: a region has finitely many members; the cap is a cycle guard.
     for _ in 0..64 {
         let member = region.members.iter().find(|m| m.doc_id == cur_doc)?;
@@ -1028,6 +1028,10 @@ fn region_output_aliases_external(
         match member.inputs.get(in_idx)? {
             RegionInput::External(e) => return Some(*e),
             RegionInput::Member(prev) => cur_doc = *prev,
+            // BUFFER regions never carry a multi-output (texture-domain) producer —
+            // buffer atoms with texture outputs are boundaries — so this never
+            // actually fires; kept for match exhaustiveness only.
+            RegionInput::MemberPort(prev, _) => cur_doc = *prev,
             RegionInput::Unwired => return None, // no buffer threads through an unwired port
             RegionInput::Virtual(_) => return None, // stencil chains are texture-domain only
         }
@@ -1302,6 +1306,9 @@ pub(crate) fn fuse_canonical_def_masked(
                 .map(|ri| match ri {
                     RegionInput::External(e) => InputSource::External(*e),
                     RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
+                    RegionInput::MemberPort(doc, port) => {
+                        InputSource::NodeOutput(NodeInstanceId(*doc), port.clone())
+                    }
                     RegionInput::Unwired => InputSource::Unwired,
                     RegionInput::Virtual(ci) => InputSource::Virtual(*ci),
                 })
@@ -1412,7 +1419,11 @@ pub(crate) fn fuse_canonical_def_masked(
         let fusion_region = FusionRegion {
             nodes: region_nodes,
             num_external_inputs: region.externals.len(),
-            outputs: region.outputs.iter().map(|&d| NodeInstanceId(d)).collect(),
+            outputs: region
+                .outputs
+                .iter()
+                .map(|(d, p)| (NodeInstanceId(*d), p.clone()))
+                .collect(),
             in_place_alias,
             sampler_address_mode,
             dispatch_count_field,
@@ -1656,7 +1667,10 @@ pub(crate) fn fuse_canonical_def_masked(
             None => Some((from_node, from_port.to_string())),
             Some(&r) => {
                 let producer = &regions[r];
-                let k = producer.outputs.iter().position(|&o| o == from_node)?;
+                let k = producer
+                    .outputs
+                    .iter()
+                    .position(|(o, p)| *o == from_node && p == from_port)?;
                 // Match the output port the codegen emitted: an in-place region's
                 // output is its aliased `src_<k>` buffer; otherwise `dst` (single)
                 // or `dst_<k>` (fan-out).
@@ -1701,14 +1715,22 @@ pub(crate) fn fuse_canonical_def_masked(
         // The finder guaranteed every consumer is a live surviving node, so each
         // output lands on a resource the executor allocates.
         let multi = region.outputs.len() > 1;
-        for (k, &out_doc) in region.outputs.iter().enumerate() {
+        for (k, (out_doc, out_port)) in region.outputs.iter().enumerate() {
             let from_port = match region_in_place[i] {
                 Some(src_k) => format!("src_{src_k}"),
                 None if multi => format!("dst_{k}"),
                 None => "dst".to_string(),
             };
+            // D4/P6: match the ORIGINAL escaping port too — a multi-output
+            // member (voronoi_2d) can appear here TWICE, once per distinct
+            // port, and each entry must only claim the wires that actually
+            // left THAT port (not every wire off the node, which would
+            // duplicate onto both `dst_<k>` slots).
             for w in &def.wires {
-                if w.from_node == out_doc && !member_region.contains_key(&w.to_node) {
+                if w.from_node == *out_doc
+                    && w.from_port == *out_port
+                    && !member_region.contains_key(&w.to_node)
+                {
                     new_wires.push(EffectGraphWire {
                         from_node: fused_doc,
                         from_port: from_port.clone(),

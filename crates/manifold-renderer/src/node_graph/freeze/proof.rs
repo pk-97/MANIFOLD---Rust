@@ -2058,30 +2058,34 @@ fn fusion_coverage_baseline() {
         detail.join("\n")
     );
 
-    // Floors RAISED (P5/D4 ratchet, not just non-regression). Isolated
-    // measurement (checked out this same widened walk against the pre-P5
-    // P4a HEAD, 21794f5c, to separate "the walk got wider" from "P5 lifted
-    // real atoms"): pre-P5, the widened walk already measures 32 preset(s) /
-    // 52 region(s) / 203 atom(s) — widening the walk (effect+generator,
-    // flatten groups) is what jumped this from the old 12/15/46 (Effect-
-    // only, unflattened); P5's OWN contribution on top of that is
-    // MetallicGlass 4→6 regions/14→19 atoms, OilyFluid 30→34 atoms,
-    // StarField 10→12 atoms (exactly the five wave-2 Color/Vec3/Vec4 atoms
-    // `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves) — net
-    // +2 regions / +13 atoms, landing at the 32/54/216 measured just above.
-    // Floors sit at the pre-P5-on-the-widened-walk numbers plus P5's real
-    // delta, with a little headroom for unrelated atom-mix churn.
+    // Floors RAISED again (D4/P6 ratchet, same discipline P5 established —
+    // not just non-regression). Isolated measurement (this exact walk against
+    // P5 HEAD via `git stash`): pre-P6 measures 33 preset(s) / 55 region(s) /
+    // 222 atom(s) — every preset that fuses today already fused before P6
+    // (voronoi_2d's/block_displace_field's downstream consumers already
+    // formed their own region reading the multi-output atom as an external
+    // texture; cut rule 6 only decided whether the PRODUCER itself could join
+    // that region, not whether one existed). P6's narrowed cut rule 6
+    // (`tex_out == 0` boundary only, was `tex_out != 1`) admits both
+    // multi-output atoms as region MEMBERS: VoronoiPrism's `cells` (voronoi)
+    // and StarField's own voronoi instance each fold into their preset's
+    // existing region (+1 atom each), Glitch's `block_displace_field` folds
+    // into its existing 2-region split (+1 atom) — net +0 presets, +0
+    // regions, +3 atoms, landing at the 33/55/225 measured just above (no
+    // preset gained a NEW region; three gained one more member each). Floors
+    // sit at the pre-P6 numbers plus P6's real delta, with a little headroom
+    // for unrelated atom-mix churn.
     assert!(
-        fused_presets >= 32,
-        "expected ≥32 bundled presets to fuse, got {fused_presets} — partition regressed?"
+        fused_presets >= 33,
+        "expected ≥33 bundled presets to fuse, got {fused_presets} — partition regressed?"
     );
     assert!(
-        total_regions >= 53,
-        "expected ≥53 regions library-wide, got {total_regions} — partition regressed?"
+        total_regions >= 55,
+        "expected ≥55 regions library-wide, got {total_regions} — partition regressed?"
     );
     assert!(
-        total_fused_atoms >= 210,
-        "expected ≥210 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
+        total_fused_atoms >= 225,
+        "expected ≥225 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
     );
 }
 
@@ -2265,6 +2269,227 @@ fn fused_generator_renders_like_unfused() {
     assert!(
         r.passes(0.005) && r.over_count < 64,
         "fused generator must match unfused (binding applied): max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// D4/P6 — MULTI-output texture atom fusion. `node.voronoi_2d` ("cells")
+/// declares TWO texture outputs (`out`, `cell_id`); this graph wires only
+/// `cell_id` into `node.hash_field_by_seed` (the real VoronoiPrism shape —
+/// `docs/FUSION_SOTA_DESIGN.md` D4 names this exact pair as the family's
+/// palette example). Before this phase, cut rule 6 (`tex_out != 1`) forced
+/// voronoi to `Boundary` unconditionally, so this pair never fused. After the
+/// narrowing (`tex_out == 0` boundary only) plus the struct-return texture
+/// wrapper in `generate_fused` (the `N{i}BodyOutputs` struct + `InputSource::
+/// NodeOutput` field pick), the two atoms must fuse into ONE region and the
+/// fused kernel must render pixel-identical to the two-dispatch unfused graph
+/// — proving the mechanism reads the RIGHT struct field (`cell_id`, not
+/// `out`) through the register.
+#[test]
+fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
+    use super::install::fuse_generator_def;
+    use super::region::{NodeClass, classify_node, partition_regions};
+    use crate::preset_context::PresetContext;
+    use crate::preset_runtime::PresetRuntime;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (128u32, 128u32);
+
+    let json = r#"{
+        "version": 1, "name": "VoronoiMultiOutputFuse",
+        "nodes": [
+            { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
+            { "id": 1, "typeId": "node.voronoi_2d", "nodeId": "cells",
+              "params": { "scale": { "type": "Float", "value": 6.0 },
+                          "jitter": { "type": "Float", "value": 1.0 } } },
+            { "id": 2, "typeId": "node.hash_field_by_seed", "nodeId": "hash",
+              "params": { "seed": { "type": "Float", "value": 3.0 } } },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 1, "fromPort": "cell_id", "toNode": 2, "toPort": "field" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let canonical: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    // Structural claim first: voronoi (2 texture outputs) now classifies
+    // Eligible, and the two atoms union into ONE region — not two boundaries.
+    let cells_node = canonical.nodes.iter().find(|n| n.id == 1).unwrap();
+    assert_eq!(
+        classify_node(cells_node, &canonical, &registry),
+        NodeClass::Eligible,
+        "voronoi_2d must classify Eligible now that cut rule 6 admits tex_out >= 1"
+    );
+    let regions = partition_regions(&canonical, &registry);
+    assert_eq!(regions.len(), 1, "cells + hash must union into one region");
+    assert_eq!(
+        regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+        vec![1, 2],
+        "voronoi (head) + hash_field_by_seed, in topo order"
+    );
+
+    let fused_def = fuse_generator_def(&canonical, &registry).expect("the pair fuses");
+
+    let ctx = PresetContext {
+        time: 0.0,
+        beat: 0.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+    };
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, FMT, None)
+                .expect("generator builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "voronoi-multi-out");
+        let mut enc = device.create_encoder("voronoi-multi-out");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            g.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+        target
+    };
+
+    let unfused = render(canonical);
+    let fused = render(fused_def);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "fused voronoi+hash must match unfused (right BodyOutputs field threaded): max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
+/// D4/P6, real-preset half: `Glitch.json` (bundled, grouped) wires BOTH of
+/// `node.block_displace_field`'s texture outputs (`offset` RG into the field
+/// sum, `raw_hash` R into the invert-accent gate) to DIFFERENT downstream
+/// consumers — the shipped preset the narrowed cut rule 6 actually promotes
+/// from Boundary to Eligible, not just voronoi. Renders the real bundled def
+/// (auto-fused via `fuse_canonical_def`, which flattens Glitch's groups first)
+/// against the unfused canonical graph with the effect's master `amount`
+/// cranked to 1.0 (the default 0.0 crossfades the whole effect out, which
+/// would hide a wrong-field bug in the final pixels) — both BodyOutputs
+/// fields must thread to their correct consumer or the block-tear / invert-
+/// flash pattern diverges.
+#[test]
+fn glitch_block_displace_field_multi_output_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input(&device, w, h);
+
+    let json =
+        crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+            "Glitch",
+        ))
+        .expect("Glitch is a bundled preset");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
+
+    // ── Unfused: the shipped (grouped) preset graph, amount cranked on. ──
+    let mut unfused_graph = def.clone().into_graph(&registry).expect("unfused graph");
+    let set_by_handle = |g: &mut Graph, handle: &str, param: &str, v: f32| {
+        let id = g
+            .node_id_by_handle(handle)
+            .unwrap_or_else(|| panic!("unfused graph missing handle `{handle}`"));
+        g.set_param(id, param, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set {handle}.{param}: {e:?}"));
+    };
+    set_by_handle(&mut unfused_graph, "amount_value", "value", 1.0);
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_glitch = unfused_graph.node_id_by_handle("glitch").expect("unfused `glitch` mix node");
+    let u_out = resource_for_output(&unfused_plan, u_glitch, "out");
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    // ── Auto-fused: flatten groups, region-grow (now admits the multi-output
+    // block_displace_field member), def-rewrite, run through the executor. ──
+    let FusedDef { def: fused_def, retarget, .. } =
+        fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
+    let mut fused_graph = fused_def.clone().into_graph(&registry).expect("fused graph builds");
+    // `amount_value` fans out to FOUR different consumers (both fields, the
+    // invert gain, the final crossfade) that land in DIFFERENT regions once
+    // fused — a node can only ever be one region's member, so it survives as
+    // its own free-standing node in both graphs rather than being absorbed
+    // (retarget only covers params that DID move onto a fused kernel).
+    // Resolve it directly, same as the unfused side.
+    let (fused_amount_node, field) = match retarget
+        .get(&("amount_value".to_string(), "value".to_string()))
+    {
+        // retarget maps (unfused handle, unfused param) -> (fused node's
+        // STABLE node_id, field name) — resolve through `instance_by_node_id`
+        // (the stable identity), never `node_id_by_handle` (a fused node's
+        // handle is synthetic, `fused_region_<i>`, and irrelevant here).
+        Some((target_node_id, field)) => (
+            fused_graph
+                .instance_by_node_id(target_node_id)
+                .unwrap_or_else(|| panic!("fused graph missing retargeted amount node")),
+            field.as_str(),
+        ),
+        None => (
+            fused_graph
+                .node_id_by_handle("amount_value")
+                .unwrap_or_else(|| panic!("amount_value must survive if not retargeted")),
+            "value",
+        ),
+    };
+    fused_graph
+        .set_param(fused_amount_node, field, ParamValue::Float(1.0))
+        .unwrap_or_else(|e| panic!("set fused amount: {e:?}"));
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    // Resolve the final output's producer STRUCTURALLY from the fused def's
+    // own wiring (robust whether `glitch` survived as itself or fused away
+    // into a `fused_region_<i>` kernel — never guess the handle).
+    let fo_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "system.final_output")
+        .expect("fused def has a final_output")
+        .id;
+    let out_wire = fused_def
+        .wires
+        .iter()
+        .find(|w| w.to_node == fo_doc)
+        .expect("final_output has a producer wire");
+    let producer_doc = fused_def
+        .nodes
+        .iter()
+        .find(|n| n.id == out_wire.from_node)
+        .expect("producer node exists in fused def");
+    let f_out_node = fused_graph
+        .instance_by_node_id(&producer_doc.node_id)
+        .unwrap_or_else(|| panic!("fused graph missing producer instance for final_output"));
+    let f_out = resource_for_output(&fused_plan, f_out_node, &out_wire.from_port);
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "auto-fused Glitch (block_displace_field's two outputs threaded to \
+         different consumers) must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
         r.max_abs,
         r.max_rel,
         r.over_count,
@@ -3186,7 +3411,7 @@ fn particletext_fp32_flow_field_diag() {
     for (i, r) in regions.iter().enumerate() {
         let members: Vec<String> =
             r.members.iter().map(|m| handle_of(&def, m.doc_id)).collect();
-        let outs: Vec<String> = r.outputs.iter().map(|&o| handle_of(&def, o)).collect();
+        let outs: Vec<String> = r.outputs.iter().map(|(o, _)| handle_of(&def, *o)).collect();
         let exts: Vec<String> = r
             .externals
             .iter()

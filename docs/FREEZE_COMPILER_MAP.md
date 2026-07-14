@@ -104,12 +104,17 @@ unfused, which is always correct. Order matters; from `classify_node`:
 2. Unknown type, `FusionKind::Boundary`, or no `wgsl_body`.
 3. `fusion_register_heavy()` (bespoke inlined simplex — occupancy cliff;
    FluidSim's burst measured fused-slower).
-4. Any param that can't lay out as a scalar uniform field (Vec3/Table/String).
+4. Any param that can't lay out as a fusable uniform field (Table/String —
+   Vec3/Vec4/Color pass via `param_is_fusable`, P5/D4, 2026-07-14).
    (Binding-targeted *Enum* params are allowed — the retarget rewrites
    `EnumRound`→`IntRound`, identical at the u32 write boundary.)
 5. Buffer atoms: see the buffer gate list below.
-6. Texture arity ≠ (Source: 0-in/1-out, else ≥1-in/1-out). Two texture outputs
-   (voronoi) = boundary.
+6. Texture arity: `tex_out == 0` boundary; else Source needs 0-in, everything
+   else ≥1-in (P6/D4, 2026-07-14 — was "≠1 texture output", so a MULTI-output
+   atom, e.g. voronoi_2d/block_displace_field, was always a boundary; now
+   admitted as a region member via the struct-return `BodyOutputs` wrapper
+   extended to `generate_fused`, `InputSource::NodeOutput` picking the field
+   a wire threads).
 7. Resample: any `output_canvas_scale ≠ 1:1` (downsample) — the fused node
    would iterate the wrong grid.
 8. Any Texture3D port (texture finder is 2D; 3D fuses only inside buffer
@@ -426,9 +431,10 @@ and edges #3/#7 below, which no lens engaged.
    header accent colour) is also purely cosmetic and still participates in
    the hash — left alone since it wasn't in this fix's scope; same minor-churn
    character as the original issue, just narrower.
-6. Buffer fan-out regions, nested stencils, multi-output texture atoms
-   (voronoi), Vec3/Table params, and resampler-into-region remain deliberate
-   boundaries — under-fusing by design.
+6. Buffer fan-out regions, nested stencils, Table/String params, and
+   resampler-into-region remain deliberate boundaries — under-fusing by
+   design. (Vec3/Vec4/Color params lifted P5; multi-output texture atoms
+   — voronoi_2d, block_displace_field — lifted P6, FUSION_SOTA_DESIGN.md D4.)
 7. `leak_params`/`leak_ports`/`Box::leak` of views: bounded by cache caps +
    distinct shapes per session, but "bounded" rests on `FUSED_CACHE_CAP`
    stopping *insertion* while recompute-on-miss keeps leaking per miss past

@@ -113,6 +113,14 @@ pub enum RegionInput {
     External(usize),
     /// Another member's output register (must be earlier in topo order).
     Member(u32),
+    /// Another member's output register, but that member is MULTI-OUTPUT (a
+    /// struct-return body with ≥2 texture outputs — voronoi_2d's `out`/
+    /// `cell_id`, D4/P6): the register alone isn't the value, so this names
+    /// which `BodyOutputs` field the wire threads. Single-output members keep
+    /// `Member(u32)` (the register IS the value already) — byte-identical for
+    /// every prior region. Carries the producer's own output PORT NAME (from
+    /// the wire), same shape as `ExternalRef::from_port`.
+    MemberPort(u32, String),
     /// An OPTIONAL texture input with no wire (pack_channels' unwired b/a). The
     /// fused body receives a zero vector gated off by its injected use flag —
     /// folded to a literal `0u` at codegen since wiring is static in the def.
@@ -178,7 +186,12 @@ pub struct Region {
     /// consumers are reachable from `final_output` (live), so the install pass can
     /// wire each `dst_<k>` to an allocated texture — a region with any escaping
     /// wire to a dead (non-final-reachable) consumer is dropped, not fused.
-    pub outputs: Vec<u32>,
+    /// Each entry carries the escaping PORT NAME too (D4/P6): a single-output
+    /// member has exactly one, so this is unchanged in shape for every prior
+    /// region; a MULTI-output member (voronoi_2d) can appear TWICE here — once
+    /// per distinct port that has a live external consumer — each its own
+    /// `dst_<k>`.
+    pub outputs: Vec<(u32, String)>,
     /// The element space every member ran at in the UNFUSED plan (tier 6).
     /// `Some` for texture regions — the install pass stamps a `Scaled` space
     /// onto the fused node's `output_canvas_scales` so the executor sizes the
@@ -294,6 +307,38 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
     candidates.sort_unstable(); // deterministic merge order → reproducible regions
     candidates.dedup();
 
+    // D4/P6 (multi-output bridging): a gather-consumed wire's producer must
+    // NEVER end up a member of the SAME region as its consumer (`build_region`
+    // bails on exactly this — "gather input wired from a member" — because a
+    // register can't carry a whole texture the body samples at a computed
+    // coord). Before this phase every multi-output candidate was Boundary, so
+    // it could never bridge two components that only interact through such a
+    // wire. Now a multi-output node's TWO ports can each union independently
+    // (one feeds branch A coincidentally, the other feeds branch B
+    // coincidentally) and merge A and B into one component even though A and
+    // B ALSO share an unrelated gather wire between two of their OTHER
+    // members (Glitch: block_displace_field's `offset`→combine_offset→remap
+    // bridges into `hash`→exposure→...→masked_mix, and remap's output feeds
+    // rgb_split's GATHER `in` input — remap and rgb_split were never unioned
+    // by that wire directly, but the multi-output bridge puts them in one
+    // component anyway). Same shape as the cycle check just below: track
+    // every gather-consumed eligible→eligible pair and refuse any union that
+    // would collapse both endpoints into one region — the two components
+    // stay separate and connect via the SAME cross-region gather the
+    // multi-region model already relies on (`generate_fused`'s doc: "two
+    // distinct regions can only be directly texture-wired through a GATHER").
+    let gather_pairs: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| {
+            eligible.contains(&w.from_node)
+                && eligible.contains(&w.to_node)
+                && is_texture_wire(def, registry, w)
+                && !wire_coincident_consumed(def, registry, w)
+        })
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+
     let mut uf = UnionFind::new(&eligible);
     for (a, b) in candidates {
         if uf.find(a) == uf.find(b) {
@@ -311,7 +356,8 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
                 None => n,
             }
         };
-        if !collapsed_has_cycle(&forward, &key) {
+        let would_bridge_a_gather_wire = gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
+        if !collapsed_has_cycle(&forward, &key) && !would_bridge_a_gather_wire {
             uf.union(a, b);
         }
     }
@@ -511,6 +557,15 @@ fn absorb_virtual_chains(
                         // A gathered producer can't thread as a per-corner
                         // register (the body samples a whole texture).
                         if access.is_gather() {
+                            return None;
+                        }
+                        // D4/P6: a multi-output producer feeding a STENCIL
+                        // chain member isn't a shape any atom needs yet (every
+                        // struct-return atom today is a 0-texture-input
+                        // Source, never itself gather-consumed) — bail
+                        // defensively rather than guess which BodyOutputs
+                        // field the chain's per-corner recompute would want.
+                        if producer_tex_output_count(registry, def, wire.from_node) > 1 {
                             return None;
                         }
                         RegionInput::Member(wire.from_node)
@@ -904,6 +959,26 @@ pub(crate) fn configured_construct(
     Some(boxed)
 }
 
+/// How many texture outputs `doc_id` declares (0 if it's not in `def`, or the
+/// registry doesn't know its type — a defensive default that never falsely
+/// reports "multi-output"). D4/P6: a producer with ≥2 texture outputs is a
+/// struct-return body (voronoi_2d's `out`/`cell_id`) — wiring FROM one of its
+/// ports into a region member must disambiguate which `BodyOutputs` field
+/// threads, via `RegionInput::MemberPort` instead of the plain `Member(u32)`
+/// single-output producers keep.
+fn producer_tex_output_count(
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+    doc_id: u32,
+) -> usize {
+    def.nodes
+        .iter()
+        .find(|n| n.id == doc_id)
+        .and_then(|n| configured_construct(registry, n))
+        .map(|c| c.outputs().iter().filter(|o| is_texture_port(&o.ty)).count())
+        .unwrap_or(0)
+}
+
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
 ///
@@ -985,10 +1060,19 @@ pub(crate) fn classify_node(
         return classify_buffer_node(n.as_ref(), node, def, registry);
     }
 
-    // Texture I/O shape: exactly one texture output (the register the region
+    // Texture I/O shape: ≥1 texture output (the register(s) the region
     // threads). A Source reads NO texture input (it generates from position); the
-    // threaded kinds read ≥1. An atom with two texture outputs (voronoi) needs
-    // multi-output fused codegen — a follow-on; boundary for now.
+    // threaded kinds read ≥1. D4/P6 (narrowed cut rule 6): a MULTI-output atom
+    // (≥2 texture outputs — voronoi_2d's `out`/`cell_id`, block_displace_field's
+    // `offset`/`raw_hash`) is Eligible too, on the same struct-return-body
+    // mechanism the codegen's buffer path already ships (`codegen.rs`'s
+    // BufferOutputs wrapper) extended to texture kernels: every atom that
+    // declares ≥2 texture outputs in this codebase already returns a
+    // `BodyOutputs` struct (there is no "multi-output but NOT struct-return"
+    // atom on the codegen path — an atom with 0/1 outputs never declares the
+    // struct; ≥2 always does, by the `primitive!` authoring contract
+    // `ADDING_PRIMITIVES.md` documents). Only tex_out == 0 (no register to
+    // thread at all) stays Boundary.
     let tex_in = n.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
     let tex_out = n.outputs().iter().filter(|o| is_texture_port(&o.ty)).count();
     let arity_ok = if matches!(n.fusion_kind(), FusionKind::Source) {
@@ -996,7 +1080,7 @@ pub(crate) fn classify_node(
     } else {
         tex_in >= 1
     };
-    if !arity_ok || tex_out != 1 {
+    if !arity_ok || tex_out == 0 {
         return NodeClass::Boundary;
     }
 
@@ -1452,7 +1536,17 @@ fn build_region(
                 if access.is_gather() {
                     return Err("gather input wired from a member");
                 }
-                RegionInput::Member(wire.from_node)
+                // D4/P6: a multi-output producer (struct-return body, ≥2
+                // texture outputs) isn't a single register — the wire names
+                // WHICH BodyOutputs field threads. Zero for every buffer-array
+                // producer and every single-texture-output atom, so this stays
+                // `Member(u32)` — byte-identical — for every region that
+                // existed before this phase.
+                if producer_tex_output_count(registry, def, wire.from_node) > 1 {
+                    RegionInput::MemberPort(wire.from_node, wire.from_port.clone())
+                } else {
+                    RegionInput::Member(wire.from_node)
+                }
             } else {
                 let key = (wire.from_node, wire.from_port.clone());
                 let slot = *ext_index.entry(key).or_insert_with(|| {
@@ -1567,9 +1661,14 @@ fn build_region(
     // unbound — so a `dst_<k>` feeding a dead consumer would silently kill the
     // live outputs too. If any escaping wire targets a dead consumer, drop the
     // whole region (it renders unfused, always correct).
-    let mut outputs: Vec<u32> = Vec::new();
+    // D4/P6: dedup by (id, PORT) — not just id — so a multi-output member with
+    // TWO distinct ports each feeding a live external consumer gets two
+    // entries (its own `dst_<k>` each), while a single-output member (or a
+    // multi-output member escaping through only one of its ports) still gets
+    // exactly one, same as before.
+    let mut outputs: Vec<(u32, String)> = Vec::new();
     for &id in nodes {
-        let mut escapes = false;
+        let mut escaping_ports: Vec<String> = Vec::new();
         for w in &def.wires {
             if w.from_node == id
                 && !node_set.contains(&w.to_node)
@@ -1578,11 +1677,13 @@ fn build_region(
                 if !final_reachable.contains(&w.to_node) {
                     return Err("escaping wire to a dead consumer");
                 }
-                escapes = true;
+                if !escaping_ports.contains(&w.from_port) {
+                    escaping_ports.push(w.from_port.clone());
+                }
             }
         }
-        if escapes {
-            outputs.push(id);
+        for port in escaping_ports {
+            outputs.push((id, port));
         }
     }
     outputs.sort_unstable();
@@ -2219,7 +2320,7 @@ mod tests {
             .find(|n| n.type_id == "node.clamp")
             .map(|n| n.id)
             .unwrap();
-        assert_eq!(r.outputs, vec![out_node], "clamp is the region output");
+        assert_eq!(r.outputs, vec![(out_node, "out".to_string())], "clamp is the region output");
         // mix reads the external fork AND colorize's register: an External + a
         // Member input, proving the fork resolves.
         let mix_id = colorgrade_def()
@@ -2274,14 +2375,14 @@ mod tests {
         assert_eq!(r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(r1.externals.len(), 1, "region 1 reads the source");
         assert_eq!(r1.externals[0].from_node, 0);
-        assert_eq!(r1.outputs, vec![2], "contrast feeds the threshold");
+        assert_eq!(r1.outputs, vec![(2, "out".to_string())], "contrast feeds the threshold");
 
         // Region 2: saturation(4) → clamp(5), reads the threshold, output = clamp.
         let r2 = &regions[1];
         assert_eq!(r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![4, 5]);
         assert_eq!(r2.externals.len(), 1, "region 2 reads the threshold output");
         assert_eq!(r2.externals[0].from_node, 3, "the threshold is region 2's external");
-        assert_eq!(r2.outputs, vec![5], "clamp feeds final_output");
+        assert_eq!(r2.outputs, vec![(5, "out".to_string())], "clamp feeds final_output");
     }
 
     /// Tier 3 — a gather atom folds INTO a region (it does NOT split it). source →
@@ -2534,7 +2635,7 @@ mod tests {
         let r = &regions[0];
         assert_eq!(r.members.len(), 2, "checkerboard + invert");
         assert!(r.externals.is_empty(), "a pure-generator region reads no external texture");
-        assert_eq!(r.outputs, vec![2], "invert feeds final_output");
+        assert_eq!(r.outputs, vec![(2, "out".to_string())], "invert feeds final_output");
         let checker = r.members.iter().find(|m| m.doc_id == 1).unwrap();
         assert!(checker.inputs.is_empty(), "the Source head reads nothing");
         let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
@@ -2566,7 +2667,7 @@ mod tests {
         assert_eq!(r.members.len(), 2, "checkerboard + mix");
         assert_eq!(r.externals.len(), 1, "the system source is the one external");
         assert_eq!(r.externals[0].from_node, 0);
-        assert_eq!(r.outputs, vec![2], "mix feeds final_output");
+        assert_eq!(r.outputs, vec![(2, "out".to_string())], "mix feeds final_output");
     }
 
     /// Fan-out — an interior member feeds two distinct downstream boundaries, so
@@ -2613,7 +2714,7 @@ mod tests {
         assert_eq!(r.externals[0].from_node, 0);
         assert_eq!(
             r.outputs,
-            vec![2, 3],
+            vec![(2, "out".to_string()), (3, "out".to_string())],
             "invert and contrast each escape to their own threshold — two outputs"
         );
     }
@@ -2696,6 +2797,68 @@ mod tests {
         );
     }
 
+    /// D4/P6 regression guard (found + fixed by the Glitch real-preset proof):
+    /// a MULTI-output node's two ports can each union independently into
+    /// otherwise-unrelated branches — one branch ends in a node whose output
+    /// GATHER-feeds the other branch's node. Neither branch unions with the
+    /// other directly (the gather wire is correctly excluded from union
+    /// candidates), but the multi-output producer bridges them into ONE
+    /// component via two separate coincident wires. `build_region` would
+    /// then find the gather wire's endpoints BOTH inside that one merged
+    /// component and bail the WHOLE thing to unfused — costing every member,
+    /// not just the gather pair. The gather-bridge guard in `partition_regions`
+    /// must keep the two components separate instead, so each still fuses
+    /// on its own and the two connect via the SAME cross-region gather the
+    /// multi-region model already relies on.
+    ///
+    /// Topology: `cells` (Source, 2 texture outputs) → `out` feeds `invert`
+    /// feeds `remap.uv_field` (branch A); `cells` → `cell_id` feeds
+    /// `hash.field` (branch B). `remap`'s output GATHER-feeds `rgb_split.in`;
+    /// `hash`'s output feeds `rgb_split.velocity` (Coincident) — so without
+    /// the guard, `cells` bridges A and B into one component that contains
+    /// both `remap` and `rgb_split`, the gather pair.
+    #[test]
+    fn multi_output_producer_never_bridges_a_gather_pair_into_one_region() {
+        let json = r#"{
+            "version": 1, "name": "gather_bridge", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.voronoi_2d", "nodeId": "cells" },
+                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 3, "typeId": "node.remap", "nodeId": "remap" },
+                { "id": 4, "typeId": "node.hash_field_by_seed", "nodeId": "hash" },
+                { "id": 5, "typeId": "node.rgb_split", "nodeId": "split" },
+                { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "uv_field" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "source" },
+                { "fromNode": 1, "fromPort": "cell_id", "toNode": 4, "toPort": "field" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "velocity" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let mut regions = partition_regions(&def, &registry());
+        // Two separate regions (branch A: cells+invert+remap; branch B: hash
+        // alone, or folded with whichever side the finder groups it) — NEVER
+        // one region containing both `remap` (3) and `rgb_split` (5), which
+        // would mean the gather pair got bridged into one component.
+        for r in &regions {
+            let ids: Vec<u32> = r.members.iter().map(|m| m.doc_id).collect();
+            assert!(
+                !(ids.contains(&3) && ids.contains(&5)),
+                "remap and rgb_split (a gather pair) must never share a region: {ids:?}"
+            );
+        }
+        regions.sort_by_key(|r| r.members[0].doc_id);
+        assert!(
+            regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 1)
+                && r.members.iter().any(|m| m.doc_id == 3)),
+            "cells must still fuse with its OWN branch (invert + remap)"
+        );
+    }
+
     /// A specialization-constant atom now FUSES: classify substitutes the
     /// declared tokens (`QUALITY_LEVEL` / `WEIGHTING_MODE`) with the def's
     /// static param values before the naga parse gate, so
@@ -2732,7 +2895,7 @@ mod tests {
         assert_eq!(r.virtual_chains.len(), 1, "the upstream invert is absorbed");
         assert_eq!(r.virtual_chains[0].members[0].doc_id, 1);
         assert_eq!(r.externals.len(), 1, "the source backs both the chain and width");
-        assert_eq!(r.outputs, vec![3]);
+        assert_eq!(r.outputs, vec![(3, "out".to_string())]);
     }
 
     /// A specialization param that an outer binding targets keeps the atom a
@@ -2804,7 +2967,7 @@ mod tests {
         assert_eq!(chain.members[0].inputs, vec![RegionInput::External(0)]);
         let blur = &r.members[0];
         assert_eq!(blur.inputs, vec![RegionInput::Virtual(0)], "the blur reads the chain");
-        assert_eq!(r.outputs, vec![2]);
+        assert_eq!(r.outputs, vec![(2, "out".to_string())]);
     }
 
     /// A producer with a SECOND consumer (the blur and a mix both read the
@@ -3272,6 +3435,20 @@ mod audit {
             .collect();
         candidates.sort_unstable();
         candidates.dedup();
+        // D4/P6: mirrors `partition_regions`' gather-bridge guard exactly (see
+        // its comment) — must stay in lockstep or this explainer would print
+        // "component merged fine" for a union the real algorithm now refuses.
+        let gather_pairs: Vec<(u32, u32)> = def
+            .wires
+            .iter()
+            .filter(|w| {
+                eligible.contains(&w.from_node)
+                    && eligible.contains(&w.to_node)
+                    && is_texture_wire(&def, registry, w)
+                    && !wire_coincident_consumed(&def, registry, w)
+            })
+            .map(|w| (w.from_node, w.to_node))
+            .collect();
         let mut uf = UnionFind::new(&eligible);
         for (a, b) in candidates {
             if uf.find(a) == uf.find(b) {
@@ -3286,8 +3463,10 @@ mod audit {
                     None => n,
                 }
             };
-            if collapsed_has_cycle(&forward, &key) {
-                eprintln!("  MERGE REJECTED (convexity): {a} + {b}");
+            let would_bridge_a_gather_wire =
+                gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
+            if collapsed_has_cycle(&forward, &key) || would_bridge_a_gather_wire {
+                eprintln!("  MERGE REJECTED (convexity or gather-bridge): {a} + {b}");
             } else {
                 uf.union(a, b);
             }
@@ -3421,10 +3600,18 @@ mod audit {
         } else {
             tex_in >= 1
         };
-        if tex_out > 1 {
-            return Some(RefusalFamily::MultiOutput);
-        }
-        if !arity_ok || tex_out != 1 {
+        // Mirrors `classify_node`'s narrowed cut rule 6 exactly (D4/P6): a
+        // MULTI-output atom (tex_out >= 2) is no longer a refusal by itself —
+        // every atom that declares ≥2 texture outputs on the codegen path is
+        // already struct-return, so `RefusalFamily::MultiOutput` now only
+        // fires for the true arity mismatch (wrong texture-INPUT count for
+        // the atom's FusionKind, or zero texture outputs at all — no register
+        // to thread). Kept as its own bucket (not folded into `Arity`) so a
+        // future non-struct-return multi-output atom would still show up
+        // distinctly if the authoring contract is ever violated — but no atom
+        // shipped today reaches it (`refusal_census_matches_classify_node`
+        // enforces the lockstep either way).
+        if !arity_ok || tex_out == 0 {
             return Some(RefusalFamily::Arity);
         }
         let default_params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
@@ -3573,6 +3760,20 @@ mod audit {
             .collect();
         candidates.sort_unstable();
         candidates.dedup();
+        // D4/P6: mirrors `partition_regions`' gather-bridge guard (see its
+        // comment) — must stay in lockstep or this test helper would report a
+        // component the real algorithm no longer forms.
+        let gather_pairs: Vec<(u32, u32)> = def
+            .wires
+            .iter()
+            .filter(|w| {
+                eligible.contains(&w.from_node)
+                    && eligible.contains(&w.to_node)
+                    && is_texture_wire(def, registry, w)
+                    && !wire_coincident_consumed(def, registry, w)
+            })
+            .map(|w| (w.from_node, w.to_node))
+            .collect();
         let mut uf = UnionFind::new(&eligible);
         for (a, b) in candidates {
             if uf.find(a) == uf.find(b) {
@@ -3587,7 +3788,9 @@ mod audit {
                     None => n,
                 }
             };
-            if !collapsed_has_cycle(&forward, &key) {
+            let would_bridge_a_gather_wire =
+                gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
+            if !collapsed_has_cycle(&forward, &key) && !would_bridge_a_gather_wire {
                 uf.union(a, b);
             }
         }

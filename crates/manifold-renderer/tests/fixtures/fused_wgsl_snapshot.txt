@@ -1967,10 +1967,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 // @static_param: n0_bands
 // @static_param: n0_motion
 // @static_param: n0_time
-// @static_param: n1_amount
-// @static_param: n1_mode
+// @static_param: n1_time
+// @static_param: n2_amount
 // @static_param: n2_mode
-// @static_param: n2_wrap
+// @static_param: n3_mode
+// @static_param: n3_wrap
+// @static_param: n5_high
+// @static_param: n5_low
 struct Params {
     n0_amount: f32,
     n0_scanline: f32,
@@ -1979,18 +1982,32 @@ struct Params {
     n0_bands: f32,
     n0_time: f32,
     n1_amount: f32,
-    n1_mode: u32,
-    n2_wrap: u32,
+    n1_block_size: f32,
+    n1_speed: f32,
+    n1_time: f32,
+    n2_amount: f32,
     n2_mode: u32,
+    n3_wrap: u32,
+    n3_mode: u32,
+    n4_gain: f32,
+    n5_low: f32,
+    n5_high: f32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var src_1: texture_2d<f32>;
-@group(0) @binding(3) var samp: sampler;
-@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var dst_1: texture_storage_2d<rgba16float, write>;
+
+struct N1BodyOutputs {
+    offset: vec4<f32>,
+    hash: vec4<f32>,
+}
+
 
 fn sjf_hash1(n: f32) -> f32 {
     return fract(sin(n) * 43758.5453123);
@@ -2014,6 +2031,11 @@ fn sjf_value_noise(p: vec2<f32>) -> f32 {
         mix(sjf_value_hash(i + vec2<f32>(0.0, 1.0)), sjf_value_hash(i + vec2<f32>(1.0, 1.0)), uu.x),
         uu.y
     );
+}
+
+fn bdf_hash2(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(sin(h) * 43758.5453123);
 }
 
 fn overlay_channel(a: f32, b: f32) -> f32 {
@@ -2094,57 +2116,86 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f3
     return vec4<f32>(offset_x, 0.0, 0.0, 1.0);
 }
 
-fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n1_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, block_size: f32, speed: f32, time: f32) -> N1BodyOutputs {
+    let res = dims;
+    let t = floor(time * speed * 12.0);
+
+    let block_pixels = max(block_size, 4.0);
+    let block_uv = floor(uv * res / block_pixels);
+    let block_hash = bdf_hash2(block_uv + t * 0.37);
+
+    let displace_mask = step(1.0 - amount * 0.6, block_hash);
+    let displace_x = (bdf_hash2(block_uv + t * 1.13) * 2.0 - 1.0) * amount * 0.15;
+    let displace_y = (bdf_hash2(block_uv + t * 2.77) * 2.0 - 1.0) * amount * 0.03;
+    let offset = vec2<f32>(displace_x, displace_y) * displace_mask;
+
+    return N1BodyOutputs(
+        vec4<f32>(offset.x, offset.y, 0.0, 1.0),
+        vec4<f32>(block_hash, block_hash, block_hash, 1.0),
+    );
+}
+
+fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n2_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, wrap: u32, mode: u32) -> vec4<f32> {
+fn n3_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, wrap: u32, mode: u32) -> vec4<f32> {
     let field = field_color.rg;
     let sample_uv = select(field, uv + field, mode == 1u);
     let wrapped = vec2<f32>(wrap_coord(sample_uv.x, wrap), wrap_coord(sample_uv.y, wrap));
     return textureSampleLevel(source, samp, wrapped, 0.0);
 }
 
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(dst);
+    let dims = textureDimensions(dst_0);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_0 = textureLoad(src_0, coord, 0);
     let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_time);
-    let r1 = n1_body(ext_0, r0, uv, vec2<f32>(dims), params.n1_amount, params.n1_mode);
-    let r2 = n2_body(src_1, samp, r1, uv, vec2<f32>(dims), params.n2_wrap, params.n2_mode);
-    textureStore(dst, coord, r2);
+    let r1 = n1_body(uv, vec2<f32>(dims), params.n1_amount, params.n1_block_size, params.n1_speed, params.n1_time);
+    let r2 = n2_body(r1.offset, r0, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
+    let r3 = n3_body(src_0, samp, r2, uv, vec2<f32>(dims), params.n3_wrap, params.n3_mode);
+    let r4 = n4_body(r1.hash, uv, vec2<f32>(dims), params.n4_gain);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_low, params.n5_high);
+    textureStore(dst_0, coord, r3);
+    textureStore(dst_1, coord, r5);
 }
 
 === effect:Glitch node:16 ===
-// @static_param: n1_high
-// @static_param: n1_low
-// @static_param: n2_angle
-// @static_param: n2_falloff
-// @static_param: n2_mode
-// @static_param: n4_intensity
-// @static_param: n5_amount
-// @static_param: n6_mode
+// @static_param: n0_angle
+// @static_param: n0_falloff
+// @static_param: n0_mode
+// @static_param: n2_intensity
+// @static_param: n3_amount
+// @static_param: n4_mode
 struct Params {
-    n0_gain: f32,
-    n1_low: f32,
-    n1_high: f32,
-    n2_mode: u32,
-    n2_angle: f32,
-    n2_falloff: f32,
+    n0_mode: u32,
+    n0_angle: f32,
+    n0_falloff: f32,
+    n1_amount: f32,
+    n2_intensity: f32,
     n3_amount: f32,
-    n4_intensity: f32,
-    n5_amount: f32,
-    n6_amount: f32,
-    n6_mode: u32,
-    _pad0: u32,
+    n4_amount: f32,
+    n4_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -2190,20 +2241,7 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     }
 }
 
-fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
-    return vec4<f32>(c.rgb * gain, c.a);
-}
-
-fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
-    return vec4<f32>(
-        smoothstep(low, high, c.r),
-        smoothstep(low, high, c.g),
-        smoothstep(low, high, c.b),
-        c.a,
-    );
-}
-
-fn n2_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) -> vec4<f32> {
     var dir: vec2<f32>;
     if mode == 0u {
         let delta = uv - vec2<f32>(0.5, 0.5);
@@ -2223,7 +2261,7 @@ fn n2_body(uv: vec2<f32>, dims: vec2<f32>, mode: u32, angle: f32, falloff: f32) 
     return vec4<f32>(dir, 0.0, 1.0);
 }
 
-fn n3_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+fn n1_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let inv = vec2<f32>(1.0) / dims;
     let v = velocity.rg;
     let off = v * amount * inv;
@@ -2233,17 +2271,17 @@ fn n3_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2
     return vec4<f32>(s_r, s_c.g, s_b, s_c.a);
 }
 
-fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
     let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
     return mix(c, inverted, intensity);
 }
 
-fn n5_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+fn n3_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let weight = clamp(mask.r * amount, 0.0, 1.0);
     return mix(a, b, weight);
 }
 
-fn n6_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);
@@ -2258,16 +2296,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_0 = textureLoad(src_0, coord, 0);
+    let ext_1 = textureLoad(src_1, coord, 0);
     let ext_2 = textureLoad(src_2, coord, 0);
-    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_gain);
-    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_low, params.n1_high);
-    let r2 = n2_body(uv, vec2<f32>(dims), params.n2_mode, params.n2_angle, params.n2_falloff);
-    let r3 = n3_body(src_1, samp, r2, uv, vec2<f32>(dims), params.n3_amount);
-    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_intensity);
-    let r5 = n5_body(r3, r4, r1, uv, vec2<f32>(dims), params.n5_amount);
-    let r6 = n6_body(ext_2, r5, uv, vec2<f32>(dims), params.n6_amount, params.n6_mode);
-    textureStore(dst, coord, r6);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_mode, params.n0_angle, params.n0_falloff);
+    let r1 = n1_body(src_0, samp, r0, uv, vec2<f32>(dims), params.n1_amount);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_intensity);
+    let r3 = n3_body(r1, r2, ext_1, uv, vec2<f32>(dims), params.n3_amount);
+    let r4 = n4_body(ext_2, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
+    textureStore(dst, coord, r4);
 }
 
 === effect:HighlightBoost node:7 ===
@@ -2875,56 +2911,88 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:VoronoiPrism node:16 ===
-// @static_param: n0_mode
-// @static_param: n0_seed_x
-// @static_param: n0_seed_y
-// @static_param: n1_high
-// @static_param: n1_low
-// @static_param: n3_direction
+// @static_param: n0_direction
+// @static_param: n10_mode
+// @static_param: n1_jitter
+// @static_param: n1_offset_x
+// @static_param: n1_offset_y
+// @static_param: n1_out_scale
+// @static_param: n2_mode
+// @static_param: n2_seed_x
+// @static_param: n2_seed_y
+// @static_param: n3_offset
+// @static_param: n3_scale
+// @static_param: n4_amount
 // @static_param: n4_mode
-// @static_param: n4_seed_x
-// @static_param: n4_seed_y
-// @static_param: n5_offset
-// @static_param: n5_scale
-// @static_param: n6_amount
+// @static_param: n5_mode
+// @static_param: n5_wrap
 // @static_param: n6_mode
-// @static_param: n7_mode
-// @static_param: n7_wrap
-// @static_param: n8_amount
-// @static_param: n8_mode
+// @static_param: n6_seed_x
+// @static_param: n6_seed_y
+// @static_param: n7_high
+// @static_param: n7_low
+// @static_param: n9_amount
 // @static_param: n9_mode
 struct Params {
-    n0_seed: f32,
-    n0_seed_x: f32,
-    n0_seed_y: f32,
-    n0_mode: u32,
-    n1_low: f32,
-    n1_high: f32,
-    n2_gain: f32,
-    n3_width: f32,
-    n3_direction: u32,
-    n4_seed: f32,
-    n4_seed_x: f32,
-    n4_seed_y: f32,
+    n0_width: f32,
+    n0_direction: u32,
+    n1_scale: f32,
+    n1_offset_x: f32,
+    n1_offset_y: f32,
+    n1_jitter: f32,
+    n1_out_scale: f32,
+    n2_seed: f32,
+    n2_seed_x: f32,
+    n2_seed_y: f32,
+    n2_mode: u32,
+    n3_scale: f32,
+    n3_offset: f32,
+    n4_amount: f32,
     n4_mode: u32,
-    n5_scale: f32,
-    n5_offset: f32,
-    n6_amount: f32,
+    n5_wrap: u32,
+    n5_mode: u32,
+    n6_seed: f32,
+    n6_seed_x: f32,
+    n6_seed_y: f32,
     n6_mode: u32,
-    n7_wrap: u32,
-    n7_mode: u32,
-    n8_amount: f32,
-    n8_mode: u32,
+    n7_low: f32,
+    n7_high: f32,
+    n8_gain: f32,
     n9_amount: f32,
     n9_mode: u32,
-    _pad0: u32,
+    n10_amount: f32,
+    n10_mode: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var src_1: texture_2d<f32>;
-@group(0) @binding(3) var samp: sampler;
-@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+
+struct N1BodyOutputs {
+    out: vec4<f32>,
+    cell_id: vec4<f32>,
+}
+
+
+fn wang_hash(seed_in: u32) -> u32 {
+    var seed = seed_in;
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed = seed * 9u;
+    seed = seed ^ (seed >> 4u);
+    seed = seed * 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return seed;
+}
+
+fn voronoi_cell_point(cell: vec2<i32>, jitter: f32) -> vec2<f32> {
+    // Two independent hashes for X and Y jitter.
+    let hx = wang_hash(u32(cell.x + 10000) * 73856093u ^ u32(cell.y + 10000) * 19349663u);
+    let hy = wang_hash(u32(cell.x + 10000) * 83492791u ^ u32(cell.y + 10000) * 28411627u);
+    let jx = f32(hx & 0xFFFFu) / 65535.0;
+    let jy = f32(hy & 0xFFFFu) / 65535.0;
+    return vec2<f32>(cell) + vec2<f32>(0.5, 0.5) + (vec2<f32>(jx, jy) - 0.5) * jitter;
+}
 
 fn hfs_hash2(p: vec2<f32>) -> vec2<f32> {
     let q = vec2<f32>(
@@ -2988,32 +3056,7 @@ fn wrap_coord(t: f32, mode: u32) -> f32 {
     return clamp(t, 0.0, 1.0);
 }
 
-fn n0_body(c_field: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, seed: f32, seed_x: f32, seed_y: f32, mode: u32) -> vec4<f32> {
-    let field = c_field.rg;
-    let seeded = field + seed * vec2<f32>(seed_x, seed_y);
-
-    if mode == 1u {
-        let h = hfs_hash1(seeded);
-        return vec4<f32>(h, h, h, 1.0);
-    }
-    let h2 = hfs_hash2(seeded);
-    return vec4<f32>(h2.x, h2.y, 0.0, 1.0);
-}
-
-fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
-    return vec4<f32>(
-        smoothstep(low, high, c.r),
-        smoothstep(low, high, c.g),
-        smoothstep(low, high, c.b),
-        c.a,
-    );
-}
-
-fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
-    return vec4<f32>(c.rgb * gain, c.a);
-}
-
-fn n3_body(uv: vec2<f32>, dims: vec2<f32>, width: f32, mode: u32) -> vec4<f32> {
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, width: f32, mode: u32) -> vec4<f32> {
     let half_width = width * 0.5;
     let lo = 0.5 - half_width;
     let hi = 0.5 + half_width;
@@ -3028,7 +3071,45 @@ fn n3_body(uv: vec2<f32>, dims: vec2<f32>, width: f32, mode: u32) -> vec4<f32> {
     return vec4<f32>(s.x, s.y, 0.0, 1.0);
 }
 
-fn n4_body(c_field: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, seed: f32, seed_x: f32, seed_y: f32, mode: u32) -> vec4<f32> {
+fn n1_body(uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset_x: f32, offset_y: f32, jitter: f32, out_scale: f32) -> N1BodyOutputs {
+    let p = uv * scale + vec2<f32>(offset_x, offset_y);
+    let cell = vec2<i32>(floor(p));
+
+    var f1 = 1e9;
+    var f2 = 1e9;
+    var f1_cell = cell;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let neighbor = cell + vec2<i32>(dx, dy);
+            let fp = voronoi_cell_point(neighbor, jitter);
+            let d = length(p - fp);
+            if d < f1 {
+                f2 = f1;
+                f1 = d;
+                f1_cell = neighbor;
+            } else if d < f2 {
+                f2 = d;
+            }
+        }
+    }
+
+    // Per-cell stable random — independent hash mix from the jitter hashes so
+    // cell_hash decorrelates from the per-cell jitter offset.
+    let cell_hash = f32(wang_hash(
+        u32(f1_cell.x + 10000) * 12345701u ^ u32(f1_cell.y + 10000) * 39916801u,
+    ) & 0xFFFFu) / 65535.0;
+
+    let r = f1 * out_scale;
+    let g = f2 * out_scale;
+    let b = (f2 - f1) * out_scale;
+
+    return N1BodyOutputs(
+        vec4<f32>(r, g, b, cell_hash),
+        vec4<f32>(f32(f1_cell.x), f32(f1_cell.y), 0.0, 1.0),
+    );
+}
+
+fn n2_body(c_field: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, seed: f32, seed_x: f32, seed_y: f32, mode: u32) -> vec4<f32> {
     let field = c_field.rg;
     let seeded = field + seed * vec2<f32>(seed_x, seed_y);
 
@@ -3040,7 +3121,7 @@ fn n4_body(c_field: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, seed: f32, seed_x
     return vec4<f32>(h2.x, h2.y, 0.0, 1.0);
 }
 
-fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
     return vec4<f32>(
         c.r * scale + offset,
         c.g * scale + offset,
@@ -3049,28 +3130,53 @@ fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
     );
 }
 
-fn n6_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n7_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, wrap: u32, mode: u32) -> vec4<f32> {
+fn n5_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, wrap: u32, mode: u32) -> vec4<f32> {
     let field = field_color.rg;
     let sample_uv = select(field, uv + field, mode == 1u);
     let wrapped = vec2<f32>(wrap_coord(sample_uv.x, wrap), wrap_coord(sample_uv.y, wrap));
     return textureSampleLevel(source, samp, wrapped, 0.0);
 }
 
-fn n8_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n6_body(c_field: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, seed: f32, seed_x: f32, seed_y: f32, mode: u32) -> vec4<f32> {
+    let field = c_field.rg;
+    let seeded = field + seed * vec2<f32>(seed_x, seed_y);
+
+    if mode == 1u {
+        let h = hfs_hash1(seeded);
+        return vec4<f32>(h, h, h, 1.0);
+    }
+    let h2 = hfs_hash2(seeded);
+    return vec4<f32>(h2.x, h2.y, 0.0, 1.0);
+}
+
+fn n7_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb * gain, c.a);
+}
+
+fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     let out_a = mix(a.a, b.a, amount);
@@ -3086,18 +3192,18 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
     let ext_0 = textureLoad(src_0, coord, 0);
-    let ext_1 = textureLoad(src_1, coord, 0);
-    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_seed, params.n0_seed_x, params.n0_seed_y, params.n0_mode);
-    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_low, params.n1_high);
-    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_gain);
-    let r3 = n3_body(uv, vec2<f32>(dims), params.n3_width, params.n3_direction);
-    let r4 = n4_body(ext_0, uv, vec2<f32>(dims), params.n4_seed, params.n4_seed_x, params.n4_seed_y, params.n4_mode);
-    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_scale, params.n5_offset);
-    let r6 = n6_body(r3, r5, uv, vec2<f32>(dims), params.n6_amount, params.n6_mode);
-    let r7 = n7_body(src_1, samp, r6, uv, vec2<f32>(dims), params.n7_wrap, params.n7_mode);
-    let r8 = n8_body(r7, r2, uv, vec2<f32>(dims), params.n8_amount, params.n8_mode);
-    let r9 = n9_body(ext_1, r8, uv, vec2<f32>(dims), params.n9_amount, params.n9_mode);
-    textureStore(dst, coord, r9);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_width, params.n0_direction);
+    let r1 = n1_body(uv, vec2<f32>(dims), params.n1_scale, params.n1_offset_x, params.n1_offset_y, params.n1_jitter, params.n1_out_scale);
+    let r2 = n2_body(r1.cell_id, uv, vec2<f32>(dims), params.n2_seed, params.n2_seed_x, params.n2_seed_y, params.n2_mode);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_scale, params.n3_offset);
+    let r4 = n4_body(r0, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
+    let r5 = n5_body(src_0, samp, r4, uv, vec2<f32>(dims), params.n5_wrap, params.n5_mode);
+    let r6 = n6_body(r1.cell_id, uv, vec2<f32>(dims), params.n6_seed, params.n6_seed_x, params.n6_seed_y, params.n6_mode);
+    let r7 = n7_body(r6, uv, vec2<f32>(dims), params.n7_low, params.n7_high);
+    let r8 = n8_body(r7, uv, vec2<f32>(dims), params.n8_gain);
+    let r9 = n9_body(r5, r8, uv, vec2<f32>(dims), params.n9_amount, params.n9_mode);
+    let r10 = n10_body(ext_0, r9, uv, vec2<f32>(dims), params.n10_amount, params.n10_mode);
+    textureStore(dst, coord, r10);
 }
 
 === effect:Watercolor node:17 ===
@@ -7920,111 +8026,152 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === generator:StarField node:20 ===
-// @static_param: n0_offset
-// @static_param: n0_scale
-// @static_param: n10_offset
-// @static_param: n11_row0_w
-// @static_param: n11_row0_x
-// @static_param: n11_row0_y
-// @static_param: n11_row0_z
-// @static_param: n11_row1_w
-// @static_param: n11_row1_x
-// @static_param: n11_row1_y
-// @static_param: n11_row1_z
-// @static_param: n11_row2_w
-// @static_param: n11_row2_x
-// @static_param: n11_row2_y
-// @static_param: n11_row2_z
-// @static_param: n11_row3_w
-// @static_param: n11_row3_x
-// @static_param: n11_row3_y
-// @static_param: n11_row3_z
-// @static_param: n2_row0_w
-// @static_param: n2_row0_x
-// @static_param: n2_row0_y
-// @static_param: n2_row0_z
-// @static_param: n2_row1_w
-// @static_param: n2_row1_x
-// @static_param: n2_row1_y
-// @static_param: n2_row1_z
-// @static_param: n2_row2_w
-// @static_param: n2_row2_x
-// @static_param: n2_row2_y
-// @static_param: n2_row2_z
-// @static_param: n2_row3_w
-// @static_param: n2_row3_x
-// @static_param: n2_row3_y
-// @static_param: n2_row3_z
-// @static_param: n3_high
-// @static_param: n4_amount
-// @static_param: n4_mode
-// @static_param: n5_offset
-// @static_param: n5_scale
+// @static_param: n0_jitter
+// @static_param: n0_out_scale
+// @static_param: n10_mode
+// @static_param: n11_offset
+// @static_param: n12_row0_w
+// @static_param: n12_row0_x
+// @static_param: n12_row0_y
+// @static_param: n12_row0_z
+// @static_param: n12_row1_w
+// @static_param: n12_row1_x
+// @static_param: n12_row1_y
+// @static_param: n12_row1_z
+// @static_param: n12_row2_w
+// @static_param: n12_row2_x
+// @static_param: n12_row2_y
+// @static_param: n12_row2_z
+// @static_param: n12_row3_w
+// @static_param: n12_row3_x
+// @static_param: n12_row3_y
+// @static_param: n12_row3_z
+// @static_param: n1_row0_w
+// @static_param: n1_row0_x
+// @static_param: n1_row0_y
+// @static_param: n1_row0_z
+// @static_param: n1_row1_w
+// @static_param: n1_row1_x
+// @static_param: n1_row1_y
+// @static_param: n1_row1_z
+// @static_param: n1_row2_w
+// @static_param: n1_row2_x
+// @static_param: n1_row2_y
+// @static_param: n1_row2_z
+// @static_param: n1_row3_w
+// @static_param: n1_row3_x
+// @static_param: n1_row3_y
+// @static_param: n1_row3_z
+// @static_param: n2_high
+// @static_param: n3_offset
+// @static_param: n3_scale
+// @static_param: n4_offset
+// @static_param: n4_scale
+// @static_param: n5_mode
+// @static_param: n5_phase
 // @static_param: n6_offset
 // @static_param: n6_scale
-// @static_param: n7_mode
-// @static_param: n7_phase
-// @static_param: n8_offset
-// @static_param: n8_scale
+// @static_param: n7_offset
+// @static_param: n7_scale
+// @static_param: n9_amount
 // @static_param: n9_mode
 struct Params {
     n0_scale: f32,
-    n0_offset: f32,
-    n1_exponent: f32,
-    n2_row0_x: f32,
-    n2_row0_y: f32,
-    n2_row0_z: f32,
-    n2_row0_w: f32,
-    n2_row1_x: f32,
-    n2_row1_y: f32,
-    n2_row1_z: f32,
-    n2_row1_w: f32,
-    n2_row2_x: f32,
-    n2_row2_y: f32,
-    n2_row2_z: f32,
-    n2_row2_w: f32,
-    n2_row3_x: f32,
-    n2_row3_y: f32,
-    n2_row3_z: f32,
-    n2_row3_w: f32,
-    n3_low: f32,
-    n3_high: f32,
-    n4_amount: f32,
-    n4_mode: u32,
-    n5_scale: f32,
-    n5_offset: f32,
+    n0_offset_x: f32,
+    n0_offset_y: f32,
+    n0_jitter: f32,
+    n0_out_scale: f32,
+    n1_row0_x: f32,
+    n1_row0_y: f32,
+    n1_row0_z: f32,
+    n1_row0_w: f32,
+    n1_row1_x: f32,
+    n1_row1_y: f32,
+    n1_row1_z: f32,
+    n1_row1_w: f32,
+    n1_row2_x: f32,
+    n1_row2_y: f32,
+    n1_row2_z: f32,
+    n1_row2_w: f32,
+    n1_row3_x: f32,
+    n1_row3_y: f32,
+    n1_row3_z: f32,
+    n1_row3_w: f32,
+    n2_low: f32,
+    n2_high: f32,
+    n3_scale: f32,
+    n3_offset: f32,
+    n4_scale: f32,
+    n4_offset: f32,
+    n5_freq: f32,
+    n5_phase: f32,
+    n5_mode: u32,
     n6_scale: f32,
     n6_offset: f32,
-    n7_freq: f32,
-    n7_phase: f32,
-    n7_mode: u32,
-    n8_scale: f32,
-    n8_offset: f32,
+    n7_scale: f32,
+    n7_offset: f32,
+    n8_exponent: f32,
     n9_amount: f32,
     n9_mode: u32,
-    n10_scale: f32,
-    n10_offset: f32,
-    n11_row0_x: f32,
-    n11_row0_y: f32,
-    n11_row0_z: f32,
-    n11_row0_w: f32,
-    n11_row1_x: f32,
-    n11_row1_y: f32,
-    n11_row1_z: f32,
-    n11_row1_w: f32,
-    n11_row2_x: f32,
-    n11_row2_y: f32,
-    n11_row2_z: f32,
-    n11_row2_w: f32,
-    n11_row3_x: f32,
-    n11_row3_y: f32,
-    n11_row3_z: f32,
-    n11_row3_w: f32,
+    n10_amount: f32,
+    n10_mode: u32,
+    n11_scale: f32,
+    n11_offset: f32,
+    n12_row0_x: f32,
+    n12_row0_y: f32,
+    n12_row0_z: f32,
+    n12_row0_w: f32,
+    n12_row1_x: f32,
+    n12_row1_y: f32,
+    n12_row1_z: f32,
+    n12_row1_w: f32,
+    n12_row2_x: f32,
+    n12_row2_y: f32,
+    n12_row2_z: f32,
+    n12_row2_w: f32,
+    n12_row3_x: f32,
+    n12_row3_y: f32,
+    n12_row3_z: f32,
+    n12_row3_w: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+struct N0BodyOutputs {
+    out: vec4<f32>,
+    cell_id: vec4<f32>,
+}
+
+
+fn wang_hash(seed_in: u32) -> u32 {
+    var seed = seed_in;
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed = seed * 9u;
+    seed = seed ^ (seed >> 4u);
+    seed = seed * 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return seed;
+}
+
+fn voronoi_cell_point(cell: vec2<i32>, jitter: f32) -> vec2<f32> {
+    // Two independent hashes for X and Y jitter.
+    let hx = wang_hash(u32(cell.x + 10000) * 73856093u ^ u32(cell.y + 10000) * 19349663u);
+    let hy = wang_hash(u32(cell.x + 10000) * 83492791u ^ u32(cell.y + 10000) * 28411627u);
+    let jx = f32(hx & 0xFFFFu) / 65535.0;
+    let jy = f32(hy & 0xFFFFu) / 65535.0;
+    return vec2<f32>(cell) + vec2<f32>(0.5, 0.5) + (vec2<f32>(jx, jy) - 0.5) * jitter;
+}
+
+fn tt_trig(x: f32, mode: u32) -> f32 {
+    if mode == 0u { return sin(x); }
+    if mode == 1u { return cos(x); }
+    let t = tan(x);
+    return clamp(t, -32.0, 32.0);
+}
 
 fn overlay_channel(a: f32, b: f32) -> f32 {
     if a < 0.5 {
@@ -8062,32 +8209,45 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     }
 }
 
-fn tt_trig(x: f32, mode: u32) -> f32 {
-    if mode == 0u { return sin(x); }
-    if mode == 1u { return cos(x); }
-    let t = tan(x);
-    return clamp(t, -32.0, 32.0);
-}
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset_x: f32, offset_y: f32, jitter: f32, out_scale: f32) -> N0BodyOutputs {
+    let p = uv * scale + vec2<f32>(offset_x, offset_y);
+    let cell = vec2<i32>(floor(p));
 
-fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
-    return vec4<f32>(
-        c.r * scale + offset,
-        c.g * scale + offset,
-        c.b * scale + offset,
-        c.a,
+    var f1 = 1e9;
+    var f2 = 1e9;
+    var f1_cell = cell;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let neighbor = cell + vec2<i32>(dx, dy);
+            let fp = voronoi_cell_point(neighbor, jitter);
+            let d = length(p - fp);
+            if d < f1 {
+                f2 = f1;
+                f1 = d;
+                f1_cell = neighbor;
+            } else if d < f2 {
+                f2 = d;
+            }
+        }
+    }
+
+    // Per-cell stable random — independent hash mix from the jitter hashes so
+    // cell_hash decorrelates from the per-cell jitter offset.
+    let cell_hash = f32(wang_hash(
+        u32(f1_cell.x + 10000) * 12345701u ^ u32(f1_cell.y + 10000) * 39916801u,
+    ) & 0xFFFFu) / 65535.0;
+
+    let r = f1 * out_scale;
+    let g = f2 * out_scale;
+    let b = (f2 - f1) * out_scale;
+
+    return N0BodyOutputs(
+        vec4<f32>(r, g, b, cell_hash),
+        vec4<f32>(f32(f1_cell.x), f32(f1_cell.y), 0.0, 1.0),
     );
 }
 
-fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
-    return vec4<f32>(
-        pow(max(c.r, 0.0), exponent),
-        pow(max(c.g, 0.0), exponent),
-        pow(max(c.b, 0.0), exponent),
-        c.a,
-    );
-}
-
-fn n2_body(
+fn n1_body(
     c: vec4<f32>,
     uv: vec2<f32>,
     dims: vec2<f32>,
@@ -8099,7 +8259,7 @@ fn n2_body(
     return vec4<f32>(dot(row0, c), dot(row1, c), dot(row2, c), dot(row3, c));
 }
 
-fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
     return vec4<f32>(
         smoothstep(low, high, c.r),
         smoothstep(low, high, c.g),
@@ -8108,14 +8268,7 @@ fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) ->
     );
 }
 
-fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
-    let blended = blend_rgb(a.rgb, b.rgb, mode);
-    let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
-    return vec4<f32>(out_rgb, out_a);
-}
-
-fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
     return vec4<f32>(
         c.r * scale + offset,
         c.g * scale + offset,
@@ -8124,7 +8277,7 @@ fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
     );
 }
 
-fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
     return vec4<f32>(
         c.r * scale + offset,
         c.g * scale + offset,
@@ -8133,7 +8286,7 @@ fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
     );
 }
 
-fn n7_body(c_in: vec4<f32>, c_freq_tex: vec4<f32>, c_phase_tex: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, freq: f32, phase: f32, mode: u32, use_freq_tex: u32, use_phase_tex: u32) -> vec4<f32> {
+fn n5_body(c_in: vec4<f32>, c_freq_tex: vec4<f32>, c_phase_tex: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, freq: f32, phase: f32, mode: u32, use_freq_tex: u32, use_phase_tex: u32) -> vec4<f32> {
     let s = c_in;
 
     var f = freq;
@@ -8153,11 +8306,29 @@ fn n7_body(c_in: vec4<f32>, c_freq_tex: vec4<f32>, c_phase_tex: vec4<f32>, uv: v
     );
 }
 
-fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
     return vec4<f32>(
         c.r * scale + offset,
         c.g * scale + offset,
         c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n7_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
+    return vec4<f32>(
+        pow(max(c.r, 0.0), exponent),
+        pow(max(c.g, 0.0), exponent),
+        pow(max(c.b, 0.0), exponent),
         c.a,
     );
 }
@@ -8169,7 +8340,14 @@ fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n10_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    let out_a = mix(a.a, b.a, amount);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n11_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
     return vec4<f32>(
         c.r * scale + offset,
         c.g * scale + offset,
@@ -8178,7 +8356,7 @@ fn n10_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f3
     );
 }
 
-fn n11_body(
+fn n12_body(
     c: vec4<f32>,
     uv: vec2<f32>,
     dims: vec2<f32>,
@@ -8198,20 +8376,20 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_0 = textureLoad(src_0, coord, 0);
-    let r0 = n0_body(ext_0, uv, vec2<f32>(dims), params.n0_scale, params.n0_offset);
-    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_exponent);
-    let r2 = n2_body(ext_0, uv, vec2<f32>(dims), vec4<f32>(params.n2_row0_x, params.n2_row0_y, params.n2_row0_z, params.n2_row0_w), vec4<f32>(params.n2_row1_x, params.n2_row1_y, params.n2_row1_z, params.n2_row1_w), vec4<f32>(params.n2_row2_x, params.n2_row2_y, params.n2_row2_z, params.n2_row2_w), vec4<f32>(params.n2_row3_x, params.n2_row3_y, params.n2_row3_z, params.n2_row3_w));
-    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_low, params.n3_high);
-    let r4 = n4_body(r1, r3, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
-    let r5 = n5_body(r2, uv, vec2<f32>(dims), params.n5_scale, params.n5_offset);
-    let r6 = n6_body(r2, uv, vec2<f32>(dims), params.n6_scale, params.n6_offset);
-    let r7 = n7_body(r5, vec4<f32>(0.0), r6, uv, vec2<f32>(dims), params.n7_freq, params.n7_phase, params.n7_mode, 0u, 1u);
-    let r8 = n8_body(r7, uv, vec2<f32>(dims), params.n8_scale, params.n8_offset);
-    let r9 = n9_body(r4, r8, uv, vec2<f32>(dims), params.n9_amount, params.n9_mode);
-    let r10 = n10_body(r9, uv, vec2<f32>(dims), params.n10_scale, params.n10_offset);
-    let r11 = n11_body(r10, uv, vec2<f32>(dims), vec4<f32>(params.n11_row0_x, params.n11_row0_y, params.n11_row0_z, params.n11_row0_w), vec4<f32>(params.n11_row1_x, params.n11_row1_y, params.n11_row1_z, params.n11_row1_w), vec4<f32>(params.n11_row2_x, params.n11_row2_y, params.n11_row2_z, params.n11_row2_w), vec4<f32>(params.n11_row3_x, params.n11_row3_y, params.n11_row3_z, params.n11_row3_w));
-    textureStore(dst, coord, r11);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_scale, params.n0_offset_x, params.n0_offset_y, params.n0_jitter, params.n0_out_scale);
+    let r1 = n1_body(r0.out, uv, vec2<f32>(dims), vec4<f32>(params.n1_row0_x, params.n1_row0_y, params.n1_row0_z, params.n1_row0_w), vec4<f32>(params.n1_row1_x, params.n1_row1_y, params.n1_row1_z, params.n1_row1_w), vec4<f32>(params.n1_row2_x, params.n1_row2_y, params.n1_row2_z, params.n1_row2_w), vec4<f32>(params.n1_row3_x, params.n1_row3_y, params.n1_row3_z, params.n1_row3_w));
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_low, params.n2_high);
+    let r3 = n3_body(r1, uv, vec2<f32>(dims), params.n3_scale, params.n3_offset);
+    let r4 = n4_body(r1, uv, vec2<f32>(dims), params.n4_scale, params.n4_offset);
+    let r5 = n5_body(r3, vec4<f32>(0.0), r4, uv, vec2<f32>(dims), params.n5_freq, params.n5_phase, params.n5_mode, 0u, 1u);
+    let r6 = n6_body(r5, uv, vec2<f32>(dims), params.n6_scale, params.n6_offset);
+    let r7 = n7_body(r0.out, uv, vec2<f32>(dims), params.n7_scale, params.n7_offset);
+    let r8 = n8_body(r7, uv, vec2<f32>(dims), params.n8_exponent);
+    let r9 = n9_body(r8, r2, uv, vec2<f32>(dims), params.n9_amount, params.n9_mode);
+    let r10 = n10_body(r9, r6, uv, vec2<f32>(dims), params.n10_amount, params.n10_mode);
+    let r11 = n11_body(r10, uv, vec2<f32>(dims), params.n11_scale, params.n11_offset);
+    let r12 = n12_body(r11, uv, vec2<f32>(dims), vec4<f32>(params.n12_row0_x, params.n12_row0_y, params.n12_row0_z, params.n12_row0_w), vec4<f32>(params.n12_row1_x, params.n12_row1_y, params.n12_row1_z, params.n12_row1_w), vec4<f32>(params.n12_row2_x, params.n12_row2_y, params.n12_row2_z, params.n12_row2_w), vec4<f32>(params.n12_row3_x, params.n12_row3_y, params.n12_row3_z, params.n12_row3_w));
+    textureStore(dst, coord, r12);
 }
 
 === generator:StrangeAttractor node:4 ===

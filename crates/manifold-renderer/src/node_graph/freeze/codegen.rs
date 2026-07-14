@@ -1380,6 +1380,13 @@ pub enum InputSource {
     External(usize),
     /// Another region node's output register (must appear earlier in topo order).
     Node(NodeInstanceId),
+    /// Another region node's output register, but that node is MULTI-OUTPUT (a
+    /// struct-return body with ≥2 texture outputs, e.g. voronoi_2d's `out`/
+    /// `cell_id` — D4/P6): the register is a `BodyOutputs` struct, not the
+    /// value itself, so this names which field to read (`r{j}.<port>`).
+    /// Single-output producers keep `Node` (the register IS the value) —
+    /// byte-identical for every region that existed before this phase.
+    NodeOutput(NodeInstanceId, String),
     /// An OPTIONAL texture input with no wire (pack_channels' unwired b/a). The
     /// body receives a zero vector and its injected `use_<name>` flag is the
     /// literal `0u`, so the value is never read — the same contract the atom's
@@ -1507,8 +1514,13 @@ pub struct FusionRegion<'a> {
     /// each escaping member's register is stored to its own `dst_<k>` binding,
     /// in this vec's order, and every one is wired to a live consumer by the
     /// install pass (so no store ever lands on an unallocated output). Must be
-    /// non-empty; each id must name a node in [`Self::nodes`].
-    pub outputs: Vec<NodeInstanceId>,
+    /// non-empty; each id must name a node in [`Self::nodes`]. Each entry
+    /// carries the escaping PORT NAME (D4/P6): a single-output node has
+    /// exactly one entry here (port ignored downstream — the register IS the
+    /// value); a MULTI-output node (voronoi_2d) can appear TWICE, once per
+    /// distinct escaping port, and the port picks the `BodyOutputs` field
+    /// each `dst_<k>` store reads.
+    pub outputs: Vec<(NodeInstanceId, String)>,
     /// IN-PLACE buffer regions only: `Some(k)` means the region's single output
     /// must be written back IN PLACE to external input `src_k` (the aliased loop
     /// buffer) instead of a fresh `// @fused_output dst`. The install pass sets
@@ -1866,7 +1878,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             ExtKind::Texture { .. } => None,
         })
         .collect();
-    let out_member = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
+    let out_member = index_of(region.outputs[0].0).ok_or(CodegenError::BadInput)?;
     let out_ty = buffer_element_type(member_io[out_member].out_specs, &mut structs);
 
     // --- bodies: split into prelude / helpers / the n{i}_body fn (same as the
@@ -2207,7 +2219,11 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                 // Optional-unwired is a texture-domain contract (use-flag bodies);
                 // no buffer ARRAY input fuses unwired, and virtual sources are
                 // texture-domain only — reaching either here is a finder bug.
-                InputSource::Unwired | InputSource::Virtual(_) => {
+                // A multi-output NodeOutput source is texture-domain only too
+                // (D4/P6: buffer atoms with texture outputs are boundaries, so
+                // no ARRAY register ever comes from one) — reaching it here is
+                // the same class of finder bug.
+                InputSource::Unwired | InputSource::Virtual(_) | InputSource::NodeOutput(..) => {
                     return Err(CodegenError::BadInput);
                 }
             }
@@ -2364,6 +2380,30 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                         rename_ident(&member_body, &format!("buf_{}", port.name), &format!("src_{e}"));
                 }
                 _ => return Err(CodegenError::BadInput),
+            }
+        }
+        // D4/P6: a MULTI-output member (struct-return body, ≥2 texture
+        // outputs — voronoi_2d's `out`/`cell_id`) declares its own
+        // `N{i}BodyOutputs` struct (namespaced so two multi-output members in
+        // one region, or a name collision with another member's helper,
+        // can't clash) and its body's `-> BodyOutputs` / `return
+        // BodyOutputs(...)` are rewritten to match — the fused analogue of
+        // the standalone wrapper's single global `BodyOutputs` (which is safe
+        // there because a standalone kernel has exactly one member). Every
+        // member with exactly one (or zero) texture outputs is untouched —
+        // byte-identical for every existing region.
+        let member_tex_outputs: Vec<&NodeOutput> =
+            node.node_outputs.iter().filter(|o| is_texture_port(&o.ty)).collect();
+        if member_tex_outputs.len() > 1 {
+            let struct_name = format!("N{i}BodyOutputs");
+            member_body = rename_ident(&member_body, "BodyOutputs", &struct_name);
+            let mut decl = format!("struct {struct_name} {{\n");
+            for o in &member_tex_outputs {
+                writeln!(decl, "    {}: vec4<f32>,", o.name).unwrap();
+            }
+            decl.push_str("}\n");
+            if !prelude.contains(&decl) {
+                prelude.push(decl);
             }
         }
         let (pre, blocks) = split_fns(&member_body);
@@ -2593,12 +2633,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     };
     let multi_output = region.outputs.len() > 1;
     if multi_output {
-        for (k, &out_id) in region.outputs.iter().enumerate() {
+        for (k, (out_id, _)) in region.outputs.iter().enumerate() {
             writeln!(
                 out,
                 "@group(0) @binding({}) var dst_{k}: texture_storage_2d<{}, write>;",
                 next_binding + k,
-                out_storage(out_id)
+                out_storage(*out_id)
             )
             .unwrap();
         }
@@ -2606,7 +2646,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         writeln!(
             out,
             "@group(0) @binding({next_binding}) var dst: texture_storage_2d<{}, write>;",
-            out_storage(region.outputs[0])
+            out_storage(region.outputs[0].0)
         )
         .unwrap();
     }
@@ -2819,7 +2859,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 // (the finder already keeps such a member out of regions).
                 (
                     InputAccess::Gather | InputAccess::GatherTexel,
-                    InputSource::Node(_) | InputSource::Unwired,
+                    InputSource::Node(_) | InputSource::NodeOutput(..) | InputSource::Unwired,
                 ) => {
                     return Err(CodegenError::BadInput);
                 }
@@ -2863,6 +2903,18 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                         return Err(CodegenError::BadInput); // not earlier in topo order
                     }
                     args.push(format!("r{j}"));
+                }
+                // D4/P6: the producer is MULTI-output — its register `r{j}` is
+                // a `N{j}BodyOutputs` struct, not the value itself, so pick
+                // the named field this wire actually threads.
+                (_, InputSource::NodeOutput(id, port)) => {
+                    let Some(j) = index_of(*id) else {
+                        return Err(CodegenError::BadInput);
+                    };
+                    if j >= i {
+                        return Err(CodegenError::BadInput); // not earlier in topo order
+                    }
+                    args.push(format!("r{j}.{port}"));
                 }
             }
         }
@@ -2918,26 +2970,53 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         }
         if node.quantize_f16 {
             // In-loop f16 member: reproduce the unfused chain's rgba16float
-            // store rounding so the loop can't drift fused-vs-unfused.
+            // store rounding so the loop can't drift fused-vs-unfused. A
+            // MULTI-output member's register is a struct, not a vec4 — q16
+            // only ever takes a vec4, so this combination is a codegen-shape
+            // bug (structurally unreachable: quantize_f16 requires the member
+            // sit on a feedback cycle, and every multi-output atom today is a
+            // 0-texture-input Source, which can't read its own output back).
+            let member_tex_outputs =
+                node.node_outputs.iter().filter(|o| is_texture_port(&o.ty)).count();
+            if member_tex_outputs > 1 {
+                return Err(CodegenError::BadInput);
+            }
             writeln!(out, "    let r{i} = q16(n{i}_body({}));", args.join(", ")).unwrap();
         } else {
             writeln!(out, "    let r{i} = n{i}_body({});", args.join(", ")).unwrap();
         }
     }
+    // D4/P6: a MULTI-output member's register (`r{idx}`) is a `N{idx}BodyOutputs`
+    // struct, not the value — the escaping port picks the field. Single-output
+    // members keep the bare register, byte-identical to before.
+    let store_expr = |idx: usize, port: &str| -> String {
+        let is_multi_output_member =
+            region.nodes[idx].node_outputs.iter().filter(|o| is_texture_port(&o.ty)).count() > 1;
+        if is_multi_output_member {
+            format!("r{idx}.{port}")
+        } else {
+            format!("r{idx}")
+        }
+    };
     if multi_output {
         // Fan-out: each escaping member's register stores to its own `dst_<k>`,
         // in `outputs` order (every one wired to a live consumer by install).
-        for (k, out_id) in region.outputs.iter().enumerate() {
+        for (k, (out_id, out_port)) in region.outputs.iter().enumerate() {
             let Some(idx) = index_of(*out_id) else {
                 return Err(CodegenError::BadInput);
             };
-            writeln!(out, "    textureStore(dst_{k}, coord, r{idx});").unwrap();
+            let expr = store_expr(idx, out_port);
+            writeln!(out, "    textureStore(dst_{k}, coord, {expr});").unwrap();
         }
     } else {
-        let Some(out_idx) = region.outputs.first().and_then(|id| index_of(*id)) else {
+        let Some((out_id, out_port)) = region.outputs.first() else {
             return Err(CodegenError::BadInput);
         };
-        writeln!(out, "    textureStore(dst, coord, r{out_idx});").unwrap();
+        let Some(out_idx) = index_of(*out_id) else {
+            return Err(CodegenError::BadInput);
+        };
+        let expr = store_expr(out_idx, out_port);
+        writeln!(out, "    textureStore(dst, coord, {expr});").unwrap();
     }
     out.push_str("}\n");
 
@@ -2994,6 +3073,10 @@ fn chain_member_args(
                     _ => return Err(CodegenError::BadInput),
                 }
             }
+            // D4/P6: a multi-output producer never gets absorbed into a
+            // stencil chain (region.rs bails defensively when building one) —
+            // reaching this is a finder bug, fail closed rather than guess.
+            InputSource::NodeOutput(..) => return Err(CodegenError::BadInput),
             InputSource::Unwired => args.push("vec4<f32>(0.0)".to_string()),
             InputSource::Virtual(_) => return Err(CodegenError::BadInput),
         }
@@ -3431,7 +3514,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(1)],
+            outputs: vec![(id(1), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3498,7 +3581,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 2,
-            outputs: vec![id(1)],
+            outputs: vec![(id(1), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3578,7 +3661,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(1)],
+            outputs: vec![(id(1), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3641,7 +3724,7 @@ mod gpu_tests {
         let region = FusionRegion {
             nodes: vec![mk(0, InputSource::External(0)), mk(1, InputSource::Node(id(0)))],
             num_external_inputs: 1,
-            outputs: vec![id(1)],
+            outputs: vec![(id(1), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3704,7 +3787,7 @@ mod gpu_tests {
                 quantize_f16: false,
             }],
             num_external_inputs: 2,
-            outputs: vec![id(0)],
+            outputs: vec![(id(0), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3775,7 +3858,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(0)],
+            outputs: vec![(id(0), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3851,7 +3934,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(1)],
+            outputs: vec![(id(1), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -3930,7 +4013,7 @@ mod gpu_tests {
                 },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(1), id(2)],
+            outputs: vec![(id(1), "out".to_string()), (id(2), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
@@ -4136,7 +4219,7 @@ mod gpu_tests {
                 RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
             ],
             num_external_inputs: 1,
-            outputs: vec![id(6)],
+            outputs: vec![(id(6), "out".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
             dispatch_count_field: None,

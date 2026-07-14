@@ -15,7 +15,6 @@ Corpus: 57 bundled effect/generator presets + Liveschool fixture (0 embedded_pre
 | Family | Refusals | Dispatches saved if lifted |
 |---|---:|---:|
 | param-type | 10 | 0 |
-| multi-output | 3 | 3 |
 | resample | 4 | 2 |
 | stencil-depth | 6 | 6 |
 | buffer-index-shaped | 16 | 10 |
@@ -25,7 +24,7 @@ Corpus: 57 bundled effect/generator presets + Liveschool fixture (0 embedded_pre
 
 **Vec3 params — LIFT (default stands).** `param-type` bucket also includes Table/String (boundary by nature per D4, not debt) so this count is an upper bound on Vec3-specifically; 10 refusal(s) / 0 dispatch(es) potentially saved support building the lift as scoped for P5.
 
-**Multi-output texture atoms — LIFT, census-gated (default stands).** 3 refusal(s) / 3 dispatch(es). Non-zero — P6 has shipped-preset cuts to point at, strengthening (not just capability-justifying) the case to build it.
+**Multi-output texture atoms — LIFT, census-gated (default stands).** 0 refusal(s) / 0 dispatch(es). Zero shipped-preset cuts from this family — per D4, it still lands as capability (voronoi's cell+distance vocabulary) but ordered LAST of the lifts, exactly the documented fallback.
 
 **Buffer fan-out — DEFER (trigger: >=3 refusals across shipped content). Measured: 0 refusal(s) / 0 dispatch(es) potentially saved.** Below the trigger — DEFER stands as-is.
 
