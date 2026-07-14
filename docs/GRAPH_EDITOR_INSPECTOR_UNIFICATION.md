@@ -337,9 +337,18 @@ agents as they are too dumb to determine correct card boundaries etc from images
 
 ### Audit — what exists and where the drift lives (verified 2026-07-14, rendered + read)
 
-The rendered editor scene (`ui-snap editor` on tip `bbc30bce`) shows the misfit
-Peter reported: the Fluid Sim 2D card's "Clip Trigger Mode" row label is clipped
-at its left edge and row internals are squeezed. The mechanism, read from code:
+**The primary defect (Peter, 2026-07-14, with screenshot): "the card size does not
+match and fit all of the elements."** His screenshot (Stylized Feedback card, audio-mod
+drawer open): the title truncates into the AUD badge, the Feature chip row's eight
+chips clip their own labels ("nplitu", "entro", "isine"…), and the Amount slider is
+crushed to a stub while the value cell and T/~/A buttons keep full size. Rows and
+chip strips overflow the width the card actually has — the fit logic, not any one
+row. **The chevron lane below is NOT the bug** — it's a 14px secondary
+context-geometry fork that Change 4 unifies anyway because it violates the identity
+requirement, but D3 (fit) is the fix for what Peter sees. The rendered editor scene
+(`ui-snap editor` on tip `bbc30bce`) independently shows the same class: the Fluid
+Sim 2D card's "Clip Trigger Mode" row label clipped, row internals squeezed.
+The mechanism, read from code:
 
 | Piece | Where | Fact |
 |---|---|---|
@@ -364,12 +373,20 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
   rows `:2456`, dropdown/table rows `:2702`, toggle/trigger rows) consumes it; no
   builder does lane arithmetic inline. This is `single-source-y-layout` applied to
   row X-geometry.
-- **D3 — Rows must fit at every legal width, fixed at the source.** Labels elide
-  (`elide_to_width` exists in `crates/manifold-ui/src/draw.rs`), slider has an
-  enforced minimum, and nothing overflows the card frame at any width in
-  [232, 900] (the union of both windows' lanes: main `MIN_INSPECTOR_WIDTH=232`,
-  editor `right_range=(240,560)`). The clipped "Clip Trigger Mode" label is fixed
-  HERE, not by nudging that row.
+- **D3 — Every element fits its card at every legal width, fixed at the source.
+  THIS is the primary fix — the defect Peter reported and screenshotted.** The
+  rule, for every row type: content adapts to the width the card has, nothing
+  clips, nothing overflows, nothing overlaps. Concretely: labels and chip captions
+  elide with ellipsis (`elide_to_width` exists in `crates/manifold-ui/src/draw.rs`)
+  — a chip must never draw a fragment of its own word; choice-chip strips
+  (Source/Feature/Band rows in the audio-mod drawer — the worst case is Feature's
+  EIGHT chips) get a minimum chip width and either elide captions or wrap the strip
+  to a second line when even elided chips can't fit (pick ONE mechanism and apply
+  it to every chip strip — no per-row variants); sliders have an enforced minimum
+  track width; the card title reserves the badge + toggle space before laying out
+  text. Holds for every width in [232, 900] (union of both windows' lanes: main
+  `MIN_INSPECTOR_WIDTH=232`, editor `right_range=(240,560)`). Fixed in the shared
+  geometry helper / row builders — never by nudging one row or one card.
 - **D4 — Tick parity, then delete the snap fork.** Extract the inspector's
   per-frame tick into `UIRoot::tick_inspector(&mut self)` (calls
   `self.inspector.update(&mut self.tree)`); `UIRoot::update()` calls it; the
@@ -387,6 +404,24 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
   (a cog that opens the graph editor from inside the graph editor is circular);
   header chrome presence may differ, header GEOMETRY may not. The mapping chevron
   remains the only Author extra, per Peter's directive.
+- **D7 — One width source (Peter, 2026-07-14: "The inspector should be identical,
+  width, all cards, tabs, etc. Not just identical but FUNDAMENTALLY the same
+  object in code so they can't drift or differ by design").** The editor's right
+  lane stops owning its own width policy: `Dock::editor()`'s
+  `right_range = (240.0, 560.0)` / `EDITOR_RIGHT_DEFAULT = 340.0` are DELETED and
+  the lane reads the same width constants and the same live width value as the
+  main window's inspector (`MIN_INSPECTOR_WIDTH`..`MAX_INSPECTOR_WIDTH`, default
+  500; one owner for the current width so resizing one window's inspector resizes
+  the other's). After D7, the two windows' inspectors build from the same panel
+  type, same sync data, same geometry function, same tick path, AND same width —
+  every layout-determining input has exactly one owner. The one remaining duality
+  is two panel *instances*, forced by each window owning its own `UITree` (node
+  ids are per-tree — the Change 3 ruling above; cross-tree shared state is
+  forbidden). That duality carries zero layout information, and the D5
+  equivalence test pins it: two instances, identical output, enforced by machine.
+  Consequence, stated honestly: the editor's canvas loses ~160px of default width
+  to the wider inspector lane; if that hurts on the rig, the knob to turn is the
+  SHARED default, never a per-window fork.
 
 ### Invariants & enforcement
 
@@ -397,10 +432,12 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
 - **No inline lane arithmetic outside the helper.** Enforcement: negative gate
   `rg -n "MAP_CHEVRON_W" crates/manifold-ui/src/panels/param_card.rs` — hits only
   the const def + the D2 helper (exact expected-hit list pinned in the phase gate).
-- **Every row fits its card at every legal width.** Enforcement:
-  `inspector_rows_fit_card_bounds_across_widths` (new): build the BUG-160 fixture
-  at 232/280/340/500/900 px in both contexts; walk the tree; assert every node
-  rect is contained by its card frame and every label's drawn width ≤ its cell.
+- **Every element fits its card at every legal width (the primary invariant).**
+  Enforcement: `inspector_rows_fit_card_bounds_across_widths` (new): build the
+  BUG-160 fixture at 232/280/340/500/900 px in both contexts; walk the tree;
+  assert every node rect is contained by its card frame, no two sibling rects in
+  a row overlap, and every text node's drawn width ≤ its cell (labels, values,
+  AND chip captions — a caption wider than its chip is the screenshot bug).
 - **The editor inspector ticks.** Enforcement:
   `editor_tick_advances_inspector_motion` (new, `manifold-app`): drive
   `tick_inspector` on an un-`built` root with a live drawer tween; assert the
@@ -413,10 +450,15 @@ at its left edge and row internals are squeezed. The mechanism, read from code:
 Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
 section whole + `feedback_single_source_y_layout`; restate D1–D3 + forbidden moves
 before code. Deliverables: the D2 helper; all row builders ported; D1 both-context
-lane reservation; D3 elide/min-width behavior; the D5 equivalence test; the width-
-sweep containment test; fixture extension covering the failing card (Fluid Sim 2D's
-enum/toggle rows — the `inspector` ui-snap fixture's cards don't cover it, which is
-why P1's byte-diff missed the regression). Gate: both new tests green;
+lane reservation; D3 elide/min-width/chip-fit behavior; D7 width unification (delete
+`Dock::editor()`'s own right-lane range/default, read the main inspector's width
+source; negative gate: `rg -n "EDITOR_RIGHT_DEFAULT" crates/` = 0 hits); the D5
+equivalence test; the width-
+sweep containment test; fixture extension covering BOTH observed failing shapes —
+an effect card with its audio-mod drawer OPEN including the eight-chip Feature
+strip (Peter's Stylized Feedback screenshot) and the Fluid Sim 2D enum/toggle rows
+(the `inspector` ui-snap fixture's cards cover neither, which is why P1's
+byte-diff missed the regression). Gate: both new tests green;
 `cargo test -p manifold-ui --lib`; negative: the `MAP_CHEVRON_W` rg gate; no
 geometry read of `CardContext` outside the helper (`rg -n "context == CardContext"
 crates/manifold-ui/src/panels/param_card.rs` — expected-hit list = glyph sites only,
@@ -451,3 +493,7 @@ main-window-only structure); calling full `update()` on the editor root.
 4. Editor ticks the inspector; snap fork deleted (D4).
 5. Gates are tree asserts; PNGs are for Peter, never for Sonnet judgment (D5).
 6. Cog stays suppressed in Author; BUG-121 stands (D6).
+7. One width source — the editor lane reads the main inspector's width constants
+   and live value; `EDITOR_RIGHT_DEFAULT` and the editor-own `right_range` are
+   deleted, never re-forked (D7). The fit fix (D3) is the primary fix; the chevron
+   lane was never the bug, only a secondary identity violation.
