@@ -761,8 +761,17 @@ impl Runner {
         scrolled_in_place: bool,
     ) {
         super::sync_data(ui, data, zoom_ppb);
+        // BUG-073 fix shape (b): this driver has no per-frame timer, so a
+        // tween a dispatch just armed (e.g. a newly-armed drawer growing a
+        // card's row count) would otherwise sit at its t=0 state forever —
+        // `Snapshot`/`Dump` don't rebuild, they just read whatever THIS call
+        // last produced, so settling has to happen here, before the rebuild
+        // decision below. Only forces a rebuild when something was actually
+        // mid-flight, so a script with nothing armed keeps the same
+        // cache-hit behavior it had before this fix.
+        let settled = ui.inspector.skip_to_settled(&mut ui.tree);
         let mut signals = UiFrameSignals {
-            needs_structural_sync: self.needs_structural_sync,
+            needs_structural_sync: self.needs_structural_sync || settled,
             scroll_dirty: self.scroll_dirty,
             scrolled_in_place,
             ..Default::default()

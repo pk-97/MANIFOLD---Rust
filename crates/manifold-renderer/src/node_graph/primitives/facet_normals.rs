@@ -321,8 +321,8 @@ mod gpu_tests {
 
         assert_eq!(out.len(), 4);
         // Full triangle (0,1,2): normal is +Z.
-        for i in 0..3 {
-            assert!((out[i].normal[2] - 1.0).abs() < 1e-5, "vertex {i} should get the triangle normal");
+        for (i, v) in out.iter().enumerate().take(3) {
+            assert!((v.normal[2] - 1.0).abs() < 1e-5, "vertex {i} should get the triangle normal");
         }
         // Trailing partial (3): passes through UNCHANGED, including its
         // original (arbitrary) normal — nothing recomputed.

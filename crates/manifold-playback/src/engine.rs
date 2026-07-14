@@ -835,18 +835,6 @@ impl PlaybackEngine {
             }
         }
 
-        // 3. Activate pending live MIDI launches whose target tick has arrived.
-        //    Port of C# line 1152: engine.LiveClipMgr.ActivateDuePendingLiveLaunches().
-        let live_activated = if let Some(ref mut mgr) = self.live_clip_manager {
-            let now_tick = self.last_frame_count as i32; // absolute tick from frame count
-            mgr.activate_due_pending_launches_at_tick(now_tick)
-        } else {
-            false
-        };
-        if live_activated {
-            self.sync_clips_dirty = true;
-        }
-
         // 3b. Live audio triggers — fire one-shot clips from incoming transients
         //     and expire elapsed ones, before the sync below picks up the new
         //     slots (same-frame, matching the MIDI activation above). Uses the

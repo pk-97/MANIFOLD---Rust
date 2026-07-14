@@ -303,7 +303,7 @@ pub(crate) mod cpu_reference {
     }
 
     fn hash_angle(px_x: f32, px_y: f32) -> f32 {
-        (((px_x * 12.9898 + px_y * 78.233).sin()) * 43_758.5453).fract() * std::f32::consts::TAU
+        (((px_x * 12.9898 + px_y * 78.233).sin()) * 43_758.547).fract() * std::f32::consts::TAU
     }
 
     /// Round half away from zero, matching `ssao_gtao_body.wgsl`'s

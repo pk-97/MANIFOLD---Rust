@@ -451,7 +451,7 @@ fn run_graph_preset(preset: &str) {
     // per-node thumbnails; the snapshot drives the canvas layout.
     render::render_graph_to_png(
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -501,7 +501,7 @@ fn run_editor_preset(
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -578,7 +578,7 @@ fn run_gltf_editor(want_dump: bool) {
         &target,
         &data.selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -635,7 +635,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         &target,
         &data.selection,
         &gv_snap_before,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -657,7 +657,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             OBJECTS_BEFORE,
             (900.0, 200.0),
-            view.canonical_def.clone(),
+            (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
     } else {
@@ -667,7 +667,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             LIGHTS_BEFORE,
             (-260.0, 50.0),
-            view.canonical_def.clone(),
+            (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
     }
@@ -893,7 +893,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -914,7 +914,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -1166,6 +1166,43 @@ mod footer_leak_probe {
             leaks.is_empty(),
             "{} inspector node(s) paint below the footer top edge on the LIVE cache path",
             leaks.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod bug068_clip_panel_overlap {
+    //! BUG-068: the `inspector` scene forces a generous `inspector_width`
+    //! (600px), narrowing the track area; a clip long enough to bleed past
+    //! the inspector's left edge gets a hit-test rect that overlaps the
+    //! inspector column (`TimelineViewportPanel::visible_clip_rects` returns
+    //! full, unclamped clip width — only fully-offscreen clips are culled).
+    //! Pins every `inspector`-scene clip clear of the inspector.
+    use super::*;
+
+    #[test]
+    fn inspector_scene_clips_clear_the_inspector_column() {
+        let data = fixtures::build("inspector").expect("inspector scene");
+        let mut ui = UIRoot::new();
+        ui.resize(LOGICAL_W, LOGICAL_H);
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+        sync_build(&mut ui, &data, 24.0);
+
+        let inspector_left = ui.layout.inspector().x;
+        let mut clip_rects = Vec::new();
+        ui.viewport.visible_clip_rects(&mut clip_rects);
+        assert!(!clip_rects.is_empty(), "sanity: scene must have visible clips");
+
+        let overlapping: Vec<_> = clip_rects
+            .iter()
+            .filter(|c| c.rect.x + c.rect.width > inspector_left)
+            .collect();
+        assert!(
+            overlapping.is_empty(),
+            "{} clip(s) bleed past the inspector's left edge ({inspector_left}): {:?}",
+            overlapping.len(),
+            overlapping.iter().map(|c| (&c.name, c.rect)).collect::<Vec<_>>()
         );
     }
 }

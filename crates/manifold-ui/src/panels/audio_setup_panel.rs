@@ -1182,6 +1182,15 @@ impl AudioSetupPanel {
         let offset = self.scroll.scroll_offset();
         if offset != 0.0 {
             self.scroll.offset_content(tree, -offset);
+            // `scope_rect` isn't a tree node — it's plain geometry the present
+            // pass reads directly for the spectrogram blit and the hit-tests
+            // (`point_in_scope`, `scope_line_y`/`scope_y_to_hz`) use for divider
+            // dragging. It was captured pre-scroll above and never shifted, so a
+            // scrolled body left the waterfall detached from its section header
+            // (BUG-101). Apply the same shift the tree content just got.
+            if let Some(r) = self.scope_rect.as_mut() {
+                r.y -= offset;
+            }
         }
         // Scrollbar in the panel's right padding gutter, only visible when the
         // body overflows (the container hides it otherwise).
@@ -2430,11 +2439,11 @@ mod tests {
         let consumers: Vec<SendConsumerRow> = (0..12)
             .map(|i| SendConsumerRow {
                 label: format!("LAYER {i} \u{2022} Effect \u{2022} Param"),
-                layer_id: Some(LayerId::new(&format!("layer{i}"))),
+                layer_id: Some(LayerId::new(format!("layer{i}"))),
             })
             .collect();
         let feeding: Vec<(LayerId, String)> = (0..6)
-            .map(|i| (LayerId::new(&format!("src{i}")), format!("SRC {i}")))
+            .map(|i| (LayerId::new(format!("src{i}")), format!("SRC {i}")))
             .collect();
         p.configure(
             None,
@@ -2462,6 +2471,58 @@ mod tests {
             "a tall source's body must overflow the dock height and be scrollable (BUG-047)"
         );
         assert!(p.scope_rect().is_some(), "scope present while open");
+    }
+
+    #[test]
+    fn scope_rect_follows_body_scroll_offset() {
+        // BUG-101: the spectrogram blit rect is plain geometry captured at
+        // build time, not a tree node — a scroll that shifts the tree's
+        // content nodes must shift `scope_rect` by the same amount, or the
+        // waterfall detaches from its section header once scrolled.
+        let mut p = AudioSetupPanel::new();
+        p.toggle(); // open
+        let consumers: Vec<SendConsumerRow> = (0..12)
+            .map(|i| SendConsumerRow {
+                label: format!("LAYER {i} \u{2022} Effect \u{2022} Param"),
+                layer_id: Some(LayerId::new(&format!("layer{i}"))),
+            })
+            .collect();
+        let feeding: Vec<(LayerId, String)> = (0..6)
+            .map(|i| (LayerId::new(&format!("src{i}")), format!("SRC {i}")))
+            .collect();
+        p.configure(
+            None,
+            vec![AudioSendRow {
+                id: AudioSendId::new("s1"),
+                label: "Kick".into(),
+                channels: vec![0],
+                channel_label: "Channel 1".into(),
+                gain_db: 0.0,
+                floor_db: crate::types::FLOOR_DB_OFF,
+                driven_count: 0,
+                routings: vec!["Capture: Channel 1".into()],
+                has_clip_triggers: false,
+                feeding_layers: feeding,
+                consumers,
+            }],
+            None,
+        );
+        let mut tree = UITree::new();
+        p.build_docked(&mut tree, test_dock_rect());
+        assert!(p.scroll.can_scroll());
+        let unscrolled_y = p.scope_rect().expect("scope present while open").y;
+
+        let moved = p.handle_scroll(40.0);
+        assert!(moved, "scroll delta within scrollable range must move the offset");
+        p.build_docked(&mut tree, test_dock_rect());
+        let offset = p.scroll.scroll_offset();
+        assert!(offset > 0.0, "expected a nonzero scroll offset after handle_scroll");
+        let scrolled_y = p.scope_rect().expect("scope still present after scroll").y;
+        assert_eq!(
+            scrolled_y,
+            unscrolled_y - offset,
+            "scope_rect must shift by the same offset applied to the tree content"
+        );
     }
 
     // ─── Inputs / Consumers sections (AUDIO_SENDS_UX_DESIGN Phase 2) ───

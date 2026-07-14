@@ -524,11 +524,11 @@ mod gpu_tests {
             "vertex 1 has explicit weight 0 -> unchanged, got y={}",
             out[1].position[1]
         );
-        for i in 2..12 {
+        for (i, v) in out.iter().enumerate().skip(2).take(10) {
             assert!(
-                (out[i].position[1] - amount).abs() < 1e-5,
+                (v.position[1] - amount).abs() < 1e-5,
                 "vertex {i} past weights_len should degrade to w=1.0 (full push {amount}), got y={}",
-                out[i].position[1]
+                v.position[1]
             );
         }
     }
@@ -556,12 +556,11 @@ mod gpu_tests {
                 v.position[1] + v.normal[1] * amount * w,
                 v.position[2] + v.normal[2] * amount * w,
             ];
-            for c in 0..3 {
+            for (c, exp) in expected.iter().enumerate() {
                 assert!(
-                    (out[i].position[c] - expected[c]).abs() < 1e-5,
-                    "vertex {i} position[{c}]: got={} expected={}",
-                    out[i].position[c],
-                    expected[c]
+                    (out[i].position[c] - exp).abs() < 1e-5,
+                    "vertex {i} position[{c}]: got={} expected={exp}",
+                    out[i].position[c]
                 );
             }
             assert_eq!(out[i].normal, v.normal);

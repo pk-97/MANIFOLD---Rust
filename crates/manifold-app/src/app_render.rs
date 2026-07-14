@@ -1729,11 +1729,10 @@ impl Application {
                 }
                 PanelAction::LayerDoubleClicked(id) => {
                     // Open text input for layer rename. The action carries a
-                    // stable LayerId; resolve it to the current row for the
-                    // index-based `name_node_id` / `LayerName` field (the
-                    // text-input subsystem is still positional — a Copy enum
-                    // that would have to drop Copy to hold a LayerId; tracked
-                    // as a follow-up, BUG-031).
+                    // stable LayerId, stored on `text_input.layer_id` and
+                    // re-resolved to the live row at commit time (BUG-031) —
+                    // `pos` here only sizes the anchor rect for THIS frame's
+                    // overlay, a read-only, open-time-only use.
                     {
                         let project = &self.local_project;
                         if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
@@ -1746,11 +1745,12 @@ impl Application {
                             };
                             let name = layer.name.clone();
                             self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName(pos),
+                                crate::text_input::TextInputField::LayerName,
                                 &name,
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
+                            self.text_input.layer_id = Some(id.clone());
                         }
                     }
                     continue;
@@ -3808,22 +3808,11 @@ impl Application {
                             canvas_width,
                             logical_h as f32,
                         );
-                        // Atlas cell geometry — same constants the old blit used.
-                        let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
-                        let half_tx = 0.5 / crate::content_pipeline::ATLAS_W as f32;
-                        let half_ty = 0.5 / crate::content_pipeline::ATLAS_H as f32;
                         // Each source is letterboxed into its 16:9 cell; the
                         // on-canvas screen takes the project aspect, so sample only
                         // the letterboxed content sub-rect. Edge-straddle clipping
                         // is now the canvas viewport scissor, so (unlike the old
                         // blit) no per-node UV cropping is needed here.
-                        let cell_aspect = crate::content_pipeline::ATLAS_CELL_W as f32
-                            / crate::content_pipeline::ATLAS_CELL_H as f32;
-                        let (content_w_frac, content_h_frac) = if monitor_aspect > cell_aspect {
-                            (1.0, cell_aspect / monitor_aspect)
-                        } else {
-                            (monitor_aspect / cell_aspect, 1.0)
-                        };
                         let mut map: ahash::AHashMap<
                             manifold_core::NodeId,
                             (manifold_ui::node::TextureHandle, [f32; 4]),
@@ -3832,17 +3821,8 @@ impl Application {
                             let Some(&cell) = layout.get(&node_id) else {
                                 continue;
                             };
-                            let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
-                            let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
-                            let mut u0 = gx * inv + half_tx;
-                            let mut v0 = gy * inv + half_ty;
-                            let mut du = inv - 2.0 * half_tx;
-                            let mut dv = inv - 2.0 * half_ty;
-                            u0 += du * (1.0 - content_w_frac) * 0.5;
-                            v0 += dv * (1.0 - content_h_frac) * 0.5;
-                            du *= content_w_frac;
-                            dv *= content_h_frac;
-                            map.insert(node_id, (atlas_handle, [u0, v0, u0 + du, v0 + dv]));
+                            let uv = crate::content_pipeline::atlas_cell_uv(cell, monitor_aspect);
+                            map.insert(node_id, (atlas_handle, uv));
                         }
                         (atlas_tex.clone(), map)
                     })

@@ -278,7 +278,7 @@ mod tests {
 /// named check: "the I1-pattern CPU-reference parity test") — a plain-Rust
 /// implementation of the committed D8 formula, independent of the WGSL body
 /// (not sharing source). Used by the GPU-vs-CPU parity gpu_test below.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod cpu_reference {
     use crate::node_graph::camera::linearize_depth;
 

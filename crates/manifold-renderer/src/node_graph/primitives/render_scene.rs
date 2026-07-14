@@ -2917,12 +2917,16 @@ mod gpu_tests {
     #[test]
     fn prewarm_pipelines_populates_the_shared_render_cache() {
         let device = crate::test_device();
-        let before = device.render_pipeline_cache_len();
+        // Order-independent (BUG-144): the cache is process-global and shared
+        // with other gpu_tests, so another test's prewarm may already have
+        // populated the exact entries this call would add — an
+        // after > before delta then reads zero even though prewarm worked.
+        // Assert the cache ends up populated, not that THIS call grew it.
         RenderScene::prewarm_pipelines(&device);
         let after = device.render_pipeline_cache_len();
         assert!(
-            after > before,
-            "prewarm_pipelines must add cache entries: before={before} after={after}"
+            after > 0,
+            "prewarm_pipelines must leave the render cache populated: after={after}"
         );
 
         // Idempotent: a second call must not grow the cache further (every

@@ -4,11 +4,11 @@ use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::recording::RecordedClipProvenance;
 use manifold_core::types::{QuantizeMode, TempoPointSource};
-use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
+use manifold_core::{Beats, Bpm, ClipId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// MIDI clock ticks per beat (standard).
 pub const MIDI_CLOCK_TICKS_PER_BEAT: i32 = 24;
@@ -34,15 +34,6 @@ pub trait LiveClipHost {
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
     fn record_command(&mut self, cmd: Box<dyn Command>);
     fn beat_to_timeline_time(&self, beat: Beats) -> Seconds;
-}
-
-/// Queued launch waiting for a target tick.
-#[derive(Debug, Clone)]
-struct PendingLiveLaunch {
-    clip: TimelineClip,
-    layer_index: i32,
-    layer_id: LayerId,
-    target_tick: i32,
 }
 
 /// 5ms timing guard threshold (seconds). Reject NoteOff within this window of NoteOn.
@@ -102,11 +93,6 @@ pub struct LiveClipManager {
     live_slots_list: Vec<(i32, TimelineClip)>,
     live_slot_clip_ids: HashSet<ClipId>,
 
-    // Pending launches (queued for future ticks)
-    pending_by_clip_id: HashMap<ClipId, PendingLiveLaunch>,
-    pending_by_layer: HashMap<LayerId, ClipId>,
-    pending_by_tick: BTreeMap<i32, Vec<ClipId>>,
-
     // Tracking
     last_live_trigger_at: f64,
 
@@ -131,9 +117,6 @@ impl LiveClipManager {
             live_slots: HashMap::with_capacity(8),
             live_slots_list: Vec::with_capacity(8),
             live_slot_clip_ids: HashSet::with_capacity(8),
-            pending_by_clip_id: HashMap::with_capacity(4),
-            pending_by_layer: HashMap::with_capacity(4),
-            pending_by_tick: BTreeMap::new(),
             last_live_trigger_at: 0.0,
             slot_creation_times: HashMap::with_capacity(8),
             slot_creation_sequences: HashMap::with_capacity(8),
@@ -174,9 +157,6 @@ impl LiveClipManager {
     pub fn live_slot_clip_ids(&self) -> &HashSet<ClipId> {
         &self.live_slot_clip_ids
     }
-    pub fn pending_launch_count(&self) -> usize {
-        self.pending_by_clip_id.len()
-    }
     pub fn last_live_trigger_at(&self) -> f64 {
         self.last_live_trigger_at
     }
@@ -187,9 +167,6 @@ impl LiveClipManager {
         self.live_slots.clear();
         self.live_slots_list.clear();
         self.live_slot_clip_ids.clear();
-        self.pending_by_clip_id.clear();
-        self.pending_by_layer.clear();
-        self.pending_by_tick.clear();
         self.slot_creation_times.clear();
         self.slot_creation_sequences.clear();
         self.clip_starts.clear();
@@ -209,11 +186,6 @@ impl LiveClipManager {
             self.live_slots_list.clear();
             self.live_slot_clip_ids.clear();
             self.oneshot_ends.clear();
-        }
-        if seek_delta > 1.0 {
-            self.pending_by_clip_id.clear();
-            self.pending_by_layer.clear();
-            self.pending_by_tick.clear();
         }
     }
 
@@ -337,34 +309,6 @@ impl LiveClipManager {
         Beats(snapped as f64 / MIDI_CLOCK_TICKS_PER_BEAT as f64)
     }
 
-    // ─── Pending launch queue ───
-
-    fn queue_pending(&mut self, clip_id: ClipId, launch: PendingLiveLaunch) {
-        let tick = launch.target_tick;
-        let layer_id = launch.layer_id.clone();
-
-        // Remove any existing pending for this layer
-        if let Some(old_id) = self.pending_by_layer.remove(&layer_id) {
-            self.remove_pending_by_clip_id(&old_id);
-        }
-
-        self.pending_by_clip_id.insert(clip_id.clone(), launch);
-        self.pending_by_layer.insert(layer_id, clip_id.clone());
-        self.pending_by_tick.entry(tick).or_default().push(clip_id);
-    }
-
-    fn remove_pending_by_clip_id(&mut self, clip_id: &str) {
-        if let Some(launch) = self.pending_by_clip_id.remove(clip_id) {
-            self.pending_by_layer.remove(&launch.layer_id);
-            if let Some(ids) = self.pending_by_tick.get_mut(&launch.target_tick) {
-                ids.retain(|id| id != clip_id);
-                if ids.is_empty() {
-                    self.pending_by_tick.remove(&launch.target_tick);
-                }
-            }
-        }
-    }
-
     // ─── Activation ───
 
     /// Activate a live slot, stopping any existing slot on the same layer.
@@ -400,92 +344,6 @@ impl LiveClipManager {
     fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip) {
         let mut noop = |_: &str| {};
         self.activate_live_slot_now_with_stop(layer_index, clip, &mut noop);
-    }
-
-    /// Process pending launches that have reached their target tick.
-    /// Returns true if any launches were activated.
-    pub fn activate_due_pending_launches(&mut self, host: &dyn LiveClipHost) -> bool {
-        if self.pending_by_tick.is_empty() {
-            return false;
-        }
-
-        let now_tick = host.get_current_absolute_tick();
-        let mut any_activated = false;
-
-        // Collect all due launches first to avoid borrow conflicts
-        let mut due_launches: Vec<PendingLiveLaunch> = Vec::new();
-
-        while let Some(&earliest_tick) = self.pending_by_tick.keys().next() {
-            if earliest_tick > now_tick {
-                break;
-            }
-
-            let clip_ids = match self.pending_by_tick.remove(&earliest_tick) {
-                Some(ids) => ids,
-                None => break,
-            };
-
-            for clip_id in clip_ids {
-                if let Some(launch) = self.pending_by_clip_id.remove(&clip_id) {
-                    self.pending_by_layer.remove(&launch.layer_id);
-                    due_launches.push(launch);
-                }
-            }
-        }
-
-        // Now activate all collected launches
-        for launch in due_launches {
-            self.activate_live_slot_now(launch.layer_index, launch.clip);
-            any_activated = true;
-        }
-
-        any_activated
-    }
-
-    /// Tick-based variant for calling from engine tick loop without a LiveClipHost.
-    /// Avoids borrow conflict where engine can't pass &self as host while &mut self.
-    /// Port of C# PlaybackController.Update line 1152.
-    pub fn activate_due_pending_launches_at_tick(&mut self, now_tick: i32) -> bool {
-        if self.pending_by_tick.is_empty() {
-            return false;
-        }
-
-        let mut any_activated = false;
-        let mut due_launches: Vec<PendingLiveLaunch> = Vec::new();
-
-        while let Some(&earliest_tick) = self.pending_by_tick.keys().next() {
-            if earliest_tick > now_tick {
-                break;
-            }
-
-            let clip_ids = match self.pending_by_tick.remove(&earliest_tick) {
-                Some(ids) => ids,
-                None => break,
-            };
-
-            for clip_id in clip_ids {
-                if let Some(launch) = self.pending_by_clip_id.remove(&clip_id) {
-                    self.pending_by_layer.remove(&launch.layer_id);
-                    due_launches.push(launch);
-                }
-            }
-        }
-
-        for launch in due_launches {
-            self.activate_live_slot_now(launch.layer_index, launch.clip);
-            any_activated = true;
-        }
-
-        any_activated
-    }
-
-    /// Check if any pending launches activated (for the engine to call mark_dirty).
-    pub fn has_pending_activations(&self, host: &dyn LiveClipHost) -> bool {
-        if let Some(&earliest) = self.pending_by_tick.keys().next() {
-            earliest <= host.get_current_absolute_tick()
-        } else {
-            false
-        }
     }
 
     // ─── Trigger ───
@@ -547,28 +405,7 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
-        // Resolve LayerId for stable pending launch tracking
-        let layer_id = project
-            .timeline
-            .layers
-            .get(layer_index as usize)
-            .map(|l| l.layer_id.clone())
-            .unwrap_or_default();
-
-        // Queue or activate immediately
-        let target_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
-        if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
-            // Queue for future activation
-            let launch = PendingLiveLaunch {
-                clip: clip.clone(),
-                layer_index,
-                layer_id,
-                target_tick,
-            };
-            self.queue_pending(clip.id.clone(), launch);
-        } else {
-            self.activate_live_slot_now(layer_index, clip.clone());
-        }
+        self.activate_live_slot_now(layer_index, clip.clone());
 
         // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
         self.track_recording_clip_start(host, project, &clip, midi_note);
@@ -631,26 +468,7 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
-        // Resolve LayerId for stable pending launch tracking
-        let layer_id = project
-            .timeline
-            .layers
-            .get(layer_index as usize)
-            .map(|l| l.layer_id.clone())
-            .unwrap_or_default();
-
-        let target_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
-        if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
-            let launch = PendingLiveLaunch {
-                clip: clip.clone(),
-                layer_index,
-                layer_id,
-                target_tick,
-            };
-            self.queue_pending(clip.id.clone(), launch);
-        } else {
-            self.activate_live_slot_now(layer_index, clip.clone());
-        }
+        self.activate_live_slot_now(layer_index, clip.clone());
 
         // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
         self.track_recording_clip_start(host, project, &clip, midi_note);
@@ -887,20 +705,7 @@ impl LiveClipManager {
             }
         }
 
-        // Check for pending launch cancellation
         if !self.live_slots.contains_key(&layer_index) {
-            let layer_id = project
-                .timeline
-                .layers
-                .get(layer_index as usize)
-                .map(|l| l.layer_id.clone())
-                .unwrap_or_default();
-            if let Some(pending_id) = self.pending_by_layer.get(&layer_id).cloned()
-                && clip_id.is_none_or(|id| id == pending_id)
-            {
-                self.remove_pending_by_clip_id(&pending_id);
-                return;
-            }
             return;
         }
 

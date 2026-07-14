@@ -303,6 +303,25 @@ impl Primitive for ScatterOnMesh {
     }
 }
 
+impl ScatterOnMesh {
+    /// BUG-037: all three entry points (`area_main`/`scan_main`/`place_main`)
+    /// come from one fixed, asset-independent shader source — same shape as
+    /// `RenderScene::prewarm_pipelines`. Lazily compiled on first `run()`
+    /// otherwise (real Metal compile, tens of ms), which is exactly the class
+    /// of frame-0 stall BUG-037 tracks for a glTF scene layer that scatters
+    /// instances across its mesh on the first rendered frame. The device's
+    /// pipeline cache is keyed by shader hash and shared across every
+    /// `ScatterOnMesh` instance, so warming here makes every later `run()`,
+    /// on any layer, a cache hit. Called from `GeneratorRegistry::prewarm_all`
+    /// at app startup.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
+        device.create_compute_pipeline(SHADER_SRC, "area_main", "node.scatter_on_mesh.area");
+        device.create_compute_pipeline(SHADER_SRC, "scan_main", "node.scatter_on_mesh.scan");
+        device.create_compute_pipeline(SHADER_SRC, "place_main", "node.scatter_on_mesh.place");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,9 +568,9 @@ mod gpu_tests {
         for (i, inst) in instances.iter().enumerate() {
             let [x, y, z, scale] = inst.pos_scale;
             assert!(y.abs() < 1e-4, "instance {i} y={y} should be on the y=0 quad plane");
-            assert!(x >= -1e-3 && x <= 4.0 + 1e-3, "instance {i} x={x} outside quad bounds");
-            assert!(z >= -1e-3 && z <= 4.0 + 1e-3, "instance {i} z={z} outside quad bounds");
-            assert!(scale >= 0.5 - 1e-4 && scale <= 1.5 + 1e-4, "instance {i} scale={scale} outside [0.5, 1.5]");
+            assert!((-1e-3..=4.0 + 1e-3).contains(&x), "instance {i} x={x} outside quad bounds");
+            assert!((-1e-3..=4.0 + 1e-3).contains(&z), "instance {i} z={z} outside quad bounds");
+            assert!((0.5 - 1e-4..=1.5 + 1e-4).contains(&scale), "instance {i} scale={scale} outside [0.5, 1.5]");
             // rot_pad.y (yaw) should vary; rot_pad.x/z stay 0 when
             // align_to_normal is off (flat quad normal is world-up anyway,
             // but this exercises the "off" branch specifically).
@@ -682,5 +701,44 @@ mod gpu_tests {
                 "instance {i}: flat ground must keep instances upright, got up={mapped_up:?} from euler=({rx}, {ry}, {rz})"
             );
         }
+    }
+
+    #[test]
+    fn prewarm_pipelines_populates_the_shared_compute_cache() {
+        // BUG-037. Order-independent by design (BUG-144's documented class,
+        // same fix shape as the sibling render_scene/gltf_texture_source
+        // prewarm tests and registry.rs's atom-codegen sweep test): `device`
+        // is process-global across the whole `--features gpu-proofs --lib`
+        // run, so another test's `GeneratorRegistry::prewarm_all` may have
+        // already warmed these same three entry points before this test
+        // runs. Asserting "cache hit after MY prewarm call" is correct
+        // either way — the operationally meaningful fact (first live `run()`
+        // is a cache hit, not a real compile) holds whether this call or an
+        // earlier test's warmed the cache.
+        let device = crate::test_device();
+        ScatterOnMesh::prewarm_pipelines(&device);
+        const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
+        for (entry, label) in [
+            ("area_main", "node.scatter_on_mesh.area"),
+            ("scan_main", "node.scatter_on_mesh.scan"),
+            ("place_main", "node.scatter_on_mesh.place"),
+        ] {
+            let cache_before_use = device.compute_pipeline_cache_len();
+            let _pipeline = device.create_compute_pipeline(SHADER_SRC, entry, label);
+            assert_eq!(
+                device.compute_pipeline_cache_len(),
+                cache_before_use,
+                "{entry}'s pipeline compile after prewarm must be a cache hit"
+            );
+        }
+
+        // A second prewarm pass must also be a pure cache hit.
+        let after_first_prewarm = device.compute_pipeline_cache_len();
+        ScatterOnMesh::prewarm_pipelines(&device);
+        assert_eq!(
+            device.compute_pipeline_cache_len(),
+            after_first_prewarm,
+            "a second prewarm pass must be a pure cache hit, not add more entries"
+        );
     }
 }

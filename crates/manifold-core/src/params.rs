@@ -438,8 +438,11 @@ mod tests {
     /// design ceiling is 2× = 271.5 ns/op. `get` is a bare scan with no registry
     /// consult, so it should beat the baseline outright. Min-of-N rounds so a
     /// transient scheduler stall on a loaded machine can't flake the default
-    /// `cargo test --workspace` sweep. Run with `-- --nocapture` to see the number.
+    /// `cargo test --workspace` sweep. Wall-clock ceilings still flake under
+    /// nextest's parallel pool (BUG-113), so this only runs under
+    /// `--features bench-timing`. Run with `-- --nocapture` to see the number.
     #[test]
+    #[cfg(feature = "bench-timing")]
     fn bench_resolve() {
         const N: usize = 40;
         const ITERS: u64 = 1_000_000;

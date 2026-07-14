@@ -50,10 +50,9 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-161 | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` errors in `ui_snapshot/mod.rs` (`view.canonical_def` is `Arc<EffectGraphDef>`, callees want `&EffectGraphDef`) — the headless ui-snap tool, the prescribed oracle for BUG-160 and others, is currently unusable. Found bug-wave lane A 2026-07-14 trying to bisect BUG-160; pre-existing on origin/main, unrelated to this session's diff. Not part of the default `nextest` sweep (feature-gated), so it went unnoticed. LOW-effort fix (add `&`/`.as_ref()` at 8 call sites) but blocks any UI-regression bisection until fixed. |
-| BUG-162 | **freeze-codegen-region-fusion-gpu-tests-fail-with-badinput-standalone** | SIX `node_graph::freeze::codegen::gpu_tests` all fail with `BadInput` from a `.fuses(...)` call, even run serially in isolation (`--test-threads=1`, module-scoped) — not a parallel-contention flake: `cross_resolution_external_sampled_at_uv` (`:3591`), `fused_colorgrade_generated_matches_hand_kernel` (`:4229`), `fused_fanout_emits_two_dst_bindings` (`:4023`), `fused_gather_binds_sampler_and_passes_texture` (`:3944`), `fused_prelude_carries_and_dedups_top_level_consts` (`:3524`), `fused_texture_region_carries_and_dedups_wgsl_includes` (`:3672`) — all "region fuses: BadInput", the SAME error shape across every one. Confirmed pre-existing on origin/main via `git stash` (`cross_resolution_external_sampled_at_uv` reproduces identically on the unmodified tree; the other 5 not individually re-verified against origin/main but share the exact same error class and were found in the same run). Distinct from BUG-144 (that one is a genuine parallel-only race on the prewarm-cache tests and passes isolated — confirmed still true this session, `prewarm_pipelines_populates_the_shared_render_cache` passed clean when isolated). This is a real, deterministic module-wide failure in the region-fusion codegen path that any `--features gpu-proofs --lib` run touching `freeze::codegen` hits — just never noticed because CLAUDE.md's guidance is to narrow runs to the primitive being touched, and nobody's recently narrowed to this module. Found bug-wave lane A 2026-07-14 verifying BUG-120's shader fix didn't regress anything, via a full `--features gpu-proofs --lib` run. Root cause not investigated. Fix shape: TBD, needs its own investigation session starting from the `.fuses(...)` call sites named above. |
+| ~~BUG-161~~ FIXED | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | FIXED 2026-07-14 (bug-wave3 lane C) — `&view.canonical_def` / `(*view.canonical_def).clone()` at all 8 sites; unblocks BUG-160's prescribed oracle. |
+| BUG-163 | **freeze-codegen-region-fusion-gpu-tests-fail-with-badinput-standalone** | SIX `node_graph::freeze::codegen::gpu_tests` all fail with `BadInput` from a `.fuses(...)` call, even run serially in isolation (`--test-threads=1`, module-scoped) — not a parallel-contention flake: `cross_resolution_external_sampled_at_uv` (`:3591`), `fused_colorgrade_generated_matches_hand_kernel` (`:4229`), `fused_fanout_emits_two_dst_bindings` (`:4023`), `fused_gather_binds_sampler_and_passes_texture` (`:3944`), `fused_prelude_carries_and_dedups_top_level_consts` (`:3524`), `fused_texture_region_carries_and_dedups_wgsl_includes` (`:3672`) — all "region fuses: BadInput", the SAME error shape across every one. Confirmed pre-existing on origin/main via `git stash` (`cross_resolution_external_sampled_at_uv` reproduces identically on the unmodified tree; the other 5 not individually re-verified against origin/main but share the exact same error class and were found in the same run). Distinct from BUG-144 (that one is a genuine parallel-only race on the prewarm-cache tests and passes isolated — confirmed still true this session, `prewarm_pipelines_populates_the_shared_render_cache` passed clean when isolated). This is a real, deterministic module-wide failure in the region-fusion codegen path that any `--features gpu-proofs --lib` run touching `freeze::codegen` hits — just never noticed because CLAUDE.md's guidance is to narrow runs to the primitive being touched, and nobody's recently narrowed to this module. Found bug-wave lane A 2026-07-14 verifying BUG-120's shader fix didn't regress anything, via a full `--features gpu-proofs --lib` run. Root cause not investigated. Fix shape: TBD, needs its own investigation session starting from the `.fuses(...)` call sites named above. |
 | BUG-160 | **editor-window-unification-inspector-card-layout-regressions** | Inspector cards misfit their buttons/controls after the EDITOR_WINDOW_UNIFICATION landing (2026-07-14) — regression per Peter's live report; P1's byte-diff verification passed, so it's P2/P3 or a fixture-uncovered configuration. Not investigated. MED-HIGH (UI regression). |
-| BUG-159 | **timeline-scroll-past-playhead-violent-snapback** | Scrolling the arrangement past the playhead during playback violently snaps the view back — playhead-follow fights the user's gesture instead of yielding to it (Ableton-style smooth limit expected). Reported by Peter 2026-07-14. MED (performance-surface feel). |
 | BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
 | BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
 | BUG-156 | **fluidsim3d-4k-perf-regression-suspect-bug066-fix** | FluidSim3D no longer holds smooth 60FPS at 4K — regressed, and the change under suspicion is the BUG-066 fix (`eebac94d`), which resized volume-node dispatch grids from the legacy 8³ workgroup to the codegen 4³ workgroup (8x more dispatched groups per volume kernel). Reported by Peter 2026-07-14. Not investigated. HIGH (live-rig performance). |
@@ -61,23 +60,16 @@ or human can read it, and it needs no external tool.
 | BUG-153 | **ui-snap-inspector-scene-172px-nondeterministic** | `cargo run --features ui-snapshot -- ui-snap inspector` is not run-to-run deterministic: two consecutive runs of the SAME unmodified binary differ in exactly 172 pixels, always the same bounding box (x 1258-1274, y 450-854 at 1536×1216 — a narrow vertical band, likely the inspector's scrollbar thumb or a hover/blend-state artifact). Confirmed pre-existing (reproduces identically on unmodified `origin/main`, unrelated to any diff) while byte-diffing `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1's before/after — the `timeline` and `states` scenes are NOT affected (byte-identical run-to-run). LOW (test-determinism only, no correctness impact — but silently defeats any future byte-identical regression check against this one scene). |
 | ~~BUG-150~~ FIXED | **mute-chip-press-motion-teleports-hit-bounds-after-scroll** | FIXED @ `804ea043` — `tick_mute_motion`'s bounds write deleted, colour tween kept; `mute_base_y` and `ChipMotion::press_offset_y` removed. Class audit (inspector drag ghost, param_card badge/target-bar, interaction_overlay lift/ghost, drawer-height tween) found no other violation of the animations-never-move-hit-geometry rule. Solo confirmed to never have had this defect (no motion tick exists for it). |
 | BUG-148 | **verification-debt-duplicate-vd-020-id** | Two unrelated `docs/VERIFICATION_DEBT.md` entries both claim ID VD-020 (PARAM_STORAGE_BOUNDARIES P2's calibration-drag gesture, and CINEMATIC_POST P5/P6's GTAO look-pass) — no merge conflict flagged it since they landed in non-overlapping regions. Fix shape: renumber one (check cross-references first), audit for other duplicates, add a uniqueness check alongside `bug_status.py`. LOW (tooling/bookkeeping only). |
-| BUG-147 | **bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs** | `bokeh_gather.rs`'s `#[cfg(test)]` module declares `BOKEH_N`/`BOKEH_GOLDEN_ANGLE`/`bokeh_hash_angle`/`Plane4` (+ its `texel`/`sample` methods)/`bokeh_gather_texel` — the CPU-reference parity harness — but they're only consumed by the inner `#[cfg(all(test, feature = "gpu-proofs"))]` submodule, so a plain `cargo test`/`cargo nextest` (no `gpu-proofs`) compiles the outer `#[cfg(test)]` module without ever using them and rustc emits `dead_code` warnings. Cosmetic (the standard scoped `clippy -p manifold-renderer -- -D warnings` gate, no `--tests`, doesn't compile test code at all and stays clean) — found via IDE diagnostics while gating an unrelated P6 (`bilateral_blur`) session, not caused by that diff (`bokeh_gather.rs` untouched, `git log` shows its last change is P4's original commit `d85c6dc0`). Now confirmed SYSTEMIC: the identical shape reappeared in `bilateral_blur.rs` the moment it compiled post-merge. Fix shape: nest the outer items under the same `#[cfg(feature = "gpu-proofs")]` gate as the submodule that uses them, or move them inside it directly. LOW (lint-only, no correctness impact — same family as BUG-126). |
 | ~~BUG-146~~ FIXED | **render-scene-atom-pipelines-never-prewarmed** | FIXED (fusion-sweep worktree) — `GeneratorRegistry::prewarm_all` now sweeps every registered primitive via `prewarm_all_atom_codegen_pipelines`, compiling each atom's standalone kernel through a new dynamic mirror of `standalone_for_spec` (`codegen::standalone_for_node`). Structural, O(atom count) — 144 atoms covered. Measured: `node.cube_mesh` cold compile ~12-15ms → ~0.02-0.04ms; worst-case all-144-atoms-cold-in-one-frame ~1.0-1.1s → ~1-2ms. One residual: `node.variable_blur` (the sole atom using `wgsl_specialization`) isn't reachable generically — its specialization-token substitution values are bespoke per atom — stays a lazy first-use compile as before. |
-| BUG-144 | **prewarm-cache-tests-flake-under-full-lib-parallel-run** | `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` and `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache` both assert a process-global shared-pipeline-cache count grows by their own prewarm call (`before=N, after=N` failure — no growth observed); reproduces deterministically under the full `cargo test -p manifold-renderer --features gpu-proofs --lib` parallel run but PASSES in isolation (`--test-threads=1` or filtered to just that test). Confirmed pre-existing and order-dependent on FOUR independent occasions now: bisected via `git stash` during VOLUMETRIC_LIGHT_DESIGN P1 (2026-07-13), and separately during the BUG-111/BUG-054 landings and CINEMATIC_POST P6/P5 (`bilateral_blur`/`ssao_gtao`) — all on the unmodified tree, unrelated to any of those changes. Root cause: two tests racing to prewarm the SAME global cache key concurrently — whichever runs second finds the entry already there from the other, so its own "before != after" growth check fails. Fix shape: either serialize these two tests against each other (a named-lock or `#[serial]`-style guard), or key each test's assertion off a cache entry unique to that test's own prewarm call instead of the raw global count. LOW (flaky-gate under parallel `--lib`, not a functional regression; doesn't affect `nextest` since these live behind `gpu-proofs` and are excluded from the default sweep). |
 | ~~BUG-143~~ FIXED | **macros-panel-ableton-trim-drag-outside-p7-inventory** | FIXED @ `d5ab1ae7` (UI_WIDGET_UNIFICATION P8) — folded onto `DragController<AbletonTrimDrag>`. |
-| BUG-142 | **fire-meter-capture-bench-flakes-under-parallel-load** | `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard µs/tick ceiling on fire-meter capture cost; failed once under `cargo nextest run --workspace` right after a merge-then-rerun (254.54 µs/tick), passed in isolation and on a clean full-workspace rerun immediately after (3192/3192). Same class as BUG-113 (`ParamManifest::get`'s bench) — a wall-clock ceiling assertion inside the default nextest sweep, contention-sensitive by construction. LOW (flaky-gate, not functional). |
 | ~~BUG-141~~ FIXED | **import-graph-fused-region-linearize-depth-parse-fail** | FIXED this session (fusion-sweep worktree, lands with its commit) — same root cause and fix as BUG-135: `generate_fused`'s texture path now emits `node_includes`. |
 | BUG-136 | **cinematic-post-motion-blur-no-visible-effect-despite-correct-wiring** | Peter (`SceneLadders.manifold`, glb auto-import wiring): orbiting the camera with `lens.shutter_angle=181` and `motion_blur.max_blur_px=128` shows no visible blur. Statically verified correct — not yet observed at runtime: the graph wiring is right (`camera` → `lens` → `render`, `lens.out` also feeds `motion_blur.camera`, `render.velocity` → `motion_blur.velocity`, `motion_blur` sits last before `final`, confirmed via `project.json`/`wires`), and `render_scene.rs`'s `prev_view_proj` frame-to-frame diff (the velocity source) only resets on a structural rebuild (`rebuild()`, object/light count change), not on an ordinary param edit like dragging Orbit — so camera-orbit motion should register. Root cause UNKNOWN pending runtime observation. Suspects: (a) the UI param-edit path may not be live-propagating slider drags into the running content-thread graph in real time (the codebase's known `ui-state-sync-path` bug class); (b) `node.motion_blur`'s fused-vs-standalone codegen routing may be silently mis-selecting a stale/pass-through kernel, same failure family as BUG-135's fused `wgsl_includes` gap; (c) the render loop may not be ticking continuously while scrubbing outside playback, collapsing `prev`/`current` camera state to the same value per redraw. Fix shape: reproduce live, add temporary `println!`s in `render_scene.rs`'s velocity computation and `motion_blur`'s `evaluate()`/derived-uniform recompute to confirm both are seeing nonzero values at runtime, then narrow. MED-HIGH — a shipped P3 feature with no observable effect. |
 | BUG-134 | **bug-status-py-tail-boundary-hides-entries-past-the-appendix** | `bug_status.py`'s `parse()` stops entry-scanning at the first `## ` heading past `## Fixed` (the "Checked and safe" appendix) and copies the rest of the file verbatim — any `### BUG-NNN` entry appended after that point (BUG-094/095/096/097/103/126, this session) is invisible to `--check`. Concretely hid a real duplicate `BUG-097` id (one FIXED, one OPEN) and a `derive_status()` false positive (`\bFIXED\b` matches inside "found not fixed" — BUG-126). Fix shape: continue the entry scan across every appendix heading, or make an entry-outside-Open/Fixed a hard check failure; separately tighten the FIXED regex to exclude a preceding not/never. LOW (tooling only). |
-| BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | ~~BUG-123~~ FIXED | **mesh-edges-capacity-vs-active-count** | FIXED @ `1b854d45` — optional `active_count` scalar input mirroring `node.range` overrides the buffer-capacity-derived vertex count. |
 | BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | DEFERRED — Peter 2026-07-14: "I don't want bug-118 worked on"; on hold at his call. CHARACTERIZED (VOLUMETRIC_LIGHT_DESIGN.md P1, 2026-07-13): `apply_fog` IS correctly distance-scaled; the "milk" symptom is saturation — a bounded subject's depth range is small relative to fog's `1/density` decay length, so the fog fraction barely varies across it (measured Δ 1.1–2.5 percentage points across a subject-scale depth slice at camDistance 9/30, vs 15–30% differentiation across a wide-range scene). Absorbed by the shafts design, which SHIPPED 2026-07-13 (P1–P3) — but whether it actually fixes this is UNVERIFIED (the shafts' own demos don't show a legible sculpting effect; no re-render of the original repro scene yet). | render_scene / atmosphere |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
 | BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Half-day spike DONE 2026-07-14 (see detail below): the static-max-arity + optional-Coincident + `0u` use-flag shape works technically (already proven in production by `node.pack_rgba`) but costs a real 4x texture-sample increase for multi_blend's common 2–3-wired case and loses the editor's dynamic port-shrink UX; switch_texture is a harder, separate call (32-input vocabulary, loses its 5x→1x branch-pruning short-circuit). Peter's call owed on whether to pursue. LOW (working atoms, dispatch-cost only). |
 | ~~BUG-114~~ FIXED | **draw-family-blocked-on-array-into-texture-codegen-read-path** | FIXED — `docs/FUSION_SOTA_DESIGN.md` P4a+P4b+P5. `InputAccess::BufferIndex` mechanism (P4a) + Vec3/Vec4/Color param-gate lift (P5) unblocked all six `draw_*` atoms + `blob_overlay`; `BlobTracking.json` measured 18→13 estimated dispatches (1 region, 6 members). Full writeup in the Fixed section below. |
-| BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
-| BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
-| BUG-110 | **osc-receiver-test-type-complexity-clippy-debt** | `manifold-playback`'s `--tests`/`--all-targets` clippy gate fails on two `clippy::type_complexity` hits in `osc_receiver.rs:366,368` (`Arc<Mutex<Vec<(String, Vec<f32>)>>>`), unrelated to and pre-dating `bug-wave1-lane-d-test-hygiene` (byte-identical to base commit `dd31cde4`; last touched by an unrelated "F3" session). Found 2026-07-11 isolating BUG-088/072's gate. Fix shape: factor the type into a local `type` alias at both sites. LOW (lint-only). |
 | ~~BUG-108~~ FIXED | **effect-card-add-effect-button-floats-over-sectioned-rows** | FIXED @ `33fc99b8` — confirmed suspect (a): `ParamCardPanel::effect_body_natural_height`/`compute_height_generator` summed `param_info` linearly, blind to the D5 section-header bar every section run draws and to a folded section's rows painting nothing, so the "+ Add Effect" button (anchored at the summed `compute_height()`) landed mid-card. Fixed by walking `section_runs()` the same way `build_effect`/`build_generator`'s own draw loops do. Class-kill: `add_effect_button_does_not_overlap_sectioned_card_last_row` (an anchored bounds-overlap assertion over real painted rects, not the full P1 generic lint from `UI_LAYOUT_INVARIANT_LINTS_PROPOSAL.md`, which hasn't shipped yet). |
 | BUG-107 | **text-rasterizer-draws-fallback-glyph-ids-with-base-font** | PARTIAL — layer 1 (correctness) FIXED @ `1d9dba9c`: the pinned file (`text_rasterizer.rs`) was the wrong one for the reported symptom (it's the Text-generator's content pipeline, never called from the graph canvas / inspector path the screenshots showed) — the actual bug lived in `native_text.rs`'s independent UI-chrome atlas, with the identical flatten-runs pattern. Fixed both: each CTLine run now draws with its own resolved font; `native_text.rs`'s glyph-atlas cache key also gained a font identity so a fallback run's glyph ids can't collide with Inter's. Layer 2 (prevention — extend the PUA icon atlas with ↳/chevrons, plus a check-time STATIC lint over `manifold-ui` string literals) remains OPEN; a runtime debug-assert was considered and rejected — both rasterizers draw live user text (layer/clip names) too, and panicking on any CoreText fallback would crash the rig on legitimate non-ASCII user content, not just an agent's stray literal. MED (class is unbounded until layer 2 lands). |
 | ~~BUG-106~~ FIXED | **audio-mixdown-analysis-only-test-order-flaky** | FIXED @ `78e97d4a` — same root cause as BUG-090/BUG-074 (a `TestDir` temp-path collision, not order-dependent global state): `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution on this machine, so concurrently-running tests sharing the `TestDir` prefix collided on the same directory and raced on the shared fixture file. Fixed with a per-process atomic sequence number in the path. |
@@ -88,7 +80,6 @@ or human can read it, and it needs no external tool.
 | ~~BUG-098~~ FIXED | **film-grain-drifts-and-reads-as-blocky-pixels** | FIXED (bug/wave2-lane-b-filmgrain) — re-roll via frame-count modulo instead of time-panned offset, resolution-relative cell scale, and a soft blur pass; see the Fixed-section entry for the full trail. |
 | ~~BUG-097~~ FIXED | **ui-snap-render-overlay-pass-uses-wrong-traversal** | FIXED 2026-07-10 by construction (HARNESS_FIDELITY_INVARIANT §4 step 2): the harness's parallel overlay pass was DELETED along with `draw_immediate_passes`, and the overlay assembly now has one owner — `ui_frame::render_main_ui_passes` — which uses `render_sub_region` @ `Depth::OVERLAY`. Not point-fixed. Confirmed reproducible after all: `build_overlays` ALWAYS records `start` after the region root, so EVERY open overlay excluded its root (the "may be latent" caveat was wrong). Permanent proof: `overlay_fidelity_proof::bug097_...` (mod.rs) shows `render_tree_range` leaves the range byte-identical (blank) while `render_sub_region` + the seam draw it. See detail below. |
 | ~~BUG-090~~ FIXED | **audio-mixdown-analysis-only-test-flakes-under-parallel-run** | FIXED @ `78e97d4a` — the named `TestDir`/temp-path-collision suspect was confirmed correct, not float summation-order non-determinism: `SystemTime::now()`'s nanosecond value isn't actually nanosecond-resolution here (~96% collision rate measured over 200k tight-loop calls), so tests sharing the `TestDir` prefix collided on the same directory under parallel execution and raced on the shared `tone.wav` fixture. Fixed with a per-process atomic sequence number in the path; 10/10 consecutive parallel runs green. |
-| BUG-089 | **live-clip-pending-tick-queue-dead-on-all-live-paths** | `LiveClipManager`'s tick-based pending-launch queue (`pending_by_tick`/`pending_by_layer`/`pending_by_clip_id`, `PendingLiveLaunch.target_tick`, `queue_pending`, `activate_due_pending_launches[_at_tick]`, `has_pending_activations`) can only ever be written when `event_absolute_tick >= 0`, but midir events always set `absolute_tick = -1` (`midi_input.rs`) and it is the sole producer of `MidiNoteEvent` in the whole workspace; `fire_layer_oneshot` also always passes `tick = -1`. `activate_due_pending_launches_at_tick` is the only live caller (`engine.rs:803`, fed `self.last_frame_count`, a frame counter, not a real clock tick) and drains a map that can never be non-empty in production — confirmed by exhaustive grep, not inference. Found 2026-07-10 while scoping F2's tick-queue deletion call; left OPEN rather than deleted because the dead footprint is the whole subsystem (7 items across 2 files plus a dead cancellation branch in `commit_live_clip`), wider than the single function F2 was scoped to evaluate — a clean full removal deserves its own dedicated pass. LOW (dead code, zero runtime cost beyond an empty-map check per tick; risk is only in a future session doing a partial removal). |
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
 | ~~BUG-086~~ FIXED | **recording-audio-track-under-covers-duration-on-longer-takes** | FIXED 2026-07-13 (recording-sync lane) — root cause was NOT the native encoder: `WriteAudioSamples`'s backpressure gate was instrumented with a counter 2026-07-11 and repeatedly measured 0 drops on runs that still fell short, falsifying it per the diagnosis protocol. The real cause was `recording_soak.rs`'s OWN synthetic-audio pusher: `push_realtime_audio_chunk` fed a bounded `ringbuf::HeapRb` (~5s capacity) via `push_slice`, discarded its return value, and advanced its `pushed_frames` bookkeeping by the INTENDED push amount regardless of what the ring actually accepted — so a transient overflow under unpaced/encoder-stress timing bursts was silently discarded, never retried, a harness-side loss with nothing recording it happened. Fixed by tracking the real accepted count (self-heals the backlog on the next call). Verified: 3x paced 2-min 1080p soaks post-fix measured audio_duration_s at 120.0087s/120.0102s/120.0115s (<0.01% off, both drop counters 0 throughout); two paced 1-min runs (720p/1080p) measured 60.0038s/60.0102s; the unpaced/encoder-stress 2-min run — previously the reliable repro — now measures 120.0007s. Landed together with BUG-085 (same silent-drop class rule: no path may return success on a dropped buffer). `LiveRecordingPlugin.m`'s audio backpressure gate was ALSO hardened while investigating (now bounded-spin-waits like the video path before counting a drop, and returns a real error code instead of `LR_OK` on drop) — real defect per the class rule, though it turned out not to be BUG-086's cause. |
 | ~~BUG-085~~ FIXED | **recording-frames-recorded-overstates-async-append-drops** | FIXED 2026-07-13 (recording-sync lane) — `frames_recorded` no longer accumulates from `LiveRecorder_EncodeVideoFrame`'s synchronous LR_OK return (that only proves the frame was queued for async append, not that it landed). Native: a `videoFramesAppendDropped` atomic counter (+ `LiveRecorder_GetVideoFramesAppendDropped`) now counts every way the async `appendPixelBuffer:` call can fail (backpressure, writer not Writing, append returning NO, an exception). Rust: `recording_thread::run` reads that counter and calls `LiveRecorder_Finalize` (which drains the append queue before returning its count) for the ground truth, and returns a `RecordingStats{frames_recorded, frames_sync_failed, video_append_dropped}` instead of an untrustworthy synchronous tally; `LiveRecordingSession::stop()` sums every drop source (`frames_dropped` now includes async-append drops, not just pool exhaustion) so `frames_recorded + frames_dropped` always equals frames submitted. `pool_accounting_consistent`'s forced-backpressure test tightened from `pts.len() <= frames_recorded` to exact equality, plus `dropped > 0`; green 3x. |
@@ -96,10 +87,9 @@ or human can read it, and it needs no external tool.
 | ~~BUG-079~~ FIXED | **missing-preset-fails-silently-no-onscreen-signal** | FIXED @ `834fdaa6` — an unresolved preset template now surfaces in the existing BUG-063 "opened with repairs" load-time toast instead of only an `eprintln`. |
 | ~~BUG-076~~ FIXED | **inspector-scroll-underestimates-content-height** | Closed as not-reproducible, Peter's call 2026-07-14 — two investigations found no mechanism, fixture tests pass, doesn't reproduce on the rig. Reopen if a tall inspector stack ever won't scroll live. |
 | ~~BUG-074~~ FIXED | **audio-mixdown-flaky-under-parallel-tests** | FIXED @ `78e97d4a` — same `TestDir` temp-path-collision root cause as BUG-090/BUG-106 (GPU-contention suspect ruled out: the mixdown render path is pure CPU decode/resample). Fixed with a per-process atomic sequence number in the `TestDir` path. |
-| BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | ~~BUG-072~~ FIXED | **audio-mixdown-all-targets-clippy-debt** | FIXED @ `78e97d4a` — same fix as BUG-088: `std::slice::from_ref` + `.iter().zip().enumerate()` rewrites in `audio_mixdown.rs`. |
 | ~~BUG-046~~ FIXED | **low-band-kick-deafness-on-mixes** | resolved by the dedicated ridge-only Kick channel (KICK_SWEEP_EVENT P1/P2/P4/P5, shipped 2026-07-07) — reads the kick's FM sweep, breaks the bad_guy deafness at equal bass-false-fire cost; kick-triggering binds Kick now, not Low; Peter confirmed 2026-07-11; live feel-pass = design P3 |
-| BUG-101 | **setup-spectrogram-scroll-offset** | Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — waterfall draws at pre-scroll position when scrolled (LOW) |
+| ~~BUG-101~~ FIXED | **setup-spectrogram-scroll-offset** | FIXED 2026-07-14 (bug-wave3 lane C) — `scope_rect` now shifts with the body scroll offset; `update_band_meters` fixed by the same change. |
 | ~~BUG-039~~ FIXED | **saw-rotation-wrap** | FIXED 2026-07-11 — `ParamSpecDef.wraps` (explicit tag) + `constrain_to_range` helper, wired into driver evaluation and automation-lane sampling; 10 preset card params tagged periodic after auditing all 49 presets. Rendered saw sweep across the wrap boundary confirms no hitch. |
 | BUG-045 | **gap-ring-down-chase** | tracker follows kernel ring-down down ~2-4 bins in note gaps; notes gate 87.6 vs 90 (LOW) |
 | ~~BUG-035~~ FIXED | **authoring-hitch** | ~59ms frame every ~5s: clip-atlas f16 convert on content thread — FIXED @ `55faec0f` (moved to clip-thumb disk worker via `try_read_packed()` + `store_atlas()`), rig confirmation owed |
@@ -112,19 +102,20 @@ or human can read it, and it needs no external tool.
 | BUG-026 | **popup-fade-freeze** | fix landed, running-app verification owed (MED) |
 | BUG-050 | **ableton-anchor-yankback** | play-from-cursor snap-backs; anchor fix landed, rig confirmation owed via [ABL-SYNC] logs (HIGH) |
 | ~~BUG-054~~ FIXED | **renderer-device-ptr-dangles** | FIXED @ `d447ec8d` — `Arc<GpuDevice>` replaces the cached raw pointer end-to-end (`GeneratorRenderer`/`VideoRenderer`/`ImageRenderer`/`MetalBackend`); `ContentThread::run()`'s repoint block and `journey_proof.rs`'s `rebind_gpu_device_pointers` workaround deleted as structurally unneeded. `rg '\*const GpuDevice' crates/` — zero code hits. |
-| BUG-048 | **arm-two-reds** | ARM idle/armed both red, shade-only difference (LOW, UX call) |
-| BUG-049 | **child-row-right-indent** | group-child right-anchored controls misaligned ~20px (LOW) |
+| ~~BUG-048~~ FIXED | **arm-two-reds** | FIXED 2026-07-14 (bug-wave3 lane C) — armed = amber `STATUS_WARNING`, idle = neutral, never red vs red. |
+| ~~BUG-049~~ FIXED | **child-row-right-indent** | FIXED 2026-07-14 (bug-wave3 lane C) — right-anchored x's use `right_pad = PAD`, not the indented `pad`; oracle updated. |
+| ~~BUG-012~~ FIXED | **tex-rename-corrupt** | FIXED 2026-07-14 (bug-wave lane A) — fragment-form rename filtered to texture-typed ports, mirroring the sibling binding-key rename. |
 | ~~BUG-018~~ FIXED | **catalog-stale** | FIXED @ `38ec595f` — regenerated; stale entry was the ApricotBloom `wireAmount` card (scene-3 morph revert leftover) |
-| BUG-081 | **audio-load-blip** | ~10ms of audio leaks when a voice is built (LOW) |
-| BUG-031 | **layer-menu-positional** | Layer context-menu + rename still address layers positionally (LOW, follow-up to the LayerId migration `877852a9`) |
-| BUG-053 | **hdr-live-recording-structural** | HDR live recording can't work: pool format mismatches the native pixel buffer, nothing PQ-encodes (LOW today, blocks HDR capture) |
+| ~~BUG-081~~ FIXED | **audio-load-blip** | FIXED 2026-07-14 (bug-wave3 lane C) — voice built silent (`.volume(0.0)`) instead of played-then-paused. |
+| ~~BUG-031~~ FIXED | **layer-menu-positional** | FIXED 2026-07-14 (bug-wave3 lane C) — Context*Layer family + `TextInputField::LayerName` now LayerId-keyed, resolved at dispatch time. |
+| BUG-053 | **hdr-live-recording-structural** | PARKED — decision owed from Peter (does live HDR capture matter for the rig); fix turns out cheap (wire the existing `PqEncoder` export already uses) once he says yes (LOW today, blocks HDR capture) |
 | BUG-034 | **atlas-uv-test-gap** | headless preview doesn't cover live atlas UV path (LOW) |
 | BUG-014 / 030 | parked | NaN content-key hash · color-ratchet red |
 | BUG-019 / 020 / 021 | deferred | group-fold gap · gen-card collapse · snap-back gap |
 | ~~BUG-056~~ FIXED | **audio-mixdown-clippy-debt** | no longer reproduces — verified 2026-07-11: `cargo clippy --workspace -- -D warnings` green (9.8s warm), no `#[allow(clippy)]` in the file. Almost certainly rewritten away by the P1 offline-export mixdown refactor (`d207f94a`, 2026-07-07), the last substantive change to `audio_mixdown.rs`; not bisected to the exact commit (LOW stakes) |
 | BUG-063 | **silent-load-repairs** | PARTIAL — load-repairs now surface as a non-blocking "opened with repairs" toast (P3, no longer silent); the heavier rescue path (blocking ack dialog + journal the pre-repair project.json to history/) is deferred (MED-HIGH) |
 | ~~BUG-066~~ FIXED | **fluid3d-corner-drift** | FIXED 2026-07-10 @ `eebac94d`, Peter rig-confirmed 2026-07-11 — root cause: `edge_slope_3d`/`swirl_force_3d` sized dispatch for the legacy 8³ workgroup while codegen emits 4³, so forces only ever existed in the (0..64)³ octant of the 128³ volume, which projects to the TR quadrant. Class killed: all volume nodes size grids from codegen's exported `VOLUME_WORKGROUP_3D`, emission pinned by test. The same-day "root cause NOT found" correction predates the fix (15:03 vs 16:51); the entry's falsification record stands as history |
-| BUG-068 | **inspector-scene-cliphit-overlap** | the `inspector` ui-snap scene fixture has a clip-vs-panel hit-test overlap at its narrower zoom — a clip can't be both uniquely-labeled and safely positioned over the inspector column, which forced DRAG_CAPTURE P1's L3 flow onto the `timeline` scene. Fixture-only, no runtime impact. Pre-existing at `b9304330` (LOW) |
+| ~~BUG-068~~ FIXED | **inspector-scene-cliphit-overlap** | FIXED 2026-07-14 (bug-wave3 lane C) — `inspector_scene`'s GLOW/PLASMA/RETURN clips shortened to clear the 600px-wide inspector column; regression test pins every clip's hit rect clear of `ui.layout.inspector().x`. |
 | BUG-069 | **shipping-license-audit** | four license problems in shipped components: madmom models + ADTOF (both CC BY-NC-SA), rusty_link crate (GPL-2.0, viral, in manifold-playback), staged ffmpeg copied from the dev machine (likely GPL build); full sweep 2026-07-08, everything else clean (HIGH for commercialization, zero runtime impact) |
 | ~~BUG-070~~ FIXED | **stepper-and-nonstandard-slider-reset** | ~~decay drawer slider~~ + Clip Trigger drawer sliders covered by the intrinsic-reset follow-through (@ 3a88f728). Remainder FIXED (AUDIO_SETUP_DOCK P4): Audio Setup gain `[−]value[＋]` steppers + the D7 overlay-drag value-label gain zone (not `BitmapSlider` tracks, so no `SliderReset` registration existed) now right-click-reset to unity via `PanelAction::slider_reset` replaying the existing `AudioSendGainDrag{Begin,Changed,Commit}` trio at 0.0 dB — the SAME gesture BUG-105 names as "every card/panel slider in the app." `feat/audio-dock-p4`. |
 
@@ -138,16 +129,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-161 (ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch) — the headless `ui-snap` tool's own compile is broken — LOW-effort mechanical fix, but blocks the prescribed oracle for UI-regression bugs
-**Status:** OPEN — found bug-wave lane A 2026-07-14, trying to bisect BUG-160 with `cargo run --features ui-snapshot --bin manifold -- ui-snap inspector` per that bug's own fix-shape ("ui-snap PNG diff is the oracle"). Not fixed this session (out of lane-A's exact bug scope) and not caused by this session's diff.
-
-**Symptom** — `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` mismatched-type errors in `ui_snapshot/mod.rs` (lines 454, 504, 581, 638, 660, 670, 896, 917): `view.canonical_def` is passed where callees (`render::render_graph_to_png`, `render::render_graph_editor_to_png`, others) expect `&EffectGraphDef`, but `canonical_def` is now `Arc<EffectGraphDef>` — a plain `&` no longer coerces. The whole `ui-snap` binary target fails to compile, so no headless UI scene can be rendered at all right now.
-
-**Root cause** — unknown which change flipped `canonical_def` from an owned `EffectGraphDef` to `Arc<EffectGraphDef>` (likely a preset-loading or graph-caching change elsewhere that made the canonical def shared); `ui_snapshot/mod.rs`'s 8 call sites were never updated to match. Confirmed pre-existing on `origin/main` (identical content on the commit this lane branched from) — this session's diff never touches `ui_snapshot/mod.rs`. Not caught by the default `nextest` sweep because `ui-snapshot` is a separate cargo feature, not compiled by a plain build.
-
-**Fix shape** — mechanical: at each of the 8 sites, deref the Arc (`&*view.canonical_def` or `view.canonical_def.as_ref()`) instead of `view.canonical_def`. No behavior change. Worth a follow-up: fold `--features ui-snapshot --bin manifold` into a routine check (even just a compile-only CI job) so this class doesn't recur silently, same gap as BUG-124's `--tests` clippy blind spot.
-
-### BUG-162 (freeze-codegen-region-fusion-gpu-tests-fail-with-badinput-standalone) — six `freeze::codegen` GPU tests fail deterministically, even isolated — not a parallel-contention flake
+### BUG-163 (freeze-codegen-region-fusion-gpu-tests-fail-with-badinput-standalone) — six `freeze::codegen` GPU tests fail deterministically, even isolated — not a parallel-contention flake
 **Status:** OPEN — found bug-wave lane A 2026-07-14, running a full `--features gpu-proofs --lib` sweep to verify BUG-120's shader-winding fix didn't regress anything. Not fixed this session (well out of lane-A's exact bug scope — a different subsystem entirely) and not caused by this session's diff (verified below).
 
 **Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib node_graph::freeze::codegen::gpu_tests -- --test-threads=1` (module-scoped, serial — rules out device contention) fails 6 of 38 tests, all with the same error shape, a `.fuses(...)` call returning `BadInput`:
@@ -167,7 +149,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Fix shape** — needs its own investigation session: start at `codegen.rs:3591` (`cross_resolution_external_sampled_at_uv`, the smallest/most specific-sounding test) and work out what input shape `.fuses()` is rejecting; check whether the same root cause explains all 6 before assuming it does. Given every hit is `--features gpu-proofs`-gated and none of the 6 tests were in this session's narrow `-p manifold-renderer node_graph::primitives::triangulate_grid` gate, this is invisible to the routine focused-test workflow CLAUDE.md recommends — worth a full `--features gpu-proofs --lib` sweep as part of any FUSION_SOTA / freeze-compiler landing to catch it early next time.
 
 ### BUG-160 (editor-window-unification-inspector-card-layout-regressions) — inspector cards no longer lay out properly (buttons and controls don't fit) after the editor-window-unification landing — MED-HIGH UI regression, reported by Peter 2026-07-14
-**Status:** PARKED 2026-07-14 (bug-wave lane A) — investigated via code reading only; the prescribed oracle (ui-snap PNG bisection) is blocked by BUG-161 (`ui-snapshot` feature doesn't compile). Reopen once BUG-161 is fixed: `ui-snap inspector` on `a0eba10c` (post-unification) vs its parent `6698e7c4` (pre-unification) is the actual next step. This session's code-reading pass, for the record: `InspectorCompositePanel::build_in_rect` (the editor host, `inspector.rs:2041`) shares the same per-card build logic as `build` (the main-window host, `:2349`) — no obvious divergent code path found. Width isn't an obvious culprit either: the editor's card-lane range (`Dock::editor()`'s `right_range = (240.0, 560.0)`, default `EDITOR_RIGHT_DEFAULT = 340.0`) sits inside the main window's own tested range (`MIN_INSPECTOR_WIDTH = 232.0` .. `MAX_INSPECTOR_WIDTH = 900.0`, default `500.0`) — if cards render correctly at the main window's 232px floor, 340px shouldn't be new territory, so a width-only theory doesn't explain the symptom on its own. Genuinely unconfirmed without pixels on screen — do not treat the above as ruling anything out, just as what didn't pan out on a code-only pass.
+**Status:** PARKED 2026-07-14 (bug-wave lane A) — investigated via code reading only; the prescribed oracle (ui-snap PNG bisection) was blocked by BUG-161 (`ui-snapshot` feature doesn't compile) at the time. **BUG-161 is now FIXED (bug-wave3 lane C, same day)** — the oracle is unblocked: `ui-snap inspector` on `a0eba10c` (post-unification) vs its parent `6698e7c4` (pre-unification) is the actual next step. This session's code-reading pass, for the record: `InspectorCompositePanel::build_in_rect` (the editor host, `inspector.rs:2041`) shares the same per-card build logic as `build` (the main-window host, `:2349`) — no obvious divergent code path found. Width isn't an obvious culprit either: the editor's card-lane range (`Dock::editor()`'s `right_range = (240.0, 560.0)`, default `EDITOR_RIGHT_DEFAULT = 340.0`) sits inside the main window's own tested range (`MIN_INSPECTOR_WIDTH = 232.0` .. `MAX_INSPECTOR_WIDTH = 900.0`, default `500.0`) — if cards render correctly at the main window's 232px floor, 340px shouldn't be new territory, so a width-only theory doesn't explain the symptom on its own. Genuinely unconfirmed without pixels on screen — do not treat the above as ruling anything out, just as what didn't pan out on a code-only pass.
 
 **Symptom** — after EDITOR_WINDOW_UNIFICATION landed (P1–P3, on main 2026-07-14, merge
 `a0eba10c`), inspector cards show layout misfits: buttons and controls don't fit their
@@ -188,23 +170,6 @@ discrepancy is itself a lead.
 `single-source-y-layout`, never per-widget nudges; regression = PNG diff on the
 affected scenes pinned into the fixture set (extend a fixture to cover the failing
 configuration if the current ones render clean).
-
-### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
-**Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
-
-**Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
-playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
-Reference behaviour (Ableton and other professional DAWs): a user scroll takes over — or eases
-against a soft limit — and follow re-engages predictably, never mid-gesture.
-
-**Root cause** — unknown, not investigated. Suspect surface: the playhead-follow auto-scroll
-writing the viewport offset unconditionally every frame during playback, racing the user's
-in-progress scroll gesture instead of being suppressed or eased while one is active.
-
-**Fix shape** — TBD after reading the follow logic; likely a follow-yields-to-gesture rule
-(suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
-or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
-acceptance is Peter's hands on it, not a test.
 
 ### BUG-158 (mapped-param-edits-snap-back-no-two-way-binding) — a param mapped to a card slider or driven by another port can't be adjusted in the graph editor; the edit snaps back — MED-HIGH (authoring surface), reported by Peter 2026-07-14
 **Status:** PARKED 2026-07-14 (bug-wave lane A) — root cause REFINED but the fix is a design decision (two-way binding / inverse mapping), escalating per the lane's contract rather than improvising. `SetGraphNodeParamCommand::execute` (`crates/manifold-editing/src/commands/graph.rs:797`) does successfully write the direct node-face edit into `def.nodes[node_id].params` — confirmed by reading it, no gating for card-bound params. The stomp happens one layer downstream: `apply_bindings` (`crates/manifold-renderer/src/node_graph/param_binding.rs:566`) runs on every chain rebuild and unconditionally re-writes `binding.apply(graph, handle, <current outer/card value>)` into the freshly-built `Graph`'s param slot — the card binding is the sole authority the render ever sees, independent of `scalar_or_param`. So the original mechanism note (`scalar_or_param`, `effect_node.rs:358`) correctly explains the WIRE-DRIVEN half of the symptom but not the CARD-SLIDER-MAPPED half — those are two distinct code paths that produce the same visible snap-back. Both point the same direction: the fix has to live at the binding/mapping layer (write-back through the inverse for card-bound params, a legible "driven" visual for wire-driven ones with no inverse) exactly as the backlog's own fix-shape already said — that's real product-UX design (how "driven" reads on the node face), not a patchable bug, so it's parked for a design pass rather than improvised here.
@@ -263,7 +228,7 @@ to Peter before landing.
 **Fix shape** — audit each rotation param (orbit, tilt, and any other rotation axis in the camera/orbit primitives) for wrap behavior; ensure all use a consistent smooth-wrap convention (e.g. modulo into 0..360 with identified endpoints) so a saw wave bound to the param produces a continuous, seamless spin. Cross-check against BUG-096 (rotate-sliders-jump) — may share root cause or fix site.
 
 ### BUG-153 (ui-snap-inspector-scene-172px-nondeterministic) — the `ui-snap inspector` headless scene is not run-to-run deterministic — LOW (test-determinism only, no correctness impact)
-**Status:** OPEN — found 2026-07-14 during `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1, while byte-diffing the `timeline`/`states`/`inspector` scenes before/after the P1 extraction to verify I4 (main-window pixels unchanged). Not fixed this session — orthogonal to that design.
+**Status:** PARKED (partial progress) 2026-07-14 (bug-wave3 lane D) — attempted, root cause not isolated within budget. Prerequisite found+fixed first: `--features ui-snapshot` didn't even compile on this tip (`view.canonical_def` changed from `EffectGraphDef` to `Arc<EffectGraphDef>` in an unrelated session, 8 call sites in `ui_snapshot/mod.rs` never updated) — fixed as BUG-162, logged separately since it's a distinct regression, not this bug. With the binary building, reproduced the exact 172-pixel/same-bbox diff on this tip. **Ruled out (verified, not guessed):** (1) the `update_fire_meters(&|_| Some(0.9), 1.0/60.0)` call the `inspector` scene makes after the base build — diff is byte-identical with that call stubbed out entirely, so it's not the meter peak-hold path. (2) `InspectorCompositePanel::motion_last_tick` being seeded to `Instant::now()` at construction, so the FIRST `update()` call measured "however long scene setup took" as its `dt_ms` instead of 0 — this was a real bug (fixed in this session, see the `motion_last_tick: Option<Instant>` change in `inspector.rs`, kept even though it didn't close this one) but had zero effect on the diff, so it isn't the source either. Both rule-outs used the actual harness re-run (`cargo run --features ui-snapshot --bin manifold -- ui-snap inspector`, twice, byte-diffed), not inference. **Still open:** the nondeterminism lives somewhere in `sync_build`/`reconcile_state`'s build path itself (structural sync → zoom → build → push-state), before either ruled-out point — candidates not yet checked: HashMap-backed registry iteration order feeding param/card construction order (would shift adjacent-row anti-aliasing at seams without moving whole rows, matching the sparse 172-pixel/full-bbox-not-solid pattern), or float-accumulation order in row-y-offset stacking. Next step: bisect by diffing the tree dump (`--dump`) between two runs to see which node's bounds/style differs, rather than guessing at the render level.
 
 **Symptom** — `cargo run --features ui-snapshot --bin manifold -- ui-snap inspector`, run twice in a row with NO code changes in between, produces two PNGs that differ in exactly 172 pixels, always the same bounding box: x 1258-1274, y 450-854 at the scene's 1536×1216 render size — a narrow vertical band. Confirmed on unmodified `origin/main` (same 172-pixel, same-bbox diff reproduces there too) — unrelated to the P1 diff. The `timeline` and `states` scenes do NOT show this (byte-identical across repeated runs).
 
@@ -280,22 +245,6 @@ to Peter before landing.
 
 **Fix shape** — renumber one of the two (whichever is less cross-referenced elsewhere — check landing reports/memory for "VD-020" hits before choosing) and grep-audit the rest of the file for any other duplicate `### VD-NNN` headers while in there. Small mechanical fix, but do it as its own dedicated pass, not folded into an unrelated landing (this one included) since it touches two other sessions' entries. Consider adding a duplicate-ID check alongside `bug_status.py` (same class of gap as BUG-134) so this can't recur silently.
 
-### BUG-147 (bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs) — a `#[cfg(test)]` CPU-reference-parity helper module emits `dead_code` warnings under a plain (no `gpu-proofs`) test compile — LOW (cosmetic, no correctness impact), now confirmed SYSTEMIC across at least 2 primitives
-**Status:** OPEN — found 2026-07-13 during CINEMATIC_POST P6 (`node.bilateral_blur`), not fixed this session (out of scope for that phase).
-**Symptom:** rustc/rust-analyzer flags `BOKEH_N`, `BOKEH_GOLDEN_ANGLE`, `bokeh_hash_angle`, `Plane4` (+ its `texel`/`sample` methods), and `bokeh_gather_texel` in `bokeh_gather.rs` as unused. **Confirmed 2026-07-13, same landing session:** the identical shape reappeared in the just-landed `bilateral_blur.rs` (`K9`, `Fixture`, `depth_at`/`color_at`, `bilateral_texel`) the moment it compiled in the main checkout post-merge — this is a reflex of the CPU-reference-parity authoring pattern itself (`docs/ADDING_PRIMITIVES.md`'s I1-style precedent), not a one-off in one file. Any future primitive following the same pattern will reproduce it.
-**Root cause:** these items live in the outer `#[cfg(test)]` module but are only consumed by the nested `#[cfg(all(test, feature = "gpu-proofs"))]` submodule; a compile of test code without `gpu-proofs` builds the outer module and never calls them. The standard scoped gate (`cargo clippy -p manifold-renderer -- -D warnings`, no `--tests`) doesn't compile test code at all, so it stays clean — this is only visible via `--tests` or IDE diagnostics, same blind spot as BUG-126.
-**Not caused by this session's diff (for `bokeh_gather.rs`):** untouched by the `bilateral_blur` commit; `git log` shows its last change is P4's original `d85c6dc0`. The `bilateral_blur.rs` instance IS this session's own diff, logged here rather than fixed because it's the same one-line-fix-shape issue as the `bokeh_gather.rs` case and worth batching.
-**Fix shape:** move each file's outer CPU-reference-parity helpers under the same `#[cfg(feature = "gpu-proofs")]` gate as the submodule that uses them (or nest them directly inside it). Mechanical, no behavior change. Given it's now confirmed systemic, worth a `docs/ADDING_PRIMITIVES.md` note in the I1-parity-test pattern itself so new primitives don't reintroduce it a third time.
-
-### BUG-144 (prewarm-cache-tests-flake-under-full-lib-parallel-run) — two shared-pipeline-cache prewarm tests race each other under the full parallel `--lib` run — LOW (flaky-gate, not functional)
-**Status:** OPEN — found 2026-07-13 during VOLUMETRIC_LIGHT_DESIGN P1's gate run; bisected to the unmodified tree, confirmed pre-existing. Independently reproduced on three OTHER occasions too: landing the `mechbugs` wave gating the BUG-111 and BUG-054 fixes (same session, `before=368 after=368` / `before=17 after=17`), and CINEMATIC_POST P6/P5 (`bilateral_blur`/`ssao_gtao`, on the unmodified pre-lane tip) — four confirmations total, all agreeing on cause.
-
-**Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib` (the full GPU suite) fails two tests: `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` and `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache`, both with a `before=N, after=N` panic (the count didn't grow). Both pass cleanly filtered to just that one test (`--test-threads=1` or an exact-name filter).
-
-**Root cause** — the two tests race to prewarm the SAME process-global pipeline cache (the same cache `GeneratorRegistry::prewarm_all` populates at real startup). Whichever runs second in the parallel test binary finds its target entry already populated by the other's prewarm call moments earlier — an order-dependency the tests don't guard against (no reset of the shared cache between tests, no isolation of the specific pipeline key they check) — so its own before/after delta reads zero. Reproduced deterministically on the unmodified tree via `git stash`/`test`/`stash pop` (VOLUMETRIC_LIGHT_DESIGN P1), ruling out any relationship to that phase's Atmosphere/render_scene edits (the `RenderSceneUniforms` size change, 448→464 bytes, doesn't touch the pipeline-cache path at all).
-
-**Fix shape** — either give each test a cache key/scene shape unique to itself (so the other test's prewarm can't satisfy its assertion), check for "entry exists after" instead of "count increased by exactly one" (weaker but order-independent), or add a named mutex/serial-test guard between the two so they never interleave. Cosmetic scope: the two named `--test gpu_proofs` runs and any single-module `--features gpu-proofs <module>::gpu_tests` filter (the CLAUDE.md-recommended narrow-run pattern) never hit this, and it's fully outside the default `nextest` sweep (gpu-proofs-gated) — only a full unfiltered `cargo test -p manifold-renderer --features gpu-proofs --lib` run is affected.
-
 ### BUG-134 (bug-status-py-tail-boundary-hides-entries-past-the-appendix) — `bug_status.py`'s parser silently excludes any `### BUG-NNN` entry written after the first appendix section, hiding a real duplicate ID and a status-derivation false positive — LOW (tooling, not runtime)
 **Status:** OPEN — found 2026-07-12 during the docs(backlog) archive-split session (`docs-git-sync` worktree), auditing every `### BUG-NNN` heading in the file against what `bug_status.py --check` actually validates.
 
@@ -306,26 +255,6 @@ to Peter before landing.
 2. **`derive_status()` false positive** — its `FIXED` classifier is `re.search(r"\bFIXED\b", heading.upper())`, which matches the word "FIXED" inside "found **not** **fixed**" (BUG-126's own heading: "...LOW, found not fixed 2026-07-12..."). Because BUG-126 has no explicit `**Status:` line and sat past `tail_i`, this misclassification was silent; had it been in the checked region it would have wrongly filed a still-open bug under `## Fixed`. Manually confirmed OPEN and left untouched in this session's archive-split (not moved).
 
 **Fix shape** — two independent, small fixes: (a) extend `parse()`'s entry-scan to continue past every `## ` heading in the appendix region instead of stopping at the first one (or: require all `### BUG-NNN` entries to live within the Open/Fixed span as a `--check` invariant, and fail loudly if one is found in the tail); (b) tighten `FIXED`'s regex to exclude a preceding "not"/"never" within a few words (e.g. negative lookbehind or an explicit `NOT\s+FIXED` exclusion checked first). Neither touched this session — logged per the archive-split's own audit, out of scope for a doc-reorg change.
-
-### BUG-142 (fire-meter-capture-bench-flakes-under-parallel-load) — a hard µs/tick ceiling on fire-meter capture cost fails under contention, same class as BUG-113 — LOW (flaky-gate)
-**Status:** OPEN — found 2026-07-13 landing the `mechbugs` wave (BUG-123/037/038/079/076), rerunning `cargo nextest run --workspace` immediately after a fetch+merge of `origin/main`.
-
-**Symptom** — `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard microseconds-per-tick ceiling for 512 fire-meter configs and panics when it's exceeded: `fire-meter capture: 512 configs/tick, 254.54 us/tick (budget: 20000 us/frame)` — well under the stated 20ms/frame budget in absolute terms, but over whatever internal ceiling the test itself asserts. An isolated rerun (`cargo nextest run -p manifold-core --lib <test>`) passed immediately after, and a clean full-workspace rerun moments later passed 3192/3192 including this test.
-
-**Root cause (known, by analogy)** — same shape as BUG-113: a wall-clock micro-benchmark with a hard ceiling, run inside the normal correctness sweep, sensitive to CPU contention from nextest's parallel thread pool and whatever else the machine was doing (this session had just finished a `cargo clippy --workspace` compile moments before). `crates/manifold-core/src/audio_trigger.rs` was not touched by this session's changes.
-
-**Fix shape** — same remedy BUG-113 names: give the ceiling real margin under parallel/loaded conditions, retry once before asserting, or move wall-clock ceiling assertions out of the default nextest sweep entirely (a dedicated feature/bin, same convention as `gpu-proofs`). Worth fixing both BUG-113 and this one together since they're the same underlying gate-design gap, not two unrelated bugs.
-
-### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
-**Status:** OPEN — found 2026-07-12 during REALTIME_3D_DESIGN §11 (P9 PCSS) landing, while scoping clippy for that phase.
-
-**Symptom** — `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 errors (`needless_range_loop`, `manual_range_contains`, `identity_op`) in `push_along_normals.rs`, `scatter_on_mesh.rs`, `taper_mesh.rs`, `twist_mesh.rs`, `revolve_curve.rs` test modules — none touched by the P9 session. The plain `cargo clippy -p manifold-renderer -- -D warnings` (lib+bins, no `--tests`) stays clean, which is why this debt went unnoticed: the CLAUDE.md-specified per-phase gate omits `--tests`, so nobody runs the stricter form routinely.
-
-**Root cause (known)** — ordinary clippy debt in `#[cfg(test)]` code (index-loop patterns, manual range checks, a `1 * COLS` identity-op) that accumulated because the test-scope clippy variant isn't part of the routine gate.
-
-**Fix shape** — mechanical: apply the suggested rewrites (`iter().enumerate()`, `RangeInclusive::contains`, drop the `1 *`) in the five listed files. Small, isolated, no behavior change. Optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace clippy sweep so it doesn't silently drift again.
-
-**Addendum (2026-07-14, FUSION_SOTA P4a session)** — hit again running this phase's `cargo test --features gpu-proofs` gate. One PRECURSOR bug surfaced first and was fixed in this session (out of P4a's scope, but blocking even compiling the gpu-proofs test binary at all): `wgsl_compute.rs`'s `mod gpu_tests` referenced `Marker::StaticParam` at 3 call sites with no `use` import in scope — a plain compile error (`E0433`), not a lint, present at `feat/fusion-sota`'s tip (`8bb94ea6`) before this session touched anything. Fixed with one `use crate::node_graph::freeze::markers::Marker;` line inside that module. Once that compiled, this bug's original 12 lint errors reappeared unchanged (still the same five files, still none touched by this session) — confirming BUG-124 needs no update beyond this note; the compile gap was simply masking it from anyone running `--features gpu-proofs` before this session.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
 **Status:** DEFERRED — Peter, 2026-07-14: "I don't want bug-118 worked on." On hold at his call; no session touches it until he revives it. Prior state, kept for that day: root cause CHARACTERIZED by the V6 sweep (2026-07-13, VOLUMETRIC_LIGHT_DESIGN.md P1, numbers below); the shafts design (P1–P3) has now SHIPPED (2026-07-13), but whether it actually resolves this bug's original complaint is UNVERIFIED, not confirmed: P2/P3's own acceptance demos don't produce a visually legible light-driven sculpting effect (see that design's landing report and its status line) — no session has re-rendered the original Apricot Weather macro-scale repro scene with shafts on to confirm the milk-washout symptom is actually gone in practice. Do not mark this FIXED until that re-render happens and someone looks. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1–P3)**.
@@ -500,76 +429,6 @@ perf win today that a naive static conversion would give up, and its `MAX_INPUTS
 always-bound-N cost much larger than multi_blend's 8 — recommend treating it as a separate, later
 decision from multi_blend's, not bundled into the same conversion.
 
-### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
-**Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
-
-**Symptom:** `cargo clippy -p manifold-playback --tests -- -D warnings` (and `--all-targets`) fails
-`clippy::type_complexity` twice in [`src/osc_receiver.rs`](../crates/manifold-playback/src/osc_receiver.rs)
-at lines 366 and 368: `fn recording_receiver(address: &str) -> (OscReceiver, Arc<Mutex<Vec<(String, Vec<f32>)>>>)`
-and its matching `let log: Arc<Mutex<Vec<(String, Vec<f32>)>>> = ...` binding.
-
-**Root cause:** unknown/not investigated — out of scope for this session (BUG-088/072 name only
-`osc_timecode.rs` and `audio_mixdown.rs`). Confirmed pre-existing and unrelated to this session's
-edits: `git diff dd31cde4 -- crates/manifold-playback/src/osc_receiver.rs` is empty; the file's
-last touching commit is `e4f51459` ("F3: external-sync test net"), an unrelated session.
-
-**Fix shape:** trivial — factor the repeated `Arc<Mutex<Vec<(String, Vec<f32>)>>>` into a local
-`type` alias (e.g. `type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;`) at both sites.
-Mechanical, no behavior change. Left open per the same file-ownership convention BUG-088 used —
-belongs to whoever owns `osc_receiver.rs`'s next change.
-
-### BUG-113 (param-manifest-get-bench-flakes-under-parallel-load) — `bench_resolve`'s hard ns/op ceiling fails under nextest's parallel thread pool — LOW (flaky-gate)
-**Status:** OPEN — found 2026-07-11 landing wave2 lane C (BUG-083/084/086 export+recording sweep).
-
-**Symptom:** `crates/manifold-core/src/params.rs`'s `params::tests::bench_resolve` times
-`ParamManifest::get`'s worst case (40 params, id last) and asserts `best_ns_per_op <= 271.5`
-(a 2x ceiling over an old baseline). Under `cargo nextest run --workspace`'s default sweep,
-run right after a heavy build and (in this session's case) a real 2-minute recording-soak
-process that had just finished, it measured 333.25 ns/op then 398.98 ns/op on consecutive runs
-and failed both times; an isolated `cargo test -p manifold-core --lib
-params::tests::bench_resolve` immediately after measured 215.02 ns/op and passed, and a
-subsequent clean full-workspace nextest run passed 3052/3052 including this test.
-
-**Root cause:** the test is a wall-clock micro-benchmark with a hard-coded nanosecond ceiling,
-run inside the normal correctness-test sweep — inherently sensitive to CPU contention from
-nextest's shared thread pool and any other load on the machine (the failing runs in this
-session followed heavy sequential cargo builds and a real recording capture). Confirmed
-unrelated to the change being landed: `crates/manifold-core/src/params.rs` was not touched.
-
-**Fix shape:** give the ceiling real margin for a loaded/parallel run, retry once before
-asserting (take the best of N *sequential process* runs, not just N in-process rounds — the
-in-process `ROUNDS` loop already exists but can't out-run sustained *external* contention), or
-move this out of the default nextest sweep entirely (behind a feature or a dedicated bin, same
-convention as `gpu-proofs`) since a wall-clock ceiling assertion doesn't belong in a "safe to
-run freely, always green" default suite per CLAUDE.md's own testing-scope description.
-
-### BUG-112 (manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests) — `manifold-ui`'s `--all-targets` clippy gate fails on two pre-existing, unrelated lints — LOW (lint-only)
-**Status:** OPEN — found 2026-07-11 during wave2 lane C (BUG-083/084/086 export+recording sweep).
-
-**Symptom:** `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two lints that
-have nothing to do with this session's changes:
-1. `clippy::needless_borrows_for_generic_args` twice in
-   [`src/panels/audio_setup_panel.rs`](../crates/manifold-ui/src/panels/audio_setup_panel.rs) —
-   lines 2494 and 2498, both `LayerId::new(&format!(...))` where the borrow is unneeded
-   (`LayerId::new` already accepts an owned `String` generically).
-2. `clippy::useless_vec` once in
-   [`src/graph_canvas/tests.rs`](../crates/manifold-ui/src/graph_canvas/tests.rs) — line 2391, a
-   `vec![WireView { .. }, ...]` fixture that clippy wants as a plain array.
-
-**Root cause:** unknown/not investigated (test-target lint debt, out of scope for this session).
-Confirmed pre-existing and unrelated: `git diff HEAD -- crates/manifold-ui/src/panels/audio_setup_panel.rs
-crates/manifold-ui/src/graph_canvas/tests.rs` is empty; both files' last-touching commit is
-`f1a35270` ("feat(audio-dock-p4): D7 readability + D8 hygiene (P4)"), an unrelated session. The
-scoped, non-`--all-targets` gate this session actually ran (`cargo clippy -p manifold-app -p
-manifold-ui -p manifold-recording -- -D warnings`, per CLAUDE.md's worktree convention) is clean
-— this only surfaces when test/bench targets are included, same pattern as BUG-110.
-
-**Fix shape:** trivial and mechanical, no behavior change — drop the `&` before each
-`format!(...)` argument at the two `audio_setup_panel.rs` sites; replace the `vec![...]` literal
-in `graph_canvas/tests.rs` with a plain array literal (`[WireView { .. }, ...]`). Left open per
-the same file-ownership convention BUG-110 used — belongs to whoever owns these files' next
-change.
-
 ### BUG-107 (text-rasterizer-draws-fallback-glyph-ids-with-base-font) — any character the UI font lacks renders as a wrong real glyph (mangled "ủ"-style symbols) — MED
 **Status:** PARTIAL — layer 1 (correctness) FIXED 2026-07-11 (`bug/wave2-lane-a-cardui` 1d9dba9c). Layer 2 (prevention: PUA atlas extension + a static lint) remains OPEN — see below. Reported by Peter 2026-07-10 (screenshots of mangled prefix glyphs on row labels; likely the graph canvas's D6 "↳ <outer label>" mirror rows from the gltfeditor scene).
 
@@ -599,39 +458,6 @@ change.
 **What P3 shipped anyway:** the write path is real and tested at the command layer — `BindingMappingEdit::section: Option<Option<String>>` (outer = touched, inner = new value/clear), `EditParamMappingCommand::execute`/`undo` apply/restore it on the manifest spec only (BOUNDARIES D4), and `PanelAction::EffectMappingSection { binding_id, section }` + its `app_render.rs` dispatch arm route it end-to-end. Any future caller (a different surface, or this popover once text input exists) can reach it today.
 
 **Fix shape:** build the caret/selection text-input primitive once (`TextEditModel`, no IME — see Status), host it in `MappingPopover` (shared by `label` + `section` + any future string field), then wire both `EditField::Label` and a new `EditField::Section` through it — the committed spec is UI_WIDGET_UNIFICATION P5a (model) + P5c (this popover). LOW severity — no live gesture is broken by its absence (section can still be seeded by expose + the rename-sweep; it just can't be hand-typed from this popover yet), but it's the second deliverable now blocked on the same missing primitive.
-
-### BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-paths) — `LiveClipManager`'s tick-based pending-launch queue can never be populated in production — LOW (dead code, correctness-neutral)
-**Status:** OPEN
-
-Found 2026-07-10 while implementing F2 (MIDI launch quantize, CORE_ENGINE_MAP-adjacent). F2's
-brief specifically flagged `activate_due_pending_launches_at_tick` as a deletion candidate and
-asked for a caller grep before removing it. That grep turned up more than the one function:
-`queue_pending` (`live_clip_manager.rs`) — the only writer of `pending_by_tick` /
-`pending_by_layer` / `pending_by_clip_id` and the only place `PendingLiveLaunch.target_tick` is
-set — only runs when its caller's `event_absolute_tick >= 0`. Every live producer of that value
-traces back to `MidiNoteEvent.absolute_tick`, and `midi_input.rs`'s midir callback (the *only*
-constructor of `MidiNoteEvent` in the whole workspace — confirmed by grep, not inference) always
-sets it to `-1`. `fire_layer_oneshot` (the audio-trigger path) also always passes `tick = -1`
-explicitly. So `pending_by_tick` can never be non-empty on any live path today. Its one live
-reader, `activate_due_pending_launches_at_tick` (`engine.rs:803`, called every tick with
-`self.last_frame_count as i32` — a frame counter, not a real MIDI clock tick), is therefore an
-unconditional no-op in production (`if self.pending_by_tick.is_empty() { return false; }` fires
-every call). The sibling beat-based `activate_due_pending_launches` and `has_pending_activations`
-have no live caller at all — only `tests/live_clip.rs` exercises them. `commit_live_clip`'s
-"pending launch cancellation" branch (the `!self.live_slots.contains_key(&layer_index)` arm) is
-similarly unreachable live, since nothing ever queues a launch that skips straight to `live_slots`.
-
-**Fix shape:** delete the whole subsystem — `pending_by_tick`, `pending_by_layer`,
-`pending_by_clip_id`, `PendingLiveLaunch` (and its `target_tick` field), `queue_pending`,
-`activate_due_pending_launches`, `activate_due_pending_launches_at_tick`,
-`has_pending_activations`, the `engine.rs:803` call site, and the dead cancellation arm in
-`commit_live_clip` — plus the `tests/live_clip.rs` coverage that only exercises it
-(`pending_launch_queue_activates_at_tick`). Left open rather than done as part of F2: the
-footprint is a full subsystem across two files and a test, wider than the single function F2 was
-scoped to evaluate for deletion, and removing it correctly (without leaving `queue_pending`'s
-write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
-native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
-quantize fix. F2 left this code untouched and unexercised by its own changes.
 
 ### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
 **Status:** OPEN — design WRITTEN 2026-07-14: `docs/PARAM_MANIFEST_GATE_DESIGN.md` (Fable, same-day session — supersedes the "dedicated Opus session" plan settled 2026-07-11; Peter asked for the design now so the bug wave can execute it). Executes as P1 of that doc inside bug-wave lane B. Still not a patch-in-a-sweep item — the design doc is the brief; do not fix this outside it.
@@ -684,16 +510,6 @@ are NOT affected — eval-only, never bundled.
 
 COMMERCIALIZATION_DESIGN's license review must consume this entry wholesale.
 
-### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
-**Status:** OPEN
-
-**Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
-`inspector` snapshot scene at its narrower zoom overlaps clip surfaces with the inspector
-column, so no clip in it is simultaneously uniquely-labeled and safely draggable — which is why
-P1's `drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline`
-scene (drag past the tracks' right edge) instead. Fixture-only, no app runtime impact. Fix shape:
-adjust the `inspector` scene's clip layout or zoom so a clip clears the panel.
-
 ### BUG-063 (silent-load-repairs) — load-time repairs delete project data with log-only notice — MED-HIGH (silent data alteration; compounds BUG-062)
 **Status:** PARTIAL
 
@@ -735,70 +551,42 @@ a write-time invariant) and this dangling-reference purge. Peter's hard requirem
 media must never delete a clip" — is **already the behavior**; the rescue-path priority drops
 accordingly (a *relink* prompt for missing media would be the higher-value follow-up if any).
 
-### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
-**Status:** PARTIAL
-
-**2026-07-10 (UI_HARNESS_UNIFICATION P2):** the root symptom — "nothing calls
-`tick_drawers`/`Panel::update` with real elapsed time" — is no longer true.
-`script.rs`'s `Runner` was repointed at the shared render seam
-(`crate::ui_frame::apply_ui_frame_invalidations` +
-`composite_main_ui_frame`), and its `AutomationAction::Step` handler now
-does a REAL `std::thread::sleep(DT)` + `ui.update()` per stepped frame
-(mirroring `cache_path_full_render`'s P0 drawer-tween loop), so a script
-that inserts `{"Step": {"frames": N}}` after arming a drawer now genuinely
-ticks it toward settlement — confirmed working: `scripts/ui-flows/
-inspector-drawer-filmstrip.json` (a fresh 12-frame `Step` after a compact-
-toggle click) settles and its filmstrip shows the drawer visibly changing
-across tiles. This is fix-shape (a)'s mechanism, just opt-in per script
-rather than automatic on every dispatch — **not fully closed**: an EXISTING
-flow (e.g. `param-step-action.json`) that doesn't add a `Step` after arming
-still hits the original symptom, and this session didn't retrofit it or
-build the unconditional auto-settle option (b) (`skip_to_settled()`/
-`finish_all()` on `ParamCardPanel`). Revive to CLOSED by either auditing
-existing flows for the missing `Step` or building (b).
-
-**Symptom:** in a `cargo xtask ui-snap <scene> --script <flow>.json` run, a
-click that newly arms a param's audio mod (or otherwise grows an EXISTING
-card's drawer row count) dispatches correctly (confirmed via
-`ui_bridge::dispatch` debug instrumentation — the right `PanelAction` fires
-and mutates the project), but the drawer's own P1 reveal tween
-(`ParamCardPanel::drawer_height_anim`, ticked by
-`InspectorCompositePanel::update`'s `tick_drawers`) never advances: the
-driver's `AutomationAction::Step` only increments a local `self.clock` field
-used for input-event timestamps, nothing calls `tick_drawers`/`Panel::update`
-with real elapsed time. The clip region sizing the reveal stays pinned at its
-t=0 height (0, if the card is easing from unarmed) forever, so subsequent
-rows in that clip region are invisible in the PNG AND unreachable by
-`ui.pointer_event`'s hit-test (confirmed: `dump_tree_ex` still reports the
-clipped nodes' raw, pre-clip rects with `VISIBLE | INTERACTIVE` flags, so the
-dump looks fine while both the render and the click silently no-op — a
-"dump says it's there, nothing else agrees" trap worth remembering before
-trusting a dump alone against a freshly-armed drawer).
-
-**Consequence for evidence-gathering:** any headless script that arms a
-config-drawer-bearing param FOR THE FIRST TIME on an EXISTING card (one that
-already went through one build with a smaller drawer) mid-script will show a
-believable-looking `PNG`/dump pair with a truncated drawer. The workaround
-used in `scripts/ui-flows/param-step-action.json`: pre-arm the mod directly
-in the fixture (`ui_snapshot::fixtures::param_steps_scene`) so the card's
-*very first* `configure()` call snaps `drawer_height_anim` straight to its
-settled target (`param_card.rs`'s own comment: "a *new* param... snaps so it
-never stalls half-open") — no tween in flight, no clipping. A REAL in-script
-click that only changes content WITHIN an already-open, unarmed-row-count-
-stable drawer (e.g. selecting a different Action/Mode segment on a param
-that's already armed) is unaffected — confirmed working in the same flow.
-
-**Fix shape:** either (a) give the `--script` driver a `self.rebuild`-adjacent
-call that also ticks `ui.inspector`'s drawer/value-flash animations by a
-large synthetic `dt` (e.g. `color::MOTION_MED_MS * 2.0`) after every
-dispatch that sets `structural_change`, fully settling in one call instead of
-requiring many small real-time-gated ticks; or (b) expose a
-`skip_to_settled()`/`finish_all()` on `ParamCardPanel` the driver calls
-unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
-gap for every future script that arms something mid-flow, not just this one.
-
 ### BUG-053 (hdr-live-recording-structural) — HDR live recording cannot work: pool format mismatches the native pixel buffer, and nothing PQ-encodes — LOW today (UI can't reach it), blocks any HDR-capture ambition
-**Status:** OPEN
+**Status:** PARKED 2026-07-14 (bug-wave3 lane C) — root-fix contract routes this to Peter, not
+code, since it's a capability/roadmap call ("does live HDR capture matter for the rig") not just
+an engineering tradeoff. Fable re-audit this session found the picture is cheaper than the
+original 2026-07-07 framing assumed:
+
+**Root cause reconfirmed against current code, unchanged:** pool still unconditionally
+`Bgra8Unorm` (`session.rs:105`), converter still unconditionally linear→sRGB
+(`format_converter.rs`), native blit dest is `RGBA16Float` when `isHDR`
+(`LiveRecordingPlugin.m:395`) — format-mismatched blit, first HDR frame dies. Guard test
+`hdr_blocked_by_bug_053` (`tests/recording_proofs.rs:583`) pins it; `recording_soak.rs:61` also
+hard-blocks `--hdr`.
+
+**What's changed since the original framing:** the "PQ-encode compute stage or linear handoff"
+choice the original entry left open ("decide at design time") turns out to be a false choice —
+linear handoff isn't viable (AVFoundation's HEVC HDR delivery has no linear transfer tag; the
+writer config demands PQ or HLG). More importantly, **a finished, shipping PQ encoder already
+exists**: `manifold-renderer/src/pq_encoder.rs` + `linear_to_pq_compute.wgsl`, used today by the
+OFFLINE HDR export path (`content_pipeline.rs:3216`'s `pq_encode_for_export`, paper_white=200,
+max_nits=10000), and the native plugin already tags HDR output correctly (BT.2020 + ST.2084,
+`LiveRecordingPlugin.m:218-219`). The only missing piece for LIVE recording is
+`content_pipeline.rs`'s live-capture block (~line 2668) dispatching the existing `FormatConverter`
+unconditionally instead of `PqEncoder` when `config.hdr`, plus the pool format following the
+flag. So this is no longer "design a PQ pipeline" — it's "wire an existing, proven component into
+a second call site," a small mechanical change, not a design project.
+
+**The actual decision left for Peter:** given the fix is now cheap, is live HDR capture worth
+building at all — does the rig need it, on what timeline? If yes: wire `PqEncoder` into live
+recording (reuse export's nits constants), flip `hdr_blocked_by_bug_053` to the HDR twin of
+`nominal_video_only` as the acceptance test. Note for whoever picks this up: the PQ shader
+encodes without a BT.709→2020 gamut matrix (slightly oversaturated under a 2020 tag) — a
+pre-existing gap shared with export, not new to this fix, worth flagging separately. If no: this
+entry can be downgraded to DEFERRED or the HDR flag path removed outright as dead code.
+Recommendation (engineering, not product): (a), wiring the existing encoder — but the yes/no is
+Peter's, not mine to improvise.
+
 
 **Found 2026-07-07 by Fable during the LIVE_RECORDING_PROOFS design audit (statically
 derived, not yet observed — no runtime repro attempted).** The recording texture pool is
@@ -842,64 +630,8 @@ on the rig answers it. **Escaped:** ABLETON_TRANSPORT_SYNC wave, P2 stage — th
 harness's FakeAbleton was fixture-overfit (instant first listener report, atomic
 play+seek apply, prompt query replies); no scenario modeled a starved ack channel.
 
-### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
-**Status:** OPEN
-
-**Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
-Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
-`pad = PAD + CHILD_INDENT`, but the indent only moves the card's LEFT edge — so child
-cards get a ~28px interior right margin vs 8px on top-level rows. Drag handles and Blend
-chips sit ~20px left of their top-level siblings, and the collapsed name budget is 20px
-tighter than necessary (it contributed to how early BUG-fixed label truncation kicks in).
-**Fix shape:** right-anchored x's use `PAD`, not the indented pad. Moves rects pinned by
-`layout_matches_frozen_oracle`, so it needs the oracle updated in the same commit — its
-own small pass, not a drive-by. **Oracle:** the frozen-layout test + a child-row render.
-
-### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
-**Status:** OPEN
-
-**Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
-idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
-active/idle pair. But REC's two states are "recording or not", while ARM's decide what
-touching a param DOES (override the lane vs punch automation INTO the arrangement) —
-a wrong read on stage silently writes automation into the show. Headless renders show
-the two reds are close at 1× (timeline vs automation scenes). **Fix shape:** give the
-armed state a non-red or clearly distinct treatment (AUTOMATION_LINE_COLOR family per
-the audit doc), or Peter rules the REC-pair consistency wins. UX call, not mechanical —
-see `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5. **Oracle:** the
-`automation_state_toggles_update_styles_in_place` test pins current colors; it changes
-with the fix.
-
-### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
-**Status:** OPEN
-
-**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
-at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
-computed at build time in `audio_setup_panel.rs`, and that rect does not add the
-`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
-P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
-its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
-detaches from its section header when the panel body is scrolled. **Fix shape:** offset
-`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
-rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
-doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
-blit; a scrolled-body render test would guard it.
-
-**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
-explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
-now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
-(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
-before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
-anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
-scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
-signature change threading `&UITree` through every caller (the present-pass blit, both
-hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
-scope for a geometry-sourcing-only pass. Currently dormant either way:
-`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
-`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
-
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
-**Status:** OPEN
+**Status:** PARKED 2026-07-14 (bug-wave3 lane D, 1-attempt timebox per session brief) — reproduced and confirmed unchanged: `cargo run -p manifold-audio --example mod_harness --release -- --selftest` still reads `P2c notes: pct_sounding_hops_within_1st_of_gt_post_acquisition=87.6481 (gate >= 90) FAIL`, exact match to this entry (no drift since 2026-07-06). Did NOT attempt the two named do-not-retry tunings (already swept, confirmed dead ends), and did not attempt the untried value-trend discriminator either — the entry itself declines that direction as "knife-edge" (a new tuned constant between two distributions with only ~2x separation, where a genuine musical fade-out sits on the wrong side of it) needing either "a plateau-demonstrated sweep on real material or a smarter shape," neither of which fits a 1-attempt timebox without risking exactly the untested-magic-constant anti-pattern the entry warns against. No code changed.
 
 **Found 2026-07-06 while fixing BUG-042** (its remaining accuracy misses after the
 re-acquire-window fix). After every note release, the VQT's kernel memory presents a
@@ -923,7 +655,7 @@ raising SETTLE_STREAK (swept 2/3/4 — 69.2/87.6/86.1, K=3 is the plateau), or
 re-clamping super-slew continuation (resurrects the 7-st gap-chase).
 
 ### BUG-037 (glp-first-render-stall) — First render of a glTF scene layer stalls the content thread ~37ms (warm-up on the frame, not at load) — MED
-**Status:** PARTIAL — `render_scene`'s and `gltf_texture_source`'s GPU pipeline compiles (both asset-independent, fixed shader source) are now prewarmed at app startup via `GeneratorRegistry::prewarm_all` (`dea66221`). A live, headless `MANIFOLD_RENDER_TRACE` proof against a real glTF fixture (`crates/manifold-app/src/bug037_verify.rs`, `7fdf25d0`, uses the `BlossomField` preset over `apricot_blossom_cluster_lod.glb`) shows a real, repeatable ~37% reduction on frame 0 (308.5ms → 194.5ms, range 194-278ms across runs) — but does NOT bring this preset's frame 0 under the 20ms bar the original entry asked for, and the backlog's original 37.1ms was measured on a much lighter asset than BlossomField's ~80k-tri scene, so the two numbers aren't apples-to-apples. **Remaining gap, owed to a future session:** on a graph this size the dominant frame-0 cost is very likely elsewhere — `scatter_on_mesh`, `push_mesh`, `mesh_edges`, the shadow pass, and the genuinely per-asset mesh/texture buffer upload (not addressed by this fix, which only covers shader/PSO compile) — closing this fully needs a broader look at which of those primitives also compile/allocate lazily on first use.
+**Status:** PARTIAL, further reduced 2026-07-14 (bug-wave lane B) — `render_scene`'s and `gltf_texture_source`'s GPU pipeline compiles (both asset-independent, fixed shader source) are prewarmed at app startup via `GeneratorRegistry::prewarm_all` (`dea66221`). BUG-146 (landed after this entry was first written, not previously cross-referenced here — supersession-sweep gap, now closed) added `prewarm_all_atom_codegen_pipelines`, sweeping all ~144 codegen-path atoms and independently cutting BlossomField's frame 0 to ~95ms. This session found and closed the next-largest remaining gap: `node.scatter_on_mesh` (a barriered multi-pass scan/reduce, exempt from the codegen path per CLAUDE.md, so BUG-146's sweep never reached its three hand-written pipelines) was still compiling `area_main`/`scan_main`/`place_main` lazily on first `run()` — confirmed the dominant remaining cost via `freeze-profile attribute BlossomField` (steady-state: `node.render_scene` 80.8%, `node.scatter_on_mesh` 15.0% of frame time). Fix: `ScatterOnMesh::prewarm_pipelines` (`crates/manifold-renderer/src/node_graph/primitives/scatter_on_mesh.rs`), wired into `GeneratorRegistry::prewarm_all` alongside the other two. The shadow-pass pipeline (`ensure_shadow_pass`) was *already* covered by `RenderScene::prewarm_pipelines` from an earlier VOLUMETRIC_LIGHT_DESIGN P3 pass — the backlog's "remaining gap" list above was stale on that item. Fresh `MANIFOLD_RENDER_TRACE=1` frame-0 measurement on BlossomField: **95.1ms → 40.6ms**. Full chain: 308.5ms (original) → 194.5ms (P1) → 95.1ms (BUG-146) → 40.6ms (this session). Still over the 20ms bar. **Remaining gap:** `push_mesh`/`mesh_edges`/`gltf_mesh_source` were not contributors on this trace (mesh_edges isn't even in this preset's graph); the per-asset mesh/texture buffer upload (`gltf_mesh_source.rs`, `gltf_texture_source.rs`) is genuinely per-asset and already backgrounds via a spawned thread — only amortizable via an "arm before play" phase, not a startup prewarm. Test: `scatter_on_mesh::gpu_tests::prewarm_pipelines_populates_the_shared_compute_cache` (order-independent per the BUG-144 cross-test-ordering class).
 
 **Symptom** — trace run 2026-07-06 (`meshImportTests.manifold`): the first frame after the
 project's glp layer became active showed `generators=37.1ms` (RENDER_TRACE frame=421) —
@@ -941,29 +673,8 @@ is loaded (or armed on a timeline), run its first-frame resource creation off th
 path so frame 1 of the clip renders at steady-state cost. Verify with the same
 MANIFOLD_RENDER_TRACE run: no >20ms frame on first clip render.
 
-### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
-**Status:** OPEN
-
-**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
-loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
-
-**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
-`make_voice` calls `manager.play(data)` at full volume and only then
-`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
-is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
-~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
-Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
-used everywhere else in this module doesn't apply here; this is the one edge built on
-kira's default tween.)
-
-**Fix shape** — build the voice silent instead of pausing it after the fact: apply
-`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
-per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
-so activation is unaffected. This kills the whole class including the race where an audio
-callback fires between play and pause. One-line-ish, `manifold-playback` only.
-
 ### BUG-034 — Headless preview verification doesn't cover the live atlas UV path — LOW (test-coverage gap, follow-up to BUG-027)
-**Status:** OPEN
+**Status:** PARTIAL 2026-07-14 (bug-wave3 lane D) — did step (1) of the entry's own fix shape: factored the atlas-cell-UV math out of `app_render.rs`'s inline block into `content_pipeline::atlas_cell_uv(cell, monitor_aspect) -> [f32; 4]`, a pure function, with 3 unit tests (square-aspect no-letterboxing, cell-index grid-position decomposition, wide-monitor vertical letterboxing) — `cargo test -p manifold-app --bin manifold atlas_cell_uv` 3 passed. `app_render.rs`'s live call site now calls the shared helper instead of duplicating the math inline. Step (2) — building the synthetic-atlas harness scene that packs per-node textures + a matching `node_atlas_layout` and drives previews through this helper for a whole-graph PNG proof — NOT done this session (real harness-authoring work, timeboxed out rather than rushed). The math itself is unit-tested now, which is strictly more coverage than before (previously zero), but the "wrong cell chosen" class of bug (a `node_atlas_layout` mismatch, not a UV-formula bug) is still unverified headless. Verify: `cargo build --bin manifold` clean; `cargo clippy -p manifold-app -- -D warnings` clean; `cargo test -p manifold-app --bin manifold` 174 passed.
 
 **Gap** — the inline node-preview fix (BUG-027) is pixel-verified headless only through the
 per-node-texture path (`ui_snapshot/render.rs`, whole-texture UV `[0,0,1,1]`). The LIVE app packs
@@ -1080,31 +791,6 @@ app motion block, mirroring `drawer_anim_active` exactly. Gate: clippy `-D warni
 `enter_anim` ticks off wall-clock, so it cannot exercise this timing bug; a running-app check
 (open the Add Effect browser, confirm the background is present immediately without moving the
 mouse) is the remaining proof. Tracked in VERIFICATION_DEBT (VD-006).
-
-### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
-**Status:** OPEN
-
-**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
-(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
-deliberately left positional to keep that diff bounded:
-- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
-  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
-  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
-  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
-  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
-  between menu-open and item-click.
-- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
-  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
-  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
-  rename has the same (unchanged) stale window it always had.
-
-**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
-list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
-Same bug class as the migration killed for the primary controls.
-
-**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
-`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
-`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
 
 ### BUG-136 — CINEMATIC_POST motion blur has no visible effect despite correct wiring — MED-HIGH
 **Status:** OPEN
@@ -1239,6 +925,412 @@ clean).
 **Fix shape** — port BUG-100's convergence pattern into `render_generator_preset.rs`: after the requested `--frames`, keep rendering and comparing consecutive readbacks until N (e.g. 3) are byte-identical (or a `--max-frames` safety cap is hit), and print a warning if the cap is hit before convergence. Cheaper alternative: expose a "pending background loads" count off `PresetRuntime`/`EffectNodeContext` that the bin can poll and block on before the final readback. Either removes the silent-partial-render trap for every current and future async-loading primitive, not just gltf.
 
 **Instrument impact:** dev-tooling only — no runtime/show-time path is affected (the primitives' own async-load behavior is correct and by design); this only bit an offline authoring/look-dev session. Worth fixing before Scene 2/3 (or any future large-asset preset work) burns the same wall-clock-guessing cycle again.
+### BUG-147 (bokeh-gather-cpu-reference-helpers-dead-without-gpu-proofs) — a `#[cfg(test)]` CPU-reference-parity helper module emits `dead_code` warnings under a plain (no `gpu-proofs`) test compile — LOW (cosmetic, no correctness impact), now confirmed SYSTEMIC across at least 2 primitives
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — gated both `bokeh_gather.rs::cpu_reference` and `bilateral_blur.rs::cpu_reference` behind `#[cfg(all(test, feature = "gpu-proofs"))]` (was plain `#[cfg(test)]`), per the entry's own fix shape. Audited the whole primitives directory for the same shape (`#[cfg(test)] mod cpu_reference`/`cpu_ref`) — found two more hits, `motion_blur.rs` and `ssao_gtao.rs`, but both have a SEPARATE plain-`#[cfg(test)]` module (`analytic_sanity`/an unnamed hand-check module) that consumes the same `cpu_reference` helpers without `gpu-proofs`, so gating those two would break their default-sweep tests — correctly left alone; not the same bug. Verify: `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` clean (0 errors, was 17); `cargo test -p manifold-renderer --lib` still 1224 passed (default sweep unaffected).
+**Symptom:** rustc/rust-analyzer flags `BOKEH_N`, `BOKEH_GOLDEN_ANGLE`, `bokeh_hash_angle`, `Plane4` (+ its `texel`/`sample` methods), and `bokeh_gather_texel` in `bokeh_gather.rs` as unused. **Confirmed 2026-07-13, same landing session:** the identical shape reappeared in the just-landed `bilateral_blur.rs` (`K9`, `Fixture`, `depth_at`/`color_at`, `bilateral_texel`) the moment it compiled in the main checkout post-merge — this is a reflex of the CPU-reference-parity authoring pattern itself (`docs/ADDING_PRIMITIVES.md`'s I1-style precedent), not a one-off in one file. Any future primitive following the same pattern will reproduce it.
+**Root cause:** these items live in the outer `#[cfg(test)]` module but are only consumed by the nested `#[cfg(all(test, feature = "gpu-proofs"))]` submodule; a compile of test code without `gpu-proofs` builds the outer module and never calls them. The standard scoped gate (`cargo clippy -p manifold-renderer -- -D warnings`, no `--tests`) doesn't compile test code at all, so it stays clean — this is only visible via `--tests` or IDE diagnostics, same blind spot as BUG-126.
+**Not caused by this session's diff (for `bokeh_gather.rs`):** untouched by the `bilateral_blur` commit; `git log` shows its last change is P4's original `d85c6dc0`. The `bilateral_blur.rs` instance IS this session's own diff, logged here rather than fixed because it's the same one-line-fix-shape issue as the `bokeh_gather.rs` case and worth batching.
+**Fix shape:** move each file's outer CPU-reference-parity helpers under the same `#[cfg(feature = "gpu-proofs")]` gate as the submodule that uses them (or nest them directly inside it). Mechanical, no behavior change. Given it's now confirmed systemic, worth a `docs/ADDING_PRIMITIVES.md` note in the I1-parity-test pattern itself so new primitives don't reintroduce it a third time.
+
+### BUG-144 (prewarm-cache-tests-flake-under-full-lib-parallel-run) — two shared-pipeline-cache prewarm tests race each other under the full parallel `--lib` run — LOW (flaky-gate, not functional)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — per the entry's second fix option: both tests ("entry exists after" instead of "count increased by exactly one" — the assertion changed from `after > before` to `after > 0`, so a prior test having already populated the shared entry no longer fails the delta check. Order-independent by construction now, no cache-key or mutex changes needed. Verify: `cargo test -p manifold-renderer --features gpu-proofs --lib prewarm` → 6 passed, including both previously-racing tests. (Also ran the full unfiltered `--lib` gate: 6 unrelated pre-existing `BadInput` fusion-codegen failures in `freeze/codegen.rs`, untouched by this lane — out of scope, not fixed.)
+**Symptom** — `cargo test -p manifold-renderer --features gpu-proofs --lib` (the full GPU suite) fails two tests: `node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache` and `node_graph::primitives::gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache`, both with a `before=N, after=N` panic (the count didn't grow). Both pass cleanly filtered to just that one test (`--test-threads=1` or an exact-name filter).
+
+**Root cause** — the two tests race to prewarm the SAME process-global pipeline cache (the same cache `GeneratorRegistry::prewarm_all` populates at real startup). Whichever runs second in the parallel test binary finds its target entry already populated by the other's prewarm call moments earlier — an order-dependency the tests don't guard against (no reset of the shared cache between tests, no isolation of the specific pipeline key they check) — so its own before/after delta reads zero. Reproduced deterministically on the unmodified tree via `git stash`/`test`/`stash pop` (VOLUMETRIC_LIGHT_DESIGN P1), ruling out any relationship to that phase's Atmosphere/render_scene edits (the `RenderSceneUniforms` size change, 448→464 bytes, doesn't touch the pipeline-cache path at all).
+
+**Fix shape** — either give each test a cache key/scene shape unique to itself (so the other test's prewarm can't satisfy its assertion), check for "entry exists after" instead of "count increased by exactly one" (weaker but order-independent), or add a named mutex/serial-test guard between the two so they never interleave. Cosmetic scope: the two named `--test gpu_proofs` runs and any single-module `--features gpu-proofs <module>::gpu_tests` filter (the CLAUDE.md-recommended narrow-run pattern) never hit this, and it's fully outside the default `nextest` sweep (gpu-proofs-gated) — only a full unfiltered `cargo test -p manifold-renderer --features gpu-proofs --lib` run is affected.
+
+### BUG-142 (fire-meter-capture-bench-flakes-under-parallel-load) — a hard µs/tick ceiling on fire-meter capture cost fails under contention, same class as BUG-113 — LOW (flaky-gate)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D), same fix as BUG-113 — gated `worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` behind `manifold-core`'s new `bench-timing` feature (off by default). Verify: `cargo test -p manifold-core --lib` (default, test absent) and `cargo test -p manifold-core --lib --features bench-timing worst_case_capture` (runs, passes) both green.
+
+**Symptom** — `manifold-core::audio_trigger::fire_meter_tests::worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget` asserts a hard microseconds-per-tick ceiling for 512 fire-meter configs and panics when it's exceeded: `fire-meter capture: 512 configs/tick, 254.54 us/tick (budget: 20000 us/frame)` — well under the stated 20ms/frame budget in absolute terms, but over whatever internal ceiling the test itself asserts. An isolated rerun (`cargo nextest run -p manifold-core --lib <test>`) passed immediately after, and a clean full-workspace rerun moments later passed 3192/3192 including this test.
+
+**Root cause (known, by analogy)** — same shape as BUG-113: a wall-clock micro-benchmark with a hard ceiling, run inside the normal correctness sweep, sensitive to CPU contention from nextest's parallel thread pool and whatever else the machine was doing (this session had just finished a `cargo clippy --workspace` compile moments before). `crates/manifold-core/src/audio_trigger.rs` was not touched by this session's changes.
+
+**Fix shape** — same remedy BUG-113 names: give the ceiling real margin under parallel/loaded conditions, retry once before asserting, or move wall-clock ceiling assertions out of the default nextest sweep entirely (a dedicated feature/bin, same convention as `gpu-proofs`). Worth fixing both BUG-113 and this one together since they're the same underlying gate-design gap, not two unrelated bugs.
+
+### BUG-124 (mesh-primitive-tests-clippy-debt-under-tests-features) — clippy fails on `-p manifold-renderer --tests --features gpu-proofs` in files unrelated to any recent change — LOW, gate-scope gap
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D), same fix as BUG-126 (this and BUG-126 named the identical 12 findings) — rewrote each flagged index loop to `iter().enumerate()`/`.skip()`/`.take()` in `push_along_normals.rs`, `scatter_on_mesh.rs`, `taper_mesh.rs`, `twist_mesh.rs`, `revolve_curve.rs`, plus `bend_mesh.rs`, `facet_normals.rs`, `gltf_mesh_source.rs`, `morph_mesh.rs`. Re-running the exact gate surfaced 5 MORE pre-existing findings beyond the original 12 (an inner/outer doc-attribute conflict in `coc_from_depth.rs`, an inconsistent-digit-grouping + excessive-precision pair on the same literal in `ssao_gtao.rs`, and a manual `.is_multiple_of()` in `blinn_specular.rs`) — fixed all 5 too rather than leave the gate red; folded into this fix since they're the same mechanical-debt class. Verify: `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` clean (0 errors, was 17); `cargo test -p manifold-renderer --lib` 1224 passed (unaffected); `cargo test -p manifold-renderer --features gpu-proofs --lib prewarm` unaffected. **Merge note (bug-wave3 lane A, folded in from a stale duplicate OPEN copy this same day):** a FUSION_SOTA P4a session had already hit this bug once and logged a precursor compile-error fix (`wgsl_compute.rs`'s `mod gpu_tests` referenced `Marker::StaticParam` with no `use` in scope, a plain `E0433` blocking the gpu-proofs test binary from compiling at all — fixed with one `use` line) before this bug's original 12 lint errors reappeared unchanged underneath it. Preserved here since the duplicate entry carrying it was removed as part of a multi-lane merge dedupe.
+
+**Symptom** — `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 errors (`needless_range_loop`, `manual_range_contains`, `identity_op`) in `push_along_normals.rs`, `scatter_on_mesh.rs`, `taper_mesh.rs`, `twist_mesh.rs`, `revolve_curve.rs` test modules — none touched by the P9 session. The plain `cargo clippy -p manifold-renderer -- -D warnings` (lib+bins, no `--tests`) stays clean, which is why this debt went unnoticed: the CLAUDE.md-specified per-phase gate omits `--tests`, so nobody runs the stricter form routinely.
+
+**Root cause (known)** — ordinary clippy debt in `#[cfg(test)]` code (index-loop patterns, manual range checks, a `1 * COLS` identity-op) that accumulated because the test-scope clippy variant isn't part of the routine gate.
+
+**Fix shape** — mechanical: apply the suggested rewrites (`iter().enumerate()`, `RangeInclusive::contains`, drop the `1 *`) in the five listed files. Small, isolated, no behavior change. Optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace clippy sweep so it doesn't silently drift again.
+
+**Addendum (2026-07-14, FUSION_SOTA P4a session)** — hit again running this phase's `cargo test --features gpu-proofs` gate. One PRECURSOR bug surfaced first and was fixed in this session (out of P4a's scope, but blocking even compiling the gpu-proofs test binary at all): `wgsl_compute.rs`'s `mod gpu_tests` referenced `Marker::StaticParam` at 3 call sites with no `use` import in scope — a plain compile error (`E0433`), not a lint, present at `feat/fusion-sota`'s tip (`8bb94ea6`) before this session touched anything. Fixed with one `use crate::node_graph::freeze::markers::Marker;` line inside that module. Once that compiled, this bug's original 12 lint errors reappeared unchanged (still the same five files, still none touched by this session) — confirming BUG-124 needs no update beyond this note; the compile gap was simply masking it from anyone running `--features gpu-proofs` before this session.
+
+### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — factored `Arc<Mutex<Vec<(String, Vec<f32>)>>>` into a local `type RecordedOsc` alias at both sites, per the entry's fix shape. Verify: `cargo clippy -p manifold-playback --tests -- -D warnings` clean.
+
+**Symptom:** `cargo clippy -p manifold-playback --tests -- -D warnings` (and `--all-targets`) fails
+`clippy::type_complexity` twice in [`src/osc_receiver.rs`](../crates/manifold-playback/src/osc_receiver.rs)
+at lines 366 and 368: `fn recording_receiver(address: &str) -> (OscReceiver, Arc<Mutex<Vec<(String, Vec<f32>)>>>)`
+and its matching `let log: Arc<Mutex<Vec<(String, Vec<f32>)>>> = ...` binding.
+
+**Root cause:** unknown/not investigated — out of scope for this session (BUG-088/072 name only
+`osc_timecode.rs` and `audio_mixdown.rs`). Confirmed pre-existing and unrelated to this session's
+edits: `git diff dd31cde4 -- crates/manifold-playback/src/osc_receiver.rs` is empty; the file's
+last touching commit is `e4f51459` ("F3: external-sync test net"), an unrelated session.
+
+**Fix shape:** trivial — factor the repeated `Arc<Mutex<Vec<(String, Vec<f32>)>>>` into a local
+`type` alias (e.g. `type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;`) at both sites.
+Mechanical, no behavior change. Left open per the same file-ownership convention BUG-088 used —
+belongs to whoever owns `osc_receiver.rs`'s next change.
+
+### BUG-113 (param-manifest-get-bench-flakes-under-parallel-load) — `bench_resolve`'s hard ns/op ceiling fails under nextest's parallel thread pool — LOW (flaky-gate)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — gated `bench_resolve` behind a new `bench-timing` cargo feature on `manifold-core` (off by default, same convention as `gpu-proofs`), so the wall-clock ceiling no longer runs in the default nextest sweep. Same class fix applied to BUG-142. Verify: `cargo test -p manifold-core --lib` (default, test absent from output) and `cargo test -p manifold-core --lib --features bench-timing bench_resolve` (runs, passes) both green.
+
+**Symptom:** `crates/manifold-core/src/params.rs`'s `params::tests::bench_resolve` times
+`ParamManifest::get`'s worst case (40 params, id last) and asserts `best_ns_per_op <= 271.5`
+(a 2x ceiling over an old baseline). Under `cargo nextest run --workspace`'s default sweep,
+run right after a heavy build and (in this session's case) a real 2-minute recording-soak
+process that had just finished, it measured 333.25 ns/op then 398.98 ns/op on consecutive runs
+and failed both times; an isolated `cargo test -p manifold-core --lib
+params::tests::bench_resolve` immediately after measured 215.02 ns/op and passed, and a
+subsequent clean full-workspace nextest run passed 3052/3052 including this test.
+
+**Root cause:** the test is a wall-clock micro-benchmark with a hard-coded nanosecond ceiling,
+run inside the normal correctness-test sweep — inherently sensitive to CPU contention from
+nextest's shared thread pool and any other load on the machine (the failing runs in this
+session followed heavy sequential cargo builds and a real recording capture). Confirmed
+unrelated to the change being landed: `crates/manifold-core/src/params.rs` was not touched.
+
+**Fix shape:** give the ceiling real margin for a loaded/parallel run, retry once before
+asserting (take the best of N *sequential process* runs, not just N in-process rounds — the
+in-process `ROUNDS` loop already exists but can't out-run sustained *external* contention), or
+move this out of the default nextest sweep entirely (behind a feature or a dedicated bin, same
+convention as `gpu-proofs`) since a wall-clock ceiling assertion doesn't belong in a "safe to
+run freely, always green" default suite per CLAUDE.md's own testing-scope description.
+
+### BUG-112 (manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests) — `manifold-ui`'s `--all-targets` clippy gate fails on two pre-existing, unrelated lints — LOW (lint-only)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — dropped the two unneeded `&` before `format!(...)` in `audio_setup_panel.rs` and replaced the `vec![WireView {...}, ...]` fixture in `graph_canvas/tests.rs` with a plain array literal, per the entry's fix shape. Re-running the exact gate (`cargo clippy -p manifold-ui --all-targets -- -D warnings`) surfaced a THIRD, unrelated `type_complexity` debt in `interaction_overlay.rs` — logged separately as BUG-161 rather than folded in here (different lint, different file, out of this entry's stated scope).
+
+**Symptom:** `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two lints that
+have nothing to do with this session's changes:
+1. `clippy::needless_borrows_for_generic_args` twice in
+   [`src/panels/audio_setup_panel.rs`](../crates/manifold-ui/src/panels/audio_setup_panel.rs) —
+   lines 2494 and 2498, both `LayerId::new(&format!(...))` where the borrow is unneeded
+   (`LayerId::new` already accepts an owned `String` generically).
+2. `clippy::useless_vec` once in
+   [`src/graph_canvas/tests.rs`](../crates/manifold-ui/src/graph_canvas/tests.rs) — line 2391, a
+   `vec![WireView { .. }, ...]` fixture that clippy wants as a plain array.
+
+**Root cause:** unknown/not investigated (test-target lint debt, out of scope for this session).
+Confirmed pre-existing and unrelated: `git diff HEAD -- crates/manifold-ui/src/panels/audio_setup_panel.rs
+crates/manifold-ui/src/graph_canvas/tests.rs` is empty; both files' last-touching commit is
+`f1a35270` ("feat(audio-dock-p4): D7 readability + D8 hygiene (P4)"), an unrelated session. The
+scoped, non-`--all-targets` gate this session actually ran (`cargo clippy -p manifold-app -p
+manifold-ui -p manifold-recording -- -D warnings`, per CLAUDE.md's worktree convention) is clean
+— this only surfaces when test/bench targets are included, same pattern as BUG-110.
+
+**Fix shape:** trivial and mechanical, no behavior change — drop the `&` before each
+`format!(...)` argument at the two `audio_setup_panel.rs` sites; replace the `vec![...]` literal
+in `graph_canvas/tests.rs` with a plain array literal (`[WireView { .. }, ...]`). Left open per
+the same file-ownership convention BUG-110 used — belongs to whoever owns these files' next
+change.
+
+### BUG-089 (live-clip-pending-tick-queue-dead-on-all-live-paths) — `LiveClipManager`'s tick-based pending-launch queue can never be populated in production — LOW (dead code, correctness-neutral)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — deleted the whole subsystem per the entry's fix shape: `pending_by_tick`/`pending_by_layer`/`pending_by_clip_id` fields, `PendingLiveLaunch`, `queue_pending`, `remove_pending_by_clip_id`, `activate_due_pending_launches`, `activate_due_pending_launches_at_tick`, `has_pending_activations`, `pending_launch_count`, the `engine.rs` tick-3 call site, and the dead cancellation arm in `commit_live_clip` (now just `if !self.live_slots.contains_key(&layer_index) { return; }`). `trigger_live_clip`/`trigger_live_generator_clip` now call `activate_live_slot_now` unconditionally (the `event_absolute_tick >= 0` branch that used to queue was always false in production, confirmed by this entry's own grep). Deleted `tests/live_clip.rs::pending_launch_queue_activates_at_tick` (the test that only exercised this) and the now-meaningless `pending_launch_count() == 0` assertion in `midi_launch_with_release_before_snap_still_gates_correctly`-family test, plus the now-dead `MockHost::at_tick` helper. Deletion gate: `rg` for every listed symbol across `crates/**/*.rs` returns zero hits. Verify: `cargo test -p manifold-playback --lib --tests` 236+9+10+23+2+8+5+4 passed, 0 failed; `cargo clippy -p manifold-playback --tests -- -D warnings` clean.
+
+Found 2026-07-10 while implementing F2 (MIDI launch quantize, CORE_ENGINE_MAP-adjacent). F2's
+brief specifically flagged `activate_due_pending_launches_at_tick` as a deletion candidate and
+asked for a caller grep before removing it. That grep turned up more than the one function:
+`queue_pending` (`live_clip_manager.rs`) — the only writer of `pending_by_tick` /
+`pending_by_layer` / `pending_by_clip_id` and the only place `PendingLiveLaunch.target_tick` is
+set — only runs when its caller's `event_absolute_tick >= 0`. Every live producer of that value
+traces back to `MidiNoteEvent.absolute_tick`, and `midi_input.rs`'s midir callback (the *only*
+constructor of `MidiNoteEvent` in the whole workspace — confirmed by grep, not inference) always
+sets it to `-1`. `fire_layer_oneshot` (the audio-trigger path) also always passes `tick = -1`
+explicitly. So `pending_by_tick` can never be non-empty on any live path today. Its one live
+reader, `activate_due_pending_launches_at_tick` (`engine.rs:803`, called every tick with
+`self.last_frame_count as i32` — a frame counter, not a real MIDI clock tick), is therefore an
+unconditional no-op in production (`if self.pending_by_tick.is_empty() { return false; }` fires
+every call). The sibling beat-based `activate_due_pending_launches` and `has_pending_activations`
+have no live caller at all — only `tests/live_clip.rs` exercises them. `commit_live_clip`'s
+"pending launch cancellation" branch (the `!self.live_slots.contains_key(&layer_index)` arm) is
+similarly unreachable live, since nothing ever queues a launch that skips straight to `live_slots`.
+
+**Fix shape:** delete the whole subsystem — `pending_by_tick`, `pending_by_layer`,
+`pending_by_clip_id`, `PendingLiveLaunch` (and its `target_tick` field), `queue_pending`,
+`activate_due_pending_launches`, `activate_due_pending_launches_at_tick`,
+`has_pending_activations`, the `engine.rs:803` call site, and the dead cancellation arm in
+`commit_live_clip` — plus the `tests/live_clip.rs` coverage that only exercises it
+(`pending_launch_queue_activates_at_tick`). Left open rather than done as part of F2: the
+footprint is a full subsystem across two files and a test, wider than the single function F2 was
+scoped to evaluate for deletion, and removing it correctly (without leaving `queue_pending`'s
+write side orphaned, or silently changing `commit_live_clip`'s NoteOff behavior for some future
+native-clock caller) deserves a dedicated pass with its own review, not a rider on a launch-
+quantize fix. F2 left this code untouched and unexercised by its own changes.
+
+### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — built fix shape (b): `ParamCardPanel::skip_to_settled(&mut self, tree) -> bool` (settles drawer height, tab-ink, collapse, spawn-pop, delete-fade, value-flash, and value-snap-back tweens in one call, reusing `tick_drawers`/`tick_value_flash`'s own tick logic with a huge `dt_ms` rather than duplicating the settle math; returns whether anything was actually mid-flight) and `InspectorCompositePanel::skip_to_settled` (walks all cards, bubbles the bool up). Wired into `script.rs`'s `Runner::advance_frame` — the ONE seam every dispatch (`Key`/`Pointer`) runs through before `Snapshot`/`Dump` read the tree, since those two don't rebuild themselves — called unconditionally, forcing a rebuild only when something was actually settled (so a script with nothing armed keeps its prior cache-hit behavior; verified this doesn't regress `apply_ui_frame_invalidations`'s `needs_structural_sync` semantics). This is stronger than "audit existing flows for a missing `Step`" (the entry's other fix option): every flow is now correct by construction, no per-script opt-in needed. Verify: re-ran `scripts/ui-flows/param-step-action.json` (uses the pre-arm-in-fixture workaround this bug's report named) and `inspector-drawer-filmstrip.json`/`audio-clip-trigger-add.json`/`select-and-inspect.json` — all still pass; `cargo test -p manifold-ui --lib` 754 passed, `cargo test -p manifold-app --bin manifold` 174 passed; `cargo clippy -p manifold-ui -p manifold-app -- -D warnings` clean.
+
+**2026-07-10 (UI_HARNESS_UNIFICATION P2):** the root symptom — "nothing calls
+`tick_drawers`/`Panel::update` with real elapsed time" — is no longer true.
+`script.rs`'s `Runner` was repointed at the shared render seam
+(`crate::ui_frame::apply_ui_frame_invalidations` +
+`composite_main_ui_frame`), and its `AutomationAction::Step` handler now
+does a REAL `std::thread::sleep(DT)` + `ui.update()` per stepped frame
+(mirroring `cache_path_full_render`'s P0 drawer-tween loop), so a script
+that inserts `{"Step": {"frames": N}}` after arming a drawer now genuinely
+ticks it toward settlement — confirmed working: `scripts/ui-flows/
+inspector-drawer-filmstrip.json` (a fresh 12-frame `Step` after a compact-
+toggle click) settles and its filmstrip shows the drawer visibly changing
+across tiles. This is fix-shape (a)'s mechanism, just opt-in per script
+rather than automatic on every dispatch — **not fully closed**: an EXISTING
+flow (e.g. `param-step-action.json`) that doesn't add a `Step` after arming
+still hits the original symptom, and this session didn't retrofit it or
+build the unconditional auto-settle option (b) (`skip_to_settled()`/
+`finish_all()` on `ParamCardPanel`). Revive to CLOSED by either auditing
+existing flows for the missing `Step` or building (b).
+
+**Symptom:** in a `cargo xtask ui-snap <scene> --script <flow>.json` run, a
+click that newly arms a param's audio mod (or otherwise grows an EXISTING
+card's drawer row count) dispatches correctly (confirmed via
+`ui_bridge::dispatch` debug instrumentation — the right `PanelAction` fires
+and mutates the project), but the drawer's own P1 reveal tween
+(`ParamCardPanel::drawer_height_anim`, ticked by
+`InspectorCompositePanel::update`'s `tick_drawers`) never advances: the
+driver's `AutomationAction::Step` only increments a local `self.clock` field
+used for input-event timestamps, nothing calls `tick_drawers`/`Panel::update`
+with real elapsed time. The clip region sizing the reveal stays pinned at its
+t=0 height (0, if the card is easing from unarmed) forever, so subsequent
+rows in that clip region are invisible in the PNG AND unreachable by
+`ui.pointer_event`'s hit-test (confirmed: `dump_tree_ex` still reports the
+clipped nodes' raw, pre-clip rects with `VISIBLE | INTERACTIVE` flags, so the
+dump looks fine while both the render and the click silently no-op — a
+"dump says it's there, nothing else agrees" trap worth remembering before
+trusting a dump alone against a freshly-armed drawer).
+
+**Consequence for evidence-gathering:** any headless script that arms a
+config-drawer-bearing param FOR THE FIRST TIME on an EXISTING card (one that
+already went through one build with a smaller drawer) mid-script will show a
+believable-looking `PNG`/dump pair with a truncated drawer. The workaround
+used in `scripts/ui-flows/param-step-action.json`: pre-arm the mod directly
+in the fixture (`ui_snapshot::fixtures::param_steps_scene`) so the card's
+*very first* `configure()` call snaps `drawer_height_anim` straight to its
+settled target (`param_card.rs`'s own comment: "a *new* param... snaps so it
+never stalls half-open") — no tween in flight, no clipping. A REAL in-script
+click that only changes content WITHIN an already-open, unarmed-row-count-
+stable drawer (e.g. selecting a different Action/Mode segment on a param
+that's already armed) is unaffected — confirmed working in the same flow.
+
+**Fix shape:** either (a) give the `--script` driver a `self.rebuild`-adjacent
+call that also ticks `ui.inspector`'s drawer/value-flash animations by a
+large synthetic `dt` (e.g. `color::MOTION_MED_MS * 2.0`) after every
+dispatch that sets `structural_change`, fully settling in one call instead of
+requiring many small real-time-gated ticks; or (b) expose a
+`skip_to_settled()`/`finish_all()` on `ParamCardPanel` the driver calls
+unconditionally before every `Snapshot`/`Dump`/`Pointer`. Either closes the
+gap for every future script that arms something mid-flow, not just this one.
+
+### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
+**Status:** FIXED 2026-07-14 (bug-wave lane B). Root cause: `check_auto_scroll`
+(`crates/manifold-app/src/ui_bridge/state_sync.rs`) unconditionally overwrote the
+viewport's scroll offset every playback frame with zero suppression mechanism —
+not a broken existing flag, there was none. Fix: `TimelineViewportPanel` tracks
+the last user-driven horizontal scroll gesture (`note_user_scroll_x`/
+`user_scroll_x_recent`, `crates/manifold-ui/src/panels/viewport.rs`), noted from
+both wheel-scroll write sites in `window_input.rs` (Shift+scroll pan, native
+trackpad horizontal swipe); `check_auto_scroll` yields (returns without moving
+the viewport) while a scrollbar drag is active OR a gesture happened within an
+800ms grace window — re-engage is automatic and implicit (the very next call
+after the grace window elapses resumes following, no separate event). Tests:
+`viewport::tests::user_scroll_x_recent_reflects_a_note_then_expires`,
+`state_sync::bug159_auto_scroll_yield_tests::{auto_scroll_moves_when_no_user_gesture_is_active,
+auto_scroll_yields_to_a_recent_user_scroll_gesture}`. Feel (the 800ms grace
+value, whether it matches Ableton closely enough) is Peter's call on the rig —
+not test-provable, flagged for his pass.
+
+**Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
+playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
+Reference behaviour (Ableton and other professional DAWs): a user scroll takes over — or eases
+against a soft limit — and follow re-engages predictably, never mid-gesture.
+
+**Root cause** — unknown, not investigated. Suspect surface: the playhead-follow auto-scroll
+writing the viewport offset unconditionally every frame during playback, racing the user's
+in-progress scroll gesture instead of being suppressed or eased while one is active.
+
+**Fix shape** — TBD after reading the follow logic; likely a follow-yields-to-gesture rule
+(suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
+or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
+acceptance is Peter's hands on it, not a test.
+
+### BUG-161 (ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch) — the headless `ui-snap` tool's own compile is broken — LOW-effort mechanical fix, but blocks the prescribed oracle for UI-regression bugs
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — found independently by two concurrent lanes the
+same day (lane A while trying to bisect BUG-160, lane C while capturing before/after PNGs for
+BUG-048/049/068); this is one bug, lane C's fix landed first. At each of the 8 `E0308` sites in
+`ui_snapshot/mod.rs`: `view.canonical_def` → `&view.canonical_def` (6 by-reference call sites) or
+`(*view.canonical_def).clone()` (2 by-value sites) — pure borrow/deref through the `Arc`, no
+semantic change. `cargo build`/`cargo clippy --features ui-snapshot -- -D warnings` clean.
+**Unblocks BUG-160**: its prescribed oracle (`ui-snap inspector` bisection between `a0eba10c` and
+its parent) can now actually run.
+
+**Symptom** — `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` mismatched-type errors in `ui_snapshot/mod.rs` (lines 454, 504, 581, 638, 660, 670, 896, 917): `view.canonical_def` is passed where callees (`render::render_graph_to_png`, `render::render_graph_editor_to_png`, others) expect `&EffectGraphDef`, but `canonical_def` is now `Arc<EffectGraphDef>` — a plain `&` no longer coerces. The whole `ui-snap` binary target fails to compile, so no headless UI scene can be rendered at all right now.
+
+**Root cause** — unknown which change flipped `canonical_def` from an owned `EffectGraphDef` to `Arc<EffectGraphDef>` (likely a preset-loading or graph-caching change elsewhere that made the canonical def shared); `ui_snapshot/mod.rs`'s 8 call sites were never updated to match. Confirmed pre-existing on `origin/main` (identical content on the commit this lane branched from) — this session's diff never touches `ui_snapshot/mod.rs`. Not caught by the default `nextest` sweep because `ui-snapshot` is a separate cargo feature, not compiled by a plain build.
+
+### BUG-049 (child-row-right-indent) — Group-child header rows double-pay the indent on right-anchored controls — LOW (visual misalignment, ~20px)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `layer_header.rs` split `pad` (left-anchor,
+still `PAD + CHILD_INDENT`) from a new `right_pad = PAD` used by every right-anchored x/width in
+`compute_layer_row`/`compute_audio_row`: `handle_x`, `dd_w` (Blend dropdown), and both
+`right_edge` computations (routing form + audio Gain/Send row). Class-swept: `rg '\bpad\b'` in
+the file found no other right-anchored use outside these five. `layout_matches_frozen_oracle`'s
+hand-copied oracle updated identically in the same commit (mirrors the live fix rect-for-rect);
+`manifold-ui --lib` green (26/26 in the file).
+
+**Found 2026-07-07 by the label-collision fix worker (timeline-ux pass), verified in the
+Liveschool after-PNG.** `layer_header.rs:489`: `handle_x = w - pad - HANDLE_W - 8.0` uses
+`pad = PAD + CHILD_INDENT`, but the indent only moves the card's LEFT edge — so child
+cards get a ~28px interior right margin vs 8px on top-level rows. Drag handles and Blend
+chips sit ~20px left of their top-level siblings, and the collapsed name budget is 20px
+tighter than necessary (it contributed to how early BUG-fixed label truncation kicks in).
+
+### BUG-048 (arm-two-reds) — Automation ARM idle vs armed are both red, distinguished only by shade — LOW (stage-legibility; behavior-changing mode)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — ARM no longer shares REC's red pair.
+`transport.rs::automation_group`: idle = `BUTTON_INACTIVE_C32` (matches sibling LANES/BACK idle
+chrome), armed = `STATUS_WARNING` (amber) — never red, so it can't be mistaken for REC's
+recording/not-recording pair at stage distance. Class-swept (`rg RECORD_RED RECORD_ACTIVE`):
+the only other survivors are REC itself (a genuine on/off pair, correctly red) and BACK's
+override-latch (red vs neutral gray, not two reds against each other — no ambiguity). UX call
+made without Peter (he's away): amber/`STATUS_WARNING` chosen over reusing
+`AUTOMATION_LINE_COLOR` because that token is itself `RED_ACTIVE` (would have reintroduced the
+exact bug). `automation_state_updates_in_place` test updated to pin the new colors; before/after
+PNGs saved for Peter's look-pass (see session report).
+
+**Found 2026-07-07 (timeline-ux headless audit).** `transport.rs::automation_group`:
+idle ARM = `RECORD_RED`, armed = `RECORD_ACTIVE` — a deliberate mirror of the REC
+active/idle pair. But REC's two states are "recording or not", while ARM's decide what
+touching a param DOES (override the lane vs punch automation INTO the arrangement) —
+a wrong read on stage silently writes automation into the show.
+
+### BUG-101 (setup-spectrogram-scroll-offset) — Docked Audio Setup spectrogram blit doesn't follow the body scroll offset — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `audio_setup_panel.rs::build_nodes` now shifts
+`self.scope_rect` by the same `-offset` applied to the scrolled tree content, right after
+`self.scroll.offset_content(tree, -offset)`. `update_band_meters` derives its geometry from
+`scope_rect()` too, so the 2026-07-11 follow-up note (band meters sharing this root cause) is
+fixed by the same one-line change. New regression test
+`scope_rect_follows_body_scroll_offset` scrolls the docked body via `handle_scroll` and asserts
+`scope_rect().y == unscrolled_y - offset`; still dormant in the shipped app per the existing
+note (`AudioSetupPanel::handle_scroll` has zero call sites), so this closes the mechanism ahead
+of it being wired up.
+
+**Found 2026-07-10 during AUDIO_SETUP_DOCK P1** (worker shortcut #3, orchestrator-logged
+at landing). The spectrogram waterfall is a GPU blit positioned by a CPU-side `scope_rect`
+computed at build time in `audio_setup_panel.rs`, and that rect does not add the
+`ScrollContainer` scroll offset. At `scroll_offset == 0` (the default, and everything the
+P1 gate exercises) it's correct; once the docked body is scrolled, the waterfall draws at
+its pre-scroll position while the rows around it move. **Symptom:** spectrogram visually
+detaches from its section header when the panel body is scrolled. **Fix shape:** offset
+`scope_rect` by the scroll delta (or parent the blit rect to the scroll content like the
+rows), and clip it to the scroll viewport. **Oracle:** not reproducible headless (the blit
+doesn't run in the snapshot harness) — needs the live app or a harness that runs the scope
+blit; a scrolled-body render test would guard it.
+
+**Update 2026-07-11 (fire-meter-unification pass):** confirmed the same root cause also
+explains `SendRowIds`'s per-send level meter (fixed this session — `meter_track: NodeId`
+now read live instead of cached `meter_x/y/w/h`) and `AudioSetupPanel::update_band_meters`
+(`audio_setup_panel.rs`, still open) — both derive from geometry captured in `build_nodes`
+before its own `self.scroll.offset_content()` call. The send-meter case had a track node to
+anchor to, so it's fixed. The scope/band-meter case roots in `self.scope_rect` (`pub fn
+scope_rect(&self) -> Option<Rect>`, no `&UITree` param) — making it scroll-live needs a
+signature change threading `&UITree` through every caller (the present-pass blit, both
+hit-tests, `update_scope_lane_labels`), which is this bug's real fix shape and is out of
+scope for a geometry-sourcing-only pass. Currently dormant either way:
+`AudioSetupPanel::handle_scroll` has zero call sites anywhere in the app (grepped), so
+`scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
+
+### BUG-081 — Audible blip when an audio clip's voice is built (play-then-pause leaks ~10ms of the file's start) — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — `make_voice` now applies `.volume(0.0)` to the
+`StaticSoundData` before `manager.play`, so the voice is built silent instead of played-then-
+paused; the per-tick sync path already restores the real volume via `set_volume(volume,
+declick())`, so activation is unaffected. Kills the whole class, including the race window a
+pause-based fix wouldn't close. `manifold-playback` builds clean.
+
+**Symptom** — a very subtle pop/click from the speakers at the moment an audio file is
+loaded onto the timeline (e.g. Finder drag-drop). Reported by Peter 2026-07-05.
+
+**Root cause** — [audio_layer_playback.rs:171-179](../crates/manifold-playback/src/audio_layer_playback.rs#L171-L179):
+`make_voice` calls `manager.play(data)` at full volume and only then
+`handle.pause(Tween::default())`. kira's `pause` is a fade-out — and `Tween::default()`
+is a **10ms** linear fade (kira-0.9.6 `tween.rs:110`), not instantaneous — so the first
+~10ms of the file renders audibly before the voice reaches its "start paused at 0" state.
+Any file whose first samples carry signal produces the blip. (The 5ms `declick()` tween
+used everywhere else in this module doesn't apply here; this is the one edge built on
+kira's default tween.)
+
+**Fix shape** — build the voice silent instead of pausing it after the fact: apply
+`.volume(0.0)` to the `StaticSoundData` before `manager.play`, keep the pause+seek. The
+per-tick sync path already restores the real volume via `set_volume(volume, declick())`,
+so activation is unaffected. This kills the whole class including the race where an audio
+callback fires between play and pause. One-line-ish, `manifold-playback` only.
+
+### BUG-031 — Layer context-menu + rename still address layers positionally — LOW (follow-up to the LayerId migration `877852a9`)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C) — both clusters now carry `LayerId` end to end.
+`ContextAddVideoLayer/GeneratorLayer/AudioLayer/DeleteLayer/DuplicateLayer/PasteAtLayer/
+ImportMidi/Ungroup/SetLayerColor` and `DropdownContext::LayerContext` all switched from `usize`
+to `LayerId`; consumers re-resolve the live index via `project.timeline.find_layer_by_id`/
+`find_layer_by_id_mut` at dispatch (execution) time instead of baking in the index at menu-open
+time — mirrors the pattern `DeleteLayerClicked(LayerId)` already used. `TextInputField::
+LayerName(usize)` became a bare `LayerName` variant with the id stored on `TextInputState::
+layer_id` (mirrors the existing `MarkerName`/`marker_id` and `AudioSendLabel`/`audio_send_id`
+idiom already on this `Copy` enum) — no `Copy`-dropping cascade needed. Class-swept the
+`TrackRightClicked` menu-build site too (a second, separate constructor for the same shared
+`Context*` actions) — it now resolves a `LayerId` from the row-under-cursor before building menu
+items, closing the same window there. `cargo check --workspace --tests` and `cargo clippy -p
+manifold-ui -p manifold-app -- -D warnings` clean; `manifold-app` test suite 189/189.
+
+**Root cause** — the primary layer-header actions were migrated to carry a stable `LayerId`
+(commit `877852a9`, kills the panel-index-vs-live-model collision). Two related clusters were
+deliberately left positional to keep that diff bounded:
+- The **`Context*Layer` right-click-menu family** (`ContextPasteAtLayer`, `ContextImportMidi`,
+  `ContextAddVideoLayer/GeneratorLayer/AudioLayer`, `ContextDuplicateLayer`, `ContextUngroup`,
+  `ContextDeleteLayer`, `DropdownContext::LayerContext`) still carry a `usize`. `LayerHeaderRightClicked`
+  now carries the id and `ui_root` resolves it to the current row synchronously when the menu opens,
+  so there's no regression — but the menu ITEMS bake in that index, leaving a (rare) stale window
+  between menu-open and item-click.
+- **`TextInputField::LayerName(usize)`** (layer rename): the enum derives `Copy`, and `LayerId`
+  isn't `Copy`, so migrating it forces dropping `Copy` and cascades through the whole text-input
+  subsystem (`app.rs` field handling). The double-click intercept resolves id→index locally, so the
+  rename has the same (unchanged) stale window it always had.
+
+**Symptom** — none observed; latent. A context-menu action or a rename committed after the layer
+list changed under it (another command, undo/redo, MIDI phantom layer) could hit the wrong layer.
+Same bug class as the migration killed for the primary controls.
+
+**Fix shape** — carry `LayerId` in the `Context*Layer` family (thread it from
+`LayerHeaderRightClicked` through the menu items) and switch `TextInputField::LayerName` to
+`LayerId` (drop `Copy` from `TextInputField`, fix the fallout in `app.rs`). Mechanical, compiler-driven.
+
+### BUG-068 (inspector-scene-cliphit-overlap) — `inspector` ui-snap fixture clip/panel hit overlap — LOW
+**Status:** FIXED 2026-07-14 (bug-wave3 lane C)
+
+**Found 2026-07-08 during DRAG_CAPTURE P1 L3 authoring; pre-existing at `b9304330`.** The
+`inspector` snapshot scene forces a generous `inspector_width` (600px of the 1536px canvas, set
+in `ui_snapshot::mod` for the inspector-subject scenes) so the selected layer's param cards have
+room — at the fixed 24px/beat zoom that leaves only ~29 beats of clip area before the inspector
+column starts. GLOW's clip (48 beats), PLASMA's clip (48 beats), and TEXT BOT L's RETURN clip (24
+beats starting at beat 24) all extended past that boundary. `TimelineViewportPanel::
+visible_clip_rects` only culls clips fully outside the tracks rect — it returns each surviving
+clip's FULL, unclamped pixel width (the comment notes "the GPU scissor clamps partials at the
+edges" for *rendering*, but the returned hit-test rect is unclamped) — so those three clips' hit
+rects genuinely overlapped the inspector column's screen region, meaning no clip in the scene was
+simultaneously uniquely-labeled and safely draggable near the inspector edge. This is why P1's
+`drag-clip-release-over-inspector.json` flow proves position-independence on the `timeline` scene
+(drag past the tracks' right edge) instead. Fixture-only, no app runtime impact.
+
+**Fix (FIXED @ this session):** shortened GLOW's and PLASMA's clips from 48 to 20 beats and
+TEXT BOT L's two clips from 24+24 to 10+10 beats (`fixtures.rs::inspector_scene`) — every clip
+now ends by x≈710, well clear of the inspector's left edge at x=936 (226px margin). Regression
+test `bug068_clip_panel_overlap::inspector_scene_clips_clear_the_inspector_column`
+(`ui_snapshot/mod.rs`) builds the real scene, reads `ui.viewport.visible_clip_rects`, and asserts
+every clip's right edge stays left of `ui.layout.inspector().x` — fails red on the pre-fix
+48-beat clips, green post-fix. **Class swept:** `bug060`/`gltfscene`/`bug047`/`paramsteps` share
+the same `inspector_width = 600.0` override and could in principle grow a similarly long clip,
+but none of them are used for clip-drag/hit-test flows today (their subject is inspector
+scroll/param display) — not touched; revival trigger is a future script that drags a clip in one
+of those scenes.
 
 ### BUG-125 (preset-runtime-generator-picks-first-final-output-nondeterministically) — a generator preset JSON with more than one `system.final_output` node has its tracked output picked via `AHashMap` iteration order, not graph position — LOW today (no shipped preset has two), but a real correctness trap
 **Status:** FIXED 2026-07-14 (bug-wave lane A, `bug/wave3-lane-a`), option (a) from the fix shape — reject at load. `PresetRuntime::from_def`'s generator path (`preset_runtime.rs:2617`) now counts `FINAL_OUTPUT_TYPE_ID` matches before resolving the tracked output; a count > 1 returns a new `JsonGeneratorLoadError::MultipleFinalOutputs { count }` instead of silently picking one via `.find()`. Threaded through `graph_tool validate`'s error → `ValidationIssue` conversion too (`validate.rs:216`), so a bad preset JSON is caught by the pre-flight tool as well as the runtime loader — the invariant is enforced at both entry points, not just one. Regression test `dual_final_output_is_rejected_at_load` builds a real two-`final_output` generator graph and asserts the new error. Gated: `cargo clippy -p manifold-renderer -- -D warnings` clean; `cargo nextest run -p manifold-renderer` full crate sweep 1265/1265 passed.
@@ -2207,6 +2299,7 @@ when one is fixed).
 **Also open (same family):** BUG-096 remainder (rotate degrees readout + slider-jump observation); param-surface dual source of truth (preset JSON params vs core generator_metadata_submissions.rs, which still lists the pre-turb_detail surface — reconcile or delete one).
 
 ### BUG-126 (manifold-renderer-tests-clippy-debt-under-gpu-proofs) — 12 pre-existing clippy findings in `manifold-renderer`'s test code, only visible under `--tests --features gpu-proofs` — LOW, found not fixed 2026-07-12 (CINEMATIC_POST P0 fusion-layer session)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — same fix as BUG-124 (identical 12 findings, one fix covers both entries); see BUG-124's Status line for the fix shape, the 5 extra findings caught by the same gate re-run, and verification commands.
 **Symptom:** `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 errors; the STANDARD gate (`cargo clippy -p manifold-renderer -- -D warnings`, no `--tests`, no feature) is clean and is what every prior session's gate ran, so this debt accumulated unnoticed.
 **Root cause:** ordinary `needless_range_loop` / `manual_range_contains` / `identity_op` clippy lints in `#[cfg(test)]`/`gpu_tests` modules that only compile under `--tests --features gpu-proofs` — never exercised by the standard scoped clippy invocation.
 **Sites:** `primitives/bend_mesh.rs:526`, `primitives/facet_normals.rs:324`, `primitives/gltf_mesh_source.rs:434`, `primitives/morph_mesh.rs:489`, `primitives/push_along_normals.rs:527,559`, `primitives/scatter_on_mesh.rs:551-553`, `primitives/taper_mesh.rs:512`, `primitives/twist_mesh.rs:505`, `primitives/revolve_curve.rs:334` — none touched by this session's D7/P0 diff (verified via `git status`/`git diff --stat`); found only because this session additionally ran `--tests --features gpu-proofs` clippy beyond its specified gate.
@@ -2218,3 +2311,15 @@ when one is fixed).
 **Root cause:** `RegionNode.node_includes` (`freeze/codegen.rs:1270`, populated at `freeze/install.rs:1256` via `node.wgsl_includes()`) is read by `generate_fused_buffer` (`freeze/codegen.rs:1591`, `for inc in node.node_includes`) but NEVER read by `generate_fused` (the texture-region path, `freeze/codegen.rs:2084`–2628) — asymmetric with the STANDALONE texture path, which this same P1 session fixed (`generate_standalone_ext` gained an `includes: &[&str]` parameter, threaded from `standalone_for_spec` via `P::WGSL_INCLUDES`; see the fix's own commit). The FUSED texture path's `prelude`/`helpers`/`bodies` (`split_fns`-based) emission never merges in `node.node_includes` at all.
 **Why not fixed at the time:** `coc_from_depth`'s neighbors in `CinematicScene` (P1's only consumer at the time) never formed a fusable region with it — its upstream `depth` input came from `node.render_scene` (always `Boundary`, a draw call) and its downstream consumer `node.variable_blur` read it via a Gather wire (gather-consumed wires never union per the union gates), so `coc_from_depth` was always an isolated single-node region there. BUG-141's glb-import graph hit a different topology where the fused region actually forms, surfacing the gap.
 **Fix (applied):** mirrored `generate_fused_buffer`'s dedup-and-prepend `includes: Vec<&'static str>` loop inside `generate_fused`'s texture path (`crates/manifold-renderer/src/node_graph/freeze/codegen.rs`) — collects `node.node_includes` across `region.nodes` in the existing per-node loop (dedup by value), prepends the joined text right before the shared-prelude emission (same relative position `generate_fused_buffer` uses, before body emission). Two new tests: `codegen.rs::gpu_tests::fused_texture_region_carries_and_dedups_wgsl_includes` (unit-level: fuses `node.coc_from_depth` + `Gain`, asserts `fn linearize_depth` appears exactly once and the kernel parses through naga) and `freeze/proof.rs::coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused` (end-to-end: the real glb-import-shaped region — `coc_from_depth` fused with `node.invert` — asserts `fuse_canonical_def` no longer falls back to `None`, both D7/P0 markers are present, and fused vs unfused render match within the out-of-loop tolerance). Both tests were verified to fail with the fix reverted (reproducing the exact pre-fix symptom: naga's "no definition in scope for identifier: linearize_depth" / `fuse_canonical_def` panicking) before the fix was restored.
+
+### BUG-161 (interaction-overlay-automation-callback-type-complexity) — `manifold-ui --all-targets` clippy fails on 4 `type_complexity` findings in `interaction_overlay.rs`, unrelated to BUG-112 — LOW (lint-only)
+**Status:** OPEN — found 2026-07-14 during bug-wave3 lane D while re-running BUG-112's exact gate (`cargo clippy -p manifold-ui --all-targets -- -D warnings`) to verify that fix.
+
+**Symptom:** 4 `clippy::type_complexity` errors in [`src/interaction_overlay.rs`](../crates/manifold-ui/src/interaction_overlay.rs) at lines 2914 (`automation_point_moves: Vec<(UiGraphTarget, ParamId, (Beats, f32, UiSegmentShape), (Beats, f32, UiSegmentShape))>`), 2920 (`automation_segment_drag_commits`, same shape with an extra `f32`), 2926 (`automation_group_move_commits: Vec<Vec<(UiGraphTarget, ParamId, Beats, f32, f32, UiSegmentShape)>>`), and 2927 (`automation_draw_commits`) — all fields on `GestureTestHost`, a `#[cfg(test)]`-only fixture struct inside `mod p1_4_gesture_integrity_tests` (test-only, not production), so only `--all-targets`/`--tests` compiles this code; none touched by this session (confirmed: `git diff --stat -- crates/manifold-ui/src/interaction_overlay.rs` is empty at `c3113703`).
+
+**Root cause:** unknown/not investigated — out of scope for BUG-112, which named only `audio_setup_panel.rs`/`graph_canvas/tests.rs`; this file wasn't scanned until this session ran the exact same `--all-targets` gate after fixing those two.
+
+**Fix shape:** mechanical — factor each repeated `(UiGraphTarget, ParamId, ...)` tuple family into named `type` aliases (e.g. `AutomationPointMove`, `AutomationSegmentDragCommit`, `AutomationGroupMoveCommit`, `AutomationDrawCommit`) near the function signature. No behavior change.
+
+### BUG-162 (ui-snapshot-feature-canonical-def-arc-regression) — `--features ui-snapshot` doesn't compile: `GraphView::canonical_def` changed to `Arc<EffectGraphDef>`, 8 call sites in `ui_snapshot/mod.rs` never updated — LOW (build-only, no runtime impact)
+**Status:** FIXED 2026-07-14 (bug-wave3 lane D) — found as a blocker while investigating BUG-153 (needed a working `ui-snap` binary to reproduce). `cargo build --features ui-snapshot --bin manifold` failed with 8 `E0308` mismatches: `render::render_graph_to_png`/`render_graph_editor_to_png` expect `&EffectGraphDef` but received `view.canonical_def` (now an `Arc<EffectGraphDef>` per an unrelated session's change — `crates/manifold-app/src/ui_snapshot/mod.rs` was untouched by that session, confirmed via `git log`), and `AddSceneObjectCommand::new`/`AddSceneLightCommand::new` expect an owned `EffectGraphDef` but received `view.canonical_def.clone()` (an `Arc` clone, not a value clone). Fixed all 8 sites: 6 call sites now pass `&view.canonical_def` (auto-deref through the `Arc`), 2 now pass `(*view.canonical_def).clone()` (deref then clone to get an owned value). Mechanical, no behavior change once it compiles. Verify: `cargo build --features ui-snapshot --bin manifold` clean; `cargo run --features ui-snapshot --bin manifold -- ui-snap inspector` runs and writes a PNG.
