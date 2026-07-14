@@ -136,6 +136,24 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-155 (camera-rotation-params-missing-smooth-360-wrap) — camera orbit/tilt/rotation controls don't smooth-wrap at 360 degrees, so a full rotation can't be modulated cleanly via a saw wave — MED, reported by Peter 2026-07-14
+**Status:** OPEN — found not fixed 2026-07-14, reported by Peter during live-rig use.
+
+**Symptom** — the camera orbit, tilt, and rotation params jump/discontinue at their wrap boundary instead of wrapping smoothly through 0/360 degrees. A saw-wave LFO driving a full rotation (the standard way to drive continuous spin from a modulation source) hits the seam and snaps instead of reading as continuous rotation.
+
+**Root cause** — unknown; not investigated. Likely candidates: the param's range/wrap handling doesn't treat 0 and 360 (or -1/1 in normalized units) as identified endpoints, or downstream consumers (orbit-to-radians conversion, Euler composition) don't handle the wrap consistently across all three rotation axes — related to the BUG-096 orbit/tilt phase investigation already on the backlog.
+
+**Fix shape** — audit each rotation param (orbit, tilt, and any other rotation axis in the camera/orbit primitives) for wrap behavior; ensure all use a consistent smooth-wrap convention (e.g. modulo into 0..360 with identified endpoints) so a saw wave bound to the param produces a continuous, seamless spin. Cross-check against BUG-096 (rotate-sliders-jump) — may share root cause or fix site.
+
+### BUG-154 (removing-group-with-slider-bound-nodes-leaves-stale-effect-card) — deleting a node group that has nodes assigned to card sliders doesn't update the effect card: no warning shown, and the stale slider isn't removed — MED, reported by Peter 2026-07-14
+**Status:** OPEN — found not fixed 2026-07-14, reported by Peter during live-rig use.
+
+**Symptom** — when a group is deleted from a node graph and that group contained a node that had been assigned to an effect card slider, the effect card doesn't react correctly: it should either warn that the binding is now dangling or remove the slider, but currently does neither — the stale slider is left on the card with no indication its underlying node is gone.
+
+**Root cause** — unknown; not investigated. Likely the group-deletion path doesn't walk card/slider bindings the way node-level deletion does — suggests group deletion isn't routed through the same binding-cleanup logic as deleting the same nodes individually (compare against however single-node deletion updates card sliders on removal).
+
+**Fix shape** — trace group deletion (`EditingService`/command path for group removal) and compare it against the single-node deletion path's card-binding cleanup; route group deletion through the same cleanup so it either surfaces the warning or removes the slider, matching single-node-delete behavior.
+
 ### BUG-153 (ui-snap-inspector-scene-172px-nondeterministic) — the `ui-snap inspector` headless scene is not run-to-run deterministic — LOW (test-determinism only, no correctness impact)
 **Status:** OPEN — found 2026-07-14 during `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1, while byte-diffing the `timeline`/`states`/`inspector` scenes before/after the P1 extraction to verify I4 (main-window pixels unchanged). Not fixed this session — orthogonal to that design.
 
