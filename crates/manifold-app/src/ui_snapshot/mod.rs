@@ -1171,6 +1171,43 @@ mod footer_leak_probe {
 }
 
 #[cfg(test)]
+mod bug068_clip_panel_overlap {
+    //! BUG-068: the `inspector` scene forces a generous `inspector_width`
+    //! (600px), narrowing the track area; a clip long enough to bleed past
+    //! the inspector's left edge gets a hit-test rect that overlaps the
+    //! inspector column (`TimelineViewportPanel::visible_clip_rects` returns
+    //! full, unclamped clip width — only fully-offscreen clips are culled).
+    //! Pins every `inspector`-scene clip clear of the inspector.
+    use super::*;
+
+    #[test]
+    fn inspector_scene_clips_clear_the_inspector_column() {
+        let data = fixtures::build("inspector").expect("inspector scene");
+        let mut ui = UIRoot::new();
+        ui.resize(LOGICAL_W, LOGICAL_H);
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+        sync_build(&mut ui, &data, 24.0);
+
+        let inspector_left = ui.layout.inspector().x;
+        let mut clip_rects = Vec::new();
+        ui.viewport.visible_clip_rects(&mut clip_rects);
+        assert!(!clip_rects.is_empty(), "sanity: scene must have visible clips");
+
+        let overlapping: Vec<_> = clip_rects
+            .iter()
+            .filter(|c| c.rect.x + c.rect.width > inspector_left)
+            .collect();
+        assert!(
+            overlapping.is_empty(),
+            "{} clip(s) bleed past the inspector's left edge ({inspector_left}): {:?}",
+            overlapping.len(),
+            overlapping.iter().map(|c| (&c.name, c.rect)).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(test)]
 mod cache_path_full_render {
     //! P0+P1 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md` — read the "Reframe
     //! 2026-07-10" block before this comment) — a faithful FULL-APP headless

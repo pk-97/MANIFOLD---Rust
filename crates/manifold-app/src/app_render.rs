@@ -1729,11 +1729,10 @@ impl Application {
                 }
                 PanelAction::LayerDoubleClicked(id) => {
                     // Open text input for layer rename. The action carries a
-                    // stable LayerId; resolve it to the current row for the
-                    // index-based `name_node_id` / `LayerName` field (the
-                    // text-input subsystem is still positional — a Copy enum
-                    // that would have to drop Copy to hold a LayerId; tracked
-                    // as a follow-up, BUG-031).
+                    // stable LayerId, stored on `text_input.layer_id` and
+                    // re-resolved to the live row at commit time (BUG-031) —
+                    // `pos` here only sizes the anchor rect for THIS frame's
+                    // overlay, a read-only, open-time-only use.
                     {
                         let project = &self.local_project;
                         if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
@@ -1746,11 +1745,12 @@ impl Application {
                             };
                             let name = layer.name.clone();
                             self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName(pos),
+                                crate::text_input::TextInputField::LayerName,
                                 &name,
                                 crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                                 11.0,
                             );
+                            self.text_input.layer_id = Some(id.clone());
                         }
                     }
                     continue;

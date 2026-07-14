@@ -389,10 +389,18 @@ impl TransportPanel {
 
     /// Right-aligned automation globals (P4): LANES (view-only, lit while lane
     /// strips are shown — Live's `A`) + BACK (Back to Arrangement, lit red
-    /// exactly when a lane override latch is active) + ARM (lit red while
-    /// armed, mirrors REC's active/idle red pair).
+    /// exactly when a lane override latch is active) + ARM.
+    ///
+    /// ARM used to mirror REC's active/idle red pair (lit red while armed),
+    /// but ARM and REC mean different things: REC's two states are just
+    /// "recording or not"; ARM's decide what touching a param DOES (override
+    /// the lane vs punch automation into the arrangement) — a misread at
+    /// stage distance silently writes automation into the show. So ARM gets
+    /// its own idle/armed pair, distinct from every red in this row: idle
+    /// matches its neutral siblings (BACK/LANES), armed is amber, never red.
+    /// See BUG-048, `docs/TIMELINE_UX_AUDIT_2026-07-07.md` item 2.5.
     fn automation_group(&self) -> View {
-        let arm_bg = if self.automation_armed { color::RECORD_ACTIVE } else { color::RECORD_RED };
+        let arm_bg = if self.automation_armed { color::STATUS_WARNING } else { color::BUTTON_INACTIVE_C32 };
         let back_bg = if self.automation_overridden { color::RECORD_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
         let lanes_bg = if self.automation_mode_visible { color::AUTOMATION_LINE_COLOR } else { color::BUTTON_INACTIVE_C32 };
 
@@ -628,14 +636,17 @@ mod tests {
         panel.set_automation_mode_visible(true);
         panel.update(&mut tree);
         assert_eq!(tree.structure_version(), sv, "automation state toggle must not rebuild");
-        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
+        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::STATUS_WARNING).bg_color);
         assert_eq!(node(&tree, "BACK").style.bg_color, button_style(color::RECORD_ACTIVE).bg_color);
         assert_eq!(node(&tree, "LANES").style.bg_color, button_style(color::AUTOMATION_LINE_COLOR).bg_color);
 
         panel.set_automation_state(false, false);
         panel.set_automation_mode_visible(false);
         panel.update(&mut tree);
-        assert_eq!(node(&tree, "ARM").style.bg_color, button_style(color::RECORD_RED).bg_color);
+        assert_eq!(
+            node(&tree, "ARM").style.bg_color,
+            button_style(color::BUTTON_INACTIVE_C32).bg_color
+        );
         assert_eq!(
             node(&tree, "BACK").style.bg_color,
             button_style(color::BUTTON_INACTIVE_C32).bg_color
