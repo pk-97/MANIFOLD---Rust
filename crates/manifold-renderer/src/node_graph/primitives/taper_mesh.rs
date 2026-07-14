@@ -509,11 +509,11 @@ mod gpu_tests {
             out[0].position[0],
             zero.0[0]
         );
-        for i in 2..12 {
+        for (i, v) in out.iter().enumerate().skip(2).take(10) {
             assert!(
-                (out[i].position[0] - full.0[0]).abs() < 1e-5,
+                (v.position[0] - full.0[0]).abs() < 1e-5,
                 "vertex {i} past weights_len should degrade to w=1.0, got x={} expected={}",
-                out[i].position[0],
+                v.position[0],
                 full.0[0]
             );
         }

@@ -1577,6 +1577,33 @@ impl ParamCardPanel {
         }
     }
 
+    /// Force every per-card tween (drawer height, tab-ink slide, collapse,
+    /// spawn pop, delete fade, value flash, value snap-back) to its settled
+    /// end state in one call (BUG-073 fix shape (b)): a headless `--script`
+    /// driver has no per-frame timer, so a tween armed mid-script — e.g. a
+    /// newly-armed drawer growing a card's row count — would otherwise never
+    /// advance past its t=0 state unless the script happens to insert a
+    /// `Step` afterward. Reuses `tick_drawers`/`tick_value_flash`'s own tick
+    /// logic with a `dt_ms` large enough that every tween's `t` clamps to 1.0
+    /// in one call, rather than duplicating the settle math per-field.
+    /// Returns whether anything was actually mid-flight — the caller only
+    /// needs to force a rebuild when this is `true`.
+    pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let was_animating = self.collapse_anim.is_animating()
+            || self.spawn_scale.is_animating()
+            || self.delete_fade.as_ref().is_some_and(|f| f.progress().is_some())
+            || self.drawer_height_anim.iter().any(|a| a.is_animating())
+            || self.mod_tab_ink.iter().any(|a| a.is_animating())
+            || self.value_flash.iter().any(|f| f.progress().is_some())
+            || self.value_snapback.iter().any(|a| a.is_animating());
+        if was_animating {
+            const HUGE_DT_MS: f32 = 1.0e9;
+            self.tick_drawers(HUGE_DT_MS);
+            self.tick_value_flash(tree, HUGE_DT_MS);
+        }
+        was_animating
+    }
+
     /// Advance this card's drawer-height tweens by `dt_ms`; returns true while any
     /// is still in flight. Called by the inspector's per-frame `update()`; the
     /// value it advances is read by the *next* `build()` (which the app's

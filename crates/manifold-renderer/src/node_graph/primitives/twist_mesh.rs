@@ -502,12 +502,12 @@ mod gpu_tests {
             out[0].position[1],
             out[0].position[2]
         );
-        for i in 2..12 {
+        for (i, v) in out.iter().enumerate().skip(2).take(10) {
             assert!(
-                (out[i].position[1] - full.0[1]).abs() < 1e-5 && (out[i].position[2] - full.0[2]).abs() < 1e-5,
+                (v.position[1] - full.0[1]).abs() < 1e-5 && (v.position[2] - full.0[2]).abs() < 1e-5,
                 "vertex {i} past weights_len should degrade to w=1.0, got y={} z={} expected y={} z={}",
-                out[i].position[1],
-                out[i].position[2],
+                v.position[1],
+                v.position[2],
                 full.0[1],
                 full.0[2]
             );

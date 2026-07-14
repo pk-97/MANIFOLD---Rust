@@ -361,11 +361,13 @@ impl Drop for OscReceiver {
 mod tests {
     use super::*;
 
+    type RecordedOsc = Arc<Mutex<Vec<(String, Vec<f32>)>>>;
+
     /// Subscribes a callback that records every dispatch into a shared log,
     /// so tests can assert exactly what (and how often) the receiver fired.
-    fn recording_receiver(address: &str) -> (OscReceiver, Arc<Mutex<Vec<(String, Vec<f32>)>>>) {
+    fn recording_receiver(address: &str) -> (OscReceiver, RecordedOsc) {
         let mut receiver = OscReceiver::new();
-        let log: Arc<Mutex<Vec<(String, Vec<f32>)>>> = Arc::new(Mutex::new(Vec::new()));
+        let log: RecordedOsc = Arc::new(Mutex::new(Vec::new()));
         let log_clone = Arc::clone(&log);
         receiver.subscribe(
             address,

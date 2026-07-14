@@ -371,7 +371,11 @@ mod fire_meter_tests {
     /// hit) — against a budget two orders of magnitude under the 20ms/frame
     /// spike threshold. Not a substitute for a live in-app run (this can't
     /// see GPU/compositor cost); see the P3c report for the run that would.
+    /// Wall-clock ceilings flake under nextest's parallel pool (BUG-142, same
+    /// class as BUG-113's `bench_resolve`), so this only runs under
+    /// `--features bench-timing`.
     #[test]
+    #[cfg(feature = "bench-timing")]
     fn worst_case_capture_cost_is_negligible_against_the_20ms_frame_budget() {
         let iterations = 2000;
         let start = std::time::Instant::now();

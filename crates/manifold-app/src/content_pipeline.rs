@@ -208,6 +208,89 @@ pub const ATLAS_H: u32 = ATLAS_GRID * ATLAS_CELL_H;
 /// Max node thumbnails an atlas holds.
 pub const ATLAS_CELLS: usize = (ATLAS_GRID * ATLAS_GRID) as usize;
 
+/// The per-node atlas UV rect for one `cell` index, letterboxed to
+/// `monitor_aspect` inside its 16:9 cell (BUG-034: this is the live
+/// preview-inline math from `app_render.rs`'s node-output-preview block,
+/// factored out so a headless harness can drive the same cell-picking math
+/// a live render does, instead of only proving the per-node-texture path).
+/// Returns `[u0, v0, u1, v1]` in the atlas's normalized UV space.
+pub fn atlas_cell_uv(cell: u32, monitor_aspect: f32) -> [f32; 4] {
+    let inv = 1.0 / ATLAS_GRID as f32;
+    let half_tx = 0.5 / ATLAS_W as f32;
+    let half_ty = 0.5 / ATLAS_H as f32;
+    let cell_aspect = ATLAS_CELL_W as f32 / ATLAS_CELL_H as f32;
+    let (content_w_frac, content_h_frac) = if monitor_aspect > cell_aspect {
+        (1.0, cell_aspect / monitor_aspect)
+    } else {
+        (monitor_aspect / cell_aspect, 1.0)
+    };
+    let gx = (cell % ATLAS_GRID) as f32;
+    let gy = (cell / ATLAS_GRID) as f32;
+    let mut u0 = gx * inv + half_tx;
+    let mut v0 = gy * inv + half_ty;
+    let mut du = inv - 2.0 * half_tx;
+    let mut dv = inv - 2.0 * half_ty;
+    u0 += du * (1.0 - content_w_frac) * 0.5;
+    v0 += dv * (1.0 - content_h_frac) * 0.5;
+    du *= content_w_frac;
+    dv *= content_h_frac;
+    [u0, v0, u0 + du, v0 + dv]
+}
+
+#[cfg(test)]
+mod atlas_cell_uv_tests {
+    use super::*;
+
+    #[test]
+    fn square_monitor_matches_cell_aspect_letterboxing() {
+        // monitor_aspect == cell_aspect: no letterboxing, full cell (minus
+        // the half-texel inset) is used in both axes.
+        let cell_aspect = ATLAS_CELL_W as f32 / ATLAS_CELL_H as f32;
+        let uv = atlas_cell_uv(0, cell_aspect);
+        let inv = 1.0 / ATLAS_GRID as f32;
+        let half_tx = 0.5 / ATLAS_W as f32;
+        let half_ty = 0.5 / ATLAS_H as f32;
+        assert!((uv[0] - half_tx).abs() < 1e-6);
+        assert!((uv[1] - half_ty).abs() < 1e-6);
+        assert!((uv[2] - (inv - half_tx)).abs() < 1e-6);
+        assert!((uv[3] - (inv - half_ty)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cell_index_selects_correct_grid_position() {
+        // Cell ATLAS_GRID (start of row 1) must land one grid step down in v,
+        // at the same u as cell 0 — proves gx/gy decomposition, not just the
+        // letterbox math.
+        let cell_aspect = ATLAS_CELL_W as f32 / ATLAS_CELL_H as f32;
+        let uv0 = atlas_cell_uv(0, cell_aspect);
+        let uv1 = atlas_cell_uv(ATLAS_GRID, cell_aspect);
+        let inv = 1.0 / ATLAS_GRID as f32;
+        assert!((uv0[0] - uv1[0]).abs() < 1e-6, "same column -> same u0");
+        assert!((uv1[1] - (uv0[1] + inv)).abs() < 1e-6, "one row down -> v0 + inv");
+    }
+
+    #[test]
+    fn wide_monitor_letterboxes_vertically() {
+        // monitor_aspect > cell_aspect: content is full-width, shrunk in v
+        // and centered — the v span must be strictly smaller than a
+        // non-letterboxed cell's, and vertically centered (equal top/bottom
+        // margin from cell edges).
+        let cell_aspect = ATLAS_CELL_W as f32 / ATLAS_CELL_H as f32;
+        let uv = atlas_cell_uv(0, cell_aspect * 2.0);
+        let inv = 1.0 / ATLAS_GRID as f32;
+        let half_tx = 0.5 / ATLAS_W as f32;
+        let half_ty = 0.5 / ATLAS_H as f32;
+        // Full width (minus half-texel inset), same as the unletterboxed case.
+        assert!((uv[0] - half_tx).abs() < 1e-6);
+        assert!((uv[2] - (inv - half_tx)).abs() < 1e-6);
+        // Shrunk + centered in v: top margin == bottom margin.
+        let top_margin = uv[1] - half_ty;
+        let bottom_margin = (inv - half_ty) - uv[3];
+        assert!(top_margin > 1e-6, "must actually letterbox, not fill v");
+        assert!((top_margin - bottom_margin).abs() < 1e-6, "must be centered");
+    }
+}
+
 /// Clip-thumbnail **filmstrip** atlas geometry (§24 5c-2), decoupled from the
 /// node atlas above. A non-square grid of small 16:9 cells; each cell holds one
 /// bar (or bar-group) of one clip's filmstrip. Cells are interchangeable — a clip

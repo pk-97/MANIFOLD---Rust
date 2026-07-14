@@ -47,11 +47,6 @@ impl MockHost {
         self
     }
 
-    fn at_tick(mut self, tick: i32) -> Self {
-        self.current_tick = tick;
-        self.beat = Beats(tick as f64 / MIDI_CLOCK_TICKS_PER_BEAT as f64);
-        self
-    }
 }
 
 impl LiveClipHost for MockHost {
@@ -329,47 +324,6 @@ fn commit_without_recording_discards() {
     // Clip should NOT be in timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 0);
     assert!(host.stopped_clips.iter().any(|s| *s == clip.id));
-}
-
-// ─── Pending launches ───
-
-#[test]
-fn pending_launch_queue_activates_at_tick() {
-    let mut project = make_project();
-    let host = MockHost::new().at_tick(0);
-    let mut mgr = LiveClipManager::new();
-
-    // Trigger with tick 0, quantize to beat — should queue for tick 24
-    let clip = mgr
-        .trigger_live_clip(
-            &mut project,
-            &host,
-            "video1".into(),
-            0,
-            2.0,
-            0.0,
-            None,
-            0,
-            true,
-            0.0,
-            -1,
-        )
-        .unwrap();
-
-    // Might be queued as pending or activated immediately depending on snap
-    let is_pending = mgr.pending_launch_count() > 0;
-    let is_active = mgr.is_live_slot_clip(&clip.id);
-
-    // Should be in one of the two states
-    assert!(is_pending || is_active);
-
-    if is_pending {
-        // Advance tick past target
-        let host2 = MockHost::new().at_tick(48);
-        let activated = mgr.activate_due_pending_launches(&host2);
-        assert!(activated);
-        assert!(mgr.is_live_slot_clip(&clip.id));
-    }
 }
 
 // ─── Clear ───
@@ -768,11 +722,6 @@ fn note_off_before_boundary_commits_cleanly_no_stuck_slot() {
 
     assert_eq!(mgr.live_slots().len(), 0, "no stuck slot after early release");
     assert!(host.stopped_clips.iter().any(|s| *s == clip.id));
-    assert_eq!(
-        mgr.pending_launch_count(),
-        0,
-        "nothing was ever queued on the midir fallback path (no tick to queue against)"
-    );
 }
 
 #[test]

@@ -2449,7 +2449,7 @@ fn ordinary_node_gets_no_action_rows() {
 
 #[test]
 fn group_wires_by_pair_collapses_shared_endpoints_leaves_singletons_alone() {
-    let wires = vec![
+    let wires = [
         WireView { from_node: 1, from_port: "vertices".into(), to_node: 9, to_port: "mesh_0".into() },
         WireView { from_node: 1, from_port: "material".into(), to_node: 9, to_port: "material_0".into() },
         WireView { from_node: 1, from_port: "transform".into(), to_node: 9, to_port: "transform_0".into() },
