@@ -222,10 +222,19 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
             P::ATOMIC_OUTPUTS,
         );
     }
-    // BUFFER→TEXTURE resolve: an Array input with a (texture) output — the
-    // accumulator-to-density bridge. Routes to its own self-contained path so
-    // the texture `generate_standalone` never grows an array-input branch.
-    if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_))) {
+    // BUFFER→TEXTURE resolve: an Array input with NO texture input, feeding a
+    // texture output — the accumulator-to-density bridge
+    // (`generate_standalone_resolve`'s contract: exactly one atomic-integer
+    // accumulator in, no texture reads at all). D3 (BUG-114) adds a SECOND,
+    // distinct Array-input shape — a texture-domain atom that ALSO reads ≥1
+    // texture input and tags its Array input `BufferIndex` (the `draw_*`
+    // family) — which is NOT the resolve bridge and must fall through to
+    // `generate_standalone_ext` below (the codegen path that now handles
+    // `BufferIndex`). Gated on "no texture input" so this branch's scope
+    // stays exactly what it always was for every existing resolve atom.
+    if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_)))
+        && !P::INPUTS.iter().any(is_texture_input)
+    {
         return generate_standalone_resolve(body, P::INPUTS, P::PARAMS, P::OUTPUTS);
     }
     generate_standalone_ext(
@@ -416,6 +425,21 @@ pub fn generate_standalone_ext(
         );
     }
     let tex_inputs: Vec<&NodeInput> = inputs.iter().filter(|i| is_texture_input(i)).collect();
+    // D3 (BUG-114): an Array input on an otherwise texture-domain atom (the
+    // `draw_*` family — a detections/marks array read while writing a pixel).
+    // `INPUT_ACCESS` packs [texture accesses] ++ [array accesses] for such an
+    // atom (see `input_port_access`'s D3 comment in region.rs); every entry
+    // here MUST be `BufferIndex` — anything else is a codegen-shape error (an
+    // Array input the region-grower can't yet express any other way on the
+    // texture path).
+    let array_inputs: Vec<&NodeInput> =
+        inputs.iter().filter(|i| matches!(i.ty, PortType::Array(_))).collect();
+    for (ai, _) in array_inputs.iter().enumerate() {
+        let access = input_access.get(tex_inputs.len() + ai).copied().unwrap_or_default();
+        if access != InputAccess::BufferIndex {
+            return Err(CodegenError::BadInput);
+        }
+    }
     // Texture outputs. >1 → the body returns a `BodyOutputs` struct (one vec4 per
     // output port) and the wrapper gates each store on an injected `write_<name>`
     // uniform flag (the executor aliases an unconsumed output slot onto a live
@@ -476,6 +500,25 @@ pub fn generate_standalone_ext(
         || !derived_uniforms.is_empty();
 
     let mut out = String::new();
+
+    // --- D3 (BUG-114): element struct(s) for any Array/BufferIndex input,
+    // synthesized from the port's Channels signature by the SAME helpers the
+    // buffer codegen path uses (`buffer_element_type`/`emit_buffer_struct`) —
+    // this is what generalizes `ExtK` synthesis to every `draw_*` atom's own
+    // detections/marks signature, not just `draw_dots`' `Detection`. Emitted
+    // before Params (mirroring the buffer path's struct-then-Params order). ---
+    let mut structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let array_elem_tys: Vec<String> = array_inputs
+        .iter()
+        .map(|i| match &i.ty {
+            PortType::Array(at) => buffer_element_type(at.specs, &mut structs),
+            _ => unreachable!("filtered to Array ports"),
+        })
+        .collect();
+    for (specs, name) in &structs {
+        out.push_str(&emit_buffer_struct(specs, name));
+        out.push('\n');
+    }
 
     // --- param uniform struct (scalar fields in PARAMS order, padded to a
     // 16-byte multiple to match the setBytes buffer size). Omitted entirely when
@@ -587,6 +630,21 @@ pub fn generate_standalone_ext(
         writeln!(out, "@group(0) @binding({next_binding}) var samp: sampler;").unwrap();
         next_binding += 1;
     }
+    // D3 (BUG-114): each Array/BufferIndex input binds its own storage global,
+    // named `buf_<port>` (the standalone kernel is single-atom, so no cross-
+    // member name collision — the fused path namespaces this to `src_<slot>`
+    // instead, see `generate_fused`). The body references it directly by name
+    // (no pre-read, no arg — exactly `BufferGather`'s ABI) and guards with
+    // `arrayLength` itself, same as the hand `draw_*` shaders already do.
+    for (ai, inp) in array_inputs.iter().enumerate() {
+        writeln!(
+            out,
+            "@group(0) @binding({next_binding}) var<storage, read> buf_{}: array<{}>;",
+            inp.name, array_elem_tys[ai]
+        )
+        .unwrap();
+        next_binding += 1;
+    }
     // Output storage texture(s). Single output keeps the name `dst` (so existing
     // atoms' WGSL is unchanged); multi-output names each `dst_<port>`.
     if multi_output {
@@ -687,9 +745,14 @@ pub fn generate_standalone_ext(
             .unwrap(),
             // Gather / GatherTexel: no pre-read; passed as a texture handle (the
             // body computes its own read coord and samples/loads it itself).
-            // BufferGather only tags Array inputs (buffer atoms branch away above)
-            // — unreachable on a texture input, no pre-read either way.
-            InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather => {}
+            // BufferGather/BufferIndex only tag Array inputs (buffer atoms branch
+            // away above; a texture-domain atom's Array inputs are handled in
+            // their own loop, never through `tex_inputs`) — unreachable on a
+            // texture input, no pre-read either way.
+            InputAccess::Gather
+            | InputAccess::GatherTexel
+            | InputAccess::BufferGather
+            | InputAccess::BufferIndex => {}
         }
     }
     // body(<per-input args>, uv, dims, params.<p0>, ..., <derived fields>,
@@ -727,6 +790,12 @@ pub fn generate_standalone_ext(
             // a texture input is never tagged BufferGather.
             InputAccess::BufferGather => {
                 unreachable!("BufferGather is buffer-domain only — never a texture input")
+            }
+            // A texture-domain atom's Array input is handled in its own loop
+            // below (the global `buf_<port>` binding, no body arg) — this
+            // `tex_inputs`-indexed loop never reaches a BufferIndex entry.
+            InputAccess::BufferIndex => {
+                unreachable!("BufferIndex only tags Array inputs — never a texture input")
             }
         }
     }
@@ -2163,6 +2232,53 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // node_id -> region index (for resolving InputSource::Node to a register).
     let index_of = |id: NodeInstanceId| region.nodes.iter().position(|n| n.node_id == id);
 
+    // D3 (BUG-114): per-external-slot kind. A TEXTURE region's external is
+    // normally a texture producer, but a member may now tag an Array input
+    // `BufferIndex` (the `draw_*` family) — that producer is an ARRAY, bound
+    // as `var<storage, read> src_<e>: array<ExtK>` instead of a texture. Each
+    // member's `node.inputs`/`input_access` pack [texture entries] ++ [array
+    // entries] (region.rs's `build_region` D3 append), so an input index
+    // `idx >= tex_count` for that member names one of ITS array ports, in
+    // declared order — the texture-domain analogue of `generate_fused_buffer`'s
+    // `ExtKind` resolution.
+    #[derive(Clone, Copy)]
+    enum ExtKind {
+        Texture,
+        Array(&'static [ChannelSpec]),
+    }
+    let mut ext_kinds: Vec<ExtKind> = vec![ExtKind::Texture; region.num_external_inputs];
+    for node in region.nodes.iter() {
+        let tex_count = node.node_inputs.iter().filter(|p| is_texture_input(p)).count();
+        let array_ports: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        for (idx, src) in node.inputs.iter().enumerate() {
+            if idx < tex_count {
+                continue;
+            }
+            if let InputSource::External(e) = src {
+                if *e >= region.num_external_inputs {
+                    return Err(CodegenError::BadInput);
+                }
+                let specs = match array_ports.get(idx - tex_count) {
+                    Some(NodeInput { ty: PortType::Array(at), .. }) => at.specs,
+                    _ => return Err(CodegenError::BadInput),
+                };
+                ext_kinds[*e] = ExtKind::Array(specs);
+            }
+        }
+    }
+    // Element struct(s) for any Array-kind external, synthesized from the
+    // port's Channels signature by the same helpers the buffer codegen path
+    // uses — generalizes `ExtK` to every `draw_*` atom's own signature.
+    let mut ext_structs: Vec<(&'static [ChannelSpec], String)> = Vec::new();
+    let ext_array_tys: Vec<Option<String>> = ext_kinds
+        .iter()
+        .map(|k| match k {
+            ExtKind::Array(specs) => Some(buffer_element_type(specs, &mut ext_structs)),
+            ExtKind::Texture => None,
+        })
+        .collect();
+
     // Per-node: split body into a top-level prelude (consts/structs), helpers,
     // and the `body` fn (renamed n{i}_body).
     let mut prelude: Vec<String> = Vec::new(); // deduped top-level decls, emitted once
@@ -2181,7 +2297,30 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 includes.push(inc);
             }
         }
-        let (pre, blocks) = split_fns(node.body);
+        // D3 (BUG-114): rewrite this member's BufferIndex-tagged array-input
+        // token `buf_<port>` (the standalone body's local storage-global name)
+        // to the region's resolved external slot `src_<e>` — the array
+        // analogue of the stencil-fetch renaming below, riding the same
+        // whole-fragment namespacing this codegen already does for structs.
+        let tex_count = node.node_inputs.iter().filter(|p| is_texture_input(p)).count();
+        let array_ports: Vec<&NodeInput> =
+            node.node_inputs.iter().filter(|p| matches!(p.ty, PortType::Array(_))).collect();
+        let mut member_body = node.body.to_string();
+        for (arr_idx, port) in array_ports.iter().enumerate() {
+            let slot_idx = tex_count + arr_idx;
+            if node.input_access.get(slot_idx).copied().unwrap_or_default() != InputAccess::BufferIndex
+            {
+                continue;
+            }
+            match node.inputs.get(slot_idx) {
+                Some(InputSource::External(e)) => {
+                    member_body =
+                        rename_ident(&member_body, &format!("buf_{}", port.name), &format!("src_{e}"));
+                }
+                _ => return Err(CodegenError::BadInput),
+            }
+        }
+        let (pre, blocks) = split_fns(&member_body);
         for line in pre {
             // Dedup identical declarations (two atoms declaring the same const
             // collapse to one). A same-name / different-value clash would surface
@@ -2276,6 +2415,14 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     }
 
     let mut out = String::new();
+    // D3 (BUG-114): element struct(s) for any Array-kind external, emitted
+    // before Params (mirroring `generate_fused_buffer`'s struct-then-Params
+    // order). Empty for every region without a BufferIndex member — no output
+    // change to any existing fused texture kernel.
+    for (specs, name) in &ext_structs {
+        out.push_str(&emit_buffer_struct(specs, name));
+        out.push('\n');
+    }
     out.push_str("struct Params {\n");
     out.push_str(&struct_body);
     out.push_str("}\n\n");
@@ -2326,10 +2473,20 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
         needs_sampler = true;
     }
 
-    // --- bindings: uniform(0), external input textures(1..), [sampler], output. ---
+    // --- bindings: uniform(0), external inputs(1..) [texture or, D3, storage
+    // array], [sampler], output. ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
-    for e in 0..region.num_external_inputs {
-        writeln!(out, "@group(0) @binding({}) var src_{e}: texture_2d<f32>;", e + 1).unwrap();
+    for (e, ty) in ext_array_tys.iter().enumerate() {
+        match ty {
+            Some(ty) => writeln!(
+                out,
+                "@group(0) @binding({}) var<storage, read> src_{e}: array<{ty}>;",
+                e + 1
+            )
+            .unwrap(),
+            None => writeln!(out, "@group(0) @binding({}) var src_{e}: texture_2d<f32>;", e + 1)
+                .unwrap(),
+        }
     }
     let mut next_binding = region.num_external_inputs + 1;
     if needs_sampler {
@@ -2605,6 +2762,18 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
                 (InputAccess::GatherTexel, InputSource::Virtual(_)) => {
                     return Err(CodegenError::BadInput); // texel-load virtual is a follow-on
                 }
+                // D3 (BUG-114): a BufferIndex array input takes NO body arg — the
+                // body references the storage global directly by name, already
+                // rewritten to `src_<e>` above (`buf_<port>` → `src_<e>`), exactly
+                // BufferGather's ABI. Must resolve to a real external (the finder
+                // never unions a BufferIndex-consumed wire, so a Node/Unwired/
+                // Virtual source here would be a codegen-shape bug).
+                (InputAccess::BufferIndex, InputSource::External(e)) => {
+                    if *e >= region.num_external_inputs {
+                        return Err(CodegenError::BadInput);
+                    }
+                }
+                (InputAccess::BufferIndex, _) => return Err(CodegenError::BadInput),
                 (_, InputSource::Virtual(_)) => {
                     return Err(CodegenError::BadInput); // virtual backs gather reads only
                 }

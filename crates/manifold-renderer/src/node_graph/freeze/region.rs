@@ -1080,11 +1080,31 @@ pub(crate) fn classify_node(
             .map(|i| i.name.as_ref())
             .collect()
     };
+    // D3 exemption (`docs/FUSION_SOTA_DESIGN.md`, closes BUG-114): a wire into
+    // an Array-typed input the atom tags `BufferIndex` no longer cuts — the
+    // narrowing cut rule 9, same shape as the Camera exemption above. The
+    // array producer still never becomes a region MEMBER (`build_region`
+    // below appends it as an external, exactly like a gather-consumed wire);
+    // this only stops the WIRE from forcing the whole node to Boundary.
+    // `INPUT_ACCESS` packs [texture accesses] ++ [array accesses] for a
+    // texture-domain atom with array inputs (see `input_port_access`'s D3
+    // comment) — offset by the atom's own texture-input count.
+    let buffer_index_ports: AHashSet<&str> = {
+        let tex_count = n.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+        n.inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Array(_)))
+            .enumerate()
+            .filter(|(idx, _)| n.input_access().get(tex_count + idx) == Some(&InputAccess::BufferIndex))
+            .map(|(_, i)| i.name.as_ref())
+            .collect()
+    };
     for w in &def.wires {
         if w.to_node == node.id
             && !tex_ports.contains(w.to_port.as_str())
             && !scalar_params.contains(w.to_port.as_str())
             && !camera_ports.contains(w.to_port.as_str())
+            && !buffer_index_ports.contains(w.to_port.as_str())
         {
             return NodeClass::Boundary;
         }
@@ -1480,6 +1500,47 @@ fn build_region(
                 input_access.push(InputAccess::Gather);
             }
         }
+        // TEXTURE members with a `BufferIndex`-tagged Array input (D3, closes
+        // BUG-114): append each such input as a gathered EXTERNAL after the
+        // texture entries — the mirror image of the buffer-member append
+        // above (there array-first-texture-after; here texture-first-array-
+        // after, since texture is this member's PRIMARY domain). The array
+        // producer must never be a region member — classify_node's wire gate
+        // only stops the wire from forcing the whole node to Boundary, the
+        // "gather never unions" contract (`is_gather()`) still applies, so a
+        // producer that slipped in as a member here is a defensive bail, same
+        // as the ordinary gather check above.
+        if !is_buffer {
+            let tex_count = constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+            for (arr_idx, port) in constructed
+                .inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .enumerate()
+            {
+                if access_list.get(tex_count + arr_idx) != Some(&InputAccess::BufferIndex) {
+                    continue; // not a BufferIndex-tagged array input on this atom
+                }
+                let wire = def
+                    .wires
+                    .iter()
+                    .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    .ok_or("BufferIndex input unwired")?;
+                if node_set.contains(&wire.from_node) {
+                    return Err("BufferIndex array produced inside the region");
+                }
+                let key = (wire.from_node, wire.from_port.clone());
+                let slot = *ext_index.entry(key).or_insert_with(|| {
+                    externals.push(ExternalRef {
+                        from_node: wire.from_node,
+                        from_port: wire.from_port.clone(),
+                    });
+                    externals.len() - 1
+                });
+                inputs.push(RegionInput::External(slot));
+                input_access.push(InputAccess::BufferIndex);
+            }
+        }
         // f16-faithful rounding (stencil tier A): an in-loop member whose
         // unfused output texture is f16 gets its fused register quantized to
         // half precision after every body call — see the classify comment.
@@ -1691,16 +1752,35 @@ fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port:
     // buffer codegen's `is_gather(i)` indexes the filtered Array inputs). Resolve
     // the port's index among inputs of its own kind so a `BufferGather` Array
     // input is detected (not silently treated as coincident).
+    //
+    // D3 (BUG-114) extends this for a TEXTURE-domain atom (no Array OUTPUT —
+    // `is_buffer_atom` below) that also carries an Array INPUT (the `draw_*`
+    // family's detections array): the flat `INPUT_ACCESS` const packs
+    // [texture-input accesses] ++ [array-input accesses] for such an atom, so
+    // an array port's slot is offset past the texture-input count. Every
+    // existing atom has array inputs ONLY when it's buffer-domain (an Array
+    // OUTPUT), so `is_buffer_atom` is true and this offset is never applied to
+    // shipped atoms — additive, zero behavior change for anything but the new
+    // mixed shape.
+    let is_buffer_atom = node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)));
     let port_ty = node.inputs().iter().find(|i| i.name == port).map(|i| i.ty);
     let idx = match port_ty {
         Some(ty) if is_texture_port(&ty) => {
             node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port)
         }
-        Some(PortType::Array(_)) => node
+        Some(PortType::Array(_)) if is_buffer_atom => node
             .inputs()
             .iter()
             .filter(|i| matches!(i.ty, PortType::Array(_)))
             .position(|i| i.name == port),
+        Some(PortType::Array(_)) => {
+            let tex_count = node.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+            node.inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .position(|i| i.name == port)
+                .map(|p| p + tex_count)
+        }
         _ => None,
     };
     match idx {
@@ -2266,6 +2346,105 @@ mod tests {
             partition_regions(&def, &registry()).is_empty(),
             "the gather cut leaves gain and sharpen as lone atoms — neither fuses"
         );
+    }
+
+    /// D3 (BUG-114): a `BufferIndex`-tagged wire never unions and the array
+    /// producer never becomes a region member — the array analogue of
+    /// `gather_atom_folds_into_a_region` / `gather_wire_does_not_union` above.
+    ///
+    /// `draw_dots` carries a `Color` param, which independently keeps
+    /// `classify_node` from ever admitting ANY atom into `eligible` (cut rule
+    /// 4 — no non-scalar param may join a multi-node region; P5's scope, not
+    /// this design's). This is the SAME reason six of wave2's seven
+    /// shading-family atoms stay lone Boundaries despite being individually
+    /// fusable (`wave2_color_param_atoms_stay_boundary_in_shipped_presets`),
+    /// and it applies to every `draw_*` atom (all six carry a Color param) —
+    /// so `partition_regions` itself can never exercise draw_dots as a region
+    /// MEMBER until P5 lifts that gate. This test proves the D3 mechanism
+    /// directly at the two layers that ARE reachable today: the wire-level
+    /// gather contract (`input_port_access`/`wire_coincident_consumed`, which
+    /// `partition_regions`' union filter reads regardless of the atom's
+    /// overall eligibility) and `build_region` itself (called directly here,
+    /// as `partition_regions` would once P5 makes draw_dots `eligible`).
+    #[test]
+    fn buffer_index_external_stays_external() {
+        let json = r#"{
+            "version": 1, "name": "dots-hud", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.blob_tracker", "nodeId": "blobs" },
+                { "id": 3, "typeId": "node.draw_dots", "nodeId": "dots" },
+                { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
+                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "blobs", "toNode": 3, "toPort": "detections" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+        // draw_dots is on the codegen path (Pointwise, a real body, no
+        // BoundaryReason) but `classify_node` still returns Boundary — for the
+        // Color param, NOT because the BufferIndex wire cuts it. Pin both
+        // facts so a future accidental reintroduction of cut rule 9 for this
+        // atom (or a silent Color-param lift) is caught here.
+        let dots_node = def.nodes.iter().find(|n| n.id == 3).unwrap();
+        let dots_prim = configured_construct(&registry(), dots_node).unwrap();
+        assert_eq!(
+            dots_prim.fusion_kind(),
+            crate::node_graph::freeze::classify::FusionKind::Pointwise
+        );
+        assert!(dots_prim.boundary_reason().is_none());
+        assert_eq!(
+            dots_prim.input_access(),
+            &[InputAccess::Coincident, InputAccess::BufferIndex]
+        );
+        assert_eq!(
+            classify_node(dots_node, &def, &registry()),
+            NodeClass::Boundary,
+            "blocked by the Color-param scalar-only gate, not by BufferIndex"
+        );
+        // explain_presets/census verdict: draw_dots now buckets as ParamType
+        // (the wave2 Color/Vec3/Vec4 family), NOT BufferIndexShaped — the
+        // BufferIndex codegen gap this design closes is no longer why it
+        // refuses; only cut rule 4 (P5's scope) still is.
+        assert_eq!(
+            audit::classify_refusal(dots_node, &def, &registry()),
+            Some(audit::RefusalFamily::ParamType)
+        );
+
+        // Wire-level contract: the array wire into `detections` is gather-
+        // shaped (BufferIndex.is_gather()), so partition_regions' union
+        // filter refuses it regardless of either endpoint's eligibility.
+        let det_wire = def.wires.iter().find(|w| w.to_port == "detections").unwrap();
+        assert!(
+            !wire_coincident_consumed(&def, &registry(), det_wire),
+            "a BufferIndex-consumed wire must never be a union candidate"
+        );
+
+        // build_region itself (the D3 mechanism): fed draw_dots directly,
+        // bypassing the orthogonal Color-param eligibility filter — the real
+        // region-assembly code path this design adds. Its array input must
+        // resolve to an EXTERNAL (never a Member), naming blob_tracker.
+        let final_reachable = final_reachable_nodes(&def);
+        let region = build_region(&def, &registry(), &[3], &final_reachable, None)
+            .expect("draw_dots assembles as a region shape on its own");
+        assert_eq!(region.members.len(), 1);
+        let dots = &region.members[0];
+        assert_eq!(
+            dots.input_access,
+            vec![InputAccess::Coincident, InputAccess::BufferIndex]
+        );
+        assert_eq!(dots.inputs.len(), 2);
+        let RegionInput::External(slot) = dots.inputs[1] else {
+            panic!("detections must resolve to an external, not a member: {:?}", dots.inputs[1]);
+        };
+        assert_eq!(region.externals[slot].from_node, 2, "blob_tracker is the external producer");
+        assert_eq!(region.externals[slot].from_port, "blobs");
     }
 
     /// A lone fusable atom is not a region (fusing one node changes nothing). The
@@ -3162,7 +3341,7 @@ mod audit {
     /// `Eligible` node (nothing to bucket) — the function must never return
     /// `Some` where `classify_node` returns `Eligible`, or vice versa; that
     /// invariant is exactly what `refusal_census_matches_classify_node` checks.
-    fn classify_refusal(
+    pub(crate) fn classify_refusal(
         node: &EffectGraphNode,
         def: &EffectGraphDef,
         registry: &PrimitiveRegistry,

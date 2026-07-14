@@ -188,6 +188,8 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape** — mechanical: apply the suggested rewrites (`iter().enumerate()`, `RangeInclusive::contains`, drop the `1 *`) in the five listed files. Small, isolated, no behavior change. Optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace clippy sweep so it doesn't silently drift again.
 
+**Addendum (2026-07-14, FUSION_SOTA P4a session)** — hit again running this phase's `cargo test --features gpu-proofs` gate. One PRECURSOR bug surfaced first and was fixed in this session (out of P4a's scope, but blocking even compiling the gpu-proofs test binary at all): `wgsl_compute.rs`'s `mod gpu_tests` referenced `Marker::StaticParam` at 3 call sites with no `use` import in scope — a plain compile error (`E0433`), not a lint, present at `feat/fusion-sota`'s tip (`8bb94ea6`) before this session touched anything. Fixed with one `use crate::node_graph::freeze::markers::Marker;` line inside that module. Once that compiled, this bug's original 12 lint errors reappeared unchanged (still the same five files, still none touched by this session) — confirming BUG-124 needs no update beyond this note; the compile gap was simply masking it from anyone running `--features gpu-proofs` before this session.
+
 ### BUG-125 (preset-runtime-generator-picks-first-final-output-nondeterministically) — a generator preset JSON with more than one `system.final_output` node has its tracked output picked via `AHashMap` iteration order, not graph position — LOW today (no shipped preset has two), but a real correctness trap
 **Status:** OPEN — found 2026-07-12 during GBUFFER_DESIGN.md P1 (depth-resolve) landing, while building the I2 conformance gate.
 
