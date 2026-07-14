@@ -52,7 +52,6 @@ or human can read it, and it needs no external tool.
 |---|---|---|
 | BUG-161 | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` errors in `ui_snapshot/mod.rs` (`view.canonical_def` is `Arc<EffectGraphDef>`, callees want `&EffectGraphDef`) — the headless ui-snap tool, the prescribed oracle for BUG-160 and others, is currently unusable. Found bug-wave lane A 2026-07-14 trying to bisect BUG-160; pre-existing on origin/main, unrelated to this session's diff. Not part of the default `nextest` sweep (feature-gated), so it went unnoticed. LOW-effort fix (add `&`/`.as_ref()` at 8 call sites) but blocks any UI-regression bisection until fixed. |
 | BUG-160 | **editor-window-unification-inspector-card-layout-regressions** | Inspector cards misfit their buttons/controls after the EDITOR_WINDOW_UNIFICATION landing (2026-07-14) — regression per Peter's live report; P1's byte-diff verification passed, so it's P2/P3 or a fixture-uncovered configuration. Not investigated. MED-HIGH (UI regression). |
-| BUG-159 | **timeline-scroll-past-playhead-violent-snapback** | Scrolling the arrangement past the playhead during playback violently snaps the view back — playhead-follow fights the user's gesture instead of yielding to it (Ableton-style smooth limit expected). Reported by Peter 2026-07-14. MED (performance-surface feel). |
 | BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
 | BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
 | BUG-156 | **fluidsim3d-4k-perf-regression-suspect-bug066-fix** | FluidSim3D no longer holds smooth 60FPS at 4K — regressed, and the change under suspicion is the BUG-066 fix (`eebac94d`), which resized volume-node dispatch grids from the legacy 8³ workgroup to the codegen 4³ workgroup (8x more dispatched groups per volume kernel). Reported by Peter 2026-07-14. Not investigated. HIGH (live-rig performance). |
@@ -171,38 +170,6 @@ discrepancy is itself a lead.
 `single-source-y-layout`, never per-widget nudges; regression = PNG diff on the
 affected scenes pinned into the fixture set (extend a fixture to cover the failing
 configuration if the current ones render clean).
-
-### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
-**Status:** FIXED 2026-07-14 (bug-wave lane B). Root cause: `check_auto_scroll`
-(`crates/manifold-app/src/ui_bridge/state_sync.rs`) unconditionally overwrote the
-viewport's scroll offset every playback frame with zero suppression mechanism —
-not a broken existing flag, there was none. Fix: `TimelineViewportPanel` tracks
-the last user-driven horizontal scroll gesture (`note_user_scroll_x`/
-`user_scroll_x_recent`, `crates/manifold-ui/src/panels/viewport.rs`), noted from
-both wheel-scroll write sites in `window_input.rs` (Shift+scroll pan, native
-trackpad horizontal swipe); `check_auto_scroll` yields (returns without moving
-the viewport) while a scrollbar drag is active OR a gesture happened within an
-800ms grace window — re-engage is automatic and implicit (the very next call
-after the grace window elapses resumes following, no separate event). Tests:
-`viewport::tests::user_scroll_x_recent_reflects_a_note_then_expires`,
-`state_sync::bug159_auto_scroll_yield_tests::{auto_scroll_moves_when_no_user_gesture_is_active,
-auto_scroll_yields_to_a_recent_user_scroll_gesture}`. Feel (the 800ms grace
-value, whether it matches Ableton closely enough) is Peter's call on the rig —
-not test-provable, flagged for his pass.
-
-**Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
-playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
-Reference behaviour (Ableton and other professional DAWs): a user scroll takes over — or eases
-against a soft limit — and follow re-engages predictably, never mid-gesture.
-
-**Root cause** — unknown, not investigated. Suspect surface: the playhead-follow auto-scroll
-writing the viewport offset unconditionally every frame during playback, racing the user's
-in-progress scroll gesture instead of being suppressed or eased while one is active.
-
-**Fix shape** — TBD after reading the follow logic; likely a follow-yields-to-gesture rule
-(suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
-or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
-acceptance is Peter's hands on it, not a test.
 
 ### BUG-158 (mapped-param-edits-snap-back-no-two-way-binding) — a param mapped to a card slider or driven by another port can't be adjusted in the graph editor; the edit snaps back — MED-HIGH (authoring surface), reported by Peter 2026-07-14
 **Status:** PARKED 2026-07-14 (bug-wave lane A) — root cause REFINED but the fix is a design decision (two-way binding / inverse mapping), escalating per the lane's contract rather than improvising. `SetGraphNodeParamCommand::execute` (`crates/manifold-editing/src/commands/graph.rs:797`) does successfully write the direct node-face edit into `def.nodes[node_id].params` — confirmed by reading it, no gating for card-bound params. The stomp happens one layer downstream: `apply_bindings` (`crates/manifold-renderer/src/node_graph/param_binding.rs:566`) runs on every chain rebuild and unconditionally re-writes `binding.apply(graph, handle, <current outer/card value>)` into the freshly-built `Graph`'s param slot — the card binding is the sole authority the render ever sees, independent of `scalar_or_param`. So the original mechanism note (`scalar_or_param`, `effect_node.rs:358`) correctly explains the WIRE-DRIVEN half of the symptom but not the CARD-SLIDER-MAPPED half — those are two distinct code paths that produce the same visible snap-back. Both point the same direction: the fix has to live at the binding/mapping layer (write-back through the inverse for card-bound params, a legible "driven" visual for wire-driven ones with no inverse) exactly as the backlog's own fix-shape already said — that's real product-UX design (how "driven" reads on the node face), not a patchable bug, so it's parked for a design pass rather than improvised here. Good candidate for the lane's one Fable consult.
@@ -1235,6 +1202,38 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
+**Status:** FIXED 2026-07-14 (bug-wave lane B). Root cause: `check_auto_scroll`
+(`crates/manifold-app/src/ui_bridge/state_sync.rs`) unconditionally overwrote the
+viewport's scroll offset every playback frame with zero suppression mechanism —
+not a broken existing flag, there was none. Fix: `TimelineViewportPanel` tracks
+the last user-driven horizontal scroll gesture (`note_user_scroll_x`/
+`user_scroll_x_recent`, `crates/manifold-ui/src/panels/viewport.rs`), noted from
+both wheel-scroll write sites in `window_input.rs` (Shift+scroll pan, native
+trackpad horizontal swipe); `check_auto_scroll` yields (returns without moving
+the viewport) while a scrollbar drag is active OR a gesture happened within an
+800ms grace window — re-engage is automatic and implicit (the very next call
+after the grace window elapses resumes following, no separate event). Tests:
+`viewport::tests::user_scroll_x_recent_reflects_a_note_then_expires`,
+`state_sync::bug159_auto_scroll_yield_tests::{auto_scroll_moves_when_no_user_gesture_is_active,
+auto_scroll_yields_to_a_recent_user_scroll_gesture}`. Feel (the 800ms grace
+value, whether it matches Ableton closely enough) is Peter's call on the rig —
+not test-provable, flagged for his pass.
+
+**Symptom** — during playback, manually scrolling the arrangement past the playhead fights the
+playhead-follow auto-scroll: the view violently yanks back to the playhead instead of yielding.
+Reference behaviour (Ableton and other professional DAWs): a user scroll takes over — or eases
+against a soft limit — and follow re-engages predictably, never mid-gesture.
+
+**Root cause** — unknown, not investigated. Suspect surface: the playhead-follow auto-scroll
+writing the viewport offset unconditionally every frame during playback, racing the user's
+in-progress scroll gesture instead of being suppressed or eased while one is active.
+
+**Fix shape** — TBD after reading the follow logic; likely a follow-yields-to-gesture rule
+(suppress auto-follow while a user scroll gesture is active, plus an explicit re-engage rule)
+or an eased soft clamp at the playhead edge. Pin the exact feel against Ableton's behaviour;
+acceptance is Peter's hands on it, not a test.
 
 ### BUG-125 (preset-runtime-generator-picks-first-final-output-nondeterministically) — a generator preset JSON with more than one `system.final_output` node has its tracked output picked via `AHashMap` iteration order, not graph position — LOW today (no shipped preset has two), but a real correctness trap
 **Status:** FIXED 2026-07-14 (bug-wave lane A, `bug/wave3-lane-a`), option (a) from the fix shape — reject at load. `PresetRuntime::from_def`'s generator path (`preset_runtime.rs:2617`) now counts `FINAL_OUTPUT_TYPE_ID` matches before resolving the tracked output; a count > 1 returns a new `JsonGeneratorLoadError::MultipleFinalOutputs { count }` instead of silently picking one via `.find()`. Threaded through `graph_tool validate`'s error → `ValidationIssue` conversion too (`validate.rs:216`), so a bad preset JSON is caught by the pre-flight tool as well as the runtime loader — the invariant is enforced at both entry points, not just one. Regression test `dual_final_output_is_rejected_at_load` builds a real two-`final_output` generator graph and asserts the new error. Gated: `cargo clippy -p manifold-renderer -- -D warnings` clean; `cargo nextest run -p manifold-renderer` full crate sweep 1265/1265 passed.
