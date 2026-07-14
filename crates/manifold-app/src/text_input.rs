@@ -324,6 +324,29 @@ impl TextInputState {
         }
     }
 
+    /// D4 (`EDITOR_WINDOW_UNIFICATION_DESIGN.md`): whether this session's
+    /// TOOLTIP-depth overlay is owned by the graph-editor window's shared
+    /// tree-overlay pass (`crate::tree_passes::render_tree_overlay_passes`).
+    /// `active` gates whether there's a session to draw at all;
+    /// `field.is_graph_field()` decides which window's pass draws it — the
+    /// two predicates are mutually exclusive and jointly exhaustive over
+    /// `active` sessions, so exactly one of `is_owned_by_editor`/
+    /// `is_owned_by_main` is true whenever `active`.
+    pub fn is_owned_by_editor(&self) -> bool {
+        self.active && self.field.is_graph_field()
+    }
+
+    /// D4 sibling of [`Self::is_owned_by_editor`] — the main window's
+    /// ownership test. Fixes the latent double-render this formalization
+    /// replaces: pre-D4, the main window's overlay pass drew ANY active
+    /// session (including graph fields it doesn't own) gated only on
+    /// `active`, so a graph-editor text session rendered into the main
+    /// window too whenever both windows happened to be composited the same
+    /// frame.
+    pub fn is_owned_by_main(&self) -> bool {
+        self.active && !self.field.is_graph_field()
+    }
+
     /// Begin editing a field with an initial value.
     /// Auto-cancels any existing session (Unity: only one active at a time).
     /// Always panel-owned (`owner` cleared) — use [`Self::begin_owned`] for a

@@ -194,7 +194,9 @@ pub fn render_graph_to_png(
 
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
-    let device = GpuDevice::new();
+    // BUG-152: `Arc<GpuDevice>` — see the `render_graph_editor_to_png` call
+    // site's comment for why.
+    let device = std::sync::Arc::new(GpuDevice::new());
     let mut renderer = UIRenderer::new(&device, FORMAT);
     let target = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-graph");
     let dpi = f64::from(scale);
@@ -316,6 +318,15 @@ pub fn render_graph_editor_to_png(
     // captured next to (or instead of) its expanded rows. Empty for every
     // caller that doesn't care (byte-identical to the pre-D6 behavior).
     force_collapsed: &[u32],
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 acceptance demo: open this
+    // window's own `browser_popup` (Node mode, the same widget
+    // `GraphEditCommand::OpenNodePicker` opens live) BEFORE
+    // `build_overlays_for_screen` runs below, so the overlay driver records
+    // its region and the shared tree-overlay pass has something to draw —
+    // proves BUG-151 is fixed on the real headless path, not just by
+    // inspection. `false` for every existing caller (byte-identical to the
+    // pre-P1 PNGs).
+    open_node_picker: bool,
 ) {
     use manifold_ui::graph_canvas::GraphCanvas;
     use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
@@ -333,7 +344,12 @@ pub fn render_graph_editor_to_png(
     let canvas_height = dock_rects.canvas.height;
     let card_x = canvas_x + canvas_width;
 
-    let device = GpuDevice::new();
+    // BUG-152: `Arc<GpuDevice>`, not a bare `GpuDevice` — `render_graph_node_
+    // textures` below needs an owned `Arc` to hand `MetalBackend::new`
+    // (BUG-054's constructor signature). Every other use of `device` in this
+    // function keeps working unchanged via `&Arc<GpuDevice>`'s `Deref`
+    // coercion to `&GpuDevice`.
+    let device = std::sync::Arc::new(GpuDevice::new());
     let mut renderer = UIRenderer::new(&device, FORMAT);
     let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor");
     let dpi = f64::from(scale);
@@ -451,10 +467,49 @@ pub fn render_graph_editor_to_png(
         canvas.set_node_preview_src(src);
     }
 
+    // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: open the node picker (if
+    // asked) and record it into the tree via the SAME driver
+    // `present_graph_editor_window` calls each frame — `build_overlays_for_
+    // screen`, not a parallel `begin_region`/`.build()` reimplementation.
+    // Minimal `PickerItem` list from `palette_atoms()` — enough to populate
+    // the grid; live app additionally threads descriptor aliases into
+    // `search_text`, irrelevant to this static PNG.
+    if open_node_picker {
+        use manifold_ui::panels::browser_popup::{BrowserPopupMode, BrowserPopupRequest};
+        use manifold_ui::panels::picker_core::PickerItem;
+        let items: Vec<PickerItem> = manifold_renderer::node_graph::palette_atoms()
+            .into_iter()
+            .map(|a| PickerItem {
+                label: a.label,
+                type_id: a.type_id,
+                category: None,
+                search_text: None,
+                badge: None,
+                source: None,
+                missing_from_library: false,
+                thumbnail: None,
+            })
+            .collect();
+        ui_root.browser_popup.set_screen_size(logical_w, logical_h);
+        ui_root.browser_popup.open(BrowserPopupRequest {
+            mode: BrowserPopupMode::Node,
+            tab: manifold_ui::panels::InspectorTab::Master,
+            layer_id: None,
+            items,
+            category_names: Vec::new(),
+            spawn_graph_pos: None,
+            paste_count: 0,
+            screen_anchor: manifold_ui::Vec2::new(logical_w * 0.5, logical_h * 0.5),
+        });
+    }
+    ui_root.build_overlays_for_screen(logical_w, logical_h);
+
     // Same paint order as `present_graph_editor_window` because it's the
     // SAME function: clear + canvas immediate-mode draws + the merged
-    // sidebar/inspector `UITree` (ONE tree-range render call) + dock +
-    // mini-timeline + (closed) popover/text-input overlays + prepare/render.
+    // sidebar/inspector `UITree` (ONE tree-range render call, narrowed to
+    // `[0, overlay_region_start)`, D2) + dock + mini-timeline + the shared
+    // tree-overlay pass (open overlays, if any) + popover/text-input +
+    // prepare/render.
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
     let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
         crate::app_render::mini_timeline_data(project, 0.0);
@@ -466,7 +521,7 @@ pub fn render_graph_editor_to_png(
     crate::editor_frame::composite_editor_frame(
         &device,
         Some(&mut renderer),
-        &ui_root,
+        &mut ui_root,
         &dock,
         editor_area,
         Some(&canvas),
@@ -671,7 +726,10 @@ impl GraphNodeTextures {
 /// graph begins at a `Source` node get a neutral mid-grey fixture on that input;
 /// generators self-produce and need none.
 fn render_graph_node_textures(
-    device: &GpuDevice,
+    // BUG-152: `&Arc<GpuDevice>`, not `&GpuDevice` — `MetalBackend::new`
+    // (BUG-054) takes an owned `Arc<GpuDevice>`; this is the only call in
+    // this module that needs to clone one out.
+    device: &std::sync::Arc<GpuDevice>,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Option<GraphNodeTextures> {
     use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -733,7 +791,7 @@ fn render_graph_node_textures(
         .nodes()
         .find(|inst| inst.node.type_id().as_str() == SOURCE_TYPE_ID)
         .map(|inst| inst.id);
-    let mut backend = MetalBackend::new(device, GW, GH, GFMT);
+    let mut backend = MetalBackend::new(std::sync::Arc::clone(device), GW, GH, GFMT);
     if let Some(sid) = source_id
         && let Some(res) = resource_for_output(&plan, sid, "out")
     {

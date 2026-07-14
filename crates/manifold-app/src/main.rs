@@ -66,6 +66,7 @@ mod shared_texture;
 mod texture_pane;
 mod text_input;
 mod ui_bridge;
+mod tree_passes;
 mod ui_frame;
 mod ui_frame_profile;
 mod ui_root;
