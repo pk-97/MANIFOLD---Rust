@@ -17,15 +17,25 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Generated-codegen uniform layout: PARAMS order — `color` (Color param →
+/// 4 consecutive f32 fields, reassembled as `vec4<f32>` at the body call
+/// site), `alpha`, `thickness_px`, `dash_period_px`, `dash_fill`,
+/// `midpoint_radius_px` — then padded to a 16-byte multiple (9 header words
+/// plus 3 pad words = 12 words = 48 bytes total). NOT the pre-conversion
+/// hand layout (`vec3<f32>` plus a separate alpha, no explicit pad); the
+/// `[f32; 4]` here matches the codegen's 4 scalar fields byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ConnectionsUniforms {
-    color: [f32; 3],
+    color: [f32; 4],
     alpha: f32,
     thickness_px: f32,
     dash_period_px: f32,
     dash_fill: f32,
     midpoint_radius_px: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -99,97 +109,10 @@ crate::primitive! {
     category: DetectionAndSampling,
     role: Filter,
     aliases: ["draw connections", "hud", "overlay", "connection lines", "links", "constellation"],
-    boundary_reason: Blocked,
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/draw_connections_body.wgsl"),
+    input_access: [Coincident, BufferIndex, BufferIndex],
 }
-
-const CONNECTIONS_SHADER: &str = r#"
-struct U {
-    color: vec3<f32>,
-    alpha: f32,
-    thickness_px: f32,
-    dash_period_px: f32,
-    dash_fill: f32,
-    midpoint_radius_px: f32,
-};
-
-struct Detection {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-};
-
-struct Edge {
-    a_index: u32,
-    b_index: u32,
-};
-
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var<storage, read> detections: array<Detection>;
-@group(0) @binding(2) var<storage, read> edges: array<Edge>;
-@group(0) @binding(3) var source_tex: texture_2d<f32>;
-@group(0) @binding(4) var src_sampler: sampler;
-@group(0) @binding(5) var output_tex: texture_storage_2d<rgba16float, write>;
-
-fn line_seg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, thickness: f32) -> f32 {
-    let pa = p - a;
-    let ba = b - a;
-    let len_sq = dot(ba, ba);
-    if len_sq < 0.000001 { return 0.0; }
-    let h = saturate(dot(pa, ba) / len_sq);
-    let d = length(pa - ba * h);
-    return 1.0 - saturate(d / thickness);
-}
-
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = textureDimensions(output_tex);
-    if gid.x >= dims.x || gid.y >= dims.y { return; }
-    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
-    var src = textureSampleLevel(source_tex, src_sampler, uv, 0.0);
-
-    let dpi_scale = f32(dims.y) / 1080.0;
-    let px_u = (1.0 / f32(dims.x)) * dpi_scale;
-    let thickness = u.thickness_px * px_u;
-    let dash_period = u.dash_period_px * px_u;
-    let mid_radius = u.midpoint_radius_px * px_u;
-    let det_count = arrayLength(&detections);
-
-    var line_cov = 0.0;
-    var mid_cov = 0.0;
-    let n = arrayLength(&edges);
-    for (var i: u32 = 0u; i < n; i = i + 1u) {
-        let e = edges[i];
-        if e.a_index == 0xFFFFFFFFu { continue; }
-        if e.a_index >= det_count || e.b_index >= det_count { continue; }
-        let da = detections[e.a_index];
-        let db = detections[e.b_index];
-        let center_a = vec2<f32>(da.x + da.width * 0.5, da.y + da.height * 0.5);
-        let center_b = vec2<f32>(db.x + db.width * 0.5, db.y + db.height * 0.5);
-
-        let ba = center_b - center_a;
-        let len_sq = dot(ba, ba);
-        if len_sq < 0.000001 { continue; }
-        let pa = uv - center_a;
-        let t_val = saturate(dot(pa, ba) / len_sq);
-        let len = sqrt(len_sq);
-        let dash_phase = fract(t_val * len / dash_period);
-        let dash_mask = step(u.dash_fill, dash_phase);
-
-        line_cov = max(line_cov, line_seg(uv, center_a, center_b, thickness) * 0.5 * dash_mask);
-
-        if mid_radius > 0.0 {
-            let mid = (center_a + center_b) * 0.5;
-            let mid_dist = length(uv - mid);
-            mid_cov = max(mid_cov, (1.0 - saturate(mid_dist / mid_radius)) * 0.4);
-        }
-    }
-
-    let add = (line_cov + mid_cov) * u.alpha;
-    src = vec4<f32>(src.rgb + u.color * add, src.a);
-    textureStore(output_tex, vec2<i32>(gid.xy), src);
-}
-"#;
 
 impl Primitive for DrawConnections {
     fn empty_skip_input_ports(&self) -> &'static [&'static str] {
@@ -202,8 +125,8 @@ impl Primitive for DrawConnections {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let color = match ctx.params.get("color") {
-            Some(ParamValue::Color(c)) => [c[0], c[1], c[2]],
-            _ => [0.85, 0.92, 1.0],
+            Some(ParamValue::Color(c)) => [c[0], c[1], c[2], 1.0],
+            _ => [0.85, 0.92, 1.0, 1.0],
         };
         let alpha = ctx.scalar_or_param("alpha", 1.0);
         let thickness_px = ctx.scalar_or_param("thickness_px", 1.5);
@@ -229,14 +152,29 @@ impl Primitive for DrawConnections {
         }
 
         let gpu = ctx.gpu_encoder();
+        // Codegen path (mandatory for per-element GPU atoms, D3/BUG-114): the
+        // kernel is generated from `wgsl_body` so the atom fuses into a
+        // texture region via the `BufferIndex` read path — this atom
+        // exercises TWO BufferIndex-tagged array inputs (detections + edges),
+        // the generic mechanism P4a built, not just one.
+        // `shaders/draw_connections.wgsl` is retained only as the gpu_tests
+        // parity oracle.
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device
-                .create_compute_pipeline(CONNECTIONS_SHADER, "cs_main", "node.draw_connections")
+            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                .expect("node.draw_connections standalone codegen");
+            gpu.device.create_compute_pipeline(
+                &wgsl,
+                crate::node_graph::freeze::codegen::ENTRY,
+                "node.draw_connections",
+            )
         });
         let sampler = self
             .sampler
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
+        // Uniform layout matches the generated Params struct: PARAMS order
+        // (color → vec4, alpha, thickness_px, dash_period_px, dash_fill,
+        // midpoint_radius_px) — 9 header words + 3 pad = 12 words.
         let uniforms = ConnectionsUniforms {
             color,
             alpha,
@@ -244,16 +182,22 @@ impl Primitive for DrawConnections {
             dash_period_px,
             dash_fill,
             midpoint_radius_px,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
+        // Bindings match the generated standalone layout: uniform(0), texture
+        // input `in`(1), sampler(2), array inputs in declaration order —
+        // `detections`→`buf_detections`(3), `edges`→`buf_edges`(4), output(5).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: det_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: edge_buf, offset: 0 },
-                GpuBinding::Texture { binding: 3, texture: in_tex },
-                GpuBinding::Sampler { binding: 4, sampler },
+                GpuBinding::Texture { binding: 1, texture: in_tex },
+                GpuBinding::Sampler { binding: 2, sampler },
+                GpuBinding::Buffer { binding: 3, buffer: det_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: edge_buf, offset: 0 },
                 GpuBinding::Texture { binding: 5, texture: out_tex },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
@@ -282,7 +226,216 @@ mod tests {
     }
 
     #[test]
-    fn uniforms_are_32_bytes() {
-        assert_eq!(std::mem::size_of::<ConnectionsUniforms>(), 32);
+    fn uniforms_are_48_bytes() {
+        assert_eq!(std::mem::size_of::<ConnectionsUniforms>(), 48);
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    //! **Generated-vs-hand parity** (D3, BUG-114 — `docs/ADDING_PRIMITIVES.md`
+    //! "The codegen path is mandatory"): the standalone kernel `run()`
+    //! actually dispatches (built via `standalone_for_spec::<DrawConnections>()`)
+    //! must reproduce `shaders/draw_connections.wgsl` (the hand oracle)
+    //! texel-for-texel. Also the proving atom for TWO BufferIndex-tagged
+    //! array inputs on one atom (detections + edges) — the generic
+    //! mechanism generalizes past draw_dots' single-array case.
+    use manifold_gpu::{
+        GpuBinding, GpuDevice, GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+        GpuTextureFormat, GpuTextureUsage,
+    };
+
+    use super::{ConnectionsUniforms, DrawConnections};
+    use crate::render_target::RenderTarget;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Detection {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Edge {
+        a_index: u32,
+        b_index: u32,
+    }
+
+    fn solid_source(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+        use half::f16;
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for i in 0..(w * h) as usize {
+            px[i * 4] = f16::from_f32(0.05);
+            px[i * 4 + 1] = f16::from_f32(0.05);
+            px[i * 4 + 2] = f16::from_f32(0.05);
+            px[i * 4 + 3] = f16::from_f32(1.0);
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label: "draw-connections-source",
+            mip_levels: 1,
+        });
+        let bytes =
+            unsafe { std::slice::from_raw_parts(px.as_ptr().cast::<u8>(), std::mem::size_of_val(px.as_slice())) };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
+        use half::f16;
+        let bytes_per_row = w * 8;
+        let total = u64::from(h * bytes_per_row);
+        let readback = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("draw-connections-readback");
+        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared readback buffer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        (0..(w * h) as usize)
+            .map(|i| {
+                let o = i * 4;
+                [
+                    f16::from_bits(halves[o]).to_f32(),
+                    f16::from_bits(halves[o + 1]).to_f32(),
+                    f16::from_bits(halves[o + 2]).to_f32(),
+                    f16::from_bits(halves[o + 3]).to_f32(),
+                ]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generated_draw_connections_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (32u32, 32u32);
+        let src = solid_source(&device, w, h);
+
+        let detections = [
+            Detection { x: 0.25, y: 0.25, width: 0.1, height: 0.1 },
+            Detection { x: 0.75, y: 0.6, width: 0.12, height: 0.12 },
+            Detection { x: 0.4, y: 0.7, width: 0.08, height: 0.08 },
+        ];
+        let edges = [
+            Edge { a_index: 0, b_index: 1 },
+            Edge { a_index: 1, b_index: 2 },
+            // Sentinel — the `0xFFFFFFFF` continue-guard, exercised the same
+            // for both kernels.
+            Edge { a_index: 0xFFFFFFFF, b_index: 0xFFFFFFFF },
+        ];
+        let det_bytes_len = std::mem::size_of_val(&detections) as u64;
+        let edge_bytes_len = std::mem::size_of_val(&edges) as u64;
+        let hand_det_buf = device.create_buffer_shared(det_bytes_len);
+        let gen_det_buf = device.create_buffer_shared(det_bytes_len);
+        let hand_edge_buf = device.create_buffer_shared(edge_bytes_len);
+        let gen_edge_buf = device.create_buffer_shared(edge_bytes_len);
+        unsafe {
+            hand_det_buf.write(0, bytemuck::bytes_of(&detections));
+            gen_det_buf.write(0, bytemuck::bytes_of(&detections));
+            hand_edge_buf.write(0, bytemuck::bytes_of(&edges));
+            gen_edge_buf.write(0, bytemuck::bytes_of(&edges));
+        }
+
+        let color = [0.85_f32, 0.92, 1.0, 1.0];
+        let alpha = 1.0_f32;
+        let thickness_px = 1.5_f32;
+        let dash_period_px = 12.0_f32;
+        let dash_fill = 0.4_f32;
+        let midpoint_radius_px = 5.0_f32;
+
+        // Hand layout (`shaders/draw_connections.wgsl`'s `struct U`): color
+        // as vec3<f32> + the rest, no explicit pad — NOT the generated
+        // Params layout (`ConnectionsUniforms`, PARAMS order: color as
+        // 4×f32 then the scalar fields + 3×u32 pad).
+        let mut hand_bytes = Vec::new();
+        hand_bytes.extend_from_slice(&color[0].to_le_bytes());
+        hand_bytes.extend_from_slice(&color[1].to_le_bytes());
+        hand_bytes.extend_from_slice(&color[2].to_le_bytes());
+        hand_bytes.extend_from_slice(&alpha.to_le_bytes());
+        hand_bytes.extend_from_slice(&thickness_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&dash_period_px.to_le_bytes());
+        hand_bytes.extend_from_slice(&dash_fill.to_le_bytes());
+        hand_bytes.extend_from_slice(&midpoint_radius_px.to_le_bytes());
+
+        let gen_uniforms = ConnectionsUniforms {
+            color,
+            alpha,
+            thickness_px,
+            dash_period_px,
+            dash_fill,
+            midpoint_radius_px,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        let gen_bytes = bytemuck::bytes_of(&gen_uniforms).to_vec();
+
+        let hand_wgsl = include_str!("shaders/draw_connections.wgsl");
+        let hand_pipeline =
+            device.create_compute_pipeline(hand_wgsl, "cs_main", "draw-connections-hand");
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<DrawConnections>()
+            .expect("node.draw_connections standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "draw-connections-generated",
+        );
+
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+
+        let hand_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "hand-out");
+        let mut enc = device.create_encoder("draw-connections-hand-dispatch");
+        enc.dispatch_compute(
+            &hand_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: &hand_bytes },
+                GpuBinding::Buffer { binding: 1, buffer: &hand_det_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &hand_edge_buf, offset: 0 },
+                GpuBinding::Texture { binding: 3, texture: &src },
+                GpuBinding::Sampler { binding: 4, sampler: &sampler },
+                GpuBinding::Texture { binding: 5, texture: &hand_out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "draw-connections-hand-dispatch",
+        );
+        enc.commit_and_wait_completed();
+
+        let gen_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "gen-out");
+        let mut enc = device.create_encoder("draw-connections-gen-dispatch");
+        enc.dispatch_compute(
+            &gen_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: &gen_bytes },
+                GpuBinding::Texture { binding: 1, texture: &src },
+                GpuBinding::Sampler { binding: 2, sampler: &sampler },
+                GpuBinding::Buffer { binding: 3, buffer: &gen_det_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: &gen_edge_buf, offset: 0 },
+                GpuBinding::Texture { binding: 5, texture: &gen_out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "draw-connections-gen-dispatch",
+        );
+        enc.commit_and_wait_completed();
+
+        let hand_px = readback_rgba(&device, &hand_out.texture, w, h);
+        let gen_px = readback_rgba(&device, &gen_out.texture, w, h);
+        for (i, (hp, gp)) in hand_px.iter().zip(gen_px.iter()).enumerate() {
+            for c in 0..4 {
+                assert!(
+                    (hp[c] - gp[c]).abs() < 1e-5,
+                    "texel={i} ch={c}: hand={} gen={}",
+                    hp[c],
+                    gp[c]
+                );
+            }
+        }
     }
 }

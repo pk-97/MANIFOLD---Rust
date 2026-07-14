@@ -65,7 +65,7 @@ use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::region::{Region, RegionInput, partition_regions};
 use crate::node_graph::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
 use crate::node_graph::ports::PortType;
-use crate::node_graph::parameters::{ParamDef, ParamValue};
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::param_binding::ParamConvert;
 use crate::node_graph::{LoadedPresetView, ParamBinding, ParamTarget, PrimitiveRegistry};
 
@@ -1451,6 +1451,49 @@ pub(crate) fn fuse_canonical_def_masked(
             let stable = resolve_node_id(doc_node);
             for p in node.parameters() {
                 let field = format!("n{idx}_{}", p.name);
+
+                // Vec3/Vec4/Color (P5/D4 lift): the codegen field is split into
+                // 3/4 namespaced scalar sub-fields (`field_x`/`_y`/`_z`[`_w`]) —
+                // see `codegen.rs`'s matching struct-emission blocks. Seed each
+                // sub-field's initial value here; there is no single `field`
+                // uniform member to seed directly for these types.
+                //
+                // `bound_targets`/`retarget` are skipped for these types:
+                // `ParamConvert` (param_binding.rs) has no Vec3/Vec4/Color
+                // variant, so no outer-card binding can ever target one —
+                // `bound_targets.contains(&(stable, p.name))` is always false
+                // for a non-scalar param, and there is no single field to point
+                // a retarget entry at anyway (the codegen split it into parts).
+                if matches!(p.ty, ParamType::Vec3 | ParamType::Vec4 | ParamType::Color) {
+                    // A wire into a Vec3/Vec4/Color param is not representable
+                    // by this seeding (a control wire carries one scalar value,
+                    // and there's no single field left to re-anchor it onto) —
+                    // refuse the whole region rather than silently drop it or
+                    // mis-wire a component. No shipped preset wires a control
+                    // producer into one of these param types today (they're
+                    // static colour/vector knobs), so this is not expected to
+                    // ever fire; it exists as a fail-closed guard.
+                    if def.wires.iter().any(|w| w.to_node == member.doc_id && w.to_port == p.name)
+                    {
+                        return None;
+                    }
+                    let comps: Vec<f32> = match p.ty {
+                        ParamType::Vec3 => {
+                            effective_param_vec3(doc_node.params.get(p.name.as_ref()), &p.default)?
+                                .to_vec()
+                        }
+                        _ => effective_param_vec4(doc_node.params.get(p.name.as_ref()), &p.default)?
+                            .to_vec(),
+                    };
+                    for (comp, suffix) in comps.iter().zip(["_x", "_y", "_z", "_w"]) {
+                        fused_params.insert(
+                            format!("{field}{suffix}"),
+                            SerializedParamValue::Float { value: *comp },
+                        );
+                    }
+                    continue;
+                }
+
                 if bound_targets.contains(&(stable.as_str().to_string(), p.name.to_string())) {
                     bound_fields.insert(field.clone());
                 }
@@ -1774,6 +1817,40 @@ fn param_value_to_f32(v: &ParamValue) -> Option<f32> {
         ParamValue::Float(f) => Some(*f),
         ParamValue::Enum(u) => Some(*u as f32),
         ParamValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
+
+/// Vec3 analogue of [`effective_param_f32`] — P5/D4 lift. Component order
+/// matches the codegen's `_x`/`_y`/`_z` field emission.
+fn effective_param_vec3(
+    override_val: Option<&SerializedParamValue>,
+    default: &ParamValue,
+) -> Option<[f32; 3]> {
+    if let Some(SerializedParamValue::Vec3 { value }) = override_val {
+        return Some(*value);
+    }
+    match default {
+        ParamValue::Vec3(v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Vec4/Color analogue of [`effective_param_f32`] — P5/D4 lift. Color and
+/// Vec4 share the same `[f32; 4]` shape and the same `_x`/`_y`/`_z`/`_w`
+/// codegen field emission, so one helper covers both.
+fn effective_param_vec4(
+    override_val: Option<&SerializedParamValue>,
+    default: &ParamValue,
+) -> Option<[f32; 4]> {
+    match override_val {
+        Some(SerializedParamValue::Vec4 { value }) => return Some(*value),
+        Some(SerializedParamValue::Color { value }) => return Some(*value),
+        _ => {}
+    }
+    match default {
+        ParamValue::Vec4(v) => Some(*v),
+        ParamValue::Color(v) => Some(*v),
         _ => None,
     }
 }
@@ -2202,6 +2279,80 @@ mod tests {
             assert!(
                 param_names.contains(field.as_str()),
                 "retarget field `{field}` is not a derived WgslCompute param — codegen drift"
+            );
+        }
+    }
+
+    /// P5/D4: a Vec3 param (`node.brightness`'s `weights`) and a Vec4 param
+    /// (`node.channel_mixer`'s `row0..row3`) both actually SEED correct
+    /// per-component values into the fused node's `params` map — not just
+    /// "the codegen text compiles" (the GPU parity tests already prove that
+    /// downstream), but that install-time seeding (`effective_param_vec3`/
+    /// `effective_param_vec4`) reconstructs the right `n{i}_<name>_x/_y/_z
+    /// [_w]` fields from the atom's declared default, matching the exact
+    /// component order `codegen.rs`'s struct/arg emission uses. Also reruns
+    /// the `seeded_fields_match_wgsl_compute_params` drift guard on a region
+    /// containing a non-scalar param, which the ColorGrade-only original
+    /// never covered.
+    #[test]
+    fn vec3_and_vec4_params_seed_correct_component_values() {
+        use crate::node_graph::effect_node::EffectNode;
+        use crate::node_graph::primitives::WgslCompute;
+        let json = r#"{
+            "version": 1, "name": "vec-params", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.contrast", "nodeId": "contrast" },
+                { "id": 2, "typeId": "node.brightness", "nodeId": "bright" },
+                { "id": 3, "typeId": "node.channel_mixer", "nodeId": "mixer" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "source" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let fused = fuse_canonical_def(&def, &registry())
+            .expect("contrast+brightness+channel_mixer all fuse (P5 lifts Vec3/Vec4)");
+        let node = fused
+            .def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .expect("one fused region");
+
+        // node.brightness is region index 1 (contrast=0, bright=1, mixer=2) —
+        // the Vec3 `weights` default is BT.709 luma [0.2126, 0.7152, 0.0722].
+        let get = |field: &str| match node.params.get(field) {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("expected a seeded Float at `{field}`, got {other:?}"),
+        };
+        assert_eq!(get("n1_weights_x"), 0.2126);
+        assert_eq!(get("n1_weights_y"), 0.7152);
+        assert_eq!(get("n1_weights_z"), 0.0722);
+
+        // node.channel_mixer is region index 2 — row0's Vec4 default is the
+        // identity matrix's first row [1.0, 0.0, 0.0, 0.0].
+        assert_eq!(get("n2_row0_x"), 1.0);
+        assert_eq!(get("n2_row0_y"), 0.0);
+        assert_eq!(get("n2_row0_z"), 0.0);
+        assert_eq!(get("n2_row0_w"), 0.0);
+        // row1's default is [0.0, 1.0, 0.0, 0.0].
+        assert_eq!(get("n2_row1_x"), 0.0);
+        assert_eq!(get("n2_row1_y"), 1.0);
+
+        // Drift guard (same pattern as `seeded_fields_match_wgsl_compute_
+        // params`, on a region a Vec3/Vec4 param actually reaches): every
+        // seeded field name must be a real reparsed WgslCompute param.
+        let mut wc = WgslCompute::new();
+        wc.set_wgsl_source(node.wgsl_source.as_deref().unwrap());
+        let param_names: AHashSet<&str> =
+            wc.parameters().iter().map(|p| p.name.as_ref()).collect();
+        for field in node.params.keys() {
+            assert!(
+                param_names.contains(field.as_str()),
+                "seeded field `{field}` is not a derived WgslCompute param — codegen drift"
             );
         }
     }

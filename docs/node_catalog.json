@@ -1653,7 +1653,7 @@
       ],
       "category": "Detection & Sampling",
       "examples": [],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -4546,7 +4546,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -4657,7 +4657,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -4733,7 +4733,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -5014,7 +5014,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -5480,7 +5480,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",
@@ -5561,7 +5561,7 @@
       "examples": [
         "BlobTracking"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "pointwise",
       "inputs": [
         {
           "name": "in",

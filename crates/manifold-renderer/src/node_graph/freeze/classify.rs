@@ -64,15 +64,8 @@ impl FusionKind {
 /// fusion constraint. This is the unit that lets a new atom slot in by "tag your
 /// inputs" instead of growing a bespoke node category each time.
 ///
-/// GPU input access is a CLOSED, small set. The two variants here are what's
-/// built; the planned additive kinds — each just one more codegen read-path +
-/// one region-grow rule, never a re-tag of the atoms already shipped — are:
-///   - `Gather`: read at a coordinate the body COMPUTES (the UV-warp family —
-///     kaleidoscope / chromatic / voronoi). The body receives the texture +
-///     sampler as a declared arg and owns the exact filter/address-mode of the
-///     unfused atom (design §11.B / line 156).
-///   - `BufferIndex`: read element `[i]` from a storage buffer (the particle-sim
-///     lane).
+/// GPU input access is a CLOSED, small set, extended additively as each new
+/// read-path is built — never a re-tag of the atoms already shipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InputAccess {
     /// Read at the fragment's own coordinate, resolution-ROBUST: the codegen
@@ -124,6 +117,27 @@ pub enum InputAccess {
     /// `BufferGather` input just means that one wire stays external, same as
     /// texture `Gather`.
     BufferGather,
+    /// TEXTURE-domain read of a storage `Array`/`Channels` input, by indices
+    /// the body computes — the array-into-texture read path (closes BUG-114,
+    /// `docs/FUSION_SOTA_DESIGN.md` D3). Only ever tags an `Array`-typed input
+    /// on an otherwise texture-domain atom (the `draw_*` family: a soft dot /
+    /// marker / tick / gauge / scanline / connection layer that reads a
+    /// detections array while writing the output pixel). Semantically this is
+    /// [`BufferGather`]'s convention — the body references the codegen-emitted
+    /// global `buf_<port>` directly and indexes it itself, no pre-read, no
+    /// body arg — just HOSTED IN a texture-domain kernel instead of a buffer
+    /// one. The region-grower never unions across a `BufferIndex`-consumed
+    /// wire (same "gather never unions" contract as texture `Gather` and
+    /// `BufferGather`): the array producer stays external, bound as
+    /// `var<storage, read> buf_<port>: array<ExtK>` (standalone) or
+    /// `src_<slot>` (fused, riding the existing external-slot numbering
+    /// texture externals already use — an external is just a producer +
+    /// element-type pair, texture or array). `ExtK` is synthesized from the
+    /// port's `Channels[…]` layout by the same helpers the buffer codegen
+    /// path already uses (`buffer_element_type`/`emit_buffer_struct`), so the
+    /// mechanism generalizes to every `draw_*` atom's own detections/marks
+    /// signature, not just `draw_dots`' `Detection`.
+    BufferIndex,
 }
 
 /// Why a Boundary primitive is excused from the codegen-path mandate
@@ -212,7 +226,10 @@ impl InputAccess {
     pub fn is_gather(self) -> bool {
         matches!(
             self,
-            InputAccess::Gather | InputAccess::GatherTexel | InputAccess::BufferGather
+            InputAccess::Gather
+                | InputAccess::GatherTexel
+                | InputAccess::BufferGather
+                | InputAccess::BufferIndex
         )
     }
 }
@@ -586,5 +603,14 @@ mod tests {
             "a color atom leaves INPUT_ACCESS empty (= all Coincident by default)"
         );
         assert_eq!(InputAccess::default(), InputAccess::Coincident);
+    }
+
+    /// D3 (BUG-114): `BufferIndex` is gather-shaped for the region-grower's
+    /// "never unions a gather-consumed wire" contract, same as `Gather` /
+    /// `GatherTexel` / `BufferGather`.
+    #[test]
+    fn buffer_index_is_gather() {
+        use super::InputAccess;
+        assert!(InputAccess::BufferIndex.is_gather());
     }
 }
