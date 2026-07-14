@@ -337,18 +337,32 @@ agents as they are too dumb to determine correct card boundaries etc from images
 
 ### Audit — what exists and where the drift lives (verified 2026-07-14, rendered + read)
 
-**The primary defect (Peter, 2026-07-14, with screenshot): "the card size does not
-match and fit all of the elements."** His screenshot (Stylized Feedback card, audio-mod
-drawer open): the title truncates into the AUD badge, the Feature chip row's eight
-chips clip their own labels ("nplitu", "entro", "isine"…), and the Amount slider is
-crushed to a stub while the value cell and T/~/A buttons keep full size. Rows and
-chip strips overflow the width the card actually has — the fit logic, not any one
-row. **The chevron lane below is NOT the bug** — it's a 14px secondary
-context-geometry fork that Change 4 unifies anyway because it violates the identity
-requirement, but D3 (fit) is the fix for what Peter sees. The rendered editor scene
-(`ui-snap editor` on tip `bbc30bce`) independently shows the same class: the Fluid
-Sim 2D card's "Clip Trigger Mode" row label clipped, row internals squeezed.
-The mechanism, read from code:
+**The primary defect (Peter, 2026-07-14, screenshot + correction: "the card
+content doesn't fit the card's HEIGHT"):** in his screenshot (Stylized Feedback
+card, audio-mod drawer open) the Zoom and Rotate rows draw PAST the card's bottom
+edge — the card frame is shorter than the rows built inside it. **The likely
+mechanism is the missing tick (D4), promoted to the primary fix:** a card's frame
+height flows through per-instance animated drawer-height state
+(`tick_drawers`, advanced only by `InspectorCompositePanel::update`,
+`inspector.rs:2382`), and the editor's panel instance is NEVER ticked
+(`UIRoot::update()` early-returns on `!built`, `ui_root.rs:2994-2996`; only the
+main window is ticked, `app_render.rs:3146`) — so the editor's card heights sit
+stale while the rows build at their true size and overflow the frame. The Author
+snap-instead-of-ease workaround (`param_card.rs:830`, `:1080-1090`) was supposed
+to mask exactly this and evidently doesn't cover every height path — P1's FIRST
+task is to verify the stale-height mechanism empirically (build the editor
+fixture, compare card frame height against the sum of its built rows) before
+changing layout code, and to fix height at its source: the card's frame height
+and its row layout must derive from the SAME row list in the SAME pass, so a
+frame that disagrees with its content is unrepresentable. ⚠ VERIFY-AT-IMPL: if
+the height mismatch reproduces even with ticking fixed, the divergence is in
+`compute_height` vs `build` (the pair `apply_mods_compact` exists to keep in
+agreement, `inspector.rs:2114-2116`) — fix there, same single-source rule.
+Secondary, real but not the reported bug: width-fit gaps (the same screenshot's
+Feature chips clip their own captions; `ui-snap editor` on `bbc30bce` shows the
+Fluid Sim 2D "Clip Trigger Mode" label clipped) — D3 covers both axes; and the
+Author chevron lane geometry fork below, a 14px identity violation. The
+mechanism table, read from code:
 
 | Piece | Where | Fact |
 |---|---|---|
@@ -444,6 +458,13 @@ The mechanism, read from code:
   re-routes the editor tick through `update()`).
 
 ### Phasing
+
+**Execution order (corrected 2026-07-14, after Peter's height report): P2 FIRST.**
+The height overflow is the reported bug and tick parity (D4) is its likely
+mechanism — run P2, then re-render the editor fixture with an open audio-mod
+drawer; if card frames still disagree with their content, fix the
+`compute_height`-vs-`build` single-source rule (audit intro ⚠) inside P2 before
+touching P1. P1 (width geometry) follows.
 
 **P1 — Geometry unification (one session).**
 Entry: re-verify the four anchors in the audit table (`rg` each). Read-back: this
