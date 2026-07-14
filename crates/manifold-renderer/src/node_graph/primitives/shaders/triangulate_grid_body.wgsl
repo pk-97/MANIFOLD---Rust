@@ -53,16 +53,20 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
     let qx = quad_idx % quads_x;
     let qy = quad_idx / quads_x;
 
-    // Triangle layout: 0:(0,0) 1:(1,0) 2:(0,1) 3:(0,1) 4:(1,0) 5:(1,1).
+    // BUG-120: triangle layout, CCW-from-+Y — see `triangulate_grid.wgsl`'s
+    // twin edit for the winding derivation. Corners 1↔2 and 4↔5 swapped
+    // from the un-fixed 0:(0,0) 1:(1,0) 2:(0,1) 3:(0,1) 4:(1,0) 5:(1,1)
+    // layout, which wound CW from above and disagreed with the +Y vertex
+    // normal `tg_compute_normal` computes for the same triangle.
     var dx: u32 = 0u;
     var dy: u32 = 0u;
     switch corner {
         case 0u: { dx = 0u; dy = 0u; }
-        case 1u: { dx = 1u; dy = 0u; }
-        case 2u: { dx = 0u; dy = 1u; }
+        case 1u: { dx = 0u; dy = 1u; }
+        case 2u: { dx = 1u; dy = 0u; }
         case 3u: { dx = 0u; dy = 1u; }
-        case 4u: { dx = 1u; dy = 0u; }
-        case 5u: { dx = 1u; dy = 1u; }
+        case 4u: { dx = 1u; dy = 1u; }
+        case 5u: { dx = 1u; dy = 0u; }
         default: {}
     }
 
