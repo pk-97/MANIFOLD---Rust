@@ -116,6 +116,135 @@ fn full_reshape_from_def(
     ))
 }
 
+/// Read-only mirror of `manifold_editing::commands::graph::descend_level`'s
+/// node-list walk — the editing crate's version is `&mut` and private, and
+/// this dispatch-layer lookup (`binding_for_node_param`) only ever reads.
+/// `None` if a hop in `scope_path` doesn't resolve to a group node.
+fn descend_level_ref<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    scope_path: &[u32],
+) -> Option<&'a [manifold_core::effect_graph_def::EffectGraphNode]> {
+    let mut cur = nodes;
+    for &gid in scope_path {
+        let group = cur.iter().find(|n| n.id == gid)?.group.as_ref()?;
+        cur = &group.nodes;
+    }
+    Some(cur)
+}
+
+/// Resolve the card binding (if any) governing `(node_id, param_name)` at
+/// `scope_path` within `def` — BUG-158 write-back (D1/D2,
+/// `docs/PARAM_TWO_WAY_BINDING_DESIGN.md`). Descends to the node's level,
+/// reads its stable `NodeId`, then looks that up against
+/// `preset_metadata.bindings` (the single unified list post
+/// `PRESET_UNIFICATION_PLAN.md` — bundled and user-added bindings both live
+/// here). Mirrors [`full_reshape_from_def`]'s reshape lookup, keyed the
+/// other way (by node target instead of outer id). `None` when the node has
+/// no stable id (a bundled node that's never been targeted), the level
+/// doesn't resolve, or no binding targets this param.
+fn binding_for_node_param(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32],
+    node_id: u32,
+    param_name: &str,
+) -> Option<(
+    String,
+    f32,
+    f32,
+    bool,
+    manifold_core::macro_bank::MacroCurve,
+    f32,
+    f32,
+)> {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let meta = def.preset_metadata.as_ref()?;
+    let nodes = descend_level_ref(&def.nodes, scope_path)?;
+    let node = nodes.iter().find(|n| n.id == node_id)?;
+    if node.node_id.is_empty() {
+        return None;
+    }
+    let binding = meta.bindings.iter().find(|b| match &b.target {
+        BindingTarget::Node { node_id: nid, param } => {
+            *nid == node.node_id && param == param_name
+        }
+        BindingTarget::Composite { .. } => false,
+    })?;
+    let spec = meta.params.iter().find(|p| p.id == binding.id)?;
+    Some((
+        binding.id.clone(),
+        spec.min,
+        spec.max,
+        spec.invert,
+        spec.curve,
+        binding.scale,
+        binding.offset,
+    ))
+}
+
+/// `true` when `(node_id, param_name)` at `scope_path` has an incoming wire
+/// — the P1 enforcement backstop for the "a bound graph param slot is never
+/// written by the node-face path" invariant. D5/D6 (wire beats binding) make
+/// the UI prevent a scrub from ever starting on a wired row; this is the
+/// dispatch-layer's own guard should that prevention somehow not fire.
+fn node_param_is_wired(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32],
+    node_id: u32,
+    param_name: &str,
+) -> bool {
+    let mut wires = &def.wires;
+    let mut level_nodes = &def.nodes;
+    for &gid in scope_path {
+        let Some(group) = level_nodes.iter().find(|n| n.id == gid).and_then(|n| n.group.as_ref())
+        else {
+            return false;
+        };
+        wires = &group.wires;
+        level_nodes = &group.nodes;
+    }
+    wires
+        .iter()
+        .any(|w| w.to_node == node_id && w.to_port == param_name)
+}
+
+/// Extract the scalar f32 value from a graph-def `SerializedParamValue`.
+/// `None` for the non-scalar kinds (`Vec*`, `Color`, `Table`, `String`) —
+/// card bindings are scalar-only (`BindingDef::default_value: f32`), so a
+/// non-scalar edit can never be a bound-param reroute candidate.
+fn serialized_value_as_f32(
+    v: &manifold_core::effect_graph_def::SerializedParamValue,
+) -> Option<f32> {
+    use manifold_core::effect_graph_def::SerializedParamValue as V;
+    match v {
+        V::Float { value } => Some(*value),
+        V::Int { value } => Some(*value as f32),
+        V::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
+        V::Enum { value } => Some(*value as f32),
+        V::Vec2 { .. } | V::Vec3 { .. } | V::Vec4 { .. } | V::Color { .. } | V::Table { .. } | V::String { .. } => {
+            None
+        }
+    }
+}
+
+/// A node-face scrub session currently rerouted through a card binding's
+/// write-back path (`PARAM_TWO_WAY_BINDING_DESIGN.md` D1). Opened at the
+/// first `SetGraphNodeParam` on a bound `(node_id, param_name)`, updated live
+/// on every subsequent move, closed on the matching
+/// `EndGraphNodeParamScrub` — one undo-worthy `ChangeGraphParamCommand`
+/// covering the whole drag (`old_value` → the last `current_value`), not one
+/// per pointer-move.
+#[derive(Debug, Clone)]
+pub(crate) struct BoundNodeParamDrag {
+    target: manifold_core::GraphTarget,
+    node_id: u32,
+    param_name: String,
+    outer_param_id: String,
+    /// Outer card value at gesture start — the undo baseline.
+    old_value: f32,
+    /// Outer card value as of the last move — the undo redo target.
+    current_value: f32,
+}
+
 impl Application {
     /// The mapping drawer's store target for the editor's watched graph —
     /// the [`manifold_core::GraphTarget`] the command then resolves to a
@@ -201,6 +330,99 @@ impl Application {
                 let view =
                     manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
                 full_reshape_from_def(&view.canonical_def, param_id)
+            }
+        }
+    }
+
+    /// The card binding (if any) governing `(node_id, param_name)` on the
+    /// watched graph at `scope_path` — BUG-158 write-back's binding lookup
+    /// (D1). Same override-then-canonical fallback as
+    /// [`Self::watched_full_reshape`]: most bound params are still on the
+    /// bundled/canonical def (never diverged), so the instance's own
+    /// per-instance `graph` override alone would miss them.
+    fn watched_binding_for_node_param(
+        &self,
+        scope_path: &[u32],
+        node_id: u32,
+        param_name: &str,
+    ) -> Option<(
+        String,
+        f32,
+        f32,
+        bool,
+        manifold_core::macro_bank::MacroCurve,
+        f32,
+        f32,
+    )> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                if let Some(def) = fx.graph.as_ref()
+                    && let Some(r) = binding_for_node_param(def, scope_path, node_id, param_name)
+                {
+                    return Some(r);
+                }
+                let view =
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
+                binding_for_node_param(&view.canonical_def, scope_path, node_id, param_name)
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let layer = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?;
+                if let Some(def) = layer.generator_graph()
+                    && let Some(r) = binding_for_node_param(def, scope_path, node_id, param_name)
+                {
+                    return Some(r);
+                }
+                let gp = layer.gen_params()?;
+                let view =
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
+                binding_for_node_param(&view.canonical_def, scope_path, node_id, param_name)
+            }
+        }
+    }
+
+    /// `true` when `(node_id, param_name)` on the watched graph at
+    /// `scope_path` has an incoming wire — same override-then-canonical
+    /// fallback as [`Self::watched_binding_for_node_param`]. The P1
+    /// enforcement backstop (Invariants §4): a wired param is never rerouted
+    /// through the card write-back path, matching D5/D6 (wire beats binding).
+    fn watched_node_param_is_wired(&self, scope_path: &[u32], node_id: u32, param_name: &str) -> bool {
+        let Some(target) = self.watched_graph_target.as_ref() else {
+            return false;
+        };
+        match target {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let Some(fx) = self.local_project.find_effect_by_id(eid) else {
+                    return false;
+                };
+                if let Some(def) = fx.graph.as_ref()
+                    && node_param_is_wired(def, scope_path, node_id, param_name)
+                {
+                    return true;
+                }
+                manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
+                    .is_some_and(|view| node_param_is_wired(&view.canonical_def, scope_path, node_id, param_name))
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let Some(layer) = self.local_project.timeline.layers.iter().find(|l| &l.layer_id == lid)
+                else {
+                    return false;
+                };
+                if let Some(def) = layer.generator_graph()
+                    && node_param_is_wired(def, scope_path, node_id, param_name)
+                {
+                    return true;
+                }
+                let Some(gp) = layer.gen_params() else {
+                    return false;
+                };
+                manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
+                    .is_some_and(|view| node_param_is_wired(&view.canonical_def, scope_path, node_id, param_name))
             }
         }
     }
@@ -2482,18 +2704,129 @@ impl Application {
                     param_name,
                     new_value,
                 } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.clone(),
                         self.watched_catalog_default.as_ref(),
                     ) {
+                        // D1 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): a
+                        // card-bound param's graph slot is `apply_bindings`'
+                        // stomp target — it re-writes the slot from the card
+                        // every rebuild — so a node-face edit on a bound
+                        // param must write the CARD param instead, through
+                        // the inverse reshape, never the def slot directly
+                        // (never dual-write). Step 1: the wired backstop
+                        // (D5/D6 — wire beats binding; P2's input-layer
+                        // scrub prevention is the primary defense, this is
+                        // the enforcement debug_assert). Step 2: bound →
+                        // reroute. Step 3: unbound → existing path,
+                        // unchanged.
+                        let wired =
+                            self.watched_node_param_is_wired(&canvas_scope, *node_id, param_name);
+                        debug_assert!(
+                            !wired,
+                            "node-face scrub started on a wired param row — P2's \
+                             input-layer prevention should have blocked this before \
+                             it reached dispatch"
+                        );
+                        let bound = if wired {
+                            None
+                        } else {
+                            self.watched_binding_for_node_param(&canvas_scope, *node_id, param_name)
+                        };
+                        if let Some((outer_id, min, max, invert, curve, scale, offset)) = bound {
+                            let core_value =
+                                crate::ui_translate::serialized_param_value_to_core(new_value);
+                            if let Some(gesture_value) = serialized_value_as_f32(&core_value)
+                                && let Some(card_value) = manifold_core::effects::invert_card_reshape(
+                                    gesture_value,
+                                    min,
+                                    max,
+                                    invert,
+                                    curve,
+                                    scale,
+                                    offset,
+                                )
+                            {
+                                let is_new_session = !self
+                                    .bound_node_param_drag
+                                    .as_ref()
+                                    .is_some_and(|d| {
+                                        d.target == target
+                                            && d.node_id == *node_id
+                                            && d.param_name == *param_name
+                                    });
+                                if is_new_session {
+                                    let old_value = self
+                                        .local_project
+                                        .with_preset_graph_mut(&target, |inst| {
+                                            inst.get_base_param(&outer_id)
+                                        })
+                                        .unwrap_or(card_value);
+                                    self.bound_node_param_drag = Some(BoundNodeParamDrag {
+                                        target: target.clone(),
+                                        node_id: *node_id,
+                                        param_name: param_name.clone(),
+                                        outer_param_id: outer_id.clone(),
+                                        old_value,
+                                        current_value: old_value,
+                                    });
+                                }
+                                if let Some(drag) = self.bound_node_param_drag.as_mut() {
+                                    drag.current_value = card_value;
+                                }
+                                // Live write — the same arms
+                                // `PanelAction::ParamChanged` uses
+                                // (`ui_bridge/inspector.rs`): mutate the
+                                // local mirror synchronously (so the
+                                // card slider follows every move) and
+                                // push a cheap `MutateProjectLive` for
+                                // the render — no undo-stack entry here,
+                                // that's `EndGraphNodeParamScrub`'s job.
+                                self.local_project.with_preset_graph_mut(&target, |inst| {
+                                    inst.set_base_param(&outer_id, card_value);
+                                });
+                                let t = target.clone();
+                                let oid = outer_id.clone();
+                                self.send_content_cmd(ContentCommand::MutateProjectLive(
+                                    Box::new(move |p| {
+                                        p.with_preset_graph_mut(&t, |inst| {
+                                            inst.set_base_param(&oid, card_value);
+                                        });
+                                    }),
+                                ));
+                            }
+                            // else: degenerate scale (D1 §3) — read-only, no
+                            // write; the row keeps showing the bound badge.
+                            continue;
+                        }
                         let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                            eid.clone(),
+                            target,
                             *node_id,
                             param_name.clone(),
                             crate::ui_translate::serialized_param_value_to_core(new_value),
                             default.clone(),
                         )
                         .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::EndGraphNodeParamScrub { node_id, param_name } => {
+                    // Close out a bound-param write-back gesture (D1) with
+                    // ONE undo-worthy `ChangeGraphParamCommand` for the whole
+                    // drag — a no-op for an ordinary (unbound) row, which
+                    // never opened a `bound_node_param_drag` session.
+                    if let Some(drag) = self.bound_node_param_drag.take()
+                        && drag.node_id == *node_id
+                        && drag.param_name == *param_name
+                        && (drag.old_value - drag.current_value).abs() > f32::EPSILON
+                    {
+                        let cmd = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                            drag.target,
+                            drag.outer_param_id,
+                            drag.old_value,
+                            drag.current_value,
+                        );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;
@@ -5356,5 +5689,134 @@ mod preview_target_tests {
             vec![wire(0, "out", 1, "in"), wire(1, "out", 2, "in")],
         );
         assert_eq!(resolve_preview_target(&s, &[], 2), Some(NodeId::new("inv")));
+    }
+}
+
+/// `PARAM_TWO_WAY_BINDING_DESIGN.md` P1: the dispatch-layer binding lookup
+/// (`binding_for_node_param`) and wired-backstop (`node_param_is_wired`) that
+/// the `SetGraphNodeParam` reroute arm depends on. These are the read-only
+/// resolution pieces the reroute is built from; `card_reshape_roundtrips` /
+/// `macro_curve_inverse_roundtrips` (manifold-core) cover the inverse math
+/// itself. A full `Application`-level drive of the dispatch arm (mutating
+/// `local_project`, asserting the def slot stays byte-unchanged) is not
+/// exercised here — `Application` needs a winit/GPU context this test module
+/// has no harness for; see the phase notes in
+/// `docs/PARAM_TWO_WAY_BINDING_DESIGN.md` for the gap.
+#[cfg(test)]
+mod binding_reroute_tests {
+    use super::{binding_for_node_param, node_param_is_wired};
+    use manifold_core::NodeId;
+    use manifold_core::effect_graph_def::{
+        BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
+        PresetMetadata,
+    };
+    use manifold_core::macro_bank::MacroCurve;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn node(id: u32, node_id: &str) -> EffectGraphNode {
+        EffectGraphNode {
+            id,
+            node_id: NodeId::new(node_id),
+            type_id: "node.blur".to_string(),
+            handle: Some(node_id.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        }
+    }
+
+    fn def_with_binding() -> EffectGraphDef {
+        EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                id: manifold_core::preset_type_id::PresetTypeId::new("Test"),
+                display_name: "Test".into(),
+                category: "Test".into(),
+                osc_prefix: "test".into(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: vec![ParamSpecDef {
+                    id: "amount".into(),
+                    name: "Amount".into(),
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: 0.0,
+                    whole_numbers: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    value_labels: vec![],
+                    format_string: None,
+                    osc_suffix: String::new(),
+                    curve: MacroCurve::SCurve,
+                    invert: true,
+                    is_angle: false,
+                    is_trigger_gate: false,
+                    wraps: false,
+                    section: None,
+                }],
+                bindings: vec![BindingDef {
+                    id: "amount".into(),
+                    label: "Amount".into(),
+                    default_value: 0.0,
+                    target: BindingTarget::Node {
+                        node_id: NodeId::new("blur1"),
+                        param: "amount".into(),
+                    },
+                    convert: Default::default(),
+                    user_added: false,
+                    scale: 2.0,
+                    offset: 0.5,
+                }],
+                skip_mode: Default::default(),
+                param_aliases: vec![],
+                value_aliases: vec![],
+                string_params: vec![],
+                string_bindings: vec![],
+            }),
+            nodes: vec![node(1, "blur1")],
+            wires: vec![],
+        }
+    }
+
+    #[test]
+    fn binding_for_node_param_resolves_and_inverts() {
+        let def = def_with_binding();
+        let (outer_id, min, max, invert, curve, scale, offset) =
+            binding_for_node_param(&def, &[], 1, "amount").expect("binding resolves");
+        assert_eq!(outer_id, "amount");
+        let target =
+            manifold_core::effects::apply_card_reshape(0.5, min, max, invert, curve, scale, offset);
+        let back =
+            manifold_core::effects::invert_card_reshape(target, min, max, invert, curve, scale, offset)
+                .expect("non-degenerate scale");
+        assert!((back - 0.5).abs() < 1e-3, "expected ~0.5, got {back}");
+    }
+
+    #[test]
+    fn binding_for_node_param_none_when_unbound() {
+        let def = def_with_binding();
+        assert!(binding_for_node_param(&def, &[], 1, "other_param").is_none());
+        assert!(binding_for_node_param(&def, &[], 99, "amount").is_none());
+    }
+
+    #[test]
+    fn node_param_is_wired_detects_incoming_wire() {
+        let mut def = def_with_binding();
+        def.wires.push(EffectGraphWire {
+            from_node: 0,
+            from_port: "out".into(),
+            to_node: 1,
+            to_port: "amount".into(),
+        });
+        assert!(node_param_is_wired(&def, &[], 1, "amount"));
+        assert!(!node_param_is_wired(&def, &[], 1, "other_param"));
     }
 }

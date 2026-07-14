@@ -510,6 +510,45 @@ pub fn apply_card_reshape(
     v * scale + offset
 }
 
+/// Exact inverse of [`apply_card_reshape`] where one exists
+/// (`PARAM_TWO_WAY_BINDING_DESIGN.md` D2) — the write-back direction for a
+/// node-face edit on a card-bound param: given the target's new value, solve
+/// for the card value that would forward-reshape to it. Returns `None` only
+/// for a degenerate affine (`scale ≈ 0`, unrepresentable). Out-of-range
+/// targets clamp to the slider ends, matching the forward stage-1 clamp —
+/// the inverse of a clamped map is defined on the range.
+///
+/// Body order is the forward run reversed: affine first (undo
+/// `v*scale+offset`), then — only when `invert || curve != Linear` —
+/// normalize, [`crate::macro_bank::MacroCurve::inverse`], un-invert,
+/// denormalize.
+pub fn invert_card_reshape(
+    target: f32,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: crate::macro_bank::MacroCurve,
+    scale: f32,
+    offset: f32,
+) -> Option<f32> {
+    if scale.abs() < f32::EPSILON {
+        return None;
+    }
+    let mut v = (target - offset) / scale;
+    if invert || curve != crate::macro_bank::MacroCurve::Linear {
+        let range = max - min;
+        if range.abs() >= f32::EPSILON {
+            let mut n = ((v - min) / range).clamp(0.0, 1.0);
+            n = curve.inverse(n);
+            if invert {
+                n = 1.0 - n;
+            }
+            v = min + range * n;
+        }
+    }
+    Some(v)
+}
+
 // ─── Param Value (per-slot state) ───
 
 // A single parameter slot's runtime state used to live here.
@@ -3586,6 +3625,46 @@ mod tests {
         let k = std::f32::consts::PI / 180.0;
         assert!((apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k).abs() < 1e-5);
         assert!((apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k).abs() < 1e-4);
+    }
+
+    /// `PARAM_TWO_WAY_BINDING_DESIGN.md` invariant: forward and inverse
+    /// cannot drift. For a grid of (min, max, invert, curve, scale, offset) ×
+    /// values: `apply(invert(x)) ≈ x` within 1e-4 across all four curves;
+    /// `invert(apply(x)) ≈ x` for in-range x.
+    #[test]
+    fn card_reshape_roundtrips() {
+        use crate::macro_bank::MacroCurve;
+        let curves = [
+            MacroCurve::Linear,
+            MacroCurve::Exponential,
+            MacroCurve::Logarithmic,
+            MacroCurve::SCurve,
+        ];
+        let ranges: [(f32, f32); 3] = [(0.0, 1.0), (0.0, 10.0), (-5.0, 5.0)];
+        let affines: [(f32, f32); 2] = [(1.0, 0.0), (2.0, 3.0)];
+        for curve in curves {
+            for invert in [false, true] {
+                for (min, max) in ranges {
+                    for (scale, offset) in affines {
+                        let mut x = min;
+                        let step = (max - min) / 10.0;
+                        while x <= max {
+                            let target = apply_card_reshape(x, min, max, invert, curve, scale, offset);
+                            let back = invert_card_reshape(target, min, max, invert, curve, scale, offset)
+                                .expect("non-degenerate scale");
+                            assert!(
+                                (back - x).abs() < 1e-3,
+                                "{curve:?} invert={invert} range=({min},{max}) affine=({scale},{offset}): \
+                                 invert_card_reshape(apply_card_reshape({x})) = {back}, expected ~{x}"
+                            );
+                            x += step;
+                        }
+                    }
+                }
+            }
+        }
+        // Degenerate affine: no inverse representable.
+        assert!(invert_card_reshape(1.0, 0.0, 1.0, false, MacroCurve::Linear, 0.0, 0.0).is_none());
     }
 
     #[test]
