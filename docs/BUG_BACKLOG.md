@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-161 | **ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch** | `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` errors in `ui_snapshot/mod.rs` (`view.canonical_def` is `Arc<EffectGraphDef>`, callees want `&EffectGraphDef`) — the headless ui-snap tool, the prescribed oracle for BUG-160 and others, is currently unusable. Found bug-wave lane A 2026-07-14 trying to bisect BUG-160; pre-existing on origin/main, unrelated to this session's diff. Not part of the default `nextest` sweep (feature-gated), so it went unnoticed. LOW-effort fix (add `&`/`.as_ref()` at 8 call sites) but blocks any UI-regression bisection until fixed. |
 | BUG-160 | **editor-window-unification-inspector-card-layout-regressions** | Inspector cards misfit their buttons/controls after the EDITOR_WINDOW_UNIFICATION landing (2026-07-14) — regression per Peter's live report; P1's byte-diff verification passed, so it's P2/P3 or a fixture-uncovered configuration. Not investigated. MED-HIGH (UI regression). |
 | BUG-159 | **timeline-scroll-past-playhead-violent-snapback** | Scrolling the arrangement past the playhead during playback violently snaps the view back — playhead-follow fights the user's gesture instead of yielding to it (Ableton-style smooth limit expected). Reported by Peter 2026-07-14. MED (performance-surface feel). |
 | BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
@@ -142,6 +143,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-161 (ui-snapshot-feature-fails-to-compile-canonical-def-arc-mismatch) — the headless `ui-snap` tool's own compile is broken — LOW-effort mechanical fix, but blocks the prescribed oracle for UI-regression bugs
+**Status:** OPEN — found bug-wave lane A 2026-07-14, trying to bisect BUG-160 with `cargo run --features ui-snapshot --bin manifold -- ui-snap inspector` per that bug's own fix-shape ("ui-snap PNG diff is the oracle"). Not fixed this session (out of lane-A's exact bug scope) and not caused by this session's diff.
+
+**Symptom** — `cargo check -p manifold-app --features ui-snapshot --bin manifold` fails with 8 `E0308` mismatched-type errors in `ui_snapshot/mod.rs` (lines 454, 504, 581, 638, 660, 670, 896, 917): `view.canonical_def` is passed where callees (`render::render_graph_to_png`, `render::render_graph_editor_to_png`, others) expect `&EffectGraphDef`, but `canonical_def` is now `Arc<EffectGraphDef>` — a plain `&` no longer coerces. The whole `ui-snap` binary target fails to compile, so no headless UI scene can be rendered at all right now.
+
+**Root cause** — unknown which change flipped `canonical_def` from an owned `EffectGraphDef` to `Arc<EffectGraphDef>` (likely a preset-loading or graph-caching change elsewhere that made the canonical def shared); `ui_snapshot/mod.rs`'s 8 call sites were never updated to match. Confirmed pre-existing on `origin/main` (identical content on the commit this lane branched from) — this session's diff never touches `ui_snapshot/mod.rs`. Not caught by the default `nextest` sweep because `ui-snapshot` is a separate cargo feature, not compiled by a plain build.
+
+**Fix shape** — mechanical: at each of the 8 sites, deref the Arc (`&*view.canonical_def` or `view.canonical_def.as_ref()`) instead of `view.canonical_def`. No behavior change. Worth a follow-up: fold `--features ui-snapshot --bin manifold` into a routine check (even just a compile-only CI job) so this class doesn't recur silently, same gap as BUG-124's `--tests` clippy blind spot.
 
 ### BUG-160 (editor-window-unification-inspector-card-layout-regressions) — inspector cards no longer lay out properly (buttons and controls don't fit) after the editor-window-unification landing — MED-HIGH UI regression, reported by Peter 2026-07-14
 **Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
