@@ -68,7 +68,7 @@ or human can read it, and it needs no external tool.
 | BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | CHARACTERIZED (VOLUMETRIC_LIGHT_DESIGN.md P1, 2026-07-13): `apply_fog` IS correctly distance-scaled; the "milk" symptom is saturation — a bounded subject's depth range is small relative to fog's `1/density` decay length, so the fog fraction barely varies across it (measured Δ 1.1–2.5 percentage points across a subject-scale depth slice at camDistance 9/30, vs 15–30% differentiation across a wide-range scene). Absorbed by the shafts design, which SHIPPED 2026-07-13 (P1–P3) — but whether it actually fixes this is UNVERIFIED (the shafts' own demos don't show a legible sculpting effect; no re-render of the original repro scene yet). | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
-| BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Fix shape: half-day spike on a fixed max-arity conversion (declare the max as optional Coincident inputs; the region machinery already folds unwired optionals as `0u` use flags). If the spike fails, dynamic-arity codegen support is a design question for Peter. LOW (working atoms, dispatch-cost only). |
+| BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Half-day spike DONE 2026-07-14 (see detail below): the static-max-arity + optional-Coincident + `0u` use-flag shape works technically (already proven in production by `node.pack_rgba`) but costs a real 4x texture-sample increase for multi_blend's common 2–3-wired case and loses the editor's dynamic port-shrink UX; switch_texture is a harder, separate call (32-input vocabulary, loses its 5x→1x branch-pruning short-circuit). Peter's call owed on whether to pursue. LOW (working atoms, dispatch-cost only). |
 | BUG-114 | **draw-family-blocked-on-array-into-texture-codegen-read-path** | The six `draw_*` atoms (dots/markers/ticks/gauge/scanlines/connections) pass the codegen mandate's per-element scope test (per-pixel bodies over the output grid) but CANNOT convert: texture-domain codegen has no read-path for an input storage `Array` (the marks buffer) — classify cut rule 9 makes a wired Array input on a texture atom a Boundary, and `freeze/classify.rs` names the needed `BufferIndex` kind as planned-not-built. Fix shape: add the `BufferIndex` read-path to codegen + a region-grow rule, then convert `draw_*` per the mandate. Per ADDING_PRIMITIVES scope test #5 these are BLOCKED (tracked compiler gap), not exempt. LOW (each sits in 1 shipped preset, overlay/HUD chains; cost is one dispatch per atom). |
 | BUG-113 | **param-manifest-get-bench-flakes-under-parallel-load** | `manifold-core::params::tests::bench_resolve` asserts a hard `<= 271.5 ns/op` wall-clock ceiling on `ParamManifest::get`; under `cargo nextest run --workspace`'s parallel thread pool (esp. right after a heavy build or another CPU-saturating process), measured ns/op climbs past the ceiling (333.25, then 398.98 ns/op observed 2026-07-11) and the test fails, while an isolated re-run consistently passes (215.02 ns/op) and a clean full-workspace re-run passes too (3052/3052). Found landing wave2 lane C (BUG-083/084) — confirmed unrelated (file untouched by that change). Fix shape: either give the ceiling real margin for parallel/loaded runs, retry-on-first-failure before asserting, or move this out of the default nextest sweep (e.g. behind a feature, like the GPU-proofs convention) since a wall-clock ceiling assertion is inherently contention-sensitive and doesn't belong in a "safe to run freely" default suite. LOW (flaky-gate annoyance, not a functional regression — the underlying code is fine). |
 | BUG-112 | **manifold-ui-all-targets-clippy-debt-audio-setup-panel-graph-canvas-tests** | `cargo clippy -p manifold-ui --all-targets -- -D warnings` fails on two pre-existing, unrelated lints: `needless_borrows_for_generic_args` (`audio_setup_panel.rs:2494,2498`, `LayerId::new(&format!(...))`) and `useless_vec` (`graph_canvas/tests.rs:2391`, a `vec![...]` that could be an array). Both files byte-identical to HEAD, last touched by unrelated commit `f1a35270`. Found 2026-07-11 isolating wave2 lane C's (BUG-083/084) scoped clippy gate — same "pre-existing test-target debt surfaces under `--all-targets`" pattern as BUG-110. Fix shape: drop the `&` before each `format!(...)` arg; replace the `vec![...]` literal with an array. LOW (lint-only, `--tests`/`--all-targets` scope; the plain-lib clippy gate this session actually ran is clean). |
@@ -333,8 +333,9 @@ oracle). Per the mandate's scope test #5 these are BLOCKED, not exempt — the d
 compiler. Severity LOW: each atom sits in exactly 1 shipped preset (overlay/HUD vocabulary), so
 the unfused cost only bites in stacked per-pixel overlay chains.
 
-### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (spike owed)
-**Status:** OPEN — logged 2026-07-11 while sharpening the codegen-mandate scope test; the spike is part of the conversion-sweep sequencing.
+### BUG-115 (mux-multiblend-dynamic-arity-blocks-codegen-conversion) — dynamic port count can't be expressed in the static spec the codegen reads — LOW (spike done, Peter's call owed)
+**Status:** OPEN — logged 2026-07-11 while sharpening the codegen-mandate scope test. Half-day spike
+done 2026-07-14 (verdict below) — no conversion landed, this is Peter's call to make.
 
 **Symptom** — `node.switch_texture` (mux_texture, 5 shipped presets — and mid-chain by its
 nature, it selects between texture chains) and `node.multi_blend` are fusion boundaries.
@@ -349,6 +350,79 @@ can't express variable arity.
 coincident inputs as `0u` use flags per FREEZE_COMPILER_MAP §4 region gates), body selects/sums
 over the wired flags. If the spike shows dynamic ports can't square with the static spec, growing
 dynamic-arity codegen support becomes a design decision for Peter — flag it, don't improvise.
+
+**Spike (2026-07-14)** — done, half-day scope, no landing. Evidence:
+`crates/manifold-renderer/tests/bug115_dynamic_arity_spike.rs` (two `#[ignore]`d tests, run with
+`cargo test -p manifold-renderer --test bug115_dynamic_arity_spike -- --ignored --nocapture`).
+
+*Spike verdict: yes-with-caveats.* The static-max-arity + optional-`Coincident` + `0u` use-flag
+shape is not a new mechanism to invent — it already ships in production for `node.pack_rgba`
+(`pack_channels.rs`: 4 always-present optional `Coincident` texture inputs, a `use_<name>: u32`
+flag per input injected into the uniform, body falls back to `default_*` when unwired). The spike
+built a throwaway 8-input `MultiInputCoincident` spec (mirroring `multi_blend`'s sum-not-pack
+semantics) directly against `generate_standalone` — bypassing the `primitive!` macro so no fake
+node registers in the palette — and confirmed: (a) `generate_standalone` accepts it and emits
+valid WGSL naga parses cleanly; (b) region-fusion already admits this shape into a region without
+new work — `region.rs`'s own comment at the unwired-optional branch says explicitly "this is what
+lets `pack_channels` fuse with only r/g wired," so multi_blend/mux converted this way would fuse
+exactly like pack_rgba does today, no region.rs changes needed.
+
+**The real tradeoff for Peter's call:**
+- **Perf, measured, not asserted.** The codegen wrapper pre-reads every DECLARED texture input
+  unconditionally (`textureSampleLevel` per input, before the body's `if use_N != 0u` gate even
+  runs) — this is separate from the use-flag folding, which only gates the *contribution*, not the
+  *sample*. The spike's generated 8-input kernel has exactly 8 `textureSampleLevel` calls and 11
+  `@binding` declarations (1 uniform + 1 sampler + 8 textures + 1 output) — always, regardless of
+  how many of the 8 are actually wired. Today's `multi_blend::shader_for(k)` samples exactly `k`
+  textures and binds exactly `2+k+1` slots. A live-show preset with 2 wired inputs (the common
+  case per multi_blend.rs's own doc comment — "the summing shader is generated for the number of
+  *wired* inputs... so a 2-input blend... compiles a tight kernel with no dead taps") would go from
+  2 samples/dispatch today to 8 samples/dispatch always-8 — a 4x texture-sample increase with no
+  possible naga/backend DCE rescue, since the use-flag is a runtime uniform value, not a
+  compile-time constant, so the sample call can never be proven dead. `switch_texture`'s case is
+  worse in shape (not degree, since it already short-circuits to 1 dispatch via
+  `selected_input_branch`): its `MAX_INPUTS = 32`, so a static-max conversion would mean 32 always-
+  bound texture slots per instance — the perf hit isn't sampling (mux only reads the selected one
+  per the executor's branch-pruning) but the sheer binding-table size and uniform layout, and 32
+  static ports is a much bigger vocabulary jump than multi_blend's 8.
+- **UI/editor implications — a real blocker, not a nuisance.** The blanket `EffectNode` impl for
+  any `Primitive` (`primitive.rs` line ~549) reads `inputs()` straight off `P::INPUTS`, a
+  compile-time `&'static` const array — there is no per-instance override hook once a node goes
+  through the `primitive!` macro / `Primitive` trait. `MultiBlend`/`MuxTexture` currently hand-roll
+  `EffectNode` precisely so `reconfigure()` can mutate the live `inputs: Vec<NodeInput>` field and
+  visually grow/shrink the node in the editor as `num_inputs` changes. Converting to the codegen
+  path via `PrimitiveSpec::INPUTS` freezes that list at compile time — `standalone_for_spec::<Self>()`
+  always reads the same 8 (or 32) ports. It's *possible* to keep a hand-rolled `EffectNode` for the
+  live authoring surface while separately implementing `PrimitiveSpec` for codegen (nothing enforces
+  the two agree), but that means hand-maintaining two divergent pictures of the node's shape — the
+  editor's dynamic list and codegen's static 8 — which is exactly the kind of invariant this
+  codebase avoids elsewhere. The `pack_rgba` precedent doesn't have this problem because it never
+  had a dynamic port count to begin with: its 4 ports are always visible, wired or not. Converting
+  multi_blend/switch_texture this way means giving up the "the node shrinks as I dial down
+  num_inputs" editor affordance and replacing it with "the node always shows all 8 (or 32) sockets,
+  wire only the ones you need" — a real UX change for an authoring surface Peter uses live.
+- **Codegen-side complexity if pursued for real:** low. No changes needed to `region.rs` or the
+  fusion-admission logic — the unwired-optional-Coincident path is already generalized and proven
+  by `pack_rgba`. The work is entirely in the primitive files: rewrite `multi_blend.rs` off its
+  hand-rolled `EffectNode` (dynamic ports, runtime `shader_for(k)`) onto the `primitive!` macro
+  with 8 static optional Coincident inputs + a `wgsl_body` fragment, prove generated-vs-hand parity
+  (mirroring the `pack_channels`/`trig_texture` parity tests in `codegen.rs`'s test module), and
+  decide the num_inputs/UI question above. `switch_texture`'s conversion is harder in a different
+  way — its `selected_input_branch` executor-level branch-pruning optimization (5-mode case: 5x → 1x
+  render cost) has no equivalent in the static-Coincident-sum shape; a mux converted this way would
+  need a different body strategy (a `select`/switch chain over 32 pre-read texture samples, which
+  reintroduces the "sample all N always" cost multiplied by mux's much higher `MAX_INPUTS`) or would
+  lose the short-circuit optimization entirely. That makes `switch_texture` a materially different,
+  harder problem than `multi_blend`, not just a bigger version of the same one.
+
+**Recommendation (spike input, not a decision):** worth doing for `multi_blend` if Peter accepts
+the UX tradeoff (always-8 static ports, no more shrink-to-fit) and the preset(s) using it don't hit
+the common 2–3-wired case hard enough for a 4x sample-count increase to matter on stage — the
+codegen-side work is small and the mechanism is already proven in production via `pack_rgba`.
+`switch_texture` is a harder call: its dynamic short-circuit (5x → 1x via branch pruning) is a real
+perf win today that a naive static conversion would give up, and its `MAX_INPUTS = 32` makes the
+always-bound-N cost much larger than multi_blend's 8 — recommend treating it as a separate, later
+decision from multi_blend's, not bundled into the same conversion.
 
 ### BUG-110 (osc-receiver-test-type-complexity-clippy-debt) — `manifold-playback`'s `--tests` clippy gate fails on `osc_receiver.rs`, unrelated to any of this session's changes — LOW (lint-only)
 **Status:** OPEN — found 2026-07-11 during `bug-wave1-lane-d-test-hygiene` (BUG-088/072 re-verification).
