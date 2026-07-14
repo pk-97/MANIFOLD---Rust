@@ -183,7 +183,7 @@ impl Application {
                 }
                 let view =
                     manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                full_reshape_from_def(view.canonical_def, param_id)
+                full_reshape_from_def(&view.canonical_def, param_id)
             }
             manifold_core::GraphTarget::Generator(lid) => {
                 let layer = self
@@ -200,7 +200,7 @@ impl Application {
                 let gp = layer.gen_params()?;
                 let view =
                     manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())?;
-                full_reshape_from_def(view.canonical_def, param_id)
+                full_reshape_from_def(&view.canonical_def, param_id)
             }
         }
     }
@@ -223,7 +223,7 @@ impl Application {
                 }
                 let view =
                     manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                Some(view.canonical_def.clone())
+                Some((*view.canonical_def).clone())
             }
             manifold_core::GraphTarget::Generator(lid) => {
                 let layer = self
@@ -237,7 +237,7 @@ impl Application {
                 }
                 let gp = layer.gen_params()?;
                 manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
-                    .map(|v| v.canonical_def.clone())
+                    .map(|v| (*v.canonical_def).clone())
             }
         }
     }
@@ -254,7 +254,7 @@ impl Application {
                     Some(d.clone())
                 } else {
                     manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
-                        .map(|v| v.canonical_def.clone())
+                        .map(|v| (*v.canonical_def).clone())
                 }
             }
             manifold_core::GraphTarget::Generator(lid) => {

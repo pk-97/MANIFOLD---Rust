@@ -328,7 +328,7 @@ fn preset_source_def(
     let preset_id = inst.effect_type().clone();
     let mut def = inst.graph.clone().or_else(|| {
         manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
-            .map(|v| v.canonical_def.clone())
+            .map(|v| (*v.canonical_def).clone())
     })?;
     // Snapshot the card's current slider values into the def's defaults so Make
     // Unique / Export freeze the configured look rather than the stock template.

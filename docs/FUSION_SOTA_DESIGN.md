@@ -1,6 +1,6 @@
 # Fusion SOTA — closing the freeze compiler's structural gaps
 
-**Status:** IN PROGRESS · 2026-07-14 · Fable 5 (with Peter in the room) · Sonnet 5 executing
+**Status:** SHIPPED · 2026-07-14 · Fable 5 design (with Peter in the room) · Sonnet 5 executing
 P1–P3 SHIPPED (markers module, segment worker robustness, refusal census committed as
 `docs/fusion_census.md` — no D4 default flipped, all four stand). P4a SHIPPED. **P5 SHIPPED**
 (Vec3 lift + D4 scope-expansion Vec4/Color lift, landed BEFORE P4b per the reordering below —
@@ -8,7 +8,26 @@ P1–P3 SHIPPED (markers module, segment worker robustness, refusal census commi
 `fusion_coverage_baseline` widened to effect+generator/flattened and its floor raised). **P4b
 SHIPPED** (closes BUG-114): the remaining five `draw_*` atoms + `blob_overlay` converted onto the
 codegen path; `BlobTracking.json` now forms a real 6-member fused region (18→13 estimated
-dispatches, `graph-tool fusion` measured). P6–P7 remain.
+dispatches, `graph-tool fusion` measured). **P6 SHIPPED**: cut rule 6 narrowed to `tex_out == 0`
+boundary only (was `!= 1`); the struct-return `BodyOutputs` wrapper extended from the buffer path
+into `generate_fused` (`N{i}BodyOutputs` per multi-output member, `InputSource::NodeOutput` field
+pick, `FusionRegion::outputs`/`RegionInput::MemberPort` carry the escaping port); voronoi_2d and
+block_displace_field (both already codegen-path, both already struct-return) both fuse now. Found
+and fixed in the same phase: a region-forming gap the narrowing exposed — a multi-output node's two
+ports independently unioning into otherwise-unrelated branches could bridge two components that
+only otherwise touched via an *excluded* gather wire, which `build_region` then correctly (but
+totally) refused; `partition_regions`' union step gained a gather-bridge guard (mirrors the existing
+cycle-convexity check) so the two components stay separate and connect via the same cross-region
+gather the multi-region model already relies on. Real-preset wins: VoronoiPrism, StarField (both
+fold voronoi_2d in) and Glitch (folds block_displace_field into its existing 2-region split) each
+gain a member; `fusion_coverage_baseline` raised 33/55/222→33/55/225. Census multi-output family:
+3→0 refusals (both real atoms no longer refused). **P7 SHIPPED**: `FUSED_EFFECT_CACHE` /
+`FUSED_GENERATOR_CACHE` / `SEGMENT_CACHE` values moved from `Box::leak`'d `&'static T` to
+`Arc<T>` with owned interiors (no more `leak_params`/`leak_ports`); LRU eviction at cap replaces
+refuse-to-insert (precedent: `EFFECT_CHAIN_LIFECYCLE.md`'s chain-pool eviction); negative gate
+`rg 'Box::leak' .../freeze/` returns zero hits. Canonical/bundled-preset views deliberately stay
+as they were — only fused (runtime-computed, evictable) artifacts moved. All seven phases (P1–P7)
+now shipped; the design is closed.
 **Prerequisites:** none for P1–P4; P5–P6 read P3's census numbers. The companion Sonnet sweep
 (BUG-135/141 includes fix, the 13-atom `CONVERSION_DEBT_LEDGER` conversion sweep, BUG-146 prewarm,
 BUG-115 spike, content-key normalization, tolerance/comment hygiene) is SEPARATE work with existing
@@ -48,7 +67,7 @@ P4 reuses); `docs/BUG_BACKLOG.md` BUG-114 (the `draw_*` gap this doc's P4 closes
 | `InputAccess` | `freeze/classify.rs:76–120` | `BufferIndex` named as planned-not-built at `:73`; `Coincident`/`CoincidentTexel`/`Gather`/`GatherTexel`/`BufferGather` shipped |
 | `buf_<port>` global convention | `freeze/codegen.rs:728,802,823,963` | Buffer bodies reference input array globals by name; codegen emits the binding |
 | Whole-fragment namespacing | `freeze/codegen.rs:1325` | Fused codegen namespaces a member's entire fragment (`n{i}_` fields; helpers too) |
-| Multi-output struct-return wrapper | `freeze/codegen.rs:1001,1030` | Standalone BUFFER atoms already do `buf_<port>[idx] = result.<port>` from a struct-returning body — the precedent P6 extends to texture atoms |
+| Multi-output struct-return wrapper | `freeze/codegen.rs:1001,1030` (buffer), `2385,2970` (fused texture, P6 SHIPPED) | Standalone BUFFER atoms already did `buf_<port>[idx] = result.<port>` from a struct-returning body — P6 extended the precedent into `generate_fused`'s texture path (`N{i}BodyOutputs` per member, `InputSource::NodeOutput` field pick) |
 | `draw_*` family | `primitives/draw_dots.rs` (+ markers/ticks/gauge/scanlines/connections, `blob_overlay`) | Plain-WGSL, `boundary_reason: Blocked`; one thread per output pixel, reads a `Channels[…]` detections array by index (`draw_dots.rs:89`) — a gather-shaped read, per-element in the mandate's sense |
 | Boundary families (under-fusing by design) | Buffer fan-out `region.rs:1528–1532`; nested stencils / `MAX_VIRTUAL_CHAIN=1` `region.rs:368,435`; multi-output texture atoms (cut rule 6); Vec3/Table params (cut rule 4); resample (cut rule 7) | Each a deliberate v1 refusal; none re-examined since shipping |
 | Census tools | `region.rs:2957` (`explain_presets`), `:2981` (`audit_all_presets`), both `#[ignore]`d; `graph_tool fusion` | Print per-node class + per-wire verdicts; do NOT bucket refusals by family or count dispatches saved |
@@ -284,10 +303,43 @@ per GIT_TREE_DISCIPLINE.
   `wave2_color_param_atoms_now_fuse_in_shipped_presets` proves all 5 real-preset atoms now fuse;
   `buffer_index_external_stays_external` proves `draw_dots` forms a real 2-member region with a
   synthetic neighbor via `partition_regions` — L2.
-- **P6 — multi-output texture atoms (D4).** Deliverables: struct-return texture wrapper (precedent
-  `codegen.rs:1001`), voronoi converted, cut rule 6 narrowed to "multi-output without struct-return
-  body". Gate: parity oracle; freeze suite; coverage ratchet. Demo: census delta — L2. Ordered
-  last of the lifts per D4 unless P3's numbers promote it.
+- **P6 — multi-output texture atoms (D4). SHIPPED.** Deliverables: struct-return texture wrapper
+  extended from the buffer-domain precedent (`codegen.rs`'s `BufferOutputs` wrapper) into
+  `generate_fused` — per-multi-output-member `N{i}BodyOutputs` struct (dedup-safe namespacing),
+  `InputSource::NodeOutput`/`RegionInput::MemberPort` carrying the escaping port so a wire into or
+  out of a multi-output producer picks the right field, `FusionRegion::outputs`/`Region::outputs`
+  widened from `Vec<NodeInstanceId>`/`Vec<u32>` to carry `(id, port)` pairs (a multi-output node can
+  escape through TWO distinct ports, each its own `dst_<k>`). Cut rule 6 narrowed from `tex_out != 1`
+  to `tex_out == 0` (both directions of the old check collapse to one: 0 outputs has no register to
+  thread, ≥1 always does — 2+ needs a struct, which every atom that declares 2+ texture outputs on
+  the codegen path already returns, by the `primitive!` authoring contract; no atom exercises
+  "multi-output without struct-return"). voronoi_2d and block_displace_field (both already
+  codegen-path, both already struct-return per prior work) both fuse. **Escalation found and
+  resolved in-phase:** the narrowing exposed a region-forming gap — a multi-output node's two ports
+  can each union independently into otherwise-separate branches that only otherwise touch via an
+  EXCLUDED gather wire (never unioned directly), bridging them into one component `build_region`
+  then correctly refuses WHOLESALE ("gather input wired from a member") — costing every member, not
+  just the gather pair (Glitch: `block_displace_field`'s `offset`→`combine_offset`→`remap` branch
+  bridges into its `hash`→`exposure`→…→`masked_mix` branch; `remap`'s output gather-feeds
+  `rgb_split.in`). Fixed at the root: `partition_regions`' union step gained a gather-bridge guard
+  (mirrors the existing cycle-convexity check exactly — same shape, refuses a tentative union that
+  would collapse a gather pair's endpoints into one region) so the two components stay separate and
+  connect via the SAME cross-region gather the multi-region model already relies on. Mirrored into
+  the two other copies of the union loop (`explain_presets`, the `component_build_results` test
+  helper) so they don't drift from the real algorithm. Gate: `cargo test -p manifold-renderer
+  --features gpu-proofs` (1559 passed, 8 pre-existing failures unchanged — 6 synthetic
+  `codegen::gpu_tests` + 2 prewarm-cache, verified identical on the pre-P6 HEAD via `git stash`) +
+  `--lib` (1221 passed) + scoped clippy clean; `refusal_census_matches_classify_node` lockstep
+  invariant green. Demo: `voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused`
+  (synthetic voronoi→hash_field_by_seed region, GPU pixel-parity) +
+  `glitch_block_displace_field_multi_output_matches_unfused` (the REAL bundled Glitch preset, both
+  BodyOutputs fields threaded to different consumers, GPU pixel-parity) +
+  `multi_output_producer_never_bridges_a_gather_pair_into_one_region` (the gather-bridge regression
+  guard) — L2. Real-preset wins beyond voronoi (D4 priced a zero-preset-impact outcome as
+  acceptable; this phase measured better): VoronoiPrism, StarField (voronoi folds in), Glitch
+  (block_displace_field folds in) each gain a region member; `fusion_coverage_baseline` floor raised
+  33/55/222→33/55/225 (net +0 presets/+0 regions/+3 atoms — no preset gained a NEW region, three
+  gained one more member each). Census: multi-output family 3→0 refusals.
 - **P7 — cache ownership (D5).** Deliverables: Arc-valued caches, owned view interiors, LRU
   eviction, the `freeze_has_no_leaks` negative gate, eviction unit test. Seam brief applies
   (standard §6): re-derive the consumer inventory with

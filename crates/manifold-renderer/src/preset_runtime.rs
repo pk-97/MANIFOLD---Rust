@@ -693,7 +693,7 @@ fn classify_segment_member(
     {
         return SegmentMember::Boundary;
     }
-    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def);
+    let effective = fx.graph.as_ref().unwrap_or(&view.canonical_def);
     if crate::node_graph::freeze::segment::def_is_segment_stateless(effective, primitives) {
         SegmentMember::Fuse
     } else {
@@ -753,7 +753,7 @@ pub fn prewarm_chain_segments(
                     let fx = active[k].1;
                     let view = loaded_preset_view_by_id(fx.effect_type())
                         .expect("eligibility implies view");
-                    (fx.graph.as_ref().unwrap_or(view.canonical_def), view)
+                    (fx.graph.as_ref().unwrap_or(&view.canonical_def), view)
                 })
                 .collect();
             let _ = freeze_install::fused_segment_view_for(&cards);
@@ -914,7 +914,7 @@ impl PresetRuntime {
                 /// chain order (currently-skipped cards excluded — they splice
                 /// nothing on the per-card path either).
                 cards: Vec<usize>,
-                view: &'static freeze_install::SegmentView,
+                view: std::sync::Arc<freeze_install::SegmentView>,
             },
         }
         // Skip note: `OnZero` skip in this runtime is STATIC per build — the
@@ -956,7 +956,7 @@ impl PresetRuntime {
                         let fx = active_effects[k].1;
                         let view = loaded_preset_view_by_id(fx.effect_type())
                             .expect("eligibility implies view");
-                        (fx.graph.as_ref().unwrap_or(view.canonical_def), view)
+                        (fx.graph.as_ref().unwrap_or(&view.canonical_def), view)
                     })
                     .collect();
                 match freeze_install::fused_segment_view_for(&cards) {
@@ -1013,7 +1013,7 @@ impl PresetRuntime {
                         splice_def_into_chain(
                             &mut graph,
                             (prev_node, prev_out_port),
-                            view.def,
+                            &view.def,
                             primitives,
                         )
                     else {
@@ -1207,8 +1207,8 @@ impl PresetRuntime {
             // every line below (splice, outer_param_index, bindings) is shape-
             // identical. `fused_view_for` returns `None` for any shape with no
             // fusable region (or a binding that would strand) → renders unfused.
-            let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(base_view.canonical_def);
-            let fused_view: Option<&LoadedPresetView> =
+            let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+            let fused_view: Option<std::sync::Arc<LoadedPresetView>> =
                 if crate::node_graph::freeze::install::should_render_fused(
                     preview_effect == Some(&fx.id),
                 ) {
@@ -1227,7 +1227,7 @@ impl PresetRuntime {
                     fx.effect_type().as_str()
                 );
             }
-            let view = fused_view.unwrap_or(base_view);
+            let view: &LoadedPresetView = fused_view.as_deref().unwrap_or(base_view);
             if is_skipped_for(view.skip_mode, &view.type_id, fx) {
                 // No workers added — previous output flows directly
                 // to the next effect.
@@ -1243,11 +1243,11 @@ impl PresetRuntime {
             // it always builds — recording a divergent error when we were trying
             // the user's edited graph or a fused kernel.
             let splice_def: &EffectGraphDef = if fused_view.is_some() {
-                view.canonical_def
+                &view.canonical_def
             } else if let Some(def) = &fx.graph {
                 def
             } else {
-                view.canonical_def
+                &view.canonical_def
             };
             let splice_result = match splice_def_into_chain(
                 &mut graph,
@@ -1269,7 +1269,7 @@ impl PresetRuntime {
                     match splice_def_into_chain(
                         &mut graph,
                         (prev_node, prev_out_port),
-                        base_view.canonical_def,
+                        &base_view.canonical_def,
                         primitives,
                     ) {
                         Some(r) => r,
@@ -2653,7 +2653,7 @@ impl PresetRuntime {
                         b.default_value,
                         ResolvedTarget::Node {
                             node: inst_id,
-                            param: static_param,
+                            param: std::borrow::Cow::Borrowed(static_param),
                         },
                         b.convert,
                         if b.user_added {
@@ -3936,9 +3936,9 @@ mod user_binding_tests {
         binding_id: &str,
         scale: f32,
     ) -> manifold_core::effect_graph_def::EffectGraphDef {
-        let mut def = loaded_preset_view_by_id(&ty)
+        let mut def = (*loaded_preset_view_by_id(&ty)
             .expect("preset view exists for type")
-            .canonical_def
+            .canonical_def)
             .clone();
         let meta = def
             .preset_metadata
@@ -6034,8 +6034,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
@@ -6139,7 +6139,7 @@ mod chain_fusion_tests {
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
-        let cards = [(view1.canonical_def, view1), (view2.canonical_def, view2)];
+        let cards = [(view1.canonical_def.as_ref(), view1), (view2.canonical_def.as_ref(), view2)];
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
 
@@ -6172,7 +6172,7 @@ mod chain_fusion_tests {
         // `graph_structure_version`, so the runtime takes the in-place
         // override path instead of rebuilding.
         let mut effects2 = effects.clone();
-        let mut edited = view2.canonical_def.clone();
+        let mut edited = (*view2.canonical_def).clone();
         {
             use manifold_core::effect_graph_def::SerializedParamValue;
             let clamp = edited
@@ -6329,8 +6329,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
         if seeded.is_none() {
@@ -6389,8 +6389,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
         if seeded.is_none() {
@@ -6532,8 +6532,8 @@ mod chain_fusion_tests {
             let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
             let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
             let cards = [
-                (view1.canonical_def, view1),
-                (view2.canonical_def, view2),
+                (view1.canonical_def.as_ref(), view1),
+                (view2.canonical_def.as_ref(), view2),
             ];
             if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
                 continue;
@@ -6612,8 +6612,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
@@ -6671,8 +6671,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[2].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
@@ -6733,8 +6733,8 @@ mod chain_fusion_tests {
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def, view1),
-            (view2.canonical_def, view2),
+            (view1.canonical_def.as_ref(), view1),
+            (view2.canonical_def.as_ref(), view2),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
