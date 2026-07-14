@@ -929,7 +929,7 @@ scope for a geometry-sourcing-only pass. Currently dormant either way:
 `scroll_offset()` is always 0 in the shipped build and neither symptom is user-reachable yet.
 
 ### BUG-045 (gap-ring-down-chase) — Tracker chases the transform's kernel ring-down during inter-note gaps — LOW (2.4 points on the notes gate; real-clip impact small)
-**Status:** OPEN
+**Status:** PARKED 2026-07-14 (bug-wave3 lane D, 1-attempt timebox per session brief) — reproduced and confirmed unchanged: `cargo run -p manifold-audio --example mod_harness --release -- --selftest` still reads `P2c notes: pct_sounding_hops_within_1st_of_gt_post_acquisition=87.6481 (gate >= 90) FAIL`, exact match to this entry (no drift since 2026-07-06). Did NOT attempt the two named do-not-retry tunings (already swept, confirmed dead ends), and did not attempt the untried value-trend discriminator either — the entry itself declines that direction as "knife-edge" (a new tuned constant between two distributions with only ~2x separation, where a genuine musical fade-out sits on the wrong side of it) needing either "a plateau-demonstrated sweep on real material or a smarter shape," neither of which fits a 1-attempt timebox without risking exactly the untested-magic-constant anti-pattern the entry warns against. No code changed.
 
 **Found 2026-07-06 while fixing BUG-042** (its remaining accuracy misses after the
 re-acquire-window fix). After every note release, the VQT's kernel memory presents a
