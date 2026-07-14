@@ -2990,6 +2990,20 @@ impl UIRoot {
         self.viewport.tracks_rect().contains(pos)
     }
 
+    /// Advance the inspector's per-frame motion (drawer-height tweens,
+    /// value-flash, dying-card collapse, tab-ink slide — everything
+    /// `InspectorCompositePanel::update` drives). Extracted
+    /// (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D4) so the graph
+    /// editor's `UIRoot` — which never sets `built` and so never runs the
+    /// rest of `update()` — can still tick its own inspector instance every
+    /// frame it presents. Calling this directly bypasses the `!self.built`
+    /// early return below by design; do not fold this into a full
+    /// `update()` call on the editor root (that flag also gates
+    /// main-window-only structure this instance doesn't have).
+    pub fn tick_inspector(&mut self) {
+        self.inspector.update(&mut self.tree);
+    }
+
     /// Per-frame update — push state changes to panels.
     pub fn update(&mut self) {
         if !self.built {
@@ -3009,7 +3023,7 @@ impl UIRoot {
         self.header.update(&mut self.tree);
         self.footer.update(&mut self.tree);
         self.layer_headers.update(&mut self.tree);
-        self.inspector.update(&mut self.tree);
+        self.tick_inspector();
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
         // D11 toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2): repaints its own alpha
@@ -3720,6 +3734,149 @@ mod region_structural_tests {
         assert!(
             ui.tree.all_roots_are_regions(),
             "build_inspector_in_rect left a stray root"
+        );
+    }
+}
+
+/// `GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4 (BUG-160), D4's tick-
+/// parity check: the graph editor's own `UIRoot` never sets `built`, so its
+/// `update()` early-returns and — before `tick_inspector` was extracted and
+/// wired into `present_graph_editor_window` — nothing ever advanced its
+/// inspector's per-card motion (drawer-height tweens, collapse, value-flash).
+/// A card's frame height flows through that same ticked state
+/// (`compute_height` reads `collapse_frac()`, which `tick_drawers` advances),
+/// so a never-ticked editor host would sit at a stale height while its rows
+/// built at their true size — the mechanism the audit named for BUG-160's
+/// overflow.
+#[cfg(test)]
+mod tick_parity_tests {
+    use super::*;
+    use manifold_ui::panels::param_card::CardContext;
+
+    /// A minimal one-param effect card config, built from scratch (not
+    /// reused from `manifold-ui`'s own private `mk_config` test helper,
+    /// which isn't reachable across the crate boundary) — every field is
+    /// `pub` on `ParamCardConfig`, so this fixture is a direct, honest
+    /// construction of the same shape `ui_bridge::state_sync` builds from
+    /// real project state.
+    fn fixture_config(collapsed: bool) -> manifold_ui::ParamCardConfig {
+        let n = 1;
+        manifold_ui::ParamCardConfig {
+            kind: manifold_ui::ParamCardKind::Effect,
+            name: "Fixture".into(),
+            params: vec![manifold_ui::ParamInfo {
+                param_id: std::borrow::Cow::Borrowed("amount"),
+                name: "Amount".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                whole_numbers: false,
+                is_angle: false,
+                exposed: true,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+                section: None,
+            }],
+            string_params: Vec::new(),
+            collapsed,
+            effect_index: 0,
+            effect_id: manifold_core::EffectId::new("bug160-fixture"),
+            enabled: true,
+            supports_envelopes: true,
+            has_drv: false,
+            has_env: false,
+            has_abl: false,
+            has_graph_mod: false,
+            layer_id: None,
+            driver_active: vec![false; n],
+            envelope_active: vec![false; n],
+            trim_min: vec![0.0; n],
+            trim_max: vec![1.0; n],
+            target_norm: vec![1.0; n],
+            env_decay: vec![1.0; n],
+            driver_beat_div_idx: vec![-1; n],
+            driver_waveform_idx: vec![-1; n],
+            driver_reversed: vec![false; n],
+            driver_dotted: vec![false; n],
+            driver_triplet: vec![false; n],
+            driver_free_period: vec![None; n],
+            audio: Default::default(),
+            automation_active: vec![false; n],
+            automation_overridden: vec![false; n],
+        }
+    }
+
+    /// Drives `UIRoot::tick_inspector` directly on an un-`built` root (the
+    /// exact state the editor's `UIRoot` is in permanently — `built` gates
+    /// only main-window-only structure, per D4's forbidden-moves list, so
+    /// the editor is never expected to flip it) with a live collapse tween —
+    /// the same per-card `tick_drawers` rail `drawer_height_anim` rides, and
+    /// the same rail this bug's card-frame height derives from
+    /// (`compute_height` -> `collapse_frac` -> `collapse_anim`, ticked only
+    /// by `tick_drawers`). Fails against the pre-fix code path (calling only
+    /// `update()`, which this root's `!built` early-return makes a no-op) —
+    /// this is the test that would have caught BUG-160's root mechanism.
+    #[test]
+    fn editor_tick_advances_inspector_motion() {
+        let mut root = UIRoot::new();
+        assert!(
+            !root.built,
+            "the editor UIRoot never sets built — that's D4's precondition"
+        );
+
+        root.inspector.set_card_context(CardContext::Author);
+        // First configure: nothing to preserve yet, so `sync_collapse_anim`
+        // snaps straight to the settled (expanded) height.
+        root.inspector.configure_master_effects(&[fixture_config(false)]);
+        let height_expanded = root
+            .inspector
+            .master_effect_mut(0)
+            .expect("card configured")
+            .compute_height();
+
+        // Second configure with the SAME effect identity: an edit, not a
+        // navigation, so the existing card is reused and `sync_collapse_anim`
+        // eases from here (D4: identically in both contexts) rather than
+        // snapping. The tween is armed but hasn't ticked yet — height is
+        // still the expanded value.
+        root.inspector.configure_master_effects(&[fixture_config(true)]);
+        {
+            let card = root.inspector.master_effect_mut(0).expect("card configured");
+            assert!(
+                card.is_collapse_animating(),
+                "flipping collapsed on an already-configured card must arm a tween"
+            );
+            assert_eq!(
+                card.compute_height(),
+                height_expanded,
+                "the tween is armed but not yet ticked — height must not have moved on its own"
+            );
+        }
+
+        // Prime `motion_last_tick` (the very first tick after arming a tween
+        // always sees dt=0 — no wall time has elapsed yet), then let real
+        // time pass and tick again — mirroring the editor's per-present-frame
+        // call in `present_graph_editor_window`.
+        root.tick_inspector();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        root.tick_inspector();
+
+        let height_after_tick = root
+            .inspector
+            .master_effect_mut(0)
+            .expect("card configured")
+            .compute_height();
+        assert!(
+            height_after_tick < height_expanded,
+            "tick_inspector on an un-built root must advance the collapse tween \
+             (height_after_tick={height_after_tick}, height_expanded={height_expanded}) — \
+             this is the exact mechanism BUG-160's card-height overflow came from"
         );
     }
 }

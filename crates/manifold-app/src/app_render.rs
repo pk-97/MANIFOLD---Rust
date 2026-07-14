@@ -3368,7 +3368,7 @@ impl Application {
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(front);
             let g0 = std::time::Instant::now();
-            self.present_graph_editor_window();
+            self.present_graph_editor_window(dt as f32);
             self.ui_profile.add("present_graph_editor", g0.elapsed());
             // Frame-fence sentinel must be the LAST commit of the frame's UI
             // encoders: the graph-editor window shares UIRenderer's vertex
@@ -3383,7 +3383,7 @@ impl Application {
             self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(0);
             let g0 = std::time::Instant::now();
-            self.present_graph_editor_window();
+            self.present_graph_editor_window(dt as f32);
             self.ui_profile.add("present_graph_editor", g0.elapsed());
             // Frame-fence sentinel: see the macos branch comment above.
             if let (Some(fence), Some(gpu)) = (&self.ui_frame_fence, &self.gpu) {
@@ -3449,7 +3449,7 @@ impl Application {
         self.editor_ui_graph.as_ref().map(|(_, ui)| ui.clone())
     }
 
-    fn present_graph_editor_window(&mut self) {
+    fn present_graph_editor_window(&mut self, dt: f32) {
         // Forward the editor's single-node selection to the content thread so
         // it can capture that node's output for the preview pane. Deduplicated
         // against the last send. A closed editor (`graph_canvas == None`)
@@ -3708,6 +3708,21 @@ impl Application {
         // out into the right lane. Selecting a card retargets the canvas; edits
         // mirror both windows next snapshot. Replaces the single watched
         // `editor_card`. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md (Change 3).
+
+        // Tick parity (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D4):
+        // the editor's `UIRoot` never sets `built`, so its own `update()`
+        // early-returns and would otherwise never advance drawer-height
+        // tweens / value-flash / fire meters — the card frame would sit at
+        // a stale height while the rows below build at their true size and
+        // overflow it (BUG-160). `tick_inspector` runs before the rebuild
+        // below so the advanced values are what this frame's `build_...`
+        // reads (mirrors the main window: `self.ws.ui_root.update()` then
+        // its own rebuild-on-dirty poll). `update_fire_meters` mirrored
+        // alongside it, same as the main window's call
+        // (`self.ws.ui_root.update_fire_meters`, above in this function's
+        // caller) — this also retires BUG-157's inspector half.
+        ws.ui_root.tick_inspector();
+        ws.ui_root.update_fire_meters(&self.content_state.fire_meters, dt);
 
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small, so a clear + rebuild is cheaper than dirty-tracking and

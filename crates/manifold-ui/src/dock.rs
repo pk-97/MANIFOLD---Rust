@@ -109,7 +109,13 @@ impl Dock {
             right_w: EDITOR_RIGHT_DEFAULT,
             bottom_h: 150.0,
             left_range: (260.0, 640.0),
-            right_range: (240.0, 560.0),
+            // D7 (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4): width
+            // VALUE stays per-window (this default, and wherever the user
+            // drags it to), but width POLICY — the clamp range — is shared
+            // with the main inspector's, so the fit rule (D3) has to hold
+            // across one range, not two: no narrower/wider than the main
+            // window's inspector can ever legally be.
+            right_range: (crate::color::MIN_INSPECTOR_WIDTH, crate::color::MAX_INSPECTOR_WIDTH),
             bottom_range: (90.0, 320.0),
             show_left: true,
             show_right: true,
