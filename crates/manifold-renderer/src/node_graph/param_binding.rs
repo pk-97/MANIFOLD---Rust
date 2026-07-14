@@ -136,7 +136,13 @@ pub enum ParamTarget {
     /// handle, which flatten prefixes. See [`ResolvedBinding::from_static`].
     Node {
         node_id: NodeId,
-        param: &'static str,
+        /// `Borrowed` for a compile-time/canonical param name; `Owned` for a
+        /// fuse-computed field name (`n{idx}_<param>`) — the FUSION_SOTA_DESIGN
+        /// D5 fix: this used to force a `Box::leak` per fuse-build (unbounded
+        /// past `FUSED_CACHE_CAP`); `Cow` lets a retargeted binding own its
+        /// field name instead, same trick already used by
+        /// [`ParamTarget::Composite::outer_name`].
+        param: Cow<'static, str>,
     },
     /// Escape hatch for routing that's neither composite nor a single
     /// node. Function pointer (no captures); for closures, build a
@@ -207,7 +213,11 @@ pub enum ResolvedTarget {
     Composite { outer_name: Cow<'static, str> },
     Node {
         node: NodeInstanceId,
-        param: &'static str,
+        /// Same `Cow` rationale as [`ParamTarget::Node::param`] — a resolved
+        /// binding lives inside `EffectSlot` for the chain's lifetime, so an
+        /// owned `Cow::Owned` field name is exactly as durable as the old
+        /// leaked `&'static str`, without the leak.
+        param: Cow<'static, str>,
     },
     Custom(fn(&mut Graph, f32)),
 }
@@ -365,7 +375,7 @@ impl ResolvedBinding {
             },
             ParamTarget::Node { node_id, param } => {
                 let node = resolve_node_id(node_map, node_id)?;
-                ResolvedTarget::Node { node, param }
+                ResolvedTarget::Node { node, param: param.clone() }
             }
             ParamTarget::Custom(f) => ResolvedTarget::Custom(*f),
         };
@@ -444,7 +454,7 @@ impl ResolvedBinding {
             core.default_value,
             ResolvedTarget::Node {
                 node: target_node,
-                param: target_param,
+                param: Cow::Borrowed(target_param),
             },
             convert,
             BindingSource::User,
@@ -517,7 +527,7 @@ impl ResolvedBinding {
             ResolvedTarget::Composite { outer_name } => handle
                 .expect("ResolvedTarget::Composite requires a CompositeHandle")
                 .set_param(graph, outer_name, pv),
-            ResolvedTarget::Node { node, param } => graph.set_param(*node, param, pv),
+            ResolvedTarget::Node { node, param } => graph.set_param(*node, param.as_ref(), pv),
             ResolvedTarget::Custom(f) => {
                 f(graph, value);
                 Ok(())
@@ -780,12 +790,12 @@ pub fn outer_routings_from_bindings(
                     // resolve. Skip rather than guess.
                     continue;
                 };
-                let Some(route) = h.inner_routing_for(outer_name.as_ref()) else {
+                let Some((n, p)) = h.inner_routing_for(outer_name.as_ref()) else {
                     continue;
                 };
-                route
+                (n, Cow::Borrowed(p))
             }
-            ResolvedTarget::Node { node, param } => (*node, *param),
+            ResolvedTarget::Node { node, param } => (*node, param.clone()),
             ResolvedTarget::Custom(_) => continue,
         };
         let Some(handle_str) = id_to_handle.get(&node_id.0) else {
@@ -1006,7 +1016,7 @@ mod tests {
             default_value: 0.5,
             target: ParamTarget::Node {
                 node_id: NodeId::new("feedback"),
-                param: "scale",
+                param: Cow::Borrowed("scale"),
             },
             convert: ParamConvert::Float,
             scale: 1.0,
@@ -1040,7 +1050,7 @@ mod tests {
             default_value: 0.5,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "scale",
+                param: Cow::Borrowed("scale"),
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
@@ -1060,7 +1070,7 @@ mod tests {
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
-                assert_eq!(param, "scale");
+                assert_eq!(param.as_ref(), "scale");
             }
             _ => panic!("expected Node target after resolution"),
         }
@@ -1105,7 +1115,7 @@ mod tests {
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
-                assert_eq!(param, "translate_x"); // pulled off AffineTransform's ParamDef list as a &'static str
+                assert_eq!(param.as_ref(), "translate_x"); // pulled off AffineTransform's ParamDef list as a &'static str
             }
             _ => panic!("user bindings always resolve to Node target"),
         }
@@ -1216,7 +1226,7 @@ mod tests {
             default_value: 0.0,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "nonexistent",
+                param: Cow::Borrowed("nonexistent"),
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
@@ -1241,7 +1251,7 @@ mod tests {
             default_value: 0.0,
             target: ResolvedTarget::Node {
                 node: mix,
-                param: "mode",
+                param: Cow::Borrowed("mode"),
             },
             convert: ParamConvert::EnumRound,
             source: BindingSource::Static,
@@ -1275,7 +1285,7 @@ mod tests {
             default_value: 0.5,
             target: ResolvedTarget::Node {
                 node: feedback,
-                param: "scale",
+                param: Cow::Borrowed("scale"),
             },
             convert: ParamConvert::Float,
             source: BindingSource::Static,
@@ -1312,7 +1322,7 @@ mod tests {
             default_value: 0.0,
             target: ResolvedTarget::Node {
                 node,
-                param: "scale",
+                param: Cow::Borrowed("scale"),
             },
             convert: ParamConvert::Float,
             source: BindingSource::User,
@@ -1360,7 +1370,7 @@ mod tests {
                 default_value: 0.95,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "translate_x",
+                    param: Cow::Borrowed("translate_x"),
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
@@ -1528,7 +1538,7 @@ mod tests {
                 default_value: 0.0,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "scale",
+                    param: Cow::Borrowed("scale"),
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,
@@ -1542,7 +1552,7 @@ mod tests {
                 default_value: 0.0,
                 target: ResolvedTarget::Node {
                     node: feedback,
-                    param: "translate_x",
+                    param: Cow::Borrowed("translate_x"),
                 },
                 convert: ParamConvert::Float,
                 source: BindingSource::Static,

@@ -59,10 +59,17 @@ pub struct LoadedPresetView {
     /// existing `ChainSpec::build_canonical_graph()` produces today —
     /// drift would be caught by the
     /// `bundled_presets_match_canonical_splices` test.
-    pub canonical_def: &'static EffectGraphDef,
-    /// Outer-card slider bindings, with all string fields converted
-    /// from owned to `&'static str` via [`Box::leak`].
-    pub bindings: &'static [ParamBinding],
+    ///
+    /// `Arc`, not `&'static`, since [`LoadedPresetView`] is the same struct
+    /// the FUSED cache uses (FUSION_SOTA_DESIGN D5): a canonical view builds
+    /// this once at startup (`Arc::new`, genuinely session-lived — no
+    /// per-edit leak) while a fused view builds a fresh `Arc` per fuse, owned
+    /// and evictable by the cache's LRU rather than `Box::leak`'d.
+    pub canonical_def: Arc<EffectGraphDef>,
+    /// Outer-card slider bindings. Owned (not leaked): same D5 rationale as
+    /// [`Self::canonical_def`] — the canonical build owns this once at
+    /// startup, a fused build owns a freshly retargeted copy per fuse.
+    pub bindings: Vec<ParamBinding>,
     pub skip_mode: SkipMode,
     /// Fusion binding-retarget map, populated only on **fused** views
     /// (empty for the plain JSON-loaded view). `(original stable
@@ -140,8 +147,11 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let metadata = def.preset_metadata.as_ref()?;
     Some(LoadedPresetView {
         type_id: type_id.clone(),
-        canonical_def: def,
-        bindings: leak_bindings(metadata),
+        // `bundled_preset_def` stays `&'static` (bundled-preset parsing is
+        // out of D5's scope) — one clone into the view's own `Arc`, at
+        // startup, per shipped preset. Bounded, not a per-edit leak.
+        canonical_def: Arc::new(def.clone()),
+        bindings: owned_bindings(metadata),
         skip_mode: skip_mode_from_def(&metadata.skip_mode),
         // Unfused view — no retargeting; user bindings resolve directly
         // against the canonical inner nodes.
@@ -149,13 +159,11 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     })
 }
 
-fn leak_bindings(meta: &PresetMetadata) -> &'static [ParamBinding] {
-    let owned: Vec<ParamBinding> = meta
-        .bindings
+fn owned_bindings(meta: &PresetMetadata) -> Vec<ParamBinding> {
+    meta.bindings
         .iter()
         .map(|b| binding_def_to_runtime(b, meta.params.iter().find(|p| p.id == b.id)))
-        .collect();
-    Box::leak(owned.into_boxed_slice())
+        .collect()
 }
 
 fn binding_def_to_runtime(
@@ -186,13 +194,13 @@ fn binding_def_to_runtime(
 
 fn target_def_to_runtime(def: &BindingTarget) -> ParamTarget {
     match def {
-        BindingTarget::Node { node_id, param } => {
-            let param: &'static str = Box::leak(param.clone().into_boxed_str());
-            ParamTarget::Node {
-                node_id: node_id.clone(),
-                param,
-            }
-        }
+        BindingTarget::Node { node_id, param } => ParamTarget::Node {
+            node_id: node_id.clone(),
+            // Owned, not leaked: `ParamTarget::Node::param` is `Cow` now
+            // (D5) — a canonical binding's param name is a one-time owned
+            // allocation at startup instead of a `Box::leak`.
+            param: Cow::Owned(param.clone()),
+        },
         BindingTarget::Composite { outer_name } => ParamTarget::Composite {
             outer_name: Cow::Owned(outer_name.clone()),
         },
@@ -217,7 +225,7 @@ fn skip_mode_from_def(def: &SkipModeDef) -> SkipMode {
 /// canonical def fails to materialize (mismatched primitives,
 /// unsupported version) — caller treats that as "no active graph".
 pub fn snapshot_for_view(view: &LoadedPresetView) -> Option<GraphSnapshot> {
-    let mut snap = GraphSnapshot::from_def(view.canonical_def)?;
+    let mut snap = GraphSnapshot::from_def(&view.canonical_def)?;
     snap.outer_routings = outer_routings_from_view(view);
     Some(snap)
 }
@@ -271,9 +279,9 @@ pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRoutin
         std::collections::HashMap::new();
     collect_node_handles(&view.canonical_def.nodes, &mut handle_by_id);
     let mut out = Vec::with_capacity(view.bindings.len());
-    for binding in view.bindings {
+    for binding in &view.bindings {
         let (node_id, inner_param) = match &binding.target {
-            ParamTarget::Node { node_id, param } => (node_id, *param),
+            ParamTarget::Node { node_id, param } => (node_id, param.clone()),
             _ => continue,
         };
         let Some(handle) = handle_by_id.get(node_id.as_str()) else {
@@ -326,14 +334,13 @@ mod tests {
             .expect("assemble azalea import graph");
 
         // Build the LoadedPresetView the pristine path builds — same
-        // canonical_def + leaked bindings + skip_mode `build_view` produces,
+        // canonical_def + owned bindings + skip_mode `build_view` produces,
         // just from the imported def instead of a bundled catalog entry.
-        let def: &'static EffectGraphDef = Box::leak(Box::new(def));
-        let meta = def.preset_metadata.as_ref().expect("import def carries metadata");
+        let meta = def.preset_metadata.clone().expect("import def carries metadata");
         let view = LoadedPresetView {
             type_id: PresetTypeId::from_string("test.gltf_import".to_string()),
-            canonical_def: def,
-            bindings: leak_bindings(meta),
+            canonical_def: Arc::new(def),
+            bindings: owned_bindings(&meta),
             skip_mode: skip_mode_from_def(&meta.skip_mode),
             fused_retarget: AHashMap::default(),
         };

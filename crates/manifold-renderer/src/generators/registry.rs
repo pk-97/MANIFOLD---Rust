@@ -192,7 +192,7 @@ impl GeneratorRegistry {
             // rule, via the one shared `should_render_fused`.
             let render_def = if crate::node_graph::freeze::install::should_render_fused(is_watched) {
                 match crate::node_graph::freeze::install::fused_generator_def_for(&def) {
-                    Some(fused) => fused.clone(),
+                    Some(fused) => (*fused).clone(),
                     None => def,
                 }
             } else {
