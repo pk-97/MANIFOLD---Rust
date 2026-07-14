@@ -63,6 +63,9 @@ impl ClipBody {
 /// was pure per-frame cost. The clips' depth comes from the inset card + identity
 /// border, not a shadow.)
 pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
+    if !color::SHADOWS_ENABLED {
+        return;
+    }
     for c in clips {
         if !c.selected || !c.visible() {
             continue;
