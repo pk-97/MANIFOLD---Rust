@@ -2448,6 +2448,7 @@ dependencies = [
  "manifold-core",
  "manifold-foundation",
  "manifold-gpu",
+ "manifold-io",
  "manifold-native",
  "manifold-playback",
  "manifold-ui",

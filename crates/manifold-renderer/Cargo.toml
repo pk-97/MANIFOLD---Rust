@@ -39,6 +39,13 @@ core-foundation = "0.9"
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
 # so a single test may acquire it more than once without deadlocking.
 parking_lot = { workspace = true }
+# FUSION_SOTA P3 census: loads the canonical-fixture-liveschool `.manifold`
+# project to walk its `embedded_presets` (per-instance forked/edited graph
+# defs) alongside the bundled preset library. Not a new crate-graph edge —
+# `renderer` already depends on `playback`, which depends on `io` — so this
+# only makes an already-transitive edge direct, test-only, dev-dependency
+# scoped. Precedent for the fixture-path resolution: `manifold-io/tests/load_project.rs`.
+manifold-io = { path = "../manifold-io" }
 
 [[bin]]
 name = "check-presets"
