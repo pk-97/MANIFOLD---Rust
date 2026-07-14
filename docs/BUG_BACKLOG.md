@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-160 | **editor-window-unification-inspector-card-layout-regressions** | Inspector cards misfit their buttons/controls after the EDITOR_WINDOW_UNIFICATION landing (2026-07-14) — regression per Peter's live report; P1's byte-diff verification passed, so it's P2/P3 or a fixture-uncovered configuration. Not investigated. MED-HIGH (UI regression). |
 | BUG-159 | **timeline-scroll-past-playhead-violent-snapback** | Scrolling the arrangement past the playhead during playback violently snaps the view back — playhead-follow fights the user's gesture instead of yielding to it (Ableton-style smooth limit expected). Reported by Peter 2026-07-14. MED (performance-surface feel). |
 | BUG-158 | **mapped-param-edits-snap-back-no-two-way-binding** | A param already mapped to a card slider (or driven by another port) can't be adjusted in the graph editor — the edit snaps back to the mapped value. Mechanism located: the port-shadows-param convention (`EffectNodeContext::scalar_or_param`, `effect_node.rs:358`) returns the wired value unconditionally, so the param write never reaches the render and the UI re-reads the driven value. Peter wants two-way behaviour between node, card, and other ports. Reported by Peter 2026-07-14. MED-HIGH (authoring surface). |
 | BUG-157 | **editor-perf-hud-never-ticked-shows-dashes-forever** | The graph-editor window's own `perf_hud` overlay, if ever opened on its own `UIRoot`, would render all values as permanent `"—"` placeholders — nothing calls `push_values()` for that instance (`UIRoot::update()` is `built`-gated and the editor's `UIRoot` is never `built`). Currently unreachable: no keyboard/UI path opens the editor's own perf HUD today (only the main window's is wired via `toggle_performance_hud`). LOW. |
@@ -71,9 +72,9 @@ or human can read it, and it needs no external tool.
 | BUG-124 | **mesh-primitive-tests-clippy-debt-under-tests-features** | `cargo clippy -p manifold-renderer --tests --features gpu-proofs -- -D warnings` fails with 12 pre-existing `needless_range_loop`/`manual_range_contains`/`identity_op` errors in `push_along_normals.rs`/`scatter_on_mesh.rs`/`taper_mesh.rs`/`twist_mesh.rs`/`revolve_curve.rs` test modules — none touched by the session that found it (REALTIME_3D §11 P9). The routine per-phase gate (`clippy -p <crate> -- -D warnings`, no `--tests`) stays clean, which is how this drifted unnoticed. Fix shape: mechanical rewrites in the five files; optionally fold `--tests --features gpu-proofs` into the landing-time full-workspace sweep. LOW. |
 | ~~BUG-123~~ FIXED | **mesh-edges-capacity-vs-active-count** | FIXED @ `1b854d45` — optional `active_count` scalar input mirroring `node.range` overrides the buffer-capacity-derived vertex count. |
 | BUG-122 | **graph-editor-node-face-loses-type-name-when-custom-named** | Once a node is given a custom (author) title, the node face shows only that name — the underlying type (e.g. `node.blur`, `node.mix`) is nowhere on the card, not even as a subtitle or tooltip. Root cause found: `display_label()` (`snapshot.rs:838`) returns the author title outright when set, never combining it with the friendly/type label; the `(WGSL)` suffix is the only case that appends anything. Shipped behavior since `ebd48cde` (2026-06-03), not a recent regression. Fix shape: show both, e.g. a secondary type line/tooltip, or a "Custom Name — Blur" compound header. |
-| BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
+| BUG-121 | **graph-editor-effect-card-missing-mapping-drawer-chevron** | ESCALATED HIGH (Peter 2026-07-14: "critical as it means users can't edit mappings"; not project-state-dependent). The graph editor's effect/generator card no longer shows the sideways slider-mapping (param range) drawer chevron. Strong lead, not yet confirmed live: `ParamCardPanel::context` defaults to `CardContext::Perform`, and `set_context(CardContext::Author)` — the call the "dedicated panel" host is supposed to make once — has zero production call sites in the current tree (only in `param_card.rs`'s own tests); the chevron and its `OpenCardMapping` action are gated entirely behind `author && info.mappable`. If that's really the live path, the drawer is unreachable app-wide, not just visually missing on this card. Fix shape: find/restore the host's `set_context(Author)` call; confirm live before treating as root-caused. |
 | BUG-120 | **grid-terrain-winding-disagrees-with-vertex-normals** | Suspected (unverified at the emitter): the grid_mesh -> make_triangles chain emits triangles whose winding-derived face normals point -Y while the vertices carry +Y shading normals. Exposed 2026-07-11 by scatter_on_mesh align_to_normal planting ~98% of Scene 2 instances upside-down/underground; scatter now orients to vertex normals (fixed at the consumer), but any future winding consumer (backface culling, facet_normals-on-terrain, GPU culling passes) will hit the same disagreement. Fix shape: assert/normalize winding in make_triangles against the source vertex normals, or document winding as non-authoritative engine-wide. LOW until a winding consumer ships. | make_triangles / grid_mesh |
-| BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | CHARACTERIZED (VOLUMETRIC_LIGHT_DESIGN.md P1, 2026-07-13): `apply_fog` IS correctly distance-scaled; the "milk" symptom is saturation — a bounded subject's depth range is small relative to fog's `1/density` decay length, so the fog fraction barely varies across it (measured Δ 1.1–2.5 percentage points across a subject-scale depth slice at camDistance 9/30, vs 15–30% differentiation across a wide-range scene). Absorbed by the shafts design, which SHIPPED 2026-07-13 (P1–P3) — but whether it actually fixes this is UNVERIFIED (the shafts' own demos don't show a legible sculpting effect; no re-render of the original repro scene yet). | render_scene / atmosphere |
+| BUG-118 | **render-scene-fog-washes-out-instead-of-depth-grading** | DEFERRED — Peter 2026-07-14: "I don't want bug-118 worked on"; on hold at his call. CHARACTERIZED (VOLUMETRIC_LIGHT_DESIGN.md P1, 2026-07-13): `apply_fog` IS correctly distance-scaled; the "milk" symptom is saturation — a bounded subject's depth range is small relative to fog's `1/density` decay length, so the fog fraction barely varies across it (measured Δ 1.1–2.5 percentage points across a subject-scale depth slice at camDistance 9/30, vs 15–30% differentiation across a wide-range scene). Absorbed by the shafts design, which SHIPPED 2026-07-13 (P1–P3) — but whether it actually fixes this is UNVERIFIED (the shafts' own demos don't show a legible sculpting effect; no re-render of the original repro scene yet). | render_scene / atmosphere |
 | BUG-117 | **render-generator-preset-silently-under-renders-async-loaded-presets** | The `render-generator-preset` look-dev CLI has no wait-for-convergence signal, so a preset with a slow background parse/decode (large glTF, `image_folder`, DNN plugins) can write an incomplete PNG with no warning — same class as (fixed) BUG-100, never ported to this general tool. Fix shape: port BUG-100's N-consecutive-identical-frames convergence check into `render_generator_preset.rs`. LOW (dev-tooling only, no runtime/show-time path affected). |
 | BUG-116 | **fire-meter-display-ballistics-reads-as-low-fps** | Fire meters read as updating at low FPS despite a 60fps capture/snapshot/UI pipeline — `MeterIds::update`'s intentional peak-hold smoothing (BUG-109 P5: `PEAK_HOLD_SECONDS = 0.25`, `PEAK_DECAY_PER_SEC = 5.0`) trades "a millisecond transient stays visible" for a chunkier feel. Fix shape: tune the ballistics down, or split into an instant live bar + a separate thin peak-hold tick. Deferred by Peter 2026-07-11 — cosmetic only, the edge-detector reads the raw signal. LOW (deferred by design). |
 | BUG-115 | **mux-multiblend-dynamic-arity-blocks-codegen-conversion** | `node.switch_texture` (5 presets) and `node.multi_blend` are fusion boundaries mid-chain: their dynamic port list (`num_inputs` rebuilds ports per instance; multi_blend synthesizes WGSL for N inputs at runtime) can't be expressed in the static `PrimitiveSpec` the freeze codegen reads. Half-day spike DONE 2026-07-14 (see detail below): the static-max-arity + optional-Coincident + `0u` use-flag shape works technically (already proven in production by `node.pack_rgba`) but costs a real 4x texture-sample increase for multi_blend's common 2–3-wired case and loses the editor's dynamic port-shrink UX; switch_texture is a harder, separate call (32-input vocabulary, loses its 5x→1x branch-pruning short-circuit). Peter's call owed on whether to pursue. LOW (working atoms, dispatch-cost only). |
@@ -95,9 +96,9 @@ or human can read it, and it needs no external tool.
 | ~~BUG-088~~ FIXED | **pre-existing-clippy-tests-gate-dirty-since-f1-landing** | FIXED @ `78e97d4a` — the 3 `audio_mixdown.rs` lints (`cloned_ref_to_slice_refs` x2, `needless_range_loop`) rewritten with `std::slice::from_ref` / `.iter().zip().enumerate()`. `osc_timecode.rs:172`'s `doc_lazy_continuation` no longer reproduces under the current toolchain (file unchanged) — nothing to fix. Surfaced a separate, unrelated pre-existing `osc_receiver.rs` lint while isolating the gate — logged as BUG-110. |
 | ~~BUG-086~~ FIXED | **recording-audio-track-under-covers-duration-on-longer-takes** | FIXED 2026-07-13 (recording-sync lane) — root cause was NOT the native encoder: `WriteAudioSamples`'s backpressure gate was instrumented with a counter 2026-07-11 and repeatedly measured 0 drops on runs that still fell short, falsifying it per the diagnosis protocol. The real cause was `recording_soak.rs`'s OWN synthetic-audio pusher: `push_realtime_audio_chunk` fed a bounded `ringbuf::HeapRb` (~5s capacity) via `push_slice`, discarded its return value, and advanced its `pushed_frames` bookkeeping by the INTENDED push amount regardless of what the ring actually accepted — so a transient overflow under unpaced/encoder-stress timing bursts was silently discarded, never retried, a harness-side loss with nothing recording it happened. Fixed by tracking the real accepted count (self-heals the backlog on the next call). Verified: 3x paced 2-min 1080p soaks post-fix measured audio_duration_s at 120.0087s/120.0102s/120.0115s (<0.01% off, both drop counters 0 throughout); two paced 1-min runs (720p/1080p) measured 60.0038s/60.0102s; the unpaced/encoder-stress 2-min run — previously the reliable repro — now measures 120.0007s. Landed together with BUG-085 (same silent-drop class rule: no path may return success on a dropped buffer). `LiveRecordingPlugin.m`'s audio backpressure gate was ALSO hardened while investigating (now bounded-spin-waits like the video path before counting a drop, and returns a real error code instead of `LR_OK` on drop) — real defect per the class rule, though it turned out not to be BUG-086's cause. |
 | ~~BUG-085~~ FIXED | **recording-frames-recorded-overstates-async-append-drops** | FIXED 2026-07-13 (recording-sync lane) — `frames_recorded` no longer accumulates from `LiveRecorder_EncodeVideoFrame`'s synchronous LR_OK return (that only proves the frame was queued for async append, not that it landed). Native: a `videoFramesAppendDropped` atomic counter (+ `LiveRecorder_GetVideoFramesAppendDropped`) now counts every way the async `appendPixelBuffer:` call can fail (backpressure, writer not Writing, append returning NO, an exception). Rust: `recording_thread::run` reads that counter and calls `LiveRecorder_Finalize` (which drains the append queue before returning its count) for the ground truth, and returns a `RecordingStats{frames_recorded, frames_sync_failed, video_append_dropped}` instead of an untrustworthy synchronous tally; `LiveRecordingSession::stop()` sums every drop source (`frames_dropped` now includes async-append drops, not just pool exhaustion) so `frames_recorded + frames_dropped` always equals frames submitted. `pool_accounting_consistent`'s forced-backpressure test tightened from `pts.len() <= frames_recorded` to exact equality, plus `dropped > 0`; green 3x. |
-| BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Fix path settled (Peter 2026-07-11): dedicated Opus design session + its own implementation session; not a bug-wave item.** |
+| BUG-080 | **param-manifest-construction-not-a-unified-safe-gate** | The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard, not SOTA: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. Fix shape (design pass, NOT a patch): make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried this session and is unsafe for exactly the reasons above (design doc §2 D1 priced + rejected it; see the 2026-07-09 double-build escalation). MEDIUM (design-quality / latent-robustness). **Design WRITTEN 2026-07-14: `docs/PARAM_MANIFEST_GATE_DESIGN.md` — executes as its P1 inside bug-wave lane B; the doc is the brief, never patch this outside it.** |
 | ~~BUG-079~~ FIXED | **missing-preset-fails-silently-no-onscreen-signal** | FIXED @ `834fdaa6` — an unresolved preset template now surfaces in the existing BUG-063 "opened with repairs" load-time toast instead of only an `eprintln`. |
-| BUG-076 | **inspector-scroll-underestimates-content-height** | `layer_scroll`/`master_scroll`'s `max_scroll()` clamps to ~13-20px on a 9-card stack that's visibly ~1200px too tall for its viewport (LOW). 2026-07-13: the drawer-tween undercounting theory was tested and RULED OUT for the single-configure/no-tick path; root cause still open, see full entry. |
+| ~~BUG-076~~ FIXED | **inspector-scroll-underestimates-content-height** | Closed as not-reproducible, Peter's call 2026-07-14 — two investigations found no mechanism, fixture tests pass, doesn't reproduce on the rig. Reopen if a tall inspector stack ever won't scroll live. |
 | ~~BUG-074~~ FIXED | **audio-mixdown-flaky-under-parallel-tests** | FIXED @ `78e97d4a` — same `TestDir` temp-path-collision root cause as BUG-090/BUG-106 (GPU-contention suspect ruled out: the mixdown render path is pure CPU decode/resample). Fixed with a per-process atomic sequence number in the `TestDir` path. |
 | BUG-073 | **ui-snap-script-drawer-tween-never-ticks** | `--script` harness has no per-frame tick, so a mod armed mid-script renders its drawer at a permanently zero-height clip region (unclickable rows) until the fixture pre-arms the state instead (LOW) |
 | ~~BUG-072~~ FIXED | **audio-mixdown-all-targets-clippy-debt** | FIXED @ `78e97d4a` — same fix as BUG-088: `std::slice::from_ref` + `.iter().zip().enumerate()` rewrites in `audio_mixdown.rs`. |
@@ -141,6 +142,29 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-160 (editor-window-unification-inspector-card-layout-regressions) — inspector cards no longer lay out properly (buttons and controls don't fit) after the editor-window-unification landing — MED-HIGH UI regression, reported by Peter 2026-07-14
+**Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
+
+**Symptom** — after EDITOR_WINDOW_UNIFICATION landed (P1–P3, on main 2026-07-14, merge
+`a0eba10c`), inspector cards show layout misfits: buttons and controls don't fit their
+cards properly. Peter attributes it to the unification work ("the editor unification
+work also introduced new bugs where the inspector cards don't fit properly with their
+buttons etc"). Exact scenes and cards not yet enumerated.
+
+**Root cause** — unknown, not investigated. Suspect surface: the P1 shared-pass
+extraction (`tree_passes.rs::render_tree_overlay_passes`) and any width/metrics
+divergence between the main-window inspector path and the unified path. Note P1's own
+I4 verification byte-diffed the `timeline`/`states`/`inspector` ui-snap scenes and
+called them equivalent (modulo BUG-153's nondeterminism) — so either the regression
+came in with P2/P3, or it lives in a configuration the fixtures don't cover. That
+discrepancy is itself a lead.
+
+**Fix shape** — bisect the affected scene against the pre-unification tip
+(`ui-snap` PNG diff is the oracle); fix at the layout source per
+`single-source-y-layout`, never per-widget nudges; regression = PNG diff on the
+affected scenes pinned into the fixture set (extend a fixture to cover the failing
+configuration if the current ones render clean).
 
 ### BUG-159 (timeline-scroll-past-playhead-violent-snapback) — scrolling past the playhead during playback violently snaps the view back; should be a smooth edge limit like Ableton — MED (performance-surface feel), reported by Peter 2026-07-14
 **Status:** OPEN — reported by Peter 2026-07-14 during the bug-triage session; not investigated.
@@ -303,8 +327,8 @@ to Peter before landing.
 
 **Fix shape** — `display_label` (or its caller) should combine both when an author title is set, not choose one: e.g. a small secondary type line under the header, a tooltip that always surfaces the type id, or a "Custom Name — Friendly Type" compound header. The `(WGSL)` marker's append-not-replace pattern for `wgsl_compute` is the precedent to generalize.
 
-### BUG-121 (graph-editor-effect-card-missing-mapping-drawer-chevron) — sideways slider-mapping drawer chevron missing from the effect/generator card — MED authoring surface, suspected unreachable
-**Status:** OPEN — reported live by Peter 2026-07-11; logged per his call. Mechanism located but not confirmed against a live repro this session.
+### BUG-121 (graph-editor-effect-card-missing-mapping-drawer-chevron) — sideways slider-mapping drawer chevron missing from the effect/generator card — HIGH authoring surface (users can't edit mappings at all)
+**Status:** OPEN — reported live by Peter 2026-07-11; logged per his call. Mechanism located but not confirmed against a live repro this session. 2026-07-14 (Peter): NOT project-state-dependent, and escalated — "this is critical as it means users can't edit mappings." His read matches the located mechanism below: the graph editor is missing the UI wiring/flag that enables the drawer (no production `set_context(CardContext::Author)` call), so the mapping surface is unreachable, full stop. First item in bug-wave lane A.
 
 **Symptom** — The graph editor's effect card (and, by the same code path, the generator card) has lost the right-edge chevron that opens the sideways drawer for a param's slider mapping / range (drag trim range, Ableton range, etc.).
 
@@ -324,7 +348,7 @@ to Peter before landing.
 **Fix shape** — read make_triangles' emission order against grid_mesh row-major layout; if winding is inverted, either fix the emission order (check draw paths that might depend on current order) or write the engine-wide rule "vertex normals are authoritative, winding is not" into DEVELOPMENT_REFERENCE.md.
 
 ### BUG-118 (render-scene-fog-washes-out-instead-of-depth-grading) — atmosphere fog reads as uniform washout, not distance-graded haze — MED look-quality / render_scene
-**Status:** OPEN — root cause CHARACTERIZED by the V6 sweep (2026-07-13, VOLUMETRIC_LIGHT_DESIGN.md P1, numbers below); the shafts design (P1–P3) has now SHIPPED (2026-07-13), but whether it actually resolves this bug's original complaint is UNVERIFIED, not confirmed: P2/P3's own acceptance demos don't produce a visually legible light-driven sculpting effect (see that design's landing report and its status line) — no session has re-rendered the original Apricot Weather macro-scale repro scene with shafts on to confirm the milk-washout symptom is actually gone in practice. Do not mark this FIXED until that re-render happens and someone looks. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1–P3)**.
+**Status:** DEFERRED — Peter, 2026-07-14: "I don't want bug-118 worked on." On hold at his call; no session touches it until he revives it. Prior state, kept for that day: root cause CHARACTERIZED by the V6 sweep (2026-07-13, VOLUMETRIC_LIGHT_DESIGN.md P1, numbers below); the shafts design (P1–P3) has now SHIPPED (2026-07-13), but whether it actually resolves this bug's original complaint is UNVERIFIED, not confirmed: P2/P3's own acceptance demos don't produce a visually legible light-driven sculpting effect (see that design's landing report and its status line) — no session has re-rendered the original Apricot Weather macro-scale repro scene with shafts on to confirm the milk-washout symptom is actually gone in practice. Do not mark this FIXED until that re-render happens and someone looks. **Absorbed-by: `docs/VOLUMETRIC_LIGHT_DESIGN.md` (2026-07-13, D4/P1–P3)**.
 
 **Symptom** — `node.atmosphere` fog at even low density (0.04) washes out the whole
 frame uniformly: near geometry loses contrast as much as far geometry, so fog reads
@@ -641,7 +665,7 @@ native-clock caller) deserves a dedicated pass with its own review, not a rider 
 quantize fix. F2 left this code untouched and unexercised by its own changes.
 
 ### BUG-080 (param-manifest-construction-not-a-unified-safe-gate) — manifest construction has no single safe gate; "partially built" is an observable state — MED (design-quality / latent-robustness; wants an Opus design pass)
-**Status:** OPEN — fix path settled with Peter 2026-07-11: a dedicated design session (Opus) followed by its own implementation session. Not a bug-wave item; do not patch it inside a fix sweep.
+**Status:** OPEN — design WRITTEN 2026-07-14: `docs/PARAM_MANIFEST_GATE_DESIGN.md` (Fable, same-day session — supersedes the "dedicated Opus session" plan settled 2026-07-11; Peter asked for the design now so the bug wave can execute it). Executes as P1 of that doc inside bug-wave lane B. Still not a patch-in-a-sweep item — the design doc is the brief; do not fix this outside it.
 
 The param manifest (an instance's live knob list) is built at deserialize AND rebuilt by a later `reconcile_param_manifests` pass, because deserialize can't see project-embedded presets yet. Consumers that read `.params` *between* the two — a direct `serde_json::from_str::<PresetInstance>`, the keep-don't-drop backstop, the legacy audio-trigger migration, ~18 tests — depend on the deserialize-time build being correct. It works today only because the double-build papers over the timing; it's a latent hazard: a future load path added without a reconcile silently inherits an empty/partial manifest (the BUG-036 class). Root cause: manifest construction has no single safe gate — "partially built" is an observable, readable state. **Fix shape (design pass, NOT a patch):** make a half-built manifest un-observable — one construction gate every load/paste/bare-read passes through, OR a type-state where params can't be read until reconciled, OR deserialize carries enough context to build complete in one shot. The naive "build once in reconcile" was tried 2026-07-09 and is unsafe for exactly those reasons (design doc §2 D1 priced + rejected it).
 
@@ -741,48 +765,6 @@ shorter of two overlapping clips — can't happen on projects saved by current b
 a write-time invariant) and this dangling-reference purge. Peter's hard requirement — "missing
 media must never delete a clip" — is **already the behavior**; the rescue-path priority drops
 accordingly (a *relink* prompt for missing media would be the higher-value follow-up if any).
-
-### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
-**Status:** OPEN — 2026-07-13 (`8d37d5e0`): the drawer-tween undercounting theory below was built and tested (a `ParamCardPanel`-level and an `InspectorCompositePanel`-level test with a 9-card stack, several audio-mod drawers armed at `configure()` time, zero `tick_drawers` calls) and RULED OUT — a card's `drawer_height_anim` is already snapped (not eased) to its settled target on first `configure()` for the single-configure/no-tick path, so `compute_height()` does not undercount there. Root cause remains open; next place to look is the real `state_sync`/`build` call ordering in `manifold-app`, or a card-reuse scenario the single-configure fixture doesn't cover. Regression tests for the ruled-out theory are kept as coverage. 2026-07-14: not to be confused with BUG-060 (inspector scroll ARTIFACTS, rig-verified FIXED + class-killed) — Peter asked whether this was that; it isn't. This entry is the scroll-RANGE clamp on tall content (can't scroll far enough), still unexplained.
-
-**Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
-session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
-unscrolled render (`target/ui-snapshots/bug060/bug060.png`), several cards extend well past the
-1216px-tall canvas. Calling `UIRoot::try_inspector_scroll` (the same method
-`window_input.rs`'s real mouse-wheel handler calls) with a delta of 300, 1000, or 1_000_000 all
-converge to the SAME ~13-20px of movement and then stop — as if `max_scroll()` were computed as
-roughly 20px, not the ~1200px the visible overflow implies.
-
-**Root cause:** unknown — suspected but not confirmed. `ScrollContainer::apply_scroll_delta`
-clamps against `self.content_height`, set via `InspectorCompositePanel::update_scroll_bounds`'s
-`right_column_height()` -> `layer_column_height()`, which sums `card.compute_height()` per
-effect card. Suspect: `compute_height()` reads a drawer-open-tween-animated height
-(`drawer_height_anim`, see `param_card.rs`'s `drawer_open_tween_reserves_interpolated_height_
-clips_then_settles` test) that starts at/near 0 and needs `tick_drawers(dt)` calls to reach its
-settled value — a card configured with its audio mod ALREADY armed (as `bug060_scene` does, no
-"click to open" step) renders its FULL drawer immediately (the build path uses the target
-height directly) but `compute_height()` may still be reading the un-ticked animation state,
-undercounting every card's height by its drawer's contribution. Not verified: whether
-`configure()` seeds the animation at its target when armed from a cold build, or always starts
-from 0.
-
-**Fix shape:** instrument `right_column_height()`/`card.compute_height()` directly (a
-`manifold-ui` unit test asserting `layer_column_height() ≈ sum of settled per-card heights` for
-a 9-card, all-drawers-open fixture) to confirm or rule out the animation-state theory; if
-confirmed, seed `drawer_height_anim` at its target value on first configure when the mod is
-already armed (mirroring how the card already renders it), not just on a later toggle.
-
-**Impact on this session:** blocked producing a scrolled-to-bottom PNG for
-`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1's BUG-060 acceptance demo — worked around by deciding the
-stopgap-removal question via a direct unit test (`InspectorCompositePanel::try_scroll_in_place`
-called with a 1,000,000 delta, `manifold-ui`'s own suite, no PNG round-trip needed) instead of
-the headless CLI harness. Also found and partially fixed en route, independent of this bug: the
-L3 script runner's `Gesture::Scroll` never reached the inspector at all before this session
-(routed only through the generic `UIEvent::Scroll` pipeline, which is real for the
-dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `script.rs` now
-branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
-matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
-left after it.
 
 ### BUG-073 (ui-snap-script-drawer-tween-never-ticks) — the headless `--script` driver has no per-frame animation tick, so a mod armed mid-script renders an unclickable, zero-height drawer — LOW (found 2026-07-08 during PARAM_STEP_ACTIONS P3)
 **Status:** PARTIAL
@@ -1272,6 +1254,48 @@ temporary instrumentation and the scratch preset were removed before commit (`gi
 clean).
 
 ## Fixed
+
+### BUG-076 (inspector-scroll-underestimates-content-height) — `try_inspector_scroll` clamps to a tiny max_scroll on genuinely tall content — LOW (found 2026-07-08 during UI_CLIP_AND_Z_OWNERSHIP_DESIGN P1)
+**Status:** FIXED (closed as not-reproducible) — Peter's call 2026-07-14: "I also think this is not a real bug, I don't think I can even reproduce it." For the record: the original 2026-07-08 log carried a concrete measurement (~13–20px max_scroll on a stack ~1200px too tall), so something was observed once — but two investigations found no mechanism, every fixture-level test passes, and it doesn't reproduce on the rig. Reopen if a tall inspector stack ever won't scroll live. History: 2026-07-13 (`8d37d5e0`): the drawer-tween undercounting theory below was built and tested (a `ParamCardPanel`-level and an `InspectorCompositePanel`-level test with a 9-card stack, several audio-mod drawers armed at `configure()` time, zero `tick_drawers` calls) and RULED OUT — a card's `drawer_height_anim` is already snapped (not eased) to its settled target on first `configure()` for the single-configure/no-tick path, so `compute_height()` does not undercount there. Root cause remains open; next place to look is the real `state_sync`/`build` call ordering in `manifold-app`, or a card-reuse scenario the single-configure fixture doesn't cover. Regression tests for the ruled-out theory are kept as coverage. 2026-07-14: not to be confused with BUG-060 (inspector scroll ARTIFACTS, rig-verified FIXED + class-killed) — Peter asked whether this was that; it isn't. This entry is the scroll-RANGE clamp on tall content (can't scroll far enough), still unexplained.
+
+**Symptom:** built a headless gate scene (`ui_snapshot/fixtures.rs`'s `bug060_scene`, added this
+session) with 9 stacked effect cards, several with audio-mod drawers open — visibly, per the
+unscrolled render (`target/ui-snapshots/bug060/bug060.png`), several cards extend well past the
+1216px-tall canvas. Calling `UIRoot::try_inspector_scroll` (the same method
+`window_input.rs`'s real mouse-wheel handler calls) with a delta of 300, 1000, or 1_000_000 all
+converge to the SAME ~13-20px of movement and then stop — as if `max_scroll()` were computed as
+roughly 20px, not the ~1200px the visible overflow implies.
+
+**Root cause:** unknown — suspected but not confirmed. `ScrollContainer::apply_scroll_delta`
+clamps against `self.content_height`, set via `InspectorCompositePanel::update_scroll_bounds`'s
+`right_column_height()` -> `layer_column_height()`, which sums `card.compute_height()` per
+effect card. Suspect: `compute_height()` reads a drawer-open-tween-animated height
+(`drawer_height_anim`, see `param_card.rs`'s `drawer_open_tween_reserves_interpolated_height_
+clips_then_settles` test) that starts at/near 0 and needs `tick_drawers(dt)` calls to reach its
+settled value — a card configured with its audio mod ALREADY armed (as `bug060_scene` does, no
+"click to open" step) renders its FULL drawer immediately (the build path uses the target
+height directly) but `compute_height()` may still be reading the un-ticked animation state,
+undercounting every card's height by its drawer's contribution. Not verified: whether
+`configure()` seeds the animation at its target when armed from a cold build, or always starts
+from 0.
+
+**Fix shape:** instrument `right_column_height()`/`card.compute_height()` directly (a
+`manifold-ui` unit test asserting `layer_column_height() ≈ sum of settled per-card heights` for
+a 9-card, all-drawers-open fixture) to confirm or rule out the animation-state theory; if
+confirmed, seed `drawer_height_anim` at its target value on first configure when the mod is
+already armed (mirroring how the card already renders it), not just on a later toggle.
+
+**Impact on this session:** blocked producing a scrolled-to-bottom PNG for
+`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1's BUG-060 acceptance demo — worked around by deciding the
+stopgap-removal question via a direct unit test (`InspectorCompositePanel::try_scroll_in_place`
+called with a 1,000,000 delta, `manifold-ui`'s own suite, no PNG round-trip needed) instead of
+the headless CLI harness. Also found and partially fixed en route, independent of this bug: the
+L3 script runner's `Gesture::Scroll` never reached the inspector at all before this session
+(routed only through the generic `UIEvent::Scroll` pipeline, which is real for the
+dropdown/timeline but a no-op for the inspector's direct-call scroll path) — `script.rs` now
+branches on `ui.layout.inspector().contains(center)` and calls `try_inspector_scroll` directly,
+matching `window_input.rs`'s real dispatch. That fix is real and committed; this bug is what's
+left after it.
 
 ### BUG-015 — Inspector sections render overlapping / at stale offsets after scroll — MED (repro needed)
 **Status:** FIXED — closed by Peter's call 2026-07-14 (staleness audit). The root-cause fix for the stale-chrome-state class shipped 2026-07-08 (`738f4e94`/`4319eb8d`, `fix/bug-015-out-of-region-dirt`: the incremental cache path falls back to a full render on out-of-sub-region dirt), with tests and gates. The original 2026-07-04 "sections interleaved" sighting was never reproduced (headless attempts 2026-07-05 and 2026-07-07 ×2). Reopen if the sighting recurs.
