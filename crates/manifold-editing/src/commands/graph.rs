@@ -275,6 +275,29 @@ struct RemovedNode {
     wires: Vec<EffectGraphWire>,
 }
 
+/// `node`'s own [`NodeId`] plus every descendant's, recursing into nested
+/// groups (a group's `GroupDef.nodes` can itself contain group nodes). Used
+/// by [`RemoveGraphNodeCommand`] so a group deletion prunes card-slider
+/// exposures for its ENTIRE removed subtree, not just the group container's
+/// own id (BUG-154) — a single-node removal is just the one-element case.
+/// Empty `NodeId`s (anonymous boundary nodes) are skipped; they can't back
+/// an exposure.
+fn subtree_node_ids(node: &EffectGraphNode) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    fn walk(node: &EffectGraphNode, out: &mut Vec<NodeId>) {
+        if !node.node_id.is_empty() {
+            out.push(node.node_id.clone());
+        }
+        if let Some(group) = &node.group {
+            for child in &group.nodes {
+                walk(child, out);
+            }
+        }
+    }
+    walk(node, &mut out);
+    out
+}
+
 impl RemoveGraphNodeCommand {
     pub fn new(target: GraphTarget, node_id: u32, catalog_default: EffectGraphDef) -> Self {
         Self {
@@ -320,7 +343,20 @@ impl Command for RemoveGraphNodeCommand {
                         wires: removed_wires,
                     }
                 };
-                let removed_exposures = inst.remove_exposures_for_node(&removed.node.node_id);
+                // BUG-154: a removed GROUP node takes its entire nested
+                // subgraph with it, but a card slider can be bound to a node
+                // ANYWHERE inside that subgraph, not just the group container
+                // itself. Pruning only `removed.node.node_id` left those
+                // nested bindings dangling — the stale slider stayed on the
+                // effect card with no warning after its node was gone.
+                // Collect the whole removed subtree's node ids (self +
+                // every descendant, recursing into nested groups) and prune
+                // each — the same cleanup single-node deletion always got,
+                // now applied uniformly regardless of removal shape.
+                let mut removed_exposures = Vec::new();
+                for nid in subtree_node_ids(&removed.node) {
+                    removed_exposures.extend(inst.remove_exposures_for_node(&nid));
+                }
                 inst.bump_graph_structure_version();
                 Some((removed, removed_exposures))
             })
@@ -3296,6 +3332,137 @@ mod tests {
         assert_eq!(restored.value, 0.5);
         assert_eq!(restored.base, 0.5);
         assert!(restored.exposed);
+    }
+
+    /// BUG-154: deleting a GROUP node that contains a node bound to a card
+    /// slider used to leave the slider dangling — `remove_exposures_for_node`
+    /// only ever matched the group container's own id, never the id of a
+    /// node NESTED inside the removed group's subgraph. `subtree_node_ids`
+    /// closes that: it walks the removed node's group tree and prunes an
+    /// exposure bound to a node at ANY depth inside it.
+    #[test]
+    fn remove_group_node_prunes_card_slider_bound_to_a_nested_node() {
+        use manifold_core::effect_graph_def::{
+            BindingDef, BindingTarget, ParamSpecDef, PresetMetadata,
+        };
+        use manifold_core::NodeId;
+
+        let (mut project, id) = project_with_one_master_effect();
+        let mut def = mirror_catalog_default();
+        // Rewrap node 1 ("uv_transform") as a group whose sole child carries
+        // the SAME node_id — the slider stays bound to the nested node, not
+        // the group container.
+        let inner = def.nodes[1].clone();
+        let group_node = EffectGraphNode {
+            id: 1,
+            node_id: NodeId::new("the_group"),
+            type_id: GROUP_TYPE_ID.to_string(),
+            handle: Some("the_group".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: Some(Box::new(GroupDef {
+                interface: GroupInterface {
+                    inputs: vec![InterfacePortDef {
+                        name: "source".to_string(),
+                        port_type: String::new(),
+                    }],
+                    outputs: vec![InterfacePortDef {
+                        name: "out".to_string(),
+                        port_type: String::new(),
+                    }],
+                    params: vec![],
+                },
+                nodes: vec![inner],
+                wires: vec![],
+                tint: None,
+            })),
+        };
+        def.nodes[1] = group_node;
+        def.preset_metadata = Some(PresetMetadata {
+            id: PresetTypeId::new("Mirror"),
+            display_name: "Mirror".into(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: vec![ParamSpecDef {
+                id: "amount".into(),
+                name: "Amount".into(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.5,
+                whole_numbers: false,
+                is_toggle: false,
+                is_trigger: false,
+                value_labels: Vec::new(),
+                format_string: None,
+                osc_suffix: String::new(),
+                curve: Default::default(),
+                invert: false,
+                is_angle: false,
+                is_trigger_gate: false,
+                wraps: false,
+                section: None,
+            }],
+            // Bound to the NESTED node's id ("uv_transform"), not the group
+            // container's id ("the_group") — this is the exact configuration
+            // BUG-154's cleanup used to miss.
+            bindings: vec![BindingDef {
+                id: "amount".into(),
+                label: "Amount".into(),
+                default_value: 0.5,
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("uv_transform"),
+                    param: "scale".into(),
+                },
+                convert: Default::default(),
+                user_added: true,
+                scale: 1.0,
+                offset: 0.0,
+            }],
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        {
+            let fx = project.find_effect_by_id_mut(&id).unwrap();
+            fx.graph = Some(def);
+            fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+        }
+
+        let mut cmd = RemoveGraphNodeCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1, // the group container
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let fx = project.find_effect_by_id(&id).unwrap();
+        assert!(
+            fx.graph.as_ref().unwrap().nodes.iter().all(|n| n.id != 1),
+            "group node deleted"
+        );
+        let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
+        assert!(
+            meta.bindings.is_empty(),
+            "slider bound to a node NESTED inside the removed group must be pruned"
+        );
+        assert!(meta.params.is_empty(), "its param spec pruned");
+        assert!(fx.params.is_empty(), "its value slot pruned");
+
+        cmd.undo(&mut project);
+        let fx = project.find_effect_by_id(&id).unwrap();
+        let meta = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.bindings.len(), 1, "binding restored on undo");
+        assert_eq!(fx.params.len(), 1, "value slot restored on undo");
     }
 
     #[test]

@@ -287,4 +287,70 @@ mod gpu_tests {
             assert_eq!(from_hand[i].uv, from_gen[i].uv, "vertex {i} uv");
         }
     }
+
+    /// BUG-120: on a flat XZ grid the per-vertex normal is always the
+    /// declared +Y up-vector (`tg_compute_normal`'s finite difference has no
+    /// height variation to react to) — the emitted triangle WINDING must
+    /// agree with that, i.e. `cross(v1-v0, v2-v0)` for every emitted
+    /// triangle must also point +Y, not -Y. Before the fix this primitive
+    /// wound every triangle CW-from-above while declaring +Y vertex normals
+    /// — exactly the disagreement scatter_on_mesh's align_to_normal had to
+    /// work around at the consumer (BUG-120's original finding). Checked on
+    /// the hand kernel; the parity test above already proves the generated
+    /// kernel matches it vertex-for-vertex.
+    #[test]
+    fn flat_grid_triangle_winding_agrees_with_vertex_normal() {
+        const COLS: u32 = 3;
+        const ROWS: u32 = 3;
+        let mut grid = Vec::new();
+        for row in 0..ROWS {
+            for col in 0..COLS {
+                let x = col as f32;
+                let z = row as f32;
+                grid.push(grid_vertex([x, 0.0, z], [x, z]));
+            }
+        }
+        const DST_CAP: u32 = 24; // (3-1)*(3-1)*6, no padding needed.
+
+        let mut hand = Vec::new();
+        hand.extend_from_slice(&COLS.to_le_bytes());
+        hand.extend_from_slice(&ROWS.to_le_bytes());
+        hand.extend_from_slice(&DST_CAP.to_le_bytes());
+        hand.extend_from_slice(&0u32.to_le_bytes());
+
+        let hand_wgsl = include_str!("shaders/triangulate_grid.wgsl");
+        let verts = dispatch_tri(hand_wgsl, &grid, DST_CAP, &hand);
+
+        fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+            [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+        }
+        fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        }
+        fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+            a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+        }
+        fn normalize(a: [f32; 3]) -> [f32; 3] {
+            let len = dot(a, a).sqrt();
+            [a[0] / len, a[1] / len, a[2] / len]
+        }
+
+        for tri in verts.chunks_exact(3) {
+            let face_normal = normalize(cross(
+                sub(tri[1].position, tri[0].position),
+                sub(tri[2].position, tri[0].position),
+            ));
+            let vertex_normal = tri[0].normal;
+            let positions = [tri[0].position, tri[1].position, tri[2].position];
+            assert!(
+                dot(face_normal, vertex_normal) > 0.99,
+                "winding-derived face normal {face_normal:?} disagrees with \
+                 declared vertex normal {vertex_normal:?} for triangle {positions:?}"
+            );
+        }
+    }
 }

@@ -80,21 +80,26 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let qx = quad_idx % quads_x;
     let qy = quad_idx / quads_x;
 
-    // Triangle layout (matches the procedural pattern in
-    // metallic_glass_render.wgsl's vertex shader):
-    //   0: (qx, qy)        4: (qx+1, qy)
-    //   1: (qx+1, qy)      5: (qx+1, qy+1)
-    //   2: (qx, qy+1)
-    //   3: (qx, qy+1)
+    // BUG-120: triangle layout, CCW-from-+Y (matches this same function's
+    // finite-difference vertex normal, `compute_normal`'s
+    // `cross(dy, dx)` on a flat XZ grid — see that function's derivation).
+    // The un-fixed layout (0,1,2 = (qx,qy),(qx+1,qy),(qx,qy+1)) wound CW
+    // from above: `cross(edge1, edge2)` on that order works out to -Y,
+    // disagreeing with the +Y vertex normal every consumer reads. Swapping
+    // corners 1↔2 and 4↔5 flips the winding to agree, with no change to
+    // triangle coverage or the corner→(col,row) mapping otherwise:
+    //   0: (qx, qy)        3: (qx, qy+1)
+    //   1: (qx, qy+1)      4: (qx+1, qy+1)
+    //   2: (qx+1, qy)      5: (qx+1, qy)
     var dx: u32 = 0u;
     var dy: u32 = 0u;
     switch corner {
         case 0u: { dx = 0u; dy = 0u; }
-        case 1u: { dx = 1u; dy = 0u; }
-        case 2u: { dx = 0u; dy = 1u; }
+        case 1u: { dx = 0u; dy = 1u; }
+        case 2u: { dx = 1u; dy = 0u; }
         case 3u: { dx = 0u; dy = 1u; }
-        case 4u: { dx = 1u; dy = 0u; }
-        case 5u: { dx = 1u; dy = 1u; }
+        case 4u: { dx = 1u; dy = 1u; }
+        case 5u: { dx = 1u; dy = 0u; }
         default: {}
     }
 

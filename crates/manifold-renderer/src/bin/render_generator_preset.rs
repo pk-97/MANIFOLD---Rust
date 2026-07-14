@@ -38,6 +38,11 @@ struct Args {
     /// advances as frame/N so trigger-responsive presets can be exercised
     /// headlessly.
     trigger_every: u32,
+    /// BUG-117: hard cap on frames rendered while WAITING for convergence
+    /// past `--frames`, so a preset that never settles (a genuinely
+    /// per-frame-varying look, or a stuck async load) can't hang the tool
+    /// forever — it prints a warning and writes whatever it has instead.
+    max_frames: u32,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +56,7 @@ fn parse_args() -> Result<Args, String> {
         out: PathBuf::from("/tmp/preset-render.png"),
         overrides: Vec::new(),
         trigger_every: 0,
+        max_frames: 300,
     };
     while let Some(flag) = argv.next() {
         let value = argv
@@ -70,6 +76,9 @@ fn parse_args() -> Result<Args, String> {
             "--out" => args.out = PathBuf::from(value),
             "--triggers" => {
                 args.trigger_every = value.parse().map_err(|e| format!("bad triggers: {e}"))?;
+            }
+            "--max-frames" => {
+                args.max_frames = value.parse().map_err(|e| format!("bad max-frames: {e}"))?;
             }
             "--param" => {
                 let (id, v) = value
@@ -140,8 +149,22 @@ fn main() {
         "look-dev-target",
     );
 
+    // BUG-117: async-loading primitives (large glTF, image_folder, DNN
+    // plugins) leave the pre-bound output untouched until their background
+    // job lands, so a fixed `--frames` count can write a PNG mid-load with
+    // no warning — the same class BUG-100 hit for the azalea-import test
+    // harness. Same fix, ported here: after the requested warm-up, keep
+    // rendering and comparing consecutive RAW readbacks until `STABLE_STREAK`
+    // of them are byte-identical, capped at `--max-frames` so a genuinely
+    // per-frame-varying preset (or a stuck load) can't hang the tool forever.
     const DT: f32 = 1.0 / 60.0;
-    for frame in 0..args.frames.max(1) {
+    const STABLE_STREAK: u32 = 3;
+    let warmup_frames = args.frames.max(1);
+    let max_frames = args.max_frames.max(warmup_frames);
+    let mut prev_raw: Option<Vec<u8>> = None;
+    let mut stable_count = 0u32;
+    let mut converged = false;
+    for frame in 0..max_frames {
         let time = frame as f64 * DT as f64;
         let ctx = PresetContext {
             time,
@@ -155,7 +178,7 @@ fn main() {
             owner_key: 0,
             is_clip_level: false,
             frame_count: frame as i64,
-            anim_progress: (frame as f32 / args.frames.max(1) as f32).min(1.0),
+            anim_progress: (frame as f32 / warmup_frames as f32).min(1.0),
             trigger_count: if args.trigger_every > 0 {
                 frame / args.trigger_every
             } else {
@@ -168,6 +191,36 @@ fn main() {
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
         enc.commit_and_wait_completed();
+
+        // Convergence tracking only kicks in once the requested warm-up has
+        // run — the caller asked for at least that many frames regardless
+        // (e.g. to reach a specific animation beat), and a preset can
+        // legitimately still be settling its warm-up transient this early.
+        if frame + 1 >= warmup_frames {
+            let raw = readback_raw_halves(&device, &target.texture, args.width, args.height);
+            if prev_raw.as_deref() == Some(raw.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_raw = Some(raw);
+            if stable_count >= STABLE_STREAK {
+                converged = true;
+                println!(
+                    "render-generator-preset: converged on frame {frame} \
+                     (stable for {STABLE_STREAK} frames)"
+                );
+                break;
+            }
+        }
+    }
+    if !converged {
+        eprintln!(
+            "render-generator-preset: WARNING — hit --max-frames={max_frames} before {STABLE_STREAK} \
+             consecutive identical frames; the preset may still be loading async content \
+             (glTF, image_folder, a DNN plugin) and this PNG could be an incomplete render. \
+             Re-run with a higher --max-frames if this preset is expected to keep animating."
+        );
     }
 
     let rgba = readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height);
@@ -180,6 +233,24 @@ fn main() {
     )
     .expect("write PNG");
     println!("OK {} ({}x{}, {} frames)", args.out.display(), args.width, args.height, args.frames);
+}
+
+/// Raw Rgba16Float bytes, untouched — no tonemap, no alpha composite. Used
+/// only to detect "did the render actually change between frames" for the
+/// convergence check (BUG-117): comparing the pre-tonemap bytes catches any
+/// change the final PNG would show, and skips the composite math on every
+/// candidate frame, not just the one that's written out.
+fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
+    let bytes_per_row = w * 8;
+    let total = u64::from(h * bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("look-dev-convergence-readback");
+    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf
+        .mapped_ptr()
+        .expect("shared readback buffer must expose mapped pointer");
+    unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
 }
 
 /// Same convention as `preset_thumbnail::readback_tonemapped_rgba8` (private
