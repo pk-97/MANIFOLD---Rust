@@ -350,7 +350,7 @@ mod gpu_tests {
     /// hand-vs-generated buffer-layout split.
     fn pack_params(words: &[f32]) -> Vec<u8> {
         let mut v: Vec<f32> = words.to_vec();
-        while v.len() % 4 != 0 {
+        while !v.len().is_multiple_of(4) {
             v.push(0.0);
         }
         v.iter().flat_map(|f| f.to_le_bytes()).collect()

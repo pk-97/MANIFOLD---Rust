@@ -549,9 +549,9 @@ mod gpu_tests {
         for (i, inst) in instances.iter().enumerate() {
             let [x, y, z, scale] = inst.pos_scale;
             assert!(y.abs() < 1e-4, "instance {i} y={y} should be on the y=0 quad plane");
-            assert!(x >= -1e-3 && x <= 4.0 + 1e-3, "instance {i} x={x} outside quad bounds");
-            assert!(z >= -1e-3 && z <= 4.0 + 1e-3, "instance {i} z={z} outside quad bounds");
-            assert!(scale >= 0.5 - 1e-4 && scale <= 1.5 + 1e-4, "instance {i} scale={scale} outside [0.5, 1.5]");
+            assert!((-1e-3..=4.0 + 1e-3).contains(&x), "instance {i} x={x} outside quad bounds");
+            assert!((-1e-3..=4.0 + 1e-3).contains(&z), "instance {i} z={z} outside quad bounds");
+            assert!((0.5 - 1e-4..=1.5 + 1e-4).contains(&scale), "instance {i} scale={scale} outside [0.5, 1.5]");
             // rot_pad.y (yaw) should vary; rot_pad.x/z stay 0 when
             // align_to_normal is off (flat quad normal is world-up anyway,
             // but this exercises the "off" branch specifically).

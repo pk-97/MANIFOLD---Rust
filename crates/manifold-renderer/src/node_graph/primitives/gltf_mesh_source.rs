@@ -432,11 +432,10 @@ mod tests {
             (min[1] + max[1]) * 0.5,
             (min[2] + max[2]) * 0.5,
         ];
-        for axis in 0..3 {
+        for (axis, c) in center.iter().enumerate() {
             assert!(
-                center[axis].abs() < 1e-5,
-                "axis {axis} center {} should be ~0 (recenter=true)",
-                center[axis]
+                c.abs() < 1e-5,
+                "axis {axis} center {c} should be ~0 (recenter=true)"
             );
         }
         let size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];

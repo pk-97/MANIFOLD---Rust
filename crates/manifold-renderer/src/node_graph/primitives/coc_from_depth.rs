@@ -283,18 +283,19 @@ mod tests {
 /// hand-computed values — CPU-only, no GPU device. Distinct from I1 (which
 /// proves the GPU kernel matches this same formula); this test proves the
 /// FORMULA itself matches D1's committed math, worked by hand.
+///
+/// Fixed camera for all 5 cases: fov_y = 90 degrees (so
+/// tan(fov_y/2) = tan(45 deg) = 1 exactly, giving
+/// f_mm = 24 / (2*1) = 12mm — a clean number to hand-check against).
+/// near = 0.1, far = 100.0 world units (meters).
+///
+/// `linearize_depth(raw, near, far)`: range = far/(near-far) =
+/// 100/(0.1-100) = 100/-99.9 = -1.0010010... ; view_z =
+/// (range*near)/(raw+range) = (-0.10010010...)/(raw - 1.0010010...).
+/// Each case below plugs in `raw` and carries the division by hand in
+/// the comment, then applies D1's CoC formula verbatim.
 #[cfg(test)]
 mod hand_computed_coc {
-    //! Fixed camera for all 5 cases: fov_y = 90 degrees (so
-    //! tan(fov_y/2) = tan(45 deg) = 1 exactly, giving
-    //! f_mm = 24 / (2*1) = 12mm — a clean number to hand-check against).
-    //! near = 0.1, far = 100.0 world units (meters).
-    //!
-    //! `linearize_depth(raw, near, far)`: range = far/(near-far) =
-    //! 100/(0.1-100) = 100/-99.9 = -1.0010010... ; view_z =
-    //! (range*near)/(raw+range) = (-0.10010010...)/(raw - 1.0010010...).
-    //! Each case below plugs in `raw` and carries the division by hand in
-    //! the comment, then applies D1's CoC formula verbatim.
     use crate::node_graph::camera::linearize_depth;
 
     const FOV_Y: f32 = std::f32::consts::FRAC_PI_2; // 90 degrees

@@ -331,7 +331,7 @@ mod gpu_tests {
         );
 
         // Hand-computed anchor: row=1 (radius=1, height=0), col=0 -> phi=0.
-        let v10 = revolved[1 * COLS as usize];
+        let v10 = revolved[COLS as usize];
         assert!((v10.position[0] - 1.0).abs() < 1e-5, "row1 col0 x: {}", v10.position[0]);
         assert!(v10.position[1].abs() < 1e-5, "row1 col0 y: {}", v10.position[1]);
         assert!(v10.position[2].abs() < 1e-5, "row1 col0 z: {}", v10.position[2]);

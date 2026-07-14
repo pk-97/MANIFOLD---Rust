@@ -210,7 +210,7 @@ mod tests {
 /// reference (I1)") — a plain-Rust implementation of the D5 algorithm,
 /// independent of the WGSL body, used by the I1 GPU-vs-CPU synthetic-fixture
 /// parity gpu_test further down.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod cpu_reference {
     const BOKEH_N: usize = 32;
     const BOKEH_GOLDEN_ANGLE: f32 = 2.399963;
@@ -220,7 +220,7 @@ pub(crate) mod cpu_reference {
     /// `fract(sin(dot(px, vec2(12.9898, 78.233))) * 43758.5453) * 2*PI`.
     fn bokeh_hash_angle(px_x: f32, px_y: f32) -> f32 {
         let dot = px_x * 12.9898 + px_y * 78.233;
-        let v = dot.sin() * 43758.5453;
+        let v = dot.sin() * 43_758.547;
         (v - v.floor()) * std::f32::consts::TAU
     }
 
