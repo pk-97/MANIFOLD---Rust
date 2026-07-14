@@ -67,6 +67,12 @@ pub struct TimelineViewportPanel {
     scroll_y_px: f32,
     beats_per_bar: u32,
 
+    // BUG-159: last horizontal scroll gesture the user drove directly (wheel,
+    // trackpad pan, scrollbar drag) — playhead-follow auto-scroll
+    // (`check_auto_scroll`, manifold-app's state_sync.rs) yields to a recent
+    // gesture instead of fighting it. `None` = no gesture yet this session.
+    last_user_scroll_x: Option<std::time::Instant>,
+
     // Layer IDs (kept in sync with project layers)
     pub layer_ids: Vec<LayerId>,
 
@@ -313,6 +319,7 @@ impl TimelineViewportPanel {
             scroll_x_beats: Beats::ZERO,
             scroll_y_px: 0.0,
             beats_per_bar: 4,
+            last_user_scroll_x: None,
             layer_ids: Vec::new(),
             tracks: Vec::new(),
             track_zebra_even: Vec::new(),
@@ -1107,6 +1114,25 @@ impl TimelineViewportPanel {
         changed
     }
 
+    /// BUG-159: record that the USER (not playhead-follow) just drove a
+    /// horizontal scroll — wheel/trackpad pan or a scrollbar drag. Call this
+    /// alongside `set_scroll` from any input path the user directly controls;
+    /// `check_auto_scroll` (manifold-app) yields while a gesture is recent
+    /// (see [`Self::user_scroll_x_recent`]) instead of overwriting it.
+    pub fn note_user_scroll_x(&mut self) {
+        self.last_user_scroll_x = Some(std::time::Instant::now());
+    }
+
+    /// BUG-159: true while a user-driven horizontal scroll gesture happened
+    /// within `grace` — the window during which playhead-follow yields
+    /// instead of fighting the gesture. Re-engage is automatic and implicit:
+    /// once `grace` elapses with no further user scroll, this returns to
+    /// `false` and the very next `check_auto_scroll` call resumes following.
+    pub fn user_scroll_x_recent(&self, grace: std::time::Duration) -> bool {
+        self.last_user_scroll_x
+            .is_some_and(|t| t.elapsed() < grace)
+    }
+
     /// Edge zone width, in screen px, where a drag pointer triggers autoscroll (B11).
     const AUTOSCROLL_EDGE_PX: f32 = 32.0;
     /// Max scroll advance per call (one call per drag frame) at the edge itself —
@@ -1712,6 +1738,22 @@ mod tests {
 
         vp.on_timeline_event(&drag_end(Vec2::new(sb.x + sb.width * 0.5, origin.y)));
         assert!(!vp.scrollbar_h_dragging(), "drag-end must clear the session");
+    }
+
+    #[test]
+    fn user_scroll_x_recent_reflects_a_note_then_expires() {
+        // BUG-159: no gesture yet — never recent, at any grace window.
+        let mut vp = built_viewport();
+        assert!(!vp.user_scroll_x_recent(std::time::Duration::from_secs(10)));
+
+        vp.note_user_scroll_x();
+        assert!(
+            vp.user_scroll_x_recent(std::time::Duration::from_millis(800)),
+            "a just-noted gesture must be recent under a normal grace window"
+        );
+        // A zero-length grace window means the gesture (however fresh) is
+        // already outside it — the boundary condition the impl must honor.
+        assert!(!vp.user_scroll_x_recent(std::time::Duration::from_secs(0)));
     }
 
     #[test]
