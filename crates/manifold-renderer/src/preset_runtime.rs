@@ -272,6 +272,14 @@ pub enum JsonGeneratorLoadError {
     /// The preset's JSON contains no `system.final_output` node, or it
     /// isn't wired.
     MissingFinalOutput,
+    /// BUG-125: the preset's JSON contains MORE THAN ONE `system.final_output`
+    /// node. The tracked-output resolution (`graph.nodes().find(...)`) is a
+    /// single, unordered lookup — a second `final_output` would be picked
+    /// nondeterministically per process, and the per-frame canvas-target
+    /// rebind (`replace_texture_2d`) would silently overwrite whichever one
+    /// lost with the host canvas's format, up to a real GPU command-buffer
+    /// fault. Rejected at load rather than silently picked.
+    MultipleFinalOutputs { count: usize },
     /// A primitive declared an `Array<T>` output but
     /// `EffectNode::array_output_capacity` returned `None` for that port.
     UnsizedArrayOutput { node_type: String, port: String },
@@ -300,6 +308,13 @@ impl std::fmt::Display for JsonGeneratorLoadError {
             Self::MissingFinalOutput => write!(
                 f,
                 "preset has no `{FINAL_OUTPUT_TYPE_ID}` node, or it is not wired"
+            ),
+            Self::MultipleFinalOutputs { count } => write!(
+                f,
+                "preset has {count} `{FINAL_OUTPUT_TYPE_ID}` nodes — exactly one is \
+                 required; the tracked-output resolution can't disambiguate more than \
+                 one (see BUG-125). Wire extra outputs to a non-FinalOutput dead-end \
+                 sink and inspect via `dump_textures_all` instead."
             ),
             Self::UnsizedArrayOutput { node_type, port } => write!(
                 f,
@@ -790,6 +805,43 @@ pub fn prewarm_project_chain_segments(project: &manifold_core::project::Project)
     }
 }
 
+/// BUG-080 seam: a provisional manifest (built against an incomplete
+/// registry, not yet reconciled) reaching chain build means a load/ingest
+/// path skipped `reconcile_param_manifests()`. Loud in dev (panics), throttled
+/// once per instance in release. Extracted so the seam behavior is directly
+/// unit-testable without driving a full chain build — see
+/// `docs/PARAM_MANIFEST_GATE_DESIGN.md` D2, INV-1.
+fn assert_manifest_gate(fx: &PresetInstance) {
+    debug_assert!(
+        !fx.manifest_provisional(),
+        "BUG-080: provisional manifest reached PresetRuntime::try_build — a \
+         load/ingest path skipped reconcile_param_manifests() (effect_id={:?})",
+        fx.id,
+    );
+    if fx.manifest_provisional() {
+        warn_provisional_manifest_once(&fx.id);
+    }
+}
+
+/// BUG-080 D2: release-mode once-per-instance warn for a provisional
+/// manifest reaching this seam. Shaped like the BUG-038 OSC-send throttle —
+/// a plain instance is enough here since we only need "once ever per id",
+/// not a reconnect transition. `debug_assert!` already screams in dev
+/// builds; this is the release-mode signal that a load/ingest path skipped
+/// `reconcile_param_manifests()`.
+fn warn_provisional_manifest_once(id: &EffectId) {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<std::collections::HashSet<EffectId>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.insert(id.clone()) {
+        log::warn!(
+            "BUG-080: provisional manifest reached PresetRuntime::try_build for \
+             effect_id={id:?} — a load/ingest path skipped reconcile_param_manifests()"
+        );
+    }
+}
+
 impl PresetRuntime {
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
@@ -847,6 +899,7 @@ impl PresetRuntime {
         // bindings, skip mode, and the canonical splice all off the
         // view; an effect without one is unrunnable.
         for (_, fx) in &active_effects {
+            assert_manifest_gate(fx);
             if loaded_preset_view_by_id(fx.effect_type()).is_none() {
                 // BUG-079: this eprintln stays as a console diagnostic, but
                 // it is no longer the only signal — the same root cause (a
@@ -2599,6 +2652,19 @@ impl PresetRuntime {
             .find(|inst| inst.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID)
             .map(|inst| inst.id)
             .ok_or(JsonGeneratorLoadError::MissingGeneratorInput)?;
+        // BUG-125: `.find()` over the graph's unordered node map is only safe
+        // when at most one node matches — count first so a second
+        // `final_output` is rejected loudly at load instead of one of the
+        // two being picked nondeterministically per process.
+        let final_output_count = graph
+            .nodes()
+            .filter(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
+            .count();
+        if final_output_count > 1 {
+            return Err(JsonGeneratorLoadError::MultipleFinalOutputs {
+                count: final_output_count,
+            });
+        }
         let final_output_id = graph
             .nodes()
             .find(|inst| inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID)
@@ -4231,6 +4297,62 @@ mod user_binding_tests {
 }
 
 #[cfg(test)]
+mod bug080_manifest_gate_tests {
+    //! PARAM_MANIFEST_GATE_DESIGN.md P1, INV-1: a provisional manifest
+    //! (built against an incomplete registry, `pending_wire` still `Some`)
+    //! must never reach `PresetRuntime::try_build` silently.
+    use manifold_core::effects::PresetInstance;
+
+    /// A bare `PresetInstance` deserialize referencing an effect type that
+    /// isn't registered anywhere, with a params map — the keep-don't-drop
+    /// path (BUG-036) seeds a placeholder-spec param and leaves
+    /// `pending_wire` `Some` because the template never resolved. No
+    /// `Project`/loader machinery needed: this is the direct, minimal
+    /// repro for "manifest built provisionally, reconcile never ran".
+    fn provisional_instance() -> PresetInstance {
+        let json = r#"{
+            "id": "bug080_test_instance",
+            "effectType": "Bug080UnregisteredType",
+            "params": { "foo": { "value": 0.5 } }
+        }"#;
+        let fx: PresetInstance = serde_json::from_str(json).expect("deserialize test fixture");
+        assert!(
+            fx.manifest_provisional(),
+            "fixture must be provisional (unregistered effect type, wire stash present)"
+        );
+        fx
+    }
+
+    #[test]
+    fn bug080_provisional_manifest_asserts_at_chain_build() {
+        let fx = provisional_instance();
+        let result = std::panic::catch_unwind(|| super::assert_manifest_gate(&fx));
+        assert!(
+            result.is_err(),
+            "assert_manifest_gate must panic (via debug_assert!) when handed a \
+             provisional manifest — a load/ingest path skipped reconcile_param_manifests()"
+        );
+    }
+
+    #[test]
+    fn bug080_loader_path_never_provisional() {
+        // A freshly-constructed, template-resolved instance (the shape every
+        // instance is in once `PresetInstance::reconcile_manifest` — and thus
+        // the loader — has actually run against a known template) must never
+        // trip the gate.
+        let fx = manifold_core::preset_definition_registry::create_default(
+            &manifold_core::PresetTypeId::COLOR_GRADE,
+        );
+        assert!(
+            !fx.manifest_provisional(),
+            "a template-resolved instance must never be provisional"
+        );
+        // Must not panic.
+        super::assert_manifest_gate(&fx);
+    }
+}
+
+#[cfg(test)]
 mod persistent_slot_tests {
     //! Regression: a feedback chain like
     //! `source → feedback → affine → gain → vignette → mix`
@@ -5827,6 +5949,37 @@ mod generator_runtime_tests {
         ));
         assert!(
             matches!(err, JsonGeneratorLoadError::MissingFinalOutput),
+            "got {err:?}"
+        );
+    }
+
+    /// BUG-125: a generator JSON with TWO `system.final_output` nodes used to
+    /// have its tracked output resolved via `.find()` over an unordered
+    /// `AHashMap`, picking one nondeterministically per process and silently
+    /// overwriting the loser's texture with the canvas format at render
+    /// time. Rejected loudly at load instead.
+    #[test]
+    fn dual_final_output_is_rejected_at_load() {
+        let json = r#"{
+            "version": 1,
+            "name": "Bad",
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input" },
+                { "id": 1, "typeId": "node.uv_field" },
+                { "id": 2, "typeId": "system.final_output" },
+                { "id": 3, "typeId": "system.final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let err = unwrap_err(PresetRuntime::from_json_str(
+            json,
+            &PrimitiveRegistry::with_builtin(),
+        ));
+        assert!(
+            matches!(err, JsonGeneratorLoadError::MultipleFinalOutputs { count: 2 }),
             "got {err:?}"
         );
     }

@@ -835,11 +835,25 @@ fn title_from_type_id(type_id: &str) -> String {
 /// `(WGSL)` marker on their authored title so a hand-written shader reads as
 /// custom code rather than a native primitive. One definition, used by both
 /// the live (`from_graph`) and structural (group-preserving) snapshot paths.
+///
+/// BUG-122: an author title used to REPLACE the type label outright, so once
+/// a node was renamed its actual type (`node.blur`, `node.mix`, …) was
+/// nowhere on the card — unreadable in a graph with several renamed nodes.
+/// Generalizes the `(WGSL)` marker's append-not-replace precedent: when the
+/// author title differs from the type's friendly label, both show as
+/// `"<author title> — <friendly type>"`. Skipped when they'd be identical
+/// (a rename back to the default reads as just the plain label, not
+/// `"Blur — Blur"`). `render.rs`'s header draw already elides long titles to
+/// fit the node's width, so the compound form degrades gracefully.
 fn display_label(type_id: &str, author_title: Option<&str>) -> String {
-    let base = author_title
+    let friendly = super::palette::friendly_label_for(type_id)
         .map(str::to_string)
-        .or_else(|| super::palette::friendly_label_for(type_id).map(|s| s.to_string()))
         .unwrap_or_else(|| title_from_type_id(type_id));
+    let base = match author_title {
+        Some(title) if title != friendly => format!("{title} — {friendly}"),
+        Some(title) => title.to_string(),
+        None => friendly,
+    };
     if author_title.is_some() && type_id == super::primitives::wgsl_compute::TYPE_ID {
         format!("{base} (WGSL)")
     } else {
@@ -937,6 +951,41 @@ mod tests {
     use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use crate::node_graph::parameters::ParamDef;
     use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort};
+
+    /// BUG-122: an author title used to replace the type label outright —
+    /// once renamed, a node's actual type was nowhere on the card. Uses an
+    /// unregistered type id so `friendly_label_for` returns `None` and
+    /// `title_from_type_id`'s deterministic prettifier is the type label,
+    /// independent of the real primitive registry's contents.
+    #[test]
+    fn display_label_combines_author_title_with_type_when_they_differ() {
+        assert_eq!(
+            display_label("node.mystery_atom", Some("My Renamed Node")),
+            "My Renamed Node — Mystery Atom"
+        );
+    }
+
+    #[test]
+    fn display_label_skips_the_compound_when_title_matches_the_type_label() {
+        // A rename back to (or never away from) the default label reads as
+        // just the plain label, not "Mystery Atom — Mystery Atom".
+        assert_eq!(
+            display_label("node.mystery_atom", Some("Mystery Atom")),
+            "Mystery Atom"
+        );
+    }
+
+    #[test]
+    fn display_label_no_author_title_is_unchanged() {
+        assert_eq!(display_label("node.mystery_atom", None), "Mystery Atom");
+    }
+
+    #[test]
+    fn display_label_wgsl_marker_still_appends_after_the_compound_form() {
+        let label = display_label(super::super::primitives::wgsl_compute::TYPE_ID, Some("My Shader"));
+        assert!(label.ends_with(" (WGSL)"), "got {label:?}");
+        assert!(label.contains("My Shader"), "got {label:?}");
+    }
 
     #[test]
     fn from_def_preserves_group_structure() {

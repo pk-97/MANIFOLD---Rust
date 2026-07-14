@@ -116,12 +116,24 @@ impl TransportDisplayCache {
 /// Check auto-scroll during playback and return true if viewport scroll changed.
 /// Must run BEFORE build() so the rebuild includes the new scroll position.
 /// From Unity ViewportManager.UpdatePlayheadPosition (lines 327-357).
+/// BUG-159: playhead-follow yields to an active or just-finished user scroll
+/// gesture (wheel, trackpad pan, scrollbar drag) instead of fighting it —
+/// Ableton's feel. Re-engage is automatic: once this grace window elapses
+/// with no further user gesture, the next `check_auto_scroll` call resumes
+/// following on its own, no separate "re-engage" event needed.
+const USER_SCROLL_GRACE: std::time::Duration = std::time::Duration::from_millis(800);
+
 pub fn check_auto_scroll(
     ui: &mut UIRoot,
     content_state: &crate::content_state::ContentState,
     project: &Project,
 ) -> bool {
     if !content_state.is_playing {
+        return false;
+    }
+    // BUG-159: a user scroll gesture (in progress, or within the grace
+    // window) owns the viewport — auto-follow must not overwrite it.
+    if ui.viewport.scrollbar_h_dragging() || ui.viewport.user_scroll_x_recent(USER_SCROLL_GRACE) {
         return false;
     }
 
@@ -166,6 +178,55 @@ pub fn check_auto_scroll(
     }
 
     false
+}
+
+#[cfg(test)]
+mod bug159_auto_scroll_yield_tests {
+    use super::*;
+    use manifold_core::Beats;
+
+    fn playing_state(beat: f32) -> crate::content_state::ContentState {
+        crate::content_state::ContentState {
+            current_beat: Beats::from_f32(beat),
+            is_playing: true,
+            ..Default::default()
+        }
+    }
+
+    /// A UIRoot laid out through the real production path (one `build()`
+    /// pass, same as every live frame) so `viewport.tracks_rect()` is a real
+    /// nonzero rect — `check_auto_scroll`'s edge margins (50px right, 20px
+    /// left) need that to be reachable at all.
+    fn wide_ui_root() -> UIRoot {
+        let mut ui = UIRoot::new();
+        ui.build();
+        ui.viewport.set_zoom(20.0); // pixels-per-beat, so a few hundred beats span the viewport
+        ui
+    }
+
+    #[test]
+    fn auto_scroll_moves_when_no_user_gesture_is_active() {
+        let mut ui = wide_ui_root();
+        let project = Project::default();
+        // Push the playhead far enough right to cross the right-edge margin.
+        let state = playing_state(500.0);
+        let moved = check_auto_scroll(&mut ui, &state, &project);
+        assert!(moved, "auto-scroll must engage with no competing user gesture");
+    }
+
+    #[test]
+    fn auto_scroll_yields_to_a_recent_user_scroll_gesture() {
+        let mut ui = wide_ui_root();
+        ui.viewport.note_user_scroll_x();
+        let project = Project::default();
+        let state = playing_state(500.0);
+        let moved = check_auto_scroll(&mut ui, &state, &project);
+        assert!(
+            !moved,
+            "auto-scroll must yield while a user scroll gesture is recent — \
+             BUG-159's violent snap-back is exactly this check missing"
+        );
+    }
 }
 
 /// Push engine state into UI panels (called once per frame, AFTER build).
@@ -1963,11 +2024,43 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
     }
 }
 
+/// BUG-080 D2: release-mode once-per-instance warn for a provisional
+/// manifest reaching this seam. Shaped like the BUG-038 OSC-send throttle —
+/// a plain "seen once" set is enough here, not a reconnect transition.
+/// `debug_assert!` already screams in dev builds; this is the release-mode
+/// signal that a load/ingest path skipped `reconcile_param_manifests()`.
+fn warn_provisional_manifest_once(id: &manifold_core::EffectId) {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<std::collections::HashSet<manifold_core::EffectId>>> =
+        OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.insert(id.clone()) {
+        log::warn!(
+            "BUG-080: provisional manifest reached rows_from_manifest for effect_id={id:?} \
+             — a load/ingest path skipped reconcile_param_manifests()"
+        );
+    }
+}
+
 /// One `SpecRow` per manifest entry, in card order (PARAM_STORAGE_BOUNDARIES
 /// D4: the manifest is the single owner of every card-row fact — descriptor +
 /// state, id-keyed). Shared by both kinds; the id/name/whole_numbers fields
 /// come straight off `Param.spec` unchanged by calibration or exposure.
 fn rows_from_manifest(inst: &PresetInstance) -> Vec<SpecRow> {
+    // BUG-080 seam: a provisional manifest (built against an incomplete
+    // registry, not yet reconciled) reaching UI row translation means a
+    // load/ingest path skipped `reconcile_param_manifests()`. Loud in dev,
+    // throttled-once in release. See docs/PARAM_MANIFEST_GATE_DESIGN.md D2.
+    debug_assert!(
+        !inst.manifest_provisional(),
+        "BUG-080: provisional manifest reached rows_from_manifest — a load/ingest path \
+         skipped reconcile_param_manifests() (effect_id={:?})",
+        inst.id,
+    );
+    if inst.manifest_provisional() {
+        warn_provisional_manifest_once(&inst.id);
+    }
     inst.params
         .iter()
         .map(|p| SpecRow {

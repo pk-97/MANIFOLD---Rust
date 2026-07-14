@@ -213,12 +213,14 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
                 port: Some(producer_port.clone()),
                 message: e.to_string(),
             },
-            Json(_) | MissingGeneratorInput | MissingFinalOutput => ValidationIssue {
-                node_id: None,
-                type_id: None,
-                port: None,
-                message: e.to_string(),
-            },
+            Json(_) | MissingGeneratorInput | MissingFinalOutput | MultipleFinalOutputs { .. } => {
+                ValidationIssue {
+                    node_id: None,
+                    type_id: None,
+                    port: None,
+                    message: e.to_string(),
+                }
+            }
         }
     }
 }

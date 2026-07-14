@@ -577,9 +577,15 @@ impl WgslCompute {
                 // AUTHORED names — `<name>` per `@in`, and `out` for the output —
                 // so presets wire to the names the fragment declares, not codegen
                 // internals. Scalar param-shadow inputs carry the param name
-                // already (no `tex_` prefix), so they pass through untouched.
+                // already (no `tex_` prefix) — but BUG-012: a scalar param
+                // author-named `tex_<x>` (e.g. `tex_speed`) collides with this
+                // convention, so the rename must be filtered to texture-typed
+                // ports (mirroring the binding-key rename just below), never
+                // applied by name alone.
                 for inp in &mut self.inputs {
-                    if let Some(stripped) = inp.name.strip_prefix("tex_") {
+                    if matches!(inp.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
+                        && let Some(stripped) = inp.name.strip_prefix("tex_")
+                    {
                         inp.name = Cow::Borrowed(leak_str(stripped));
                     }
                 }
@@ -2695,6 +2701,36 @@ mod tests {
         assert_eq!(node.params[0].range, Some((0.0, 2.0)));
         // wgsl_source() round-trips the AUTHORED fragment, not the kernel.
         assert_eq!(node.wgsl_source(), Some(fragment_src.as_str()));
+    }
+
+    /// BUG-012: a scalar `@param` author-named `tex_<x>` (a legal but unusual
+    /// choice) used to collide with the texture-input rename convention —
+    /// the fragment-form rename loop stripped a literal `tex_` prefix off
+    /// EVERY input port name with no type filter, so `tex_speed` became
+    /// `speed` on the port while the uniform layout + `self.params` stayed
+    /// keyed `tex_speed`, and a wired LFO/Ableton control on that param
+    /// silently went nowhere. The texture input (`src`) still renames
+    /// (`tex_src` → `src` in codegen, but here the AUTHORED name is already
+    /// `src`, so this asserts the port-shadow keeps its param name intact).
+    #[test]
+    fn fragment_scalar_param_named_tex_prefixed_is_not_stripped() {
+        let src = format!(
+            "{}\n// @in: src\n// @param: tex_speed = 1.0 [0, 4]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, tex_speed: f32) -> vec4<f32> {{\n    return vec4<f32>(c.rgb * tex_speed, c.a);\n}}\n",
+            Marker::Fusion { kind: "pointwise".to_string() }.emit()
+        );
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(&src);
+        assert!(!node.compile_failed, "fragment must synthesize + introspect");
+        // The texture input renamed normally (`tex_src` → `src`).
+        assert!(node.inputs.iter().any(|i| i.name == "src" && i.ty == PortType::Texture2D));
+        // The scalar param-shadow port keeps its full authored name — no
+        // `tex_` stripped off a non-texture port.
+        assert!(
+            node.inputs.iter().any(|i| i.name == "tex_speed"),
+            "scalar param-shadow port must not be renamed by the texture convention: {:?}",
+            input_names(&node)
+        );
+        assert!(node.params.iter().any(|p| p.name == "tex_speed"));
     }
 
     /// BUG-010: a stray leftover `@compute fn` BEFORE the synthesized `cs_main`
