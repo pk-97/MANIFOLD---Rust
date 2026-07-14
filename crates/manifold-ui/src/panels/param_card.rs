@@ -277,21 +277,22 @@ const MAP_CHEVRON_W: f32 = 14.0;
 /// width — the single source both `build_effect_sliders` and
 /// `build_generator` consume instead of each doing their own lane arithmetic
 /// inline (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D2: "one
-/// row-geometry helper... no builder does lane arithmetic inline"). D1: the
-/// chevron lane is reserved in EVERY context — `CardContext` may change
-/// which glyph draws in it (Author + mappable only), never the rect itself —
-/// so a Perform card's slider is exactly as wide as an Author card's at the
-/// same content width, by construction, not by a parity test.
+/// row-geometry helper... no builder does lane arithmetic inline"). The
+/// chevron lane is reserved only in `CardContext::Author`, where the glyph
+/// can actually draw (BUG-160 follow-up: reserving it in `Perform` too, per
+/// the original D1, shrank the timeline inspector's sliders for a control
+/// that never appears there — Peter's directive was "mapping chevron the
+/// only extra" in the editor, not a lane Perform pays for and never uses).
 struct RowGeometry {
     /// Width of the param-name label column.
     label_width: f32,
     /// Width of the draggable slider track (content width minus the D/E/A
-    /// button lane and the chevron lane).
+    /// button lane, and the chevron lane when reserved).
     slider_w: f32,
 }
 
-fn row_geometry(content_w: f32) -> RowGeometry {
-    let chevron_lane = MAP_CHEVRON_W + DE_BUTTON_GAP;
+fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry {
+    let chevron_lane = if reserve_chevron { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 };
     let label_width = crate::slider::label_width_for_row(content_w);
     let slider_w =
         content_w - MOD_LANE_GAP - DE_BUTTON_SIZE * 3.0 - DE_BUTTON_GAP * 2.0 - chevron_lane;
@@ -2491,16 +2492,16 @@ impl ParamCardPanel {
         w: f32,
     ) {
         let mut cy = start_y;
-        // The chevron lane is reserved in EVERY context (D1); only the glyph
-        // draw is gated on Author + mappable, below. `author` still gates
-        // that glyph and the row-id scheme.
+        // `author` gates both the chevron lane reservation and the glyph
+        // draw + row-id scheme below — the lane only exists where the glyph
+        // can appear (Author + mappable).
         let author = self.context == CardContext::Author;
         // Label column grows with the row so a wide inspector card gives the
         // param name more room (not just a longer track). Floored at the
         // default, so narrow timeline cards keep the timeline's width exactly.
         // Shared with `build_generator` via `row_geometry` (D2) so the two
         // builders' lane math can't drift from each other.
-        let RowGeometry { label_width, slider_w } = row_geometry(w - PADDING * 2.0);
+        let RowGeometry { label_width, slider_w } = row_geometry(w - PADDING * 2.0, author);
 
         self.section_header_ids.clear();
         let runs = self.section_runs();
@@ -2711,15 +2712,12 @@ impl ParamCardPanel {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP;
-            // The chevron lane is reserved in EVERY context (D1) — same
-            // `row_geometry` helper the effect card uses (D2), so generator
-            // slider rows can't drift from the effect card's lane math.
-            // Generators are remappable too (reshape on the per-instance
-            // graph), so the reserved lane unifies the surface — same
-            // chevron, same drawer. `author` still gates the glyph draw
-            // below and the row-id scheme.
+            // Same `row_geometry` helper the effect card uses (D2), so
+            // generator slider rows can't drift from the effect card's lane
+            // math. `author` gates both the chevron lane reservation and the
+            // glyph draw + row-id scheme below.
             let author = self.context == CardContext::Author;
-            let RowGeometry { label_width, slider_w } = row_geometry(content_w);
+            let RowGeometry { label_width, slider_w } = row_geometry(content_w, author);
 
             self.section_header_ids.clear();
             let runs = self.section_runs();
