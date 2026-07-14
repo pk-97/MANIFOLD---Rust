@@ -451,7 +451,7 @@ fn run_graph_preset(preset: &str) {
     // per-node thumbnails; the snapshot drives the canvas layout.
     render::render_graph_to_png(
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -501,7 +501,7 @@ fn run_editor_preset(
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -578,7 +578,7 @@ fn run_gltf_editor(want_dump: bool) {
         &target,
         &data.selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -635,7 +635,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         &target,
         &data.selection,
         &gv_snap_before,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -657,7 +657,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             OBJECTS_BEFORE,
             (900.0, 200.0),
-            view.canonical_def.clone(),
+            (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
     } else {
@@ -667,7 +667,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             LIGHTS_BEFORE,
             (-260.0, 50.0),
-            view.canonical_def.clone(),
+            (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
     }
@@ -893,7 +893,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,
@@ -914,7 +914,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        view.canonical_def,
+        &view.canonical_def,
         tex_w,
         tex_h,
         SCALE,

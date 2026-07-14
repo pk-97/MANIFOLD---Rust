@@ -255,8 +255,12 @@ pub struct InspectorCompositePanel {
     drawer_anim_prev: bool,
     /// Wall-clock anchor for this frame's tween `dt_ms` — the inspector has no
     /// frame timer, so it measures its own delta (same pattern as the layer
-    /// header's mute-chip motion).
-    motion_last_tick: Instant,
+    /// header's mute-chip motion). `None` until the first `update()` call, so
+    /// that call's dt is always exactly 0 instead of "however long
+    /// construction took" (BUG-153: measuring from `Instant::now()` at
+    /// construction made the first tween tick a nondeterministic, non-zero
+    /// amount depending on setup time).
+    motion_last_tick: Option<Instant>,
 }
 
 impl InspectorCompositePanel {
@@ -310,7 +314,7 @@ impl InspectorCompositePanel {
             cache_node_count: 0,
             drawer_anim_active: false,
             drawer_anim_prev: false,
-            motion_last_tick: Instant::now(),
+            motion_last_tick: None,
         }
     }
 
@@ -2311,8 +2315,11 @@ impl Panel for InspectorCompositePanel {
         // moves the tween *values*; the reflow they drive happens on the next
         // build() (which the app's drawer_anim_active poll forces while a tween is
         // live). No tree mutation here — build reads the advanced values.
-        let dt_ms = (self.motion_last_tick.elapsed().as_secs_f32() * 1000.0).min(100.0);
-        self.motion_last_tick = Instant::now();
+        let dt_ms = self
+            .motion_last_tick
+            .map(|t| (t.elapsed().as_secs_f32() * 1000.0).min(100.0))
+            .unwrap_or(0.0);
+        self.motion_last_tick = Some(Instant::now());
         let mut any = false;
         for card in self.master_effects.iter_mut().chain(self.layer_effects.iter_mut()) {
             any |= card.tick_drawers(dt_ms);
