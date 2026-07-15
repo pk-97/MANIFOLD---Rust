@@ -158,6 +158,17 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         prev_raw = Some(raw);
         stable_count = if byte_stable { stable_count + 1 } else { 0 };
+        // NOT cosmetic — see render_import.rs's identical loop for why:
+        // without pacing, `STABLE_STREAK` frames can render faster than a
+        // background texture decode thread can swap even one map in, so a
+        // genuine partial-load state reads as fully converged. Found
+        // empirically on DamagedHelmet.glb this session (a wrong,
+        // reproducible "zebra-striped" partial render, byte-stable and
+        // above the non-black floor, at a different STABLE_STREAK frame
+        // than the correct one). A golden-diffed conformance harness is
+        // exactly the place this bug is most dangerous — a flaky render
+        // would make `check_golden` flip between pass/fail across runs.
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         if stable_count >= STABLE_STREAK {
             let rgba = readback_tonemapped_rgba8(&device, &target.texture, WIDTH, HEIGHT);

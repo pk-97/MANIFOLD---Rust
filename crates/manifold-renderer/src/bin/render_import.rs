@@ -166,7 +166,7 @@ fn main() {
 
     let target = RenderTarget::new(&device, args.width, args.height, format, "render-import-target");
 
-    // Same convergence-poll pattern as `render-generator-preset`/
+    // Same convergence-poll pattern as
     // `damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate`
     // (BUG-100/BUG-117): background texture decodes (base-color/normal/mr/
     // occlusion/emissive, each its own `node.gltf_texture_source` thread)
@@ -174,6 +174,22 @@ fn main() {
     // where every wired source is STILL mid-decode is byte-stable too — a
     // fixed frame count alone can't tell "converged" from "stuck at black".
     // Require byte-stability AND a non-black floor together.
+    //
+    // The `std::thread::sleep` below is NOT cosmetic — omitting it (an
+    // earlier version of this loop did) is a real bug, found empirically
+    // this session: with zero pacing, the GPU render loop can spin through
+    // `STABLE_STREAK` frames in under a millisecond, faster than a
+    // multi-texture background decode can swap even one map in, so 3
+    // "stable" frames can land entirely inside a decode thread's dead time
+    // — a genuine partial-load state (e.g. the normal map still solid-
+    // default while base-color has already landed) reads as fully
+    // converged. Reproduced on `DamagedHelmet.glb`: without the sleep,
+    // 2 of 3 runs converged on a visibly wrong frame (a monochrome
+    // "zebra-striped" partial load) at a DIFFERENT fraction than the
+    // correct render. The DamagedHelmet gpu test this pattern is ported
+    // from paces its polls at 50ms for exactly this reason; this loop
+    // renders every frame (unlike that test's real-time poll), so the
+    // sleep goes between frames instead of around the whole attempt.
     const DT: f32 = 1.0 / 60.0;
     const STABLE_STREAK: u32 = 3;
     let mut prev_raw: Option<Vec<u8>> = None;
@@ -213,6 +229,7 @@ fn main() {
         } else {
             stable_count = 0;
         }
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         if stable_count >= STABLE_STREAK {
             let rgba = readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height);
