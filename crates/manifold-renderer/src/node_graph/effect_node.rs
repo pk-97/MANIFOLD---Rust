@@ -847,6 +847,22 @@ pub trait EffectNode: Send {
     /// for every node whose format is fixed at compile time.
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// Whether the named `Texture2D` output wants a full mip chain on its
+    /// backing texture. Same compile-time contract as
+    /// [`output_format`](Self::output_format): the plan records it per
+    /// resource, the backend allocates the slot with
+    /// `floor(log2(max(w,h))) + 1` mip levels, and slot recycling keys on
+    /// it so a mipped slot never aliases a flat one.
+    ///
+    /// The producer is responsible for filling levels 1.. (typically
+    /// `generate_mipmaps` after writing level 0) — the executor does not
+    /// regenerate them. Default `false`: mips cost ~33% extra memory and
+    /// only material-map sources sampled under minification (IMPORT_FIDELITY
+    /// F-P6: `node.gltf_texture_source`) need them.
+    fn output_mipmapped(&self, _port: &str) -> bool {
+        false
+    }
+
     /// The sampler ADDRESS MODE a fused region must bind so this atom's
     /// `Gather` inputs sample identically whether fused or standalone. The
     /// freeze compiler folds a gather atom into a `node.wgsl_compute` kernel

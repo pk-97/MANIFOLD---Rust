@@ -292,6 +292,16 @@ pub trait Primitive: PrimitiveSpec {
     /// state (the `node.wgsl_compute_*` family).
     fn set_output_format(&mut self, _port: &str, _format: manifold_gpu::GpuTextureFormat) {}
 
+    /// Per-output-port mip-chain request — mirror of
+    /// [`EffectNode::output_mipmapped`](crate::node_graph::effect_node::EffectNode::output_mipmapped).
+    /// Override on material-map sources whose output is sampled under
+    /// minification (`node.gltf_texture_source`, IMPORT_FIDELITY F-P6);
+    /// the producer must fill levels 1.. itself (`generate_mipmaps`
+    /// after writing level 0). Default `false`.
+    fn output_mipmapped(&self, _port: &str) -> bool {
+        false
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -582,6 +592,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_output_format(&mut self, port: &str, format: manifold_gpu::GpuTextureFormat) {
         Primitive::set_output_format(self, port, format);
+    }
+    fn output_mipmapped(&self, port: &str) -> bool {
+        Primitive::output_mipmapped(self, port)
     }
     fn fused_gather_sampler_mode(
         &self,

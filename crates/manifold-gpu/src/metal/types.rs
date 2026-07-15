@@ -88,6 +88,15 @@ impl GpuTexture {
         Retained::as_ptr(&self.raw) as *const () as usize
     }
 
+    /// Number of mip levels on the underlying Metal texture. `1` for the
+    /// common flat allocation; mip-chained material-map slots
+    /// (IMPORT_FIDELITY F-P6) report their full chain length. Callers use
+    /// this to gate `GpuEncoder::generate_mipmaps` — generating on a
+    /// single-level texture is a pointless blit pass.
+    pub fn mip_level_count(&self) -> u32 {
+        self.raw.mipmapLevelCount() as u32
+    }
+
     /// Create a VIEW of a single mip level of `self`, sharing the same
     /// underlying storage (no new GPU allocation) but presented to the
     /// shader as its own complete, single-mip `GpuTexture` of the given

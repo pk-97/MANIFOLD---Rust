@@ -109,6 +109,14 @@ crate::primitive! {
         pending_upload: Option<(u32, u32, Vec<u8>)> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
+        // Identity of the `out` texture whose mip chain was last
+        // regenerated (IMPORT_FIDELITY F-P6). The blit rewrites level 0
+        // every frame, but levels 1.. only need regenerating when the
+        // content changed (fresh upload) or the output slot was handed a
+        // different physical texture (pool recycle / resize) — comparing
+        // `GpuTexture::identity_key` catches both without a per-frame
+        // mip pass.
+        last_mip_identity: usize = 0,
     },
 }
 
@@ -132,6 +140,13 @@ impl Primitive for GltfTextureSource {
             _ => 1024,
         };
         Some((w, h))
+    }
+
+    fn output_mipmapped(&self, port: &str) -> bool {
+        // IMPORT_FIDELITY F-P6: material maps are sampled under heavy
+        // minification in `render_scene` — the output slot carries a full
+        // mip chain, filled by `generate_mipmaps` in `run()` step 8.
+        port == "out"
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -189,6 +204,7 @@ impl Primitive for GltfTextureSource {
         // 4. Upload a freshly decoded image to the GPU. color_space is
         // read here (rather than cached) so it always reflects the
         // param at the moment of upload.
+        let mut fresh_upload = false;
         if let Some((w, h, rgba)) = self.pending_upload.take() {
             let color_space = match ctx.params.get("color_space") {
                 Some(ParamValue::Enum(v)) => *v,
@@ -208,6 +224,7 @@ impl Primitive for GltfTextureSource {
             self.src_w = w;
             self.src_h = h;
             self.uploaded = true;
+            fresh_upload = true;
         }
 
         // 5. Output buffer.
@@ -223,7 +240,18 @@ impl Primitive for GltfTextureSource {
         // decode error) — emit black rather than whatever pool leftover
         // is sitting in the output slot.
         let Some(source_texture) = self.source_texture.as_ref() else {
-            ctx.gpu_encoder().clear_texture(out, 0.0, 0.0, 0.0, 1.0);
+            let gpu = ctx.gpu_encoder();
+            gpu.clear_texture(out, 0.0, 0.0, 0.0, 1.0);
+            // The clear writes level 0 only — propagate the black down the
+            // chain so a downstream mip sample never reads a recycled
+            // slot's leftover tails (same staleness rule as step 8).
+            if out.mip_level_count() > 1 {
+                let out_identity = out.identity_key();
+                if out_identity != self.last_mip_identity {
+                    gpu.native_enc.generate_mipmaps(out);
+                    self.last_mip_identity = out_identity;
+                }
+            }
             return;
         };
 
@@ -268,6 +296,20 @@ impl Primitive for GltfTextureSource {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "node.gltf_texture_source",
         );
+
+        // 8. Regenerate the output's mip chain (IMPORT_FIDELITY F-P6).
+        // The blit above rewrote level 0; levels 1.. are stale whenever
+        // the content changed (fresh upload) or the slot handed us a
+        // different physical texture than the one we last mipped (pool
+        // recycle / resize). Guarded on the chain actually existing —
+        // tests that pre-bind a flat texture skip the pass cleanly.
+        if out.mip_level_count() > 1 {
+            let out_identity = out.identity_key();
+            if fresh_upload || out_identity != self.last_mip_identity {
+                gpu.native_enc.generate_mipmaps(out);
+                self.last_mip_identity = out_identity;
+            }
+        }
     }
 }
 

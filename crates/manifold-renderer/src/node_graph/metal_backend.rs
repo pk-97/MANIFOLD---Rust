@@ -84,6 +84,12 @@ pub struct MetalBackend {
     bound: AHashMap<ResourceId, Slot>,
     next_slot: u32,
 
+    /// Resources whose `Texture2D` slot must carry a full mip chain —
+    /// installed per plan via [`Backend::declare_mipmapped`], consulted by
+    /// `acquire`/`release` so mipped and flat slots pool separately.
+    /// IMPORT_FIDELITY F-P6 (`node.gltf_texture_source` material maps).
+    mipmapped_ids: AHashSet<ResourceId>,
+
     /// Resource IDs that the host has pinned to a host-supplied texture
     /// via `pre_bind_texture_2d`. The executor's `release` is a no-op for
     /// these — their bindings persist across frames so the host can call
@@ -187,6 +193,7 @@ impl MetalBackend {
             free_by_type: AHashMap::default(),
             bound: AHashMap::default(),
             next_slot: 0,
+            mipmapped_ids: AHashSet::default(),
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
@@ -218,6 +225,7 @@ impl MetalBackend {
             free_by_type: AHashMap::default(),
             bound: AHashMap::default(),
             next_slot: 0,
+            mipmapped_ids: AHashSet::default(),
             pinned: AHashSet::default(),
             textures_2d: AHashMap::default(),
             borrowed_2d: AHashMap::default(),
@@ -510,7 +518,8 @@ impl Backend for MetalBackend {
         if let Some(&slot) = self.bound.get(&id) {
             return slot;
         }
-        let key = crate::node_graph::backend::pool_key(ty, format, dims);
+        let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
+        let key = crate::node_graph::backend::pool_key(ty, format, dims, mipmapped);
         let pool = self.free_by_type.entry(key).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
@@ -539,9 +548,9 @@ impl Backend for MetalBackend {
             );
             let device: &GpuDevice = &device;
             let alloc_format = format.unwrap_or(self.format);
-            let rt =
-                self.pool
-                    .get(device, dims.0, dims.1, alloc_format, "node_graph");
+            let rt = self
+                .pool
+                .get(device, dims.0, dims.1, alloc_format, mipmapped, "node_graph");
             e.insert(rt);
         }
 
@@ -561,9 +570,17 @@ impl Backend for MetalBackend {
             return;
         }
         if let Some(slot) = self.bound.remove(&id) {
-            let key = crate::node_graph::backend::pool_key(ty, format, dims);
+            let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
+            let key = crate::node_graph::backend::pool_key(ty, format, dims, mipmapped);
             self.free_by_type.entry(key).or_default().push(slot);
         }
+    }
+
+    fn declare_mipmapped(&mut self, ids: &[ResourceId]) {
+        // Per-plan install: replace, don't accumulate — a stale id from a
+        // previous plan would silently upgrade an unrelated resource.
+        self.mipmapped_ids.clear();
+        self.mipmapped_ids.extend(ids.iter().copied());
     }
 
     fn slot_for(&self, id: ResourceId) -> Option<Slot> {
@@ -759,6 +776,43 @@ mod array_buffer_tests {
         // ArrayTypes with the same byte layout but different
         // Channels signatures get separate buffers.
         ArrayType::of_known::<crate::generators::compute_common::Particle>()
+    }
+
+    /// IMPORT_FIDELITY F-P6: a resource declared mip-chained allocates its
+    /// slot texture with a full mip chain, and mipped/flat slots never
+    /// recycle into each other (pool-key separation) — a flat consumer in a
+    /// mipped leftover would sample stale mip tails.
+    #[test]
+    fn declared_mipmapped_resource_allocates_a_mip_chain_and_pools_separately() {
+        let (_device, mut b) = make_backend();
+        b.declare_mipmapped(&[ResourceId(0)]);
+
+        let mipped_slot = b.acquire(ResourceId(0), PortType::Texture2D, None, (64, 64));
+        let mipped_tex = Backend::texture_2d(&b, mipped_slot).expect("real texture");
+        assert_eq!(
+            mipped_tex.mip_level_count(),
+            7, // floor(log2(64)) + 1
+            "declared resource must get the full mip chain"
+        );
+
+        // Release the mipped slot, then acquire an UNDECLARED resource of
+        // the same (type, format, dims): it must NOT receive the recycled
+        // mipped slot.
+        b.release(ResourceId(0), PortType::Texture2D, None, (64, 64));
+        let flat_slot = b.acquire(ResourceId(1), PortType::Texture2D, None, (64, 64));
+        assert_ne!(
+            mipped_slot, flat_slot,
+            "flat acquire must not recycle a mip-chained slot"
+        );
+        let flat_tex = Backend::texture_2d(&b, flat_slot).expect("real texture");
+        assert_eq!(flat_tex.mip_level_count(), 1, "undeclared resource stays flat");
+
+        // And the declared id, re-acquired, DOES recycle its own bucket.
+        let reacquired = b.acquire(ResourceId(0), PortType::Texture2D, None, (64, 64));
+        assert_eq!(
+            reacquired, mipped_slot,
+            "mipped free-pool must hand the mipped slot back to a declared id"
+        );
     }
 
     #[test]
