@@ -215,9 +215,12 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 worker pass/fail criterion in this section is mechanical — numeric readbacks,
 byte-parity diffs, dispatch-count asserts, `rg` hit counts, named green tests. No
 worker or orchestrator gate in this doc requires looking at an image or judging a
-look. The L2 PNG demos are **artifacts produced for Peter** (attached to the
-landing report per standard §8.8) — they are never a correctness oracle for any
-agent; the AMG GT3 render is Peter's L4 check and his alone. gpu-proofs gate runs
+look. **No PNG demo artifacts are produced anywhere in this wave** — Peter's
+directive (2026-07-15): "I will use the live app, not look at PNGs." Verification
+above test level is Peter in the live app (L4), reached through each landing's
+≤2-minute click-script; that click-script replaces the standard's L2 demo for
+every phase here. (The bundled-preset pixel-parity gates stay — those are machine
+byte comparisons, not images anyone reviews.) gpu-proofs gate runs
 are **serialized across the wave** — never run two phases' `--features gpu-proofs`
 gates concurrently (device contention flakes them; the in-process `test_device`
 lock only serializes within one process).
@@ -250,9 +253,9 @@ instead of reading it (`feedback_synthesis_drift`).
   (the D2 animated-envmap consequence gets a price, not an argument). Gate
   (negative): no-envmap presets byte-identical;
   `rg 'ibl_strength'` → zero hits; existing `render_scene_*` proofs green
-  unmodified. Demo: L2 headless PNG — mirror sphere + rough sphere under the
-  gradient studio, read by the landing session. Test scope: focused +
-  `--features gpu-proofs render_scene`; workspace sweep at landing.
+  unmodified. Demo: none — numeric gates above; Peter's check is in-app via the
+  landing click-script (mirror sphere vs rough sphere scene named in it). Test
+  scope: focused + `--features gpu-proofs render_scene`; workspace sweep at landing.
 - **F-P2 — Per-object map set + tangent-space normals.** D3 ports + resolve
   functions + `texture_flags2`, D4 cotangent frame, emissive/occlusion terms in
   all lit entry points (emissive in `fs_unlit` too, matching M6-D1's albedo
@@ -263,15 +266,17 @@ instead of reading it (`feedback_synthesis_drift`).
   emissive adds after lighting; occlusion darkens the IBL term only). Gate
   (negative): unwired parity (byte-identical), port-rebuild tests (the
   `base_color_map_n` test family at `render_scene.rs:2098` extended), `rg` zero
-  hits for `texture_flags2` reads outside the resolve functions. Demo: L2 PNG —
-  normal-mapped cube vs flat cube under one sun. Performer gesture: emissive
+  hits for `texture_flags2` reads outside the resolve functions. Demo: none —
+  Peter's check is in-app (normal-mapped cube vs flat cube, named in the landing
+  click-script). Performer gesture: emissive
   material's emission intensity on a fader → glow pulses through bloom.
 - **F-P3 — Softbox bake mode.** D7 params on `node.bake_environment`; `gradient`
   byte-identity; strip math free within the committed param names. Gate:
   gpu-proof — `gradient` mode byte-identical to build-of-record; `softbox`
   readback: ≥95% of texels below 0.05 luminance, emitter rows above 1.0 (HDR),
-  emitter_count changes the strip count (counted, not eyeballed). Demo: L2 PNG of
-  a chrome sphere under softbox — streak reflections on black. Test scope: focused.
+  emitter_count changes the strip count (counted, not eyeballed). Demo: none —
+  Peter's check is in-app (chrome sphere under softbox, named in the landing
+  click-script). Test scope: focused.
 - **F-P4 — Loader + importer + defaults.** D5 parse fields + Cargo features, D6
   colour spaces, importer wiring of all four map ports, report lines
   (clearcoat/transmission/BLEND-as-Mask — the transmission and BLEND lines are
@@ -283,8 +288,7 @@ instead of reading it (`feedback_synthesis_drift`).
   (all five maps; CC-BY, add attribution line) imports with every map port wired
   (asserted by port name), renders headless without error, and the render is
   non-degenerate (mean luminance above 0.02 AND below 0.98 — catches both
-  all-black and blown-out without judging the look); its PNG is attached to the
-  landing report as a Peter-facing artifact, not a gate; the AMG GT3 .glb
+  all-black and blown-out without judging the look); the AMG GT3 .glb
   (already local in `tests/fixtures/gltf/`, untracked — **stays untracked**:
   vecarz licensing unverified, never commit it) renders and is the Peter-facing
   look check (L4, his call, not any agent's). Gate (negative):
@@ -310,8 +314,8 @@ instead of reading it (`feedback_synthesis_drift`).
   pre-F-P5 (no second pass runs — dispatch-count assert); existing
   `render_scene_*` proofs green unmodified; `rg -i 'oit|per_triangle_sort'` on
   touched files → zero hits. Round-trip: `Blend` alpha_mode survives
-  save/reload with modulation live after reload. Demo: L2 PNG — the two-pane
-  scene; the AMG's windows are Peter's L4 check. Performer gesture: a glass
+  save/reload with modulation live after reload. Demo: none — the AMG's windows
+  are Peter's in-app check (L4). Performer gesture: a glass
   object's opacity (material alpha) on a fader — solid to ghost mid-set without
   the object popping wrongly through geometry. Test scope: focused +
   `--features gpu-proofs render_scene`; workspace sweep at landing (blend
