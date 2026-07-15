@@ -684,16 +684,11 @@ impl Application {
             .unwrap_or(0)
             .min(self.local_project.timeline.layers.len());
 
-        let dropped_note = if report.dropped_over_cap > 0 {
-            format!(
-                ", {} material(s) dropped over the 8-object cap",
-                report.dropped_over_cap
-            )
-        } else {
-            String::new()
-        };
+        // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — object_count always
+        // equals material_count, nothing is ever dropped over a cap
+        // (assemble_import_graph errors instead of truncating).
         log::warn!(
-            "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s){dropped_note}",
+            "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s)",
             report.object_count,
             report.textures_wired,
         );
