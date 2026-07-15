@@ -398,6 +398,20 @@ and the doc says so explicitly. Burn-down: Peter looks at the two PNG pairs name
 landing report (or the live app) and confirms/rejects the look, especially GTAO's stated
 honest cost (thin-object over-darkening) on a real scene rather than the demo's flat plane.
 
+### VD-021 — GLB_CONFORMANCE G-P1+G-P2: Peter's look-pass on the AMG livery fix and card-curation UI not yet run — L2 reached / L4 target
+Landed 2026-07-15 (`909976d2`). G-P1's conformance harness is numerically proven (4 `expect_pass`
+checks green, goldens pinned at 2/255) and the orchestrating session viewed the DamagedHelmet
+render, the held-out BoomBox/AntiqueCamera renders, and the AMG GT3 before/after (body livery now
+renders silver/NASA instead of black — BUG-163 closed on this evidence). Per the doc's L2/L4
+distinction, an orchestrator PNG review is not Peter's own verdict. Also unverified: the card
+curation's UI surface (D4 — "the card shows 16 sliders, not 78" performer gesture) was proven only
+at the `card_params`/round-trip level (`card_curation_caps_at_16_but_wiring_and_round_trip_stay_1_to_1`,
+L1) — nobody has looked at the actual inspector panel on a >16-material import. Burn-down: Peter
+drops the AMG (or another many-material glb) into a set live and confirms (a) the body livery looks
+right, (b) the card shows exactly 16 sliders. Separately tracked, not blocking: BUG-165 (BoomBox
+held-out asset never converges — a genuine gap found by G-P1's held-out gate, triage owed) and the
+`TextureTransformTest` fixture gap (no glTF-Binary variant at the pinned commit — G-P4's problem).
+
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
