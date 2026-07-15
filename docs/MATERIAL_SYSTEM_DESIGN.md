@@ -515,6 +515,10 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   skips tangent-space normal maps and lists each skip in the import report.
   Trigger: a hero import that visibly needs them → tangent generation at import
   time + a `normal_space` mode on the renderer, as its own designed slice.
+  **[TRIGGER FIRED 2026-07-15 → `docs/IMPORT_FIDELITY_DESIGN.md` D4 is the designed
+  slice. It lands tangent-space maps on `render_scene` only, via a fragment-shader
+  cotangent frame — NOT import-time tangent generation, and NOT a `normal_space`
+  mode on `render_mesh`, whose world-space contract stays untouched.]**
 
 ### 11.3 Tranche M6 brief (one session)
 

@@ -39,7 +39,8 @@ prerequisites aren't shipped, stop.
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
 | REALTIME_3D_DESIGN (P0/P1/P2/P3/P4/§9 ✅; P5–P7 remain) | **P2 shadows + P3 fog SHIPPED 2026-07-11** (`bf0e1a5d`; gpu-proofs `render_scene_shadows`+`render_scene_fog`, PNG-verified; F2 caster policy built as specified); P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
 | SIMULATIONS_DESIGN | REALTIME_3D P1 ✅ | full |
-| IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
+| IMPORT_FIDELITY_DESIGN (added 2026-07-15) | none — all prereqs in-tree (MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, shipped glTF assembler); **outranks IMPORT_DESIGN P1-remaining** (Peter: "really critical infra"); PROPOSED — Peter's read pending | full |
+| IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); **P1-remaining now orders AFTER IMPORT_FIDELITY (2026-07-15), whose F-P4 absorbs §8's normal-map report scope**; P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
 | COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069) before launch | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (re-derive anchors — ABLETON_TRANSPORT_SYNC landed 2026-07-07) | conformance |
