@@ -20,14 +20,14 @@
 //      emission are added exactly once (after the light loop), not
 //      blended per light.
 //
-// Shadows (P2) via the caster table + PCF below; no atmosphere/fog yet
-// (P3). No per-object surface
-// textures in P1 — `texture_flags` is always zero (render_scene has no
-// normal_map / roughness_map / base_color_map / metallic_map inputs);
-// the resolve_* helpers below are kept identical to render_3d_mesh.wgsl
-// so a future per-object texture extension is a pure additive port add,
-// not a shader rewrite. ONE envmap is shared across every PBR object in
-// the scene (an environment map is scene-wide, not per-object).
+// Shadows (P2) via the caster table + PCF below; atmosphere/fog (P3).
+// Per-object surface textures (IMPORT_FIDELITY_DESIGN.md D3/F-P2):
+// base_color_map (M6 addendum) plus normal_map (tangent-space, D4
+// cotangent-frame reconstruction), mr_map (glTF-packed roughness/metallic),
+// occlusion_map, and emissive_map — each gated by a texture_flags/
+// texture_flags2 presence bit, unwired = always-bind dummy stub (P8
+// pattern), byte-identical output. ONE envmap is shared across every PBR
+// object in the scene (an environment map is scene-wide, not per-object).
 //
 // MeshVertex layout (48 bytes), entry point names, and per-kind
 // dispatch: identical to render_3d_mesh.wgsl.
@@ -45,10 +45,11 @@ struct Vertex {
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
 // aligned throughout — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed. Total 464 bytes (four mat4x4s + thirteen vec4s;
-// stale as "272"/"320"/"448" in older comments — grew with the P3 atmosphere
-// fields, the P2 prev_view_proj/prev_model pair, and the
-// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field;
+// manual padding is needed. Total 480 bytes (four mat4x4s + fourteen vec4s;
+// stale as "272"/"320"/"448"/"464" in older comments — grew with the P3
+// atmosphere fields, the P2 prev_view_proj/prev_model pair, the
+// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field, and
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2;
 // `RenderSceneUniforms`'s `size_of` assert in render_scene.rs is the
 // authoritative check).
 // Lights are NO LONGER in here: they live in the `@binding(8)` storage
@@ -73,10 +74,23 @@ struct Uniforms {
     specular: vec4<f32>,
     // x: cel_bands (as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
-    // Surface-texture presence flags — always 0 in render_scene (no
-    // per-object surface texture inputs in P1). Kept so resolve_* below
-    // stays byte-identical to render_3d_mesh.wgsl.
+    // Surface-texture presence flags. x: normal_map_n wired (D3/F-P2,
+    // tangent-space glTF normal map — see resolve_normal's cotangent-frame
+    // reconstruction below), y/w: reserved/unused (the old single-channel
+    // roughness_map/metallic_map stubs are permanently dead — D3 rejected
+    // reusing them with a channel-select mode flag; superseded by the
+    // dedicated mr_map + texture_flags2.x below), z: base_color_map_n wired
+    // (M6 addendum, matches resolve_albedo's gate).
     texture_flags: vec4<f32>,
+    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: texture_flags is full (see above),
+    // so the three remaining new per-object maps get their own vec4.
+    // x: mr_map_n wired (glTF packing: G=roughness, B=metallic — a
+    // DEDICATED resolve function, not a channel-select mode on the old
+    // roughness_map/metallic_map bindings, per D3's explicit rejection of
+    // that shape). y: occlusion_map_n wired (R channel). z: emissive_map_n
+    // wired (sRGB, multiplied by the material's emission factor). w:
+    // reserved.
+    texture_flags2: vec4<f32>,
     // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
     // z/w: reserved.
     alpha_params: vec4<f32>,
@@ -120,8 +134,14 @@ struct Uniforms {
 // the scene.
 @group(0) @binding(2) var envmap: texture_2d<f32>;
 @group(0) @binding(3) var envmap_sampler: sampler;
-// No per-object surface textures in P1 — these bind the 1×1 dummy every
-// draw; texture_flags (always 0) keeps resolve_* from ever sampling them.
+// binding(4): normal_map_n (D3/F-P2) — tangent-space glTF normal map,
+// gated by texture_flags.x, reconstructed via the screen-space cotangent
+// frame in resolve_normal below (D4). Unwired binds the 1×1 dummy, flag
+// stays 0 — always-bind stub pattern (render_scene.rs P8 precedent).
+// binding(5)/(7): roughness_map/metallic_map — permanently dead stubs
+// (D3 rejected a channel-select mode flag on these; superseded by the
+// dedicated mr_map at binding(19) below). Always bound to the 1×1 dummy;
+// texture_flags.y/w never set from Rust.
 @group(0) @binding(4) var normal_map: texture_2d<f32>;
 @group(0) @binding(5) var roughness_map: texture_2d<f32>;
 @group(0) @binding(6) var base_color_map: texture_2d<f32>;
@@ -181,6 +201,14 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(16) var prefiltered_specular: texture_2d<f32>;
 @group(0) @binding(17) var irradiance_map: texture_2d<f32>;
 @group(0) @binding(18) var brdf_lut: texture_2d<f32>;
+
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the three NEW per-object maps (normal
+// reuses binding(4) above). Always bound (same always-bind ABI-stub
+// discipline as bindings 4/5/7/10-14) — unwired binds the 1×1 dummy,
+// gated off by texture_flags2's presence bits.
+@group(0) @binding(19) var mr_map: texture_2d<f32>;
+@group(0) @binding(20) var occlusion_map: texture_2d<f32>;
+@group(0) @binding(21) var emissive_map: texture_2d<f32>;
 
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 // Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
@@ -493,24 +521,45 @@ fn vs_main(
     return out;
 }
 
-// Identical to render_3d_mesh.wgsl — see that file for fuller commentary.
-fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>) -> vec3<f32> {
-    if u.texture_flags.x > 0.5 {
-        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
-        let n = sampled + vec3<f32>(1e-8, 0.0, 0.0);
-        return normalize(n);
-    }
-    return normalize(vertex_normal);
+// IMPORT_FIDELITY_DESIGN.md D4/F-P2: tangent-space (glTF-convention) normal
+// mapping via a screen-space cotangent frame (Mikkelsen's derivation, the
+// technique three.js/filament use when no vertex tangents exist — see
+// MeshVertex's 48-byte ABI-pinned comment: growing it for tangents was
+// priced and rejected). Built purely from `dpdx`/`dpdy` of `world_pos` and
+// `uv` — both screen-space derivatives, so the reconstructed T/B are a
+// function of the surface's own UV parameterization, independent of camera
+// or screen resolution. Uniform per-object branch (texture_flags.x is a
+// per-draw-call uniform, not per-fragment data), so `dpdx`/`dpdy` inside the
+// `if` are legal (same discipline the PCSS branches above already rely on).
+fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
+    let dp1 = dpdx(p);
+    let dp2 = dpdy(p);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    let inv_max = inverseSqrt(max(dot(t, t), dot(b, b)));
+    return mat3x3<f32>(t * inv_max, b * inv_max, n);
 }
 
-fn resolve_roughness(uv: vec2<f32>) -> f32 {
-    var r: f32;
-    if u.texture_flags.y > 0.5 {
-        r = textureSampleLevel(roughness_map, envmap_sampler, uv, 0.0).r;
-    } else {
-        r = u.pbr_metallic_roughness.y;
+// Identical to render_3d_mesh.wgsl's SIGNATURE — see that file for the
+// world-space-map path it still uses. render_scene's normal_map_n (D3) is
+// tangent-space (glTF convention: R/G = tangent-space X/Y in [-1,1] packed
+// to [0,1], B = tangent-space Z), reconstructed into world space via the
+// cotangent frame above rather than added directly to the vertex normal.
+fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    if u.texture_flags.x > 0.5 {
+        let n = normalize(vertex_normal);
+        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
+        let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        let tbn = cotangent_frame(n, world_pos, uv);
+        return normalize(tbn * tangent_normal);
     }
-    return max(r, 0.01);
+    return normalize(vertex_normal);
 }
 
 fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
@@ -521,11 +570,41 @@ fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
     return u.base_color;
 }
 
-fn resolve_metallic(uv: vec2<f32>) -> f32 {
-    if u.texture_flags.w > 0.5 {
-        return textureSampleLevel(metallic_map, envmap_sampler, uv, 0.0).r;
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2: glTF metallic-roughness packing
+// (G = roughness, B = metallic) in ONE dedicated texture — NOT a
+// channel-select mode on the (now-dead) roughness_map/metallic_map
+// bindings, per D3's explicit rejection of that shape. Returns
+// (roughness, metallic).
+fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
+    if u.texture_flags2.x > 0.5 {
+        let t = textureSampleLevel(mr_map, envmap_sampler, uv, 0.0);
+        return vec2<f32>(max(t.g, 0.01), clamp(t.b, 0.0, 1.0));
     }
-    return u.pbr_metallic_roughness.x;
+    return vec2<f32>(max(u.pbr_metallic_roughness.y, 0.01), clamp(u.pbr_metallic_roughness.x, 0.0, 1.0));
+}
+
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2: R-channel ambient occlusion. Unwired
+// = 1.0 (no darkening) — used ONLY to darken fs_pbr's diffuse IBL term
+// (never direct lighting, never specular IBL), per the design's Invariants
+// table.
+fn resolve_occlusion(uv: vec2<f32>) -> f32 {
+    if u.texture_flags2.y > 0.5 {
+        return textureSampleLevel(occlusion_map, envmap_sampler, uv, 0.0).r;
+    }
+    return 1.0;
+}
+
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2: sRGB emissive map, multiplied by the
+// material's own (already premultiplied-with-intensity) emission factor.
+// Unwired = the material's emission factor alone (byte-identical to before
+// this port existed). Used in EVERY entry point (fs_unlit included, per
+// M6-D1's albedo precedent) — emission is always added AFTER lighting.
+fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
+    if u.texture_flags2.z > 0.5 {
+        let t = textureSampleLevel(emissive_map, envmap_sampler, uv, 0.0).rgb;
+        return u.emission.rgb * t;
+    }
+    return u.emission.rgb;
 }
 
 // Exponential depth fog (P3), applied to a lit fragment's STRAIGHT
@@ -561,7 +640,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     // final STRAIGHT rgb (post-fog, post-emission, pre-output); alpha is
     // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
     // byte-identical to pre-lens builds (I2/I5).
-    let rgb = apply_fog(albedo.rgb + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
+    let rgb = apply_fog(albedo.rgb + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -574,7 +653,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -596,7 +675,7 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
-    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
+    let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -613,13 +692,14 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
     }
-    let metallic = clamp(resolve_metallic(in.uv), 0.0, 1.0);
-    let roughness = resolve_roughness(in.uv);
+    let mr = resolve_mr(in.uv);
+    let roughness = mr.x;
+    let metallic = mr.y;
 
     let n_dot_v = max(dot(N, V), 0.001);
     let F0 = mix(vec3<f32>(0.04), albedo.rgb, metallic);
@@ -681,16 +761,19 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // heuristic's neighbouring comment already documented for this split).
     let f_view = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
     let kd_ibl = (1.0 - f_view) * (1.0 - metallic);
-    // No per-object occlusion map yet (F-P2) — occlusion defaults to 1.0
-    // (no darkening), matching resolve_* above's "no per-object surface
-    // texture inputs in P1" scope fence.
-    let diffuse_ibl = kd_ibl * albedo.rgb * irradiance;
+    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: occlusion darkens the diffuse IBL
+    // term ONLY — never direct lighting (the `direct` accumulator above),
+    // never specular IBL (`specular_ibl`) — per the design's Invariants
+    // table. Unwired = 1.0 (no darkening), byte-identical to before this
+    // port existed.
+    let occlusion = resolve_occlusion(in.uv);
+    let diffuse_ibl = kd_ibl * albedo.rgb * irradiance * occlusion;
 
     let ibl = specular_ibl + diffuse_ibl;
 
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
-    let rgb = apply_fog(direct + ibl + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
+    let rgb = apply_fog(direct + ibl + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 
@@ -702,7 +785,7 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal);
+    var N = resolve_normal(in.uv, in.world_normal, in.world_pos);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
     if dot(N, V) < 0.0 {
         N = -N;
@@ -725,6 +808,6 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
-    let rgb = apply_fog(lit + ambient + u.emission.rgb, in.world_pos) * exp2(u.scene_params.z);
+    let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }

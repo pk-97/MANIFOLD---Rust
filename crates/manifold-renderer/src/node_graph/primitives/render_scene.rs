@@ -39,11 +39,16 @@
 //! into `pos_z` is a drop hit. Old saves carry a one-time migration
 //! (`crate::migrations::scene_transform_v1120` in `manifold-io`) that
 //! synthesizes the atom and re-points any card binding. Each object also
-//! has an optional `base_color_map_n` albedo/alpha input (M6 addendum);
-//! normal/roughness/metallic maps remain unwired per object (dummy-bound)
-//! — a documented additive follow-up. ONE shared `envmap` input lights
-//! every PBR object in the scene (an environment map is scene-wide by
-//! nature, not per-object).
+//! has an optional `base_color_map_n` albedo/alpha input (M6 addendum) plus
+//! four more optional per-object maps (IMPORT_FIDELITY_DESIGN.md D3/F-P2):
+//! `normal_map_n` (tangent-space, glTF convention, cotangent-frame
+//! reconstruction — D4), `mr_map_n` (glTF metallic-roughness packing:
+//! G=roughness, B=metallic), `occlusion_map_n` (R channel, darkens only the
+//! PBR diffuse IBL term), and `emissive_map_n` (sRGB, multiplied by the
+//! material's emission factor, added after lighting in every material
+//! kind). All unwired-safe (dummy-bound, byte-identical output). ONE shared
+//! `envmap` input lights every PBR object in the scene (an environment map
+//! is scene-wide by nature, not per-object).
 //!
 //! Per docs/REALTIME_3D_DESIGN.md §10 D11+P8 (shipped): each object also
 //! grows an optional `instances_n: Array(InstanceTransform)` port. Wired,
@@ -245,10 +250,18 @@ struct RenderSceneUniforms {
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
     cel_params: [f32; 4],
-    /// `z` = 1.0 when this object's `base_color_map_n` is wired (matches
-    /// `resolve_albedo`'s `texture_flags.z` gate); x/y/w remain zero — no
-    /// normal_map/roughness_map/metallic_map inputs per object yet.
+    /// `x` = 1.0 when `normal_map_n` is wired (IMPORT_FIDELITY_DESIGN.md
+    /// D3/F-P2, tangent-space cotangent-frame reconstruction), `z` = 1.0
+    /// when `base_color_map_n` is wired (M6 addendum, matches
+    /// `resolve_albedo`'s gate); `y`/`w` stay zero permanently — the old
+    /// single-channel roughness_map/metallic_map stubs, superseded by
+    /// the dedicated `mr_map_n` (see `texture_flags2` below).
     texture_flags: [f32; 4],
+    /// IMPORT_FIDELITY_DESIGN.md D3/F-P2: `texture_flags` above is full, so
+    /// the three remaining new per-object maps get their own vec4. `x` =
+    /// `mr_map_n` wired, `y` = `occlusion_map_n` wired, `z` =
+    /// `emissive_map_n` wired, `w` reserved.
+    texture_flags2: [f32; 4],
     alpha_params: [f32; 4],
     /// `(light_count, ambient, exposure_ev, 0)`. `light_count` is the sole
     /// source of truth for how many `@binding(8)` entries the shader reads —
@@ -282,10 +295,10 @@ struct RenderSceneUniforms {
     prev_model: [[f32; 4]; 4],
 }
 
-// 464 = 29 × 16 → the naga 16-byte uniform-size rule holds. Was 448 before
-// the VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field (+16 bytes,
-// plumbing-only — no march kernel reads it yet).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 464);
+// 480 = 30 × 16 → the naga 16-byte uniform-size rule holds. Was 464 before
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2's `texture_flags2` field (+16 bytes,
+// the four new per-object map presence flags).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 480);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -524,7 +537,7 @@ impl RenderScene {
         let n_obj = objects as usize;
         let n_lights = lights as usize;
 
-        let mut inputs = Vec::with_capacity(3 + n_lights + n_obj * 5);
+        let mut inputs = Vec::with_capacity(3 + n_lights + n_obj * 9);
         inputs.push(NodePort {
             name: std::borrow::Cow::Borrowed("camera"),
             ty: PortType::Camera,
@@ -570,6 +583,34 @@ impl RenderScene {
             });
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("base_color_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: four new optional per-object
+            // texture ports, each following the P8 always-bind-stub pattern
+            // exactly like base_color_map_n above — unwired binds a dummy,
+            // its texture_flags/texture_flags2 bit stays 0.
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("normal_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("mr_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("occlusion_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("emissive_map_{i}")),
                 ty: PortType::Texture2D,
                 kind: PortKind::Input,
                 required: false,
@@ -1323,8 +1364,8 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) — wired, that object draws instance_count = buffer_size / 32 copies (main pass AND every caster's shadow pass), each instance's world transform composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Normal/roughness/metallic maps remain unwired per object (dummy-bound) — a documented additive follow-up. `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. No atmosphere/fog yet (P3).",
-            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/transform_n/instances_n quintuples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n is optional — leaving it unwired renders that object with material_n's flat base_color, exactly as before this port existed. instances_n is optional and carries no per-object instance_count param — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) — wired, that object draws instance_count = buffer_size / 32 copies (main pass AND every caster's shadow pass), each instance's world transform composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps (IMPORT_FIDELITY_DESIGN.md D3): normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
+            composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/normal_map_n/mr_map_n/occlusion_map_n/emissive_map_n/transform_n/instances_n nonuples, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n and the four D3 maps are all optional — leaving any unwired renders that object exactly as before that port existed. instances_n is optional and carries no per-object instance_count param — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
             outputs: &RENDER_SCENE_OUTPUTS,
@@ -1434,6 +1475,7 @@ fn build_uniforms(
             0.0,
         ],
         texture_flags: [0.0, 0.0, 0.0, 0.0],
+        texture_flags2: [0.0, 0.0, 0.0, 0.0],
         alpha_params: [
             match material.alpha_mode {
                 AlphaMode::Mask => 1.0,
@@ -1678,6 +1720,13 @@ impl EffectNode for RenderScene {
             uniforms: RenderSceneUniforms,
             pipeline: manifold_gpu::GpuRenderPipeline,
             base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
+            /// per-object texture ports, same "None = unwired, dummy-bind at
+            /// draw time" shape as `base_color_map` above.
+            normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
             /// Wired `instances_n` buffer, or `None` (unwired — bind the
             /// identity stub at draw time; see `identity_instance_stub`).
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
@@ -1726,6 +1775,12 @@ impl EffectNode for RenderScene {
                 return;
             }
             let base_color_map = ctx.inputs.texture_2d(&format!("base_color_map_{n}"));
+            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
+            // per-object texture ports.
+            let normal_map = ctx.inputs.texture_2d(&format!("normal_map_{n}"));
+            let mr_map = ctx.inputs.texture_2d(&format!("mr_map_{n}"));
+            let occlusion_map = ctx.inputs.texture_2d(&format!("occlusion_map_{n}"));
+            let emissive_map = ctx.inputs.texture_2d(&format!("emissive_map_{n}"));
 
             // Unwired `transform_n` = identity (`Transform::default()`) —
             // matches the old scattered params' defaults exactly (pos 0,
@@ -1760,6 +1815,19 @@ impl EffectNode for RenderScene {
             if base_color_map.is_some() {
                 uniforms.texture_flags[2] = 1.0; // z = base_color_map present (matches resolve_albedo's texture_flags.z gate)
             }
+            // IMPORT_FIDELITY_DESIGN.md D3/F-P2 presence flags.
+            if normal_map.is_some() {
+                uniforms.texture_flags[0] = 1.0; // x = normal_map present (resolve_normal's cotangent-frame gate)
+            }
+            if mr_map.is_some() {
+                uniforms.texture_flags2[0] = 1.0; // x = mr_map present (resolve_mr's gate)
+            }
+            if occlusion_map.is_some() {
+                uniforms.texture_flags2[1] = 1.0; // y = occlusion_map present (resolve_occlusion's gate)
+            }
+            if emissive_map.is_some() {
+                uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
+            }
 
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
@@ -1782,6 +1850,10 @@ impl EffectNode for RenderScene {
                 uniforms,
                 pipeline,
                 base_color_map,
+                normal_map,
+                mr_map,
+                occlusion_map,
+                emissive_map,
                 instances,
                 instance_count,
             });
@@ -2020,7 +2092,7 @@ impl EffectNode for RenderScene {
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 19]> = draws
+        let binding_sets: Vec<[GpuBinding; 22]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2041,10 +2113,14 @@ impl EffectNode for RenderScene {
                         binding: 3,
                         sampler,
                     },
+                    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: normal_map_n (D4
+                    // cotangent-frame tangent-space reconstruction).
                     GpuBinding::Texture {
                         binding: 4,
-                        texture: dummy,
+                        texture: draw.normal_map.unwrap_or(dummy),
                     },
+                    // binding(5): roughness_map — permanently dead stub, see
+                    // shader-side comment; always the dummy.
                     GpuBinding::Texture {
                         binding: 5,
                         texture: dummy,
@@ -2053,6 +2129,8 @@ impl EffectNode for RenderScene {
                         binding: 6,
                         texture: draw.base_color_map.unwrap_or(dummy),
                     },
+                    // binding(7): metallic_map — permanently dead stub, see
+                    // shader-side comment; always the dummy.
                     GpuBinding::Texture {
                         binding: 7,
                         texture: dummy,
@@ -2116,6 +2194,21 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 18,
                         texture: brdf_lut,
+                    },
+                    // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the three NEW
+                    // per-object maps (normal_map_n reuses binding(4) above).
+                    // Same always-bind ABI-stub discipline.
+                    GpuBinding::Texture {
+                        binding: 19,
+                        texture: draw.mr_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 20,
+                        texture: draw.occlusion_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 21,
+                        texture: draw.emissive_map.unwrap_or(dummy),
                     },
                 ]
             })
@@ -2321,6 +2414,56 @@ mod tests {
         );
     }
 
+    /// IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate: `texture_flags2`
+    /// bits must be read ONLY inside their dedicated resolve functions
+    /// (`resolve_mr`/`resolve_occlusion`/`resolve_emissive`), never ad-hoc
+    /// from a fragment entry point directly — the shape D3 explicitly
+    /// requires (a dedicated resolve function per map, not a shared
+    /// channel-select branch scattered across call sites). Plain
+    /// source-text scan (no GPU needed), scoped to the actual field-access
+    /// syntax `u.texture_flags2` so prose mentions of the name in comments
+    /// don't count as "reads".
+    #[test]
+    fn texture_flags2_is_read_only_inside_its_dedicated_resolve_functions() {
+        let src = include_str!("shaders/render_scene.wgsl");
+
+        fn function_body<'a>(src: &'a str, sig: &str) -> &'a str {
+            let start = src.find(sig).unwrap_or_else(|| panic!("missing `{sig}`"));
+            let body_start = src[start..].find('{').expect("fn body") + start;
+            let mut depth = 0i32;
+            let mut end = body_start;
+            for (i, c) in src[body_start..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = body_start + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &src[start..end]
+        }
+
+        let access = "u.texture_flags2";
+        let total = src.matches(access).count();
+        assert!(total > 0, "expected at least one texture_flags2 read (sanity check on the scan itself)");
+
+        let inside: usize = ["fn resolve_mr(", "fn resolve_occlusion(", "fn resolve_emissive("]
+            .iter()
+            .map(|sig| function_body(src, sig).matches(access).count())
+            .sum();
+
+        assert_eq!(
+            total, inside,
+            "u.texture_flags2 must be read ONLY inside resolve_mr/resolve_occlusion/resolve_emissive \
+             (IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate) — found a read elsewhere"
+        );
+    }
+
     /// VOLUMETRIC_LIGHT_DESIGN.md P3 deliverable 4: `shaft_quality`'s
     /// 0/1/2 (Low/Med/High) enum must decode to D2's committed 16/24/32
     /// step counts, and the march's uniform build (`evaluate`, ~line 1837)
@@ -2419,9 +2562,11 @@ mod tests {
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
         // camera + envmap + atmosphere + light_0 +
-        // (mesh_0,material_0,base_color_map_0,transform_0,instances_0) +
-        // (mesh_1,material_1,base_color_map_1,transform_1,instances_1)
-        assert_eq!(s.inputs().len(), 3 + 1 + 10);
+        // (mesh_0,material_0,base_color_map_0,normal_map_0,mr_map_0,
+        //  occlusion_map_0,emissive_map_0,transform_0,instances_0) +
+        // (mesh_1,material_1,base_color_map_1,normal_map_1,mr_map_1,
+        //  occlusion_map_1,emissive_map_1,transform_1,instances_1)
+        assert_eq!(s.inputs().len(), 3 + 1 + 18);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
@@ -2436,6 +2581,15 @@ mod tests {
         let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
         assert!(!by_name("base_color_map_0").required);
         assert!(!by_name("base_color_map_1").required);
+        // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional per-object
+        // texture ports, same optional/Texture2D shape as base_color_map_n.
+        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+            let p0 = by_name(&format!("{kind}_0"));
+            assert!(!p0.required, "{kind}_0 must be optional");
+            assert_eq!(p0.ty, PortType::Texture2D, "{kind}_0 must be Texture2D");
+            let p1 = by_name(&format!("{kind}_1"));
+            assert!(!p1.required, "{kind}_1 must be optional");
+        }
         assert!(!by_name("transform_0").required);
         assert!(!by_name("transform_1").required);
         assert_eq!(by_name("transform_0").ty, PortType::Transform);
@@ -2464,6 +2618,12 @@ mod tests {
         assert!(node.inputs().iter().any(|p| p.name == "mesh_4"));
         assert!(node.inputs().iter().any(|p| p.name == "material_4"));
         assert!(node.inputs().iter().any(|p| p.name == "base_color_map_4"));
+        // IMPORT_FIDELITY_DESIGN.md D3/F-P2 ports must grow/shrink with the
+        // object count exactly like base_color_map_n.
+        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+            assert!(node.inputs().iter().any(|p| p.name == format!("{kind}_4")));
+            assert!(!node.inputs().iter().any(|p| p.name == format!("{kind}_5")));
+        }
         assert!(node.inputs().iter().any(|p| p.name == "transform_4"));
         assert!(node.inputs().iter().any(|p| p.name == "instances_4"));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_5"));
@@ -2476,6 +2636,9 @@ mod tests {
         node.reconfigure(&params_with(1.0, 0.0));
         assert!(!node.inputs().iter().any(|p| p.name == "mesh_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "base_color_map_1"));
+        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+            assert!(!node.inputs().iter().any(|p| p.name == format!("{kind}_1")));
+        }
         assert!(!node.inputs().iter().any(|p| p.name == "transform_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "instances_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_0"));
@@ -2500,6 +2663,9 @@ mod tests {
             .inputs()
             .iter()
             .any(|p| p.name == format!("base_color_map_{last_obj}")));
+        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+            assert!(node.inputs().iter().any(|p| p.name == format!("{kind}_{last_obj}")));
+        }
         assert!(node
             .inputs()
             .iter()
@@ -2554,6 +2720,9 @@ mod tests {
         assert!(by_name("mesh_0").required);
         assert!(by_name("material_0").required);
         assert!(!by_name("base_color_map_0").required);
+        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+            assert!(!by_name(&format!("{kind}_0")).required);
+        }
         assert!(!by_name("transform_0").required);
         assert!(!by_name("instances_0").required);
     }
