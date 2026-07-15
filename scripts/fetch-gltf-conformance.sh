@@ -30,12 +30,7 @@ OUT_DIR="${REPO_ROOT}/tests/fixtures/gltf/khronos"
 mkdir -p "${OUT_DIR}"
 
 # Every asset named in manifest.json's glTF-Binary (.glb) variant, EXCEPT
-# TextureTransformTest — the pinned commit ships it only as a multi-file
-# `glTF` variant (JSON + side-car .bin + textures, no glTF-Binary folder at
-# all), confirmed against the GitHub API at pin time. Its manifest entry is
-# `xfail:G-P4` and has no local fixture in v1; a future phase that flips it
-# to expect_pass either fetches the multi-file variant or waits for Khronos
-# to publish a binary one — tracked there, not here.
+# TextureTransformTest — see below.
 ASSETS="
 MetalRoughSpheres
 EmissiveStrengthTest
@@ -66,4 +61,44 @@ for name in ${ASSETS}; do
     fetched=$((fetched + 1))
 done
 
-echo "[fetch-gltf-conformance] done: ${fetched} fetched, ${skipped} already present, 1 (TextureTransformTest) intentionally not fetchable in v1 — see manifest.json"
+# TextureTransformTest — the pinned commit ships it ONLY as a multi-file
+# `glTF` variant (JSON + side-car .bin + textures; no glTF-Binary folder at
+# all, confirmed against the GitHub API at pin time). GLB_CONFORMANCE_DESIGN.md
+# G-P4: fetch the whole `Models/TextureTransformTest/glTF/` directory into
+# its own subfolder — `gltf::import(path)` (the production loader) natively
+# resolves the .gltf's sidecar .bin/textures relative to the .gltf's own
+# path, so this works with zero loader changes. File list enumerated from
+# the GitHub API tree at the pinned commit (7 files, fixed set — no manifest
+# to walk).
+TT_DIR="${OUT_DIR}/TextureTransformTest"
+mkdir -p "${TT_DIR}"
+TT_BASE_URL="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/${COMMIT}/Models/TextureTransformTest/glTF"
+TT_FILES="
+TextureTransformTest.gltf
+TextureTransformTest.bin
+Arrow.png
+Correct.png
+Error.png
+NotSupported.png
+UV.png
+"
+tt_fetched=0
+tt_skipped=0
+for f in ${TT_FILES}; do
+    out="${TT_DIR}/${f}"
+    if [ -s "${out}" ]; then
+        echo "[fetch-gltf-conformance] already have TextureTransformTest/${f}, skipping"
+        tt_skipped=$((tt_skipped + 1))
+        continue
+    fi
+    echo "[fetch-gltf-conformance] fetching TextureTransformTest/${f}"
+    if ! curl -sfL -o "${out}.tmp" "${TT_BASE_URL}/${f}"; then
+        echo "[fetch-gltf-conformance] ERROR: failed to fetch ${TT_BASE_URL}/${f}" >&2
+        rm -f "${out}.tmp"
+        exit 1
+    fi
+    mv "${out}.tmp" "${out}"
+    tt_fetched=$((tt_fetched + 1))
+done
+
+echo "[fetch-gltf-conformance] done: $((fetched + tt_fetched)) fetched, $((skipped + tt_skipped)) already present"

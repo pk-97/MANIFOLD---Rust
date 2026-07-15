@@ -75,6 +75,111 @@ enum CheckSpec {
     /// Regression pin against our OWN prior render (D3) — never Khronos's.
     #[serde(rename = "golden")]
     Golden { file: String, mean_abs_tol: f64 },
+    /// GLB_CONFORMANCE_DESIGN.md G-P4: "feature on vs feature off changes
+    /// the named quantity in the predicted direction" (D3), applied within
+    /// ONE render instead of two — `region` (a dim tile: identity-transform
+    /// UV sampling a dark part of the source texture, or specularFactor≈0)
+    /// must average darker than `reference_region` (a bright/neutral tile)
+    /// by at least the given fraction: `mean(region) < value *
+    /// mean(reference_region)`. Both regions are normalized `[x0,y0,x1,y1]`
+    /// in `[0,1]` screen space (top-left origin, matching the tonemapped
+    /// RGBA8 readback). Luminance = the standard-illuminant approximation
+    /// `0.2126*r + 0.7152*g + 0.0722*b` over straight (non-premultiplied)
+    /// RGBA8 — no premultiplied-alpha correction needed since these assets
+    /// have no transparent regions.
+    #[serde(rename = "region_mean_luminance_below")]
+    RegionMeanLuminanceBelow {
+        region: [f64; 4],
+        reference_region: [f64; 4],
+        value: f64,
+    },
+    /// GLB_CONFORMANCE_DESIGN.md G-P4: TextureTransformTest's "Offset U"
+    /// badge tile flips hue (green ✓ when the transform is applied vs.
+    /// olive ⊘ when it's ignored) at near-IDENTICAL luminance — verified
+    /// empirically (falsification render: `region_mean_luminance_below`
+    /// alone doesn't separate the two states here, a hue-based check
+    /// does). `mean(G) - mean(R)` over `region` must exceed `value`.
+    #[serde(rename = "region_green_minus_red_above")]
+    RegionGreenMinusRedAbove { region: [f64; 4], value: f64 },
+    /// GLB_CONFORMANCE_DESIGN.md G-P5: "clearcoat=1 sphere has brighter
+    /// specular peak than clearcoat=0" — a PEAK comparison, not a mean one.
+    /// None of the existing mean-based kinds fit: ClearCoatTest's
+    /// "Base layer"/"Coated" panels are near-identical diffuse red over
+    /// most of their area (the coat's Fresnel-weighted contribution is
+    /// concentrated in the specular highlight itself, a small fraction of
+    /// each region — a whole-panel MEAN comparison is diluted to noise,
+    /// verified empirically this session: mean barely moves while max
+    /// moves ~74%). `region`'s max luminance must exceed `value *
+    /// reference_region`'s max luminance.
+    #[serde(rename = "region_max_luminance_above")]
+    RegionMaxLuminanceAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
+}
+
+/// Mean luminance over a normalized `[x0,y0,x1,y1]` rect of a tonemapped
+/// RGBA8 `WIDTH`×`HEIGHT` buffer (row-major, 4 bytes/pixel).
+fn region_mean_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
+    let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);
+    let y0 = ((region[1] * HEIGHT as f64) as u32).min(HEIGHT - 1);
+    let x1 = ((region[2] * WIDTH as f64) as u32).clamp(x0 + 1, WIDTH);
+    let y1 = ((region[3] * HEIGHT as f64) as u32).clamp(y0 + 1, HEIGHT);
+    let mut sum = 0.0f64;
+    let mut n = 0u64;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            let r = rgba[i] as f64;
+            let g = rgba[i + 1] as f64;
+            let b = rgba[i + 2] as f64;
+            sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            n += 1;
+        }
+    }
+    sum / n.max(1) as f64
+}
+
+/// Max luminance over a normalized `[x0,y0,x1,y1]` rect — same rect
+/// convention as [`region_mean_luminance`], same luminance weights.
+/// GLB_CONFORMANCE_DESIGN.md G-P5: isolates a specular PEAK, which a mean
+/// over the same region dilutes away (see `RegionMaxLuminanceAbove`'s doc
+/// comment).
+fn region_max_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
+    let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);
+    let y0 = ((region[1] * HEIGHT as f64) as u32).min(HEIGHT - 1);
+    let x1 = ((region[2] * WIDTH as f64) as u32).clamp(x0 + 1, WIDTH);
+    let y1 = ((region[3] * HEIGHT as f64) as u32).clamp(y0 + 1, HEIGHT);
+    let mut max_lum = 0.0f64;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            let r = rgba[i] as f64;
+            let g = rgba[i + 1] as f64;
+            let b = rgba[i + 2] as f64;
+            let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            max_lum = max_lum.max(lum);
+        }
+    }
+    max_lum
+}
+
+/// Mean `(r, g, b)` over a normalized `[x0,y0,x1,y1]` rect — same rect
+/// convention as [`region_mean_luminance`].
+fn region_mean_rgb(rgba: &[u8], region: [f64; 4]) -> (f64, f64, f64) {
+    let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);
+    let y0 = ((region[1] * HEIGHT as f64) as u32).min(HEIGHT - 1);
+    let x1 = ((region[2] * WIDTH as f64) as u32).clamp(x0 + 1, WIDTH);
+    let y1 = ((region[3] * HEIGHT as f64) as u32).clamp(y0 + 1, HEIGHT);
+    let (mut rs, mut gs, mut bs, mut n) = (0.0f64, 0.0f64, 0.0f64, 0u64);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            rs += rgba[i] as f64;
+            gs += rgba[i + 1] as f64;
+            bs += rgba[i + 2] as f64;
+            n += 1;
+        }
+    }
+    let n = n.max(1) as f64;
+    (rs / n, gs / n, bs / n)
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +386,55 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
             let rgba = render_asset(path, &[], 0.02)?;
             let result = check_golden(&rgba, file, *mean_abs_tol);
             if assert { result } else { Ok(()) }
+        }
+        CheckSpec::RegionMeanLuminanceBelow { region, reference_region, value } => {
+            let rgba = render_asset(path, &[], 0.02)?;
+            let region_mean = region_mean_luminance(&rgba, *region);
+            let reference_mean = region_mean_luminance(&rgba, *reference_region);
+            println!(
+                "  {asset}: region_mean_luminance = {region_mean:.2}, reference_mean = {reference_mean:.2} \
+                 (region must be < {value} * reference = {:.2})",
+                value * reference_mean
+            );
+            if !assert || region_mean < value * reference_mean {
+                Ok(())
+            } else {
+                Err(format!(
+                    "region_mean_luminance {region_mean:.2} >= {value} * reference_mean {reference_mean:.2} \
+                     ({:.2}) — the feature-dependent region isn't dimmer than the reference",
+                    value * reference_mean
+                ))
+            }
+        }
+        CheckSpec::RegionGreenMinusRedAbove { region, value } => {
+            let rgba = render_asset(path, &[], 0.02)?;
+            let (r, g, _b) = region_mean_rgb(&rgba, *region);
+            let diff = g - r;
+            println!("  {asset}: region mean G-R = {diff:.2} (floor {value})");
+            if !assert || diff > *value {
+                Ok(())
+            } else {
+                Err(format!("region mean G-R {diff:.2} <= floor {value}"))
+            }
+        }
+        CheckSpec::RegionMaxLuminanceAbove { region, reference_region, value } => {
+            let rgba = render_asset(path, &[], 0.02)?;
+            let region_max = region_max_luminance(&rgba, *region);
+            let reference_max = region_max_luminance(&rgba, *reference_region);
+            println!(
+                "  {asset}: region_max_luminance = {region_max:.2}, reference_max = {reference_max:.2} \
+                 (region must be > {value} * reference = {:.2})",
+                value * reference_max
+            );
+            if !assert || region_max > value * reference_max {
+                Ok(())
+            } else {
+                Err(format!(
+                    "region_max_luminance {region_max:.2} <= {value} * reference_max {reference_max:.2} \
+                     ({:.2}) — the coated region's specular peak isn't brighter than the base",
+                    value * reference_max
+                ))
+            }
         }
     }
 }

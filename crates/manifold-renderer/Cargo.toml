@@ -33,11 +33,25 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # KHR_materials_clearcoat, which this crate version has no typed support
 # for) + KHR_lights_punctual (IMPORT_DESIGN P1's light mapping needs it;
 # enabling here costs nothing — no lights/cameras work happens in F-P4).
+# GLB_CONFORMANCE_DESIGN.md G-P4: KHR_texture_transform (typed
+# `texture::Info::texture_transform()`) + KHR_materials_specular (typed
+# `Material::specular()`) + KHR_materials_ior (typed `Material::ior()`).
+# GLB_CONFORMANCE_DESIGN.md G-P5: KHR_materials_clearcoat's factors
+# (clearcoatFactor/clearcoatRoughnessFactor) are now MAPPED (second GGX
+# lobe) but STILL via the raw-JSON `extension_value` sniff above, not a
+# feature flag — VERIFIED this session against both `gltf` and
+# `gltf-json` 1.4.1's own `Cargo.toml` (and full source grep): neither
+# crate has a `KHR_materials_clearcoat` feature or any typed accessor at
+# this pinned version, unlike specular/ior in G-P4. No feature added; no
+# new dependency.
 gltf = { version = "1", features = [
     "KHR_materials_emissive_strength",
     "KHR_materials_transmission",
     "extensions",
     "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

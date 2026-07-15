@@ -180,6 +180,7 @@ impl Render3DMesh {
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
                 compare: None,
+                ..Default::default()
             }));
         }
     }

@@ -258,8 +258,37 @@ struct RenderSceneUniforms {
     camera_pos: [f32; 4],
     base_color: [f32; 4],
     emission: [f32; 4],
+    /// `x`: metallic `[0,1]`, `y`: roughness `[0.01,1]`. `z`/`w` were
+    /// permanently-zero reserved slots until GLB_CONFORMANCE_DESIGN.md
+    /// G-P4/D5 repurposed them: `z` = `ior` (KHR_materials_ior, default
+    /// `1.5`), `w` = `specular_factor` (KHR_materials_specular, default
+    /// `1.0`) — both feed `fs_pbr`'s dielectric F0 term. Defaults collapse
+    /// the formula to the pre-G-P4 hardcoded `F0 = 0.04` exactly, so this
+    /// reuse is byte-identical for every asset without the extensions.
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
+    /// GLB_CONFORMANCE_DESIGN.md G-P4/D5: `KHR_materials_specular`'s
+    /// `specularColorFactor` (rgb, default `[1,1,1]`) — `w` reserved.
+    /// A NEW field (not a reserved-slot reuse) since no existing vec4 had
+    /// 3 free floats for the rgb triplet.
+    pbr_specular_tint: [f32; 4],
+    /// GLB_CONFORMANCE_DESIGN.md G-P4/D5: per-map `KHR_texture_transform`
+    /// folded 2×3 affines, one `vec4 + vec4` pair per map family. `*_uv_m`
+    /// = linear part `(m00, m01, m10, m11)` s.t. `uv' = (m00*u + m01*v +
+    /// tx, m10*u + m11*v + ty)`, default identity `(1,0,0,1)`; `*_uv_t` =
+    /// translation `(tx, ty, 0, 0)` (`z`/`w` reserved), default zero.
+    /// Per-map, not one shared transform: the AMG GT3 carries transforms
+    /// on 9 normalTexture infos and only 1 baseColorTexture.
+    base_color_uv_m: [f32; 4],
+    base_color_uv_t: [f32; 4],
+    normal_uv_m: [f32; 4],
+    normal_uv_t: [f32; 4],
+    mr_uv_m: [f32; 4],
+    mr_uv_t: [f32; 4],
+    occlusion_uv_m: [f32; 4],
+    occlusion_uv_t: [f32; 4],
+    emissive_uv_m: [f32; 4],
+    emissive_uv_t: [f32; 4],
     cel_params: [f32; 4],
     /// `x` = 1.0 when `normal_map_n` is wired (IMPORT_FIDELITY_DESIGN.md
     /// D3/F-P2, tangent-space cotangent-frame reconstruction), `z` = 1.0
@@ -273,6 +302,14 @@ struct RenderSceneUniforms {
     /// `mr_map_n` wired, `y` = `occlusion_map_n` wired, `z` =
     /// `emissive_map_n` wired, `w` reserved.
     texture_flags2: [f32; 4],
+    /// `x` = alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), `y` =
+    /// alpha_cutoff. `z`/`w` were permanently-zero reserved slots until
+    /// GLB_CONFORMANCE_DESIGN.md G-P5/D5 repurposed them: `z` = `clearcoat`
+    /// (KHR_materials_clearcoat's `clearcoatFactor`, default `0.0`), `w` =
+    /// `clearcoat_roughness` (`clearcoatRoughnessFactor`, default `0.0`) —
+    /// both feed `fs_pbr`'s second GGX lobe. Default `0.0` makes the
+    /// shader's energy-compensation weight exactly zero, byte-identical to
+    /// pre-G-P5 output.
     alpha_params: [f32; 4],
     /// `(light_count, ambient, exposure_ev, 0)`. `light_count` is the sole
     /// source of truth for how many `@binding(8)` entries the shader reads —
@@ -306,10 +343,14 @@ struct RenderSceneUniforms {
     prev_model: [[f32; 4]; 4],
 }
 
-// 480 = 30 × 16 → the naga 16-byte uniform-size rule holds. Was 464 before
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2's `texture_flags2` field (+16 bytes,
-// the four new per-object map presence flags).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 480);
+// 656 = 41 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
+// `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
+// `ior`/`specular_factor` rode existing reserved slots on
+// `pbr_metallic_roughness` instead of growing the struct). Still 656 after
+// G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
+// reserved slots — no struct growth.
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 656);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -764,6 +805,7 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
                 compare: None,
+                ..Default::default()
             }));
         }
         // Material-map sampler (binding 22): REPEAT on both axes — the glTF
@@ -781,6 +823,11 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
                 compare: None,
+                // Anisotropic filtering (D7, GLB_CONFORMANCE G-P3): glancing-angle
+                // minification on grazing surfaces (floors, the AMG's paint) stays
+                // sharp instead of over-blurring. Material sampler only — every
+                // other sampler in this file keeps the field's default (1).
+                max_anisotropy: 8,
             }));
         }
     }
@@ -819,6 +866,7 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
                 compare: Some(manifold_gpu::GpuCompareFunction::Less),
+                ..Default::default()
             }));
         }
         if self.dummy_depth.is_none() {
@@ -1543,6 +1591,16 @@ fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     out
 }
 
+/// Split a folded `[m00, m01, m10, m11, tx, ty]` per-map UV affine
+/// (G-P4) into its `vec4` linear part / `vec4` translation part for the
+/// uniform.
+fn uv_m(t: &[f32; 6]) -> [f32; 4] {
+    [t[0], t[1], t[2], t[3]]
+}
+fn uv_t(t: &[f32; 6]) -> [f32; 4] {
+    [t[4], t[5], 0.0, 0.0]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_uniforms(
     view_proj: [[f32; 4]; 4],
@@ -1560,13 +1618,37 @@ fn build_uniforms(
         camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
         base_color: material.base_color,
         emission: material.emission,
-        pbr_metallic_roughness: [material.metallic, material.roughness, 0.0, 0.0],
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: z/w were permanently-zero
+        // reserved slots, now ior/specular_factor — see the struct's field
+        // doc comment.
+        pbr_metallic_roughness: [
+            material.metallic,
+            material.roughness,
+            material.ior,
+            material.specular_factor,
+        ],
         specular: [
             material.specular_color[0],
             material.specular_color[1],
             material.specular_color[2],
             material.specular_power,
         ],
+        pbr_specular_tint: [
+            material.specular_tint[0],
+            material.specular_tint[1],
+            material.specular_tint[2],
+            0.0,
+        ],
+        base_color_uv_m: uv_m(&material.base_color_uv_transform),
+        base_color_uv_t: uv_t(&material.base_color_uv_transform),
+        normal_uv_m: uv_m(&material.normal_uv_transform),
+        normal_uv_t: uv_t(&material.normal_uv_transform),
+        mr_uv_m: uv_m(&material.mr_uv_transform),
+        mr_uv_t: uv_t(&material.mr_uv_transform),
+        occlusion_uv_m: uv_m(&material.occlusion_uv_transform),
+        occlusion_uv_t: uv_t(&material.occlusion_uv_transform),
+        emissive_uv_m: uv_m(&material.emissive_uv_transform),
+        emissive_uv_t: uv_t(&material.emissive_uv_transform),
         cel_params: [
             material.cel_bands as f32,
             material.band_low,
@@ -1584,8 +1666,11 @@ fn build_uniforms(
                 AlphaMode::Opaque | AlphaMode::Blend => 0.0,
             },
             material.alpha_cutoff,
-            0.0,
-            0.0,
+            // GLB_CONFORMANCE_DESIGN.md G-P5/D5: z/w were permanently-zero
+            // reserved slots, now clearcoat/clearcoat_roughness — see the
+            // struct's field doc comment.
+            material.clearcoat,
+            material.clearcoat_roughness,
         ],
         // z = exposure_ev (CAMERA_AND_LENS_DESIGN.md §2 D5) — the fragment
         // shaders multiply their final straight rgb by exp2(scene_params.z).
@@ -3498,6 +3583,7 @@ mod gpu_tests {
             address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
             compare: Some(GpuCompareFunction::Less),
+            ..Default::default()
         });
 
         let fog_density = 0.05f32;
@@ -3633,6 +3719,198 @@ mod gpu_tests {
             device.render_pipeline_cache_len(),
             cache_before_use,
             "pipeline_for after prewarm must be a cache hit, not compile a new pipeline"
+        );
+    }
+
+    // --- G-P3 anisotropic filtering (GLB_CONFORMANCE_DESIGN.md D7) -----
+    //
+    // Both proofs sample the SAME horizontally-striped texture (constant
+    // along U, alternating bands along V — no detail in U at all) with the
+    // SAME highly anisotropic derivative via `textureSampleGrad` (ddx large
+    // in U, ddy small in V): the "floor viewed edge-on" case. Isotropic
+    // filtering picks its LOD off the larger (U) footprint and blurs V
+    // along with it even though V never needed blurring; anisotropic
+    // filtering takes multiple taps along U at a sharper effective LOD,
+    // preserving V's stripe edges. `textureSampleGrad` (not the implicit-
+    // derivative `textureSample`) is required here because a compute
+    // kernel has no rasterizer-derived screen-space derivatives to draw
+    // an implicit LOD from — WGSL restricts `textureSample` to fragment
+    // shaders for exactly that reason.
+
+    const ANISO_TEST_SIZE: u32 = 128;
+    const ANISO_TEST_BANDS: u32 = 8;
+    const ANISO_TEST_ROW_LEN: u32 = 256;
+
+    const ANISO_TEST_WGSL: &str = r#"
+const N: u32 = 256u;
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<storage, read_write> out_buf: array<vec4<f32>>;
+
+@compute @workgroup_size(64)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= N) {
+        return;
+    }
+    let v = (f32(gid.x) + 0.5) / f32(N);
+    let uv = vec2<f32>(0.5, v);
+    // Grazing-minification derivative: large in U (the axis the texture
+    // carries no detail in — Metal's isotropic LOD pick is driven by
+    // this larger footprint regardless), small in V (the axis the
+    // stripes actually live in).
+    let ddx = vec2<f32>(0.5, 0.0);
+    let ddy = vec2<f32>(0.0, 0.02);
+    out_buf[gid.x] = textureSampleGrad(src_tex, samp, uv, ddx, ddy);
+}
+"#;
+
+    /// 128x128 Rgba8Unorm, `ANISO_TEST_BANDS` horizontal bands alternating
+    /// ~0.05 / ~0.95 (avoids pure 0/1 clipping ambiguity), full mip chain
+    /// via the same hardware `generate_mipmaps` blit `gltf_texture_source`
+    /// uses (F-P6 precedent) — a synthesized fixture, not production
+    /// texture-decode code, so this does not touch mip generation itself
+    /// (forbidden move).
+    fn make_striped_grazing_texture(device: &manifold_gpu::GpuDevice) -> manifold_gpu::GpuTexture {
+        let n = ANISO_TEST_SIZE;
+        let band_h = n / ANISO_TEST_BANDS;
+        let mut data = vec![0u8; (n * n * 4) as usize];
+        for y in 0..n {
+            let band = y / band_h;
+            let v: u8 = if band % 2 == 0 { 13 } else { 242 };
+            for x in 0..n {
+                let o = ((y * n + x) * 4) as usize;
+                data[o] = v;
+                data[o + 1] = v;
+                data[o + 2] = v;
+                data[o + 3] = 255;
+            }
+        }
+        let mip_levels = manifold_gpu::GpuTextureDesc::max_mip_levels(n, n);
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: n,
+            height: n,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
+            label: "aniso-test-stripes",
+            mip_levels,
+        });
+        device.upload_texture(&tex, &data);
+        let mut enc = device.create_encoder("aniso-test-mip-gen");
+        enc.generate_mipmaps(&tex);
+        enc.commit_and_wait_completed();
+        tex
+    }
+
+    /// Dispatch `ANISO_TEST_WGSL` and read back `ANISO_TEST_ROW_LEN` grazing
+    /// samples as RGBA floats.
+    fn sample_grazing_row(
+        device: &manifold_gpu::GpuDevice,
+        tex: &manifold_gpu::GpuTexture,
+        sampler: &manifold_gpu::GpuSampler,
+    ) -> Vec<[f32; 4]> {
+        let pipeline = device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
+        let out_buf = device.create_buffer_shared(u64::from(ANISO_TEST_ROW_LEN) * 16);
+        let bindings = [
+            GpuBinding::Texture { binding: 0, texture: tex },
+            GpuBinding::Sampler { binding: 1, sampler },
+            GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+        ];
+        let mut enc = device.create_encoder("aniso-test-dispatch");
+        enc.dispatch_compute(&pipeline, &bindings, [ANISO_TEST_ROW_LEN / 64, 1, 1], "aniso-test");
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared output buffer");
+        let floats: &[f32] = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<f32>(), (ANISO_TEST_ROW_LEN * 4) as usize)
+        };
+        (0..ANISO_TEST_ROW_LEN as usize)
+            .map(|i| {
+                let o = i * 4;
+                [floats[o], floats[o + 1], floats[o + 2], floats[o + 3]]
+            })
+            .collect()
+    }
+
+    /// D7 invariant (`docs/GLB_CONFORMANCE_DESIGN.md` §4): `max_anisotropy:
+    /// 1` must be byte-identical to pre-field behavior. Every call site that
+    /// predates the field builds its `GpuSamplerDesc` via `..Default::
+    /// default()` and never mentions the field at all — that shape, and a
+    /// sampler that explicitly spells `max_anisotropy: 1`, must sample
+    /// identically.
+    #[test]
+    fn sampler_aniso_one_is_byte_identical() {
+        let device = crate::test_device();
+        let tex = make_striped_grazing_texture(&device);
+
+        let untouched = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        });
+        let explicit_one = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            compare: None,
+            max_anisotropy: 1,
+        });
+
+        let a = sample_grazing_row(&device, &tex, &untouched);
+        let b = sample_grazing_row(&device, &tex, &explicit_one);
+        assert_eq!(a.len(), b.len());
+        for (i, (pa, pb)) in a.iter().zip(b.iter()).enumerate() {
+            assert_eq!(
+                pa, pb,
+                "row sample {i}: default-spread sampler (max_anisotropy never mentioned) must \
+                 be byte-identical to an explicit max_anisotropy: 1 sampler"
+            );
+        }
+    }
+
+    /// G-P3 gate proof (`docs/GLB_CONFORMANCE_DESIGN.md`, the F-P3 numeric-
+    /// not-look style): aniso 8 must sharpen grazing minification relative
+    /// to aniso 1. High-frequency energy (total variation — sum of absolute
+    /// consecutive-sample deltas along the sampled row) is high when the
+    /// alternating bands stay resolved and collapses toward zero as they
+    /// blur into a uniform mid-grey, so it is a direct, numeric proxy for
+    /// "did anisotropic filtering keep this sharp."
+    #[test]
+    fn aniso_sharpens_grazing_minification() {
+        let device = crate::test_device();
+        let tex = make_striped_grazing_texture(&device);
+
+        let aniso_1 = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            max_anisotropy: 1,
+            ..Default::default()
+        });
+        let aniso_8 = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            max_anisotropy: 8,
+            ..Default::default()
+        });
+
+        let low = sample_grazing_row(&device, &tex, &aniso_1);
+        let high = sample_grazing_row(&device, &tex, &aniso_8);
+
+        let energy =
+            |row: &[[f32; 4]]| -> f32 { row.windows(2).map(|w| (w[1][0] - w[0][0]).abs()).sum() };
+        let e1 = energy(&low);
+        let e8 = energy(&high);
+        assert!(
+            e8 > e1 * 1.1,
+            "aniso 8 must sharpen the grazing-angle stripe pattern relative to aniso 1: \
+             e(aniso=1)={e1:.4} e(aniso=8)={e8:.4}"
         );
     }
 }

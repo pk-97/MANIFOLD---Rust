@@ -305,6 +305,10 @@ impl GpuDevice {
             if let Some(compare) = desc.compare {
                 mtl_desc.setCompareFunction(to_mtl_compare_function(compare));
             }
+            // 1 = isotropic, Metal's own default — setting it unconditionally
+            // keeps this a single code path (D7: the field default already
+            // matches Metal's implicit default, so this is a no-op at 1).
+            mtl_desc.setMaxAnisotropy(desc.max_anisotropy as usize);
         }
         let raw = self
             .device
