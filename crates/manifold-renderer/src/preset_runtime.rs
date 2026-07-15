@@ -2252,6 +2252,15 @@ impl PresetRuntime {
     /// reading it back here is exactly what the executor just ran with. Empty
     /// when this chain doesn't hold `effect_id`. Cheap: param names are
     /// `&'static`, so only the small `Vec`s allocate per frame.
+    ///
+    /// A param whose same-named input port carries a connected scalar wire
+    /// reads [`Executor::live_scalar_input`](crate::node_graph::Executor::live_scalar_input)
+    /// first — the executor's per-frame wire-value tap — falling back to the
+    /// param map only when unwired. Mirrors
+    /// [`EffectNodeContext::scalar_or_param`](crate::node_graph::effect_node::EffectNodeContext::scalar_or_param)'s
+    /// port-shadows-param resolution order, so the editor's live value tap
+    /// doesn't freeze on a wire-driven scalar param while the render keeps
+    /// moving (PARAM_TWO_WAY_BINDING_DESIGN.md P2 D5).
     pub fn live_node_params(&self, effect_id: &EffectId) -> crate::node_graph::LiveNodeParams {
         let Some(slot) = self.effect_nodes.iter().find(|s| &s.effect_id == effect_id) else {
             return Vec::new();
@@ -2265,12 +2274,16 @@ impl PresetRuntime {
                     .parameters()
                     .iter()
                     .map(|pd| {
-                        let v = n
-                            .params
-                            .get(pd.name.as_ref())
-                            .map(crate::node_graph::param_default_to_f32)
+                        let v = self
+                            .executor
+                            .live_scalar_input(*inst, pd.name.as_ref())
                             .unwrap_or_else(|| {
-                                crate::node_graph::param_default_to_f32(&pd.default)
+                                n.params
+                                    .get(pd.name.as_ref())
+                                    .map(crate::node_graph::param_default_to_f32)
+                                    .unwrap_or_else(|| {
+                                        crate::node_graph::param_default_to_f32(&pd.default)
+                                    })
                             });
                         (crate::node_graph::intern_name(&pd.name), v)
                     })
@@ -5605,6 +5618,77 @@ mod generator_runtime_tests {
         assert_eq!(preset.type_id().as_str(), "TestPassthrough");
         preset.set_frame_context(1.5, 0.5, 1.78, 4.0, 0.25, 1920.0, 1080.0);
         preset.execute_frame(frame_time());
+    }
+
+    /// BUG per PARAM_TWO_WAY_BINDING_DESIGN.md P2 D5: a wired scalar input
+    /// is resolved live, per-frame, via `EffectNodeContext::scalar_or_param`
+    /// (wire first, param second) — it never writes back into
+    /// `NodeInstance::params`. The old `live_node_params` read only the
+    /// param map, so the editor's value inspector froze on a wire-driven
+    /// scalar param while the render kept moving. `node.value` (a constant
+    /// control source, `pure: true`) wired into
+    /// `node.scale_offset_image`'s `scale` port — whose own `scale` param
+    /// defaults to `1.0` and is never wired-through — is the minimal
+    /// control-wire fixture that reproduces it.
+    #[test]
+    fn live_node_params_reports_wire_value_not_stale_param_default() {
+        let json = r#"{
+            "version": 1,
+            "name": "TestWireTap",
+            "nodes": [
+                { "id": 0, "typeId": "system.generator_input", "handle": "input" },
+                { "id": 1, "typeId": "node.uv_field", "nodeId": "uv", "handle": "uv" },
+                { "id": 2, "typeId": "node.value", "nodeId": "src", "handle": "src",
+                  "params": { "value": { "type": "Float", "value": 0.75 } } },
+                { "id": 3, "typeId": "node.scale_offset_image", "nodeId": "scaler", "handle": "scaler" },
+                { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
+            ],
+            "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "scale" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("wire-tap fixture must load");
+        let scaler_id = g
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new("scaler"))
+            .expect("fixture declares a `scaler` node");
+
+        g.execute_frame(frame_time());
+
+        // Sanity: the wire never writes NodeInstance::params — the param
+        // map is still the primitive's declared default.
+        assert!(
+            matches!(
+                g.graph.get_node(scaler_id).unwrap().params.get("scale"),
+                Some(ParamValue::Float(v)) if (*v - 1.0).abs() < 1e-6
+            ),
+            "sanity: a wired scalar input must not write NodeInstance::params, got {:?}",
+            g.graph.get_node(scaler_id).unwrap().params.get("scale"),
+        );
+
+        // The live tap must report the WIRE's value (0.75 from `src`), not
+        // the stale param-map default (1.0).
+        let scaler_node_id = g.graph.get_node(scaler_id).unwrap().node_id.clone();
+        let live = g.live_node_params_watched();
+        let scaler_values = live
+            .iter()
+            .find(|(id, _)| *id == scaler_node_id)
+            .map(|(_, values)| values)
+            .expect("scaler node reports live params");
+        let scale_v = *scaler_values
+            .iter()
+            .find(|(name, _)| *name == "scale")
+            .map(|(_, v)| v)
+            .expect("scale is a declared param");
+        assert!(
+            (scale_v - 0.75).abs() < 1e-5,
+            "live_node_params_watched should report the wire's live value \
+             (0.75), not the stale param-map default (1.0); got {scale_v}"
+        );
     }
 
     /// `PresetRuntime` holds a `Graph` which doesn't impl Debug, so we

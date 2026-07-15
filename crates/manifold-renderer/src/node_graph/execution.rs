@@ -230,6 +230,31 @@ pub struct Executor {
     /// the guard, a skip on the first empty frame would serve the last
     /// NON-empty frame's content (ghost blobs).
     empty_resources_prev: ahash::AHashSet<ResourceId>,
+    /// Live wire-resolved scalar value for every node's wired scalar INPUT
+    /// port, snapshotted at the top of each step's turn in the per-frame
+    /// loop — the point at which the step's own declared inputs are
+    /// guaranteed bound (produced by an earlier step, not yet released:
+    /// release only happens at the LAST reader's own turn, which is this
+    /// step or later). Captured unconditionally, before the mux / memo /
+    /// data-driven skip branches, so a value stays fresh even on frames
+    /// where the node's step is skip-continued (its held resource is
+    /// still the last real write). Entries are `(node, port name,
+    /// value)`; port names are the same `&'static str`-interned strings
+    /// as [`execution_plan::ExecutionStep::inputs`], so capture is a
+    /// plain push — no string allocation. Small (bounded by the graph's
+    /// wired-scalar-input count) and read via a linear scan in
+    /// [`live_scalar_input`](Self::live_scalar_input) — avoids a hash
+    /// key whose lifetime would need to match a caller's borrowed `&str`
+    /// param name against this map's `&'static str` port name.
+    ///
+    /// Feeds [`crate::preset_runtime::PresetRuntime::live_node_params`]:
+    /// a param whose same-named input port carries a scalar wire should
+    /// report the wire's value here, not the frozen `NodeInstance::params`
+    /// entry (which a wired scalar input never writes) — the same
+    /// resolution order as
+    /// [`EffectNodeContext::scalar_or_param`](crate::node_graph::effect_node::EffectNodeContext::scalar_or_param)
+    /// (wire first, param second). Cleared and rebuilt every frame.
+    live_scalar_inputs: Vec<(NodeInstanceId, &'static str, f32)>,
 }
 
 /// Epoch snapshot a pure step last executed with — see [`Executor::step_memo`].
@@ -296,6 +321,7 @@ impl Executor {
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
             empty_resources_prev: ahash::AHashSet::default(),
+            live_scalar_inputs: Vec::new(),
         }
     }
 
@@ -421,6 +447,20 @@ impl Executor {
     /// producing this frame.
     pub fn preview_scalar_outputs(&self) -> &[(String, f32)] {
         &self.preview_scalar_outputs
+    }
+
+    /// Live wire-resolved value of `node`'s scalar INPUT port `port`, if a
+    /// scalar wire is connected to it this frame. `None` when the port is
+    /// unwired (or wired to a non-scalar/absent resource) — the caller
+    /// should fall back to the node's param-map value, exactly the
+    /// `scalar_or_param` port-shadows-param order. See
+    /// [`live_scalar_inputs`](Self::live_scalar_inputs) for how this is
+    /// captured.
+    pub fn live_scalar_input(&self, node: NodeInstanceId, port: &str) -> Option<f32> {
+        self.live_scalar_inputs
+            .iter()
+            .find(|&&(n, p, _)| n == node && p == port)
+            .map(|&(_, _, v)| v)
     }
 
     /// Read a scalar resource's current value off the backend as `f32`, or
@@ -715,6 +755,7 @@ impl Executor {
         self.preview_resource = None;
         self.preview_scalar_inputs.clear();
         self.preview_scalar_outputs.clear();
+        self.live_scalar_inputs.clear();
         self.dump_resources.clear();
         self.dump_array_resources.clear();
         self.dump_pinned_resources.clear();
@@ -785,6 +826,17 @@ impl Executor {
         let mut preview_tex_count = 0usize;
 
         for (idx, step) in plan.steps().iter().enumerate() {
+            // Live wire-value tap (see `live_scalar_inputs` field doc):
+            // snapshot this step's wired scalar inputs before any skip
+            // branch below can `continue` past it. The step's own
+            // declared inputs are always bound at this point, live-step,
+            // memo-skipped, or mux-pruned alike.
+            for &(port, res) in &step.inputs {
+                if let Some(v) = self.read_scalar_resource(plan, res) {
+                    self.live_scalar_inputs.push((step.node, port, v));
+                }
+            }
+
             if !self.live_steps[idx] {
                 // Mux short-circuit: producer subgraph of an
                 // unselected branch. Skip acquire / evaluate /

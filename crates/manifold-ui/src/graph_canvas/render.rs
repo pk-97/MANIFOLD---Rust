@@ -322,11 +322,11 @@ impl GraphCanvas {
         // more specific thing the user is pointing at.
         let text: Option<&str> = self
             .param_row_under(viewport, sx, sy)
-            .and_then(|(nid, idx)| {
-                self.find_node(nid)
-                    .and_then(|n| n.params.get(idx))
-                    .and_then(|p| p.tooltip.as_deref())
-            })
+            .and_then(|(nid, idx)| self.find_node(nid).and_then(|n| n.params.get(idx)))
+            // D5: a wire-driven row's source ("driven by <node>.<port>")
+            // outranks its static help line — once the row is read-only,
+            // knowing what's driving it is the more useful hover fact.
+            .and_then(|p| p.driven_by.as_deref().or(p.tooltip.as_deref()))
             .or_else(|| {
                 self.hovered
                     .and_then(|h| self.find_node(h))
@@ -849,6 +849,13 @@ impl GraphCanvas {
                         {
                             let (px, py) = node.input_port_pos_graph(ii);
                             let (psx, psy) = self.to_screen(viewport, px, py);
+                            if p.wire_driven {
+                                // D5: a tinted halo behind the socket dot flags
+                                // it as the row's live "driven" jack, so the
+                                // attribution is visible at the row itself, not
+                                // just in the label text.
+                                self.draw_port_dot(ui, psx, psy, port_d * 1.7, PARAM_DRIVEN_JACK);
+                            }
                             self.draw_port_dot(ui, psx, psy, port_d, port.color);
                         }
                         // Expose checkbox (exposable kinds only): empty box = not
@@ -868,13 +875,20 @@ impl GraphCanvas {
                         // "↳ <outer>" when an outer card slider routes in (still
                         // editable). Wire wins when both apply (parity with the
                         // sidebar's precedence).
-                        let label_text: std::borrow::Cow<str> = if p.wire_driven {
-                            format!("{}  ← wired", p.label).into()
-                        } else if let Some(outer) = &p.outer_driver {
-                            format!("{}  ↳ {outer}", p.label).into()
-                        } else {
-                            p.label.as_str().into()
-                        };
+                        // D6: wire beats binding for INTERACTIVITY (the row
+                        // reads/draws as wire-driven either way), but a param
+                        // that's also card-bound keeps that attribution
+                        // visible too — hiding it would make the mapping
+                        // undiscoverable the moment a wire lands on it.
+                        let label_text: std::borrow::Cow<str> =
+                            match (p.wire_driven, &p.outer_driver) {
+                                (true, Some(outer)) => {
+                                    format!("{}  ← wired (↳ {outer})", p.label).into()
+                                }
+                                (true, None) => format!("{}  ← wired", p.label).into(),
+                                (false, Some(outer)) => format!("{}  ↳ {outer}", p.label).into(),
+                                (false, None) => p.label.as_str().into(),
+                            };
                         let slider_x = sx + PARAM_LABEL_X * self.zoom;
                         let row_right = sx + sw - pad_x;
                         if let Some(frac) = p.fill {
@@ -888,6 +902,17 @@ impl GraphCanvas {
                             let mut colors = Theme::INSPECTOR.slider_colors();
                             if p.wire_driven {
                                 colors.text = color::TEXT_DIMMED_C32;
+                                // D5: the whole slider reads as non-interactive,
+                                // not just its label — track/fill/thumb all mix
+                                // toward the same dimmed grey so a wire-driven
+                                // row visually "looks disabled" before you ever
+                                // try to drag it.
+                                let dim = |c: Color32| color::mix(c, color::TEXT_DIMMED_C32, 0.55);
+                                colors.track = dim(colors.track);
+                                colors.track_hover = dim(colors.track_hover);
+                                colors.track_pressed = dim(colors.track_pressed);
+                                colors.fill = dim(colors.fill);
+                                colors.thumb = dim(colors.thumb);
                             }
                             // The widget draws shorter than the full row pitch
                             // and centers in it, so the pitch's extra room
@@ -1266,6 +1291,13 @@ impl GraphCanvas {
             || self.selected.contains(&wire.to_node)
             || self.hovered == Some(wire.from_node)
             || self.hovered == Some(wire.to_node)
+            // D5: a click on a wire-driven param row highlights the wire that
+            // feeds it, so it draws at the same full-focus brightness as a
+            // hovered/selected endpoint.
+            || self
+                .highlighted_wire
+                .as_ref()
+                .is_some_and(|(tn, tp)| wire.to_node == *tn && &wire.to_port == tp)
     }
 
     /// Whether a wire carries a control/scalar value (orange) rather than image

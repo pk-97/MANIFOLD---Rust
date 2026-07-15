@@ -870,7 +870,15 @@ impl GraphCanvas {
                 // the value every frame, so a scrub / editor here would fight the
                 // wire and lie about control. Consume the click (it selected the
                 // node) but open nothing — remove the wire to reclaim the param.
+                // Instead, highlight the feeding wire (D5) — the click still does
+                // *something* legible: it points at what's actually driving the
+                // row.
                 if p.wire_driven {
+                    self.highlighted_wire = self
+                        .wires
+                        .iter()
+                        .find(|w| w.to_node == node_id && w.to_port == p.name)
+                        .map(|w| (w.to_node, w.to_port.clone()));
                     return;
                 }
                 // Numeric ranged params scrub in place — UNLESS this press is
@@ -1175,6 +1183,9 @@ impl GraphCanvas {
     /// already-selected node leaves the (possibly multi-) selection intact so
     /// it can be dragged as a group.
     fn click_select(&mut self, id: u32, shift: bool) {
+        // Any click here is a new interaction — a wire highlighted by a
+        // previous wire-driven-row click (D5) shouldn't linger past it.
+        self.highlighted_wire = None;
         if shift {
             if !self.selected.insert(id) {
                 self.selected.remove(&id);
@@ -1188,6 +1199,10 @@ impl GraphCanvas {
     /// Replace the selection with exactly `id`. Used where multi-select
     /// doesn't apply (param-row focus).
     pub(crate) fn select_single(&mut self, id: u32) {
+        // See `click_select`'s note — same "new interaction clears the wire
+        // highlight" rule. The wire-driven-row branch that wants to set it
+        // calls `select_single` first, then sets `highlighted_wire` after.
+        self.highlighted_wire = None;
         self.selected.clear();
         self.selected.insert(id);
     }
