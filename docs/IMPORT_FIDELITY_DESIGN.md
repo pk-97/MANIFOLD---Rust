@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: PROPOSED · 2026-07-15 · Fable 5 (authored at Peter's direction; needs his read before execution — his three product calls are quoted in the intro, D7, and D8; glass/F-P5 added same day at his request).**
+**Status: APPROVED design, not built · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3, (2) F-P2 → F-P4, (3) F-P5.**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
