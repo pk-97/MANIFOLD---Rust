@@ -310,17 +310,16 @@ mod tests {
         assert!(loaded_preset_view_by_id(&unknown).is_none());
     }
 
-    /// BUG-103 regression: a glTF-imported scene's per-object Metallic /
-    /// Roughness card knobs target the `mat_k` material node that lives
-    /// INSIDE that object's group box. `outer_routings_from_view` used to
-    /// build its `node_id → handle` map from top-level nodes only, so those
-    /// in-group bindings were silently dropped — the routing never reached
-    /// the editor and the group face showed no D6 mirror row for exactly the
-    /// imported-scene case the feature exists for. Pre-fix this returned 9
-    /// routings (the top-level camera/sun/environment spine); post-fix it
-    /// returns all 13, including the 4 in-group `mat_0`/`mat_1`
-    /// metallic/roughness ones. Drives the REAL importer + the REAL
-    /// resolution path, exactly what the pristine `graph_snapshot` arm runs
+    /// BUG-103 regression: a glTF-imported scene's per-object card knobs can
+    /// target the `mat_k` material node that lives INSIDE that object's
+    /// group box (originally caught via the since-hidden Metallic/Roughness
+    /// knobs; the shared Ambient fan-out now exercises the same path).
+    /// `outer_routings_from_view` used to build its `node_id → handle` map
+    /// from top-level nodes only, so those in-group bindings were silently
+    /// dropped — the routing never reached the editor and the group face
+    /// showed no D6 mirror row for exactly the imported-scene case the
+    /// feature exists for. Drives the REAL importer + the REAL resolution
+    /// path, exactly what the pristine `graph_snapshot` arm runs
     /// (`snapshot_for_view` → `outer_routings_from_view`).
     #[test]
     fn gltf_import_group_material_bindings_resolve_through_groups() {
@@ -347,27 +346,26 @@ mod tests {
 
         let routings = outer_routings_from_view(&view);
 
-        // Every canonical binding that targets a node resolves now — the 13
-        // the importer emits for the 2-object azalea (4 camera + 4 sun + 1
-        // environment + 2×(metallic + roughness)).
+        // Every canonical binding that targets a node resolves now.
         assert_eq!(
             routings.len(),
             meta.bindings.len(),
             "every node-targeting card binding must resolve, in-group ones included"
         );
 
-        // The payoff: the in-group material knobs are present, keyed by the
-        // material node's own (unprefixed) handle so the D6 group-face join
-        // (`find_node_by_handle`) finds them inside the group body.
+        // The payoff: the shared Ambient knob's fan-out into each object's
+        // material node is present, keyed by the material node's own
+        // (unprefixed) handle so the D6 group-face join (`find_node_by_handle`)
+        // finds it inside the group body — the in-group resolution path
+        // this test exists to cover (metallic/roughness card sliders, which
+        // used to exercise the same path, were hidden 2026-07-15).
         let has = |handle: &str, param: &str| {
             routings
                 .iter()
                 .any(|r| r.node_handle == handle && r.inner_param == param)
         };
-        assert!(has("mat_0", "metallic"), "object 0's Metallic knob resolves inside its group");
-        assert!(has("mat_0", "roughness"), "object 0's Roughness knob resolves inside its group");
-        assert!(has("mat_1", "metallic"), "object 1's Metallic knob resolves inside its group");
-        assert!(has("mat_1", "roughness"), "object 1's Roughness knob resolves inside its group");
+        assert!(has("mat_0", "ambient"), "object 0's Ambient fan-out resolves inside its group");
+        assert!(has("mat_1", "ambient"), "object 1's Ambient fan-out resolves inside its group");
 
         // And the top-level spine still resolves (no regression on the 9 that
         // always worked).

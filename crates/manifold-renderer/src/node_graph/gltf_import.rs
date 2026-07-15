@@ -453,15 +453,13 @@ fn build_import_graph(
     cam_node.params.insert("look_y".to_string(), float(0.0));
     nodes.push(cam_node);
 
-    // Physical lens (CINEMATIC_POST D6): the node the DoF group's
-    // circle-of-confusion reads. No motion_blur consumer wired (see the
-    // motion_blur removal note below), so `shutter_angle` is left at the
-    // primitive's own neutral default (0) rather than set here. f_stop
-    // starts at the primitive's own neutral top-of-range (32 — matches
-    // CinematicScene's declared max), so an import looks unchanged until
-    // the Depth of Field card is dialed in. focus_distance seeds to the
-    // synthesized camera's own framing distance so the subject is the
-    // first thing that stays sharp once f_stop drops.
+    // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
+    // and render_scene/ao. No depth-of-field consumer wired anymore (the
+    // "dof" group was removed 2026-07-15 for buggy visuals) and no
+    // motion_blur consumer either (see the motion_blur removal note below),
+    // so `shutter_angle`/`focus_distance`/`f_stop` are along for the ride
+    // only insofar as `node.camera_lens` requires them — nothing downstream
+    // reads them today.
     let lens_id = fresh_id();
     let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
     lens_node.params.insert("focus_distance".to_string(), float(distance));
@@ -654,26 +652,11 @@ fn build_import_graph(
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
         group_nodes.push(mat_node);
 
-        // Per-object material knobs on the card: metallic + roughness, the
-        // two live PBR controls. No more " 2"-style numeric suffix on the
-        // label — the `section` (the object's own group name) now carries
-        // that identity, so every object reads "Metallic" / "Roughness"
-        // under its own collapsible header (D5/D9). Defaults mirror the
-        // node params set just above, so the card reproduces the glTF's own
-        // material on first frame. These still target the material node by its
-        // stable `node_id`, which grouping preserves.
-        let metal_default = m.metallic;
-        let rough_default = m.roughness.max(0.01);
-        let metal_id = format!("metal_{k}");
-        let rough_id = format!("rough_{k}");
-        card_params.push(card_param(&metal_id, "Metallic", 0.0, 1.0, metal_default, false, &group_name));
-        card_bindings.push(card_binding(
-            &metal_id, "Metallic", metal_default, &mat_node_id, "metallic", 1.0,
-        ));
-        card_params.push(card_param(&rough_id, "Roughness", 0.01, 1.0, rough_default, false, &group_name));
-        card_bindings.push(card_binding(
-            &rough_id, "Roughness", rough_default, &mat_node_id, "roughness", 1.0,
-        ));
+        // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
+        // "no need to modify them and they explode the card" — with one pair
+        // per object, a multi-object import's card grew unusably long). The
+        // material node above still carries the glTF's own metallic/
+        // roughness values; only the card exposure is gone.
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5 performer gesture: glass objects
         // ONLY get an Opacity knob (solid → ghost mid-set on the material's
         // alpha) — opaque/mask objects don't expose it, matching the
@@ -1001,52 +984,11 @@ fn build_import_graph(
     }));
     nodes.push(ao_group_node);
 
-    // Depth of field, packaged as the same "dof" node group CinematicScene
-    // ships (CINEMATIC_POST P1/P4, BUG-137's coc_dilate fix): coc_from_depth
-    // → coc_dilate (fixes the hard cutoff at depth discontinuities) →
-    // bokeh_gather occlusion-aware disc gather, reading the shared lens's
-    // focus_distance/f_stop.
-    let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
-    let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
-    let dof_in_id = fresh_id();
-    dof_nodes.push(plain_node(dof_in_id, "dof_in", GROUP_INPUT_TYPE_ID, "input"));
-    let coc_id = fresh_id();
-    let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
-    coc_node.params.insert("max_radius".to_string(), float(24.0));
-    dof_nodes.push(coc_node);
-    let coc_dilate_id = fresh_id();
-    dof_nodes.push(plain_node(coc_dilate_id, "coc_dilate", "node.coc_dilate", "coc_dilate"));
-    let bokeh_id = fresh_id();
-    let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
-    bokeh_node.params.insert("max_radius".to_string(), float(24.0));
-    dof_nodes.push(bokeh_node);
-    let dof_out_id = fresh_id();
-    dof_nodes.push(plain_node(dof_out_id, "dof_out", GROUP_OUTPUT_TYPE_ID, "output"));
-    dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
-    dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
-    dof_wires.push(wire(coc_id, "out", coc_dilate_id, "in"));
-    dof_wires.push(wire(coc_dilate_id, "out", bokeh_id, "width"));
-    dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
-    dof_wires.push(wire(bokeh_id, "out", dof_out_id, "out"));
-
-    let dof_group_id = fresh_id();
-    let mut dof_group_node = plain_node(dof_group_id, "dof", GROUP_TYPE_ID, "dof");
-    dof_group_node.title = Some("Depth of Field".to_string());
-    dof_group_node.group = Some(Box::new(GroupDef {
-        interface: GroupInterface {
-            inputs: vec![
-                InterfacePortDef { name: "depth".to_string(), port_type: "Texture2D".to_string() },
-                InterfacePortDef { name: "camera".to_string(), port_type: "Camera".to_string() },
-                InterfacePortDef { name: "color".to_string(), port_type: "Texture2D".to_string() },
-            ],
-            outputs: vec![InterfacePortDef { name: "out".to_string(), port_type: "Texture2D".to_string() }],
-            params: Vec::new(),
-        },
-        nodes: dof_nodes,
-        wires: dof_wires,
-        tint: None,
-    }));
-    nodes.push(dof_group_node);
+    // Depth of Field group removed (Peter, 2026-07-15): the coc_dilate/
+    // bokeh_gather chain read as buggy in practice and made imported scenes
+    // hard to look at. `render_scene → ao → final` now, no dof stage; the
+    // "lens" node stays — it still feeds render_scene's/ao's `camera` input
+    // and the FOV card knob.
 
     // No `node.motion_blur` tail: it's live-tracked as BUG-136 (MED-HIGH,
     // `docs/BUG_BACKLOG.md`) — orbiting the camera in the running app
@@ -1065,22 +1007,19 @@ fn build_import_graph(
     nodes.push(plain_node(final_id, "final", FINAL_OUTPUT_TYPE_ID, "final"));
 
     // The lens sits between the raw orbit camera and every downstream
-    // consumer (render_scene, the ao/dof groups) — the node whose
-    // focus_distance/f_stop the Depth of Field card reads.
+    // consumer (render_scene, the ao group) — the node whose fov_y the
+    // Camera FOV card slider reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
     wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
     wires.push(wire(atmosphere_id, "atmosphere", render_id, "atmosphere"));
 
-    // render_scene → ao (contact AO) → dof (defocus) → final.
+    // render_scene → ao (contact AO) → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
     wires.push(wire(lens_id, "out", ao_group_id, "camera"));
     wires.push(wire(render_id, "color", ao_group_id, "color"));
-    wires.push(wire(render_id, "depth", dof_group_id, "depth"));
-    wires.push(wire(lens_id, "out", dof_group_id, "camera"));
-    wires.push(wire(ao_group_id, "out", dof_group_id, "color"));
-    wires.push(wire(dof_group_id, "out", final_id, "in"));
+    wires.push(wire(ao_group_id, "out", final_id, "in"));
 
     // Shared framing / light / environment card knobs. These come LAST in
     // `card_params` (after the per-object material knobs) but read first on
@@ -1091,15 +1030,27 @@ fn build_import_graph(
     // formatter double-converts (40° → 2298°). Defaults mirror the
     // `camera`/`sun`/`envmap` node params set above so the card is a faithful
     // mirror of the assembled look.
-    card_params.push(card_param(
+    // Both angle sliders `wraps: true` (Peter, 2026-07-15: "properly wrap 360
+    // degrees") — a drag/modulation that crosses ±180° loops back round
+    // instead of sticking at the edge (`constrain_to_range`'s wrap arm,
+    // `manifold-core/src/params.rs`). Tilt widens from its old ±89° clamp to
+    // the same full ±180° span as orbit: `camera_orbit`'s
+    // `distance*sin(tilt)`/`cos(tilt)` spherical math is continuous through
+    // the poles, so a full loop is a smooth over-the-top orbit, not a
+    // singularity.
+    let mut cam_orbit_param = card_param(
         "cam_orbit", "Camera Orbit", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.7, true, "Camera",
-    )); // angle (radians)
+    );
+    cam_orbit_param.wraps = true;
+    card_params.push(cam_orbit_param);
     card_bindings.push(card_binding(
         "cam_orbit", "Camera Orbit", 0.7, "camera", "orbit", 1.0,
     ));
-    card_params.push(card_param(
-        "cam_tilt", "Camera Tilt", -89.0 * DEG2RAD, 89.0 * DEG2RAD, 0.3, true, "Camera",
-    )); // angle (radians)
+    let mut cam_tilt_param = card_param(
+        "cam_tilt", "Camera Tilt", -180.0 * DEG2RAD, 180.0 * DEG2RAD, 0.3, true, "Camera",
+    );
+    cam_tilt_param.wraps = true;
+    card_params.push(cam_tilt_param);
     card_bindings.push(card_binding(
         "cam_tilt", "Camera Tilt", 0.3, "camera", "tilt", 1.0,
     ));
@@ -1178,40 +1129,10 @@ fn build_import_graph(
     // lift the shadow side of every material at once.
     card_params.push(card_param("scene_ambient", "Ambient", 0.0, 1.0, 0.0, false, "Environment"));
 
-    // SSAO — contact-occlusion arm. These bind to the ssao atom's own params
-    // (plain params, not port-shadowed), so they apply their defaults cleanly.
-    // `ssao_radius` is scene-scaled (world units) to the model's bounding
-    // radius; the rest mirror the atom's defaults.
-    card_params.push(card_param(
-        "ssao_intensity", "SSAO Intensity", 0.0, 4.0, 1.0, false, "Ambient Occlusion",
-    ));
-    card_bindings.push(card_binding(
-        "ssao_intensity", "SSAO Intensity", 1.0, "ssao", "intensity", 1.0,
-    ));
-    card_params.push(card_param(
-        "ssao_radius", "SSAO Radius", 0.01, 5.0, ssao_radius_default, false, "Ambient Occlusion",
-    ));
-    card_bindings.push(card_binding(
-        "ssao_radius", "SSAO Radius", ssao_radius_default, "ssao", "radius", 1.0,
-    ));
-    // No `ssao_bias` card — node.ssao_gtao (CINEMATIC_POST D9) has no `bias`
-    // param; the per-tap range check subsumes it.
-
-    // Depth of field — both bind the shared "lens" node (CINEMATIC_POST D6).
-    // Focus distance is scene-scaled like the camera distance card, defaulting
-    // to it, so the subject starts in focus; range widens with `distance` the
-    // same way `cam_dist` does so a huge or tiny import both stay editable.
-    // F-Stop defaults to the lens's own neutral top-of-range (32, no visible
-    // blur) — dialing it down is what turns DoF on.
-    let focus_distance_max = (distance * 4.0).max(1.0);
-    card_params.push(card_param(
-        "dof_focus", "Focus Distance", 0.1, focus_distance_max, distance, false, "Depth of Field",
-    ));
-    card_bindings.push(card_binding(
-        "dof_focus", "Focus Distance", distance, "lens", "focus_distance", 1.0,
-    ));
-    card_params.push(card_param("dof_fstop", "F-Stop", 0.5, 32.0, 32.0, false, "Depth of Field"));
-    card_bindings.push(card_binding("dof_fstop", "F-Stop", 32.0, "lens", "f_stop", 1.0));
+    // No SSAO card sliders (Peter, 2026-07-15: "the defaults look good") —
+    // the `ao` node group stays wired at its defaults
+    // (`ssao_radius_default`/1.0 intensity, set on the ssao node above);
+    // it's just no longer exposed on the outer card.
 
     // Atmosphere — two independent node.atmosphere knobs, each its own
     // slider (not folded together): `shaft_intensity` alone does nothing
@@ -1225,7 +1146,8 @@ fn build_import_graph(
     // `cast_shadows` (already on above) is what gives the shafts their
     // shape once both faders are up.
     //
-    // Fog density is scene-scaled like `ssao_radius`/`dof_focus` (BUG-149):
+    // Fog density is scene-scaled like the internal `ssao_radius_default`
+    // (BUG-149):
     // the atom's `fog_density` is per-world-unit, so a raw 0–1 slider is a
     // cliff on any real import (0.13 at the apricot fixture's 27.87-unit
     // framing distance is optical depth ~3.6 ≈ 97% fog — flat grey mesh,
@@ -1360,25 +1282,26 @@ mod tests {
         }
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
-        // + 1 Environment + 1 Ambient + 2×(metallic + roughness) = 15
-        // framing/material sliders, PLUS 2 GTAO knobs (radius, intensity --
-        // `bias` dropped, CINEMATIC_POST D9(b)) + 2 DoF (focus, f-stop) +
+        // + 1 Environment + 1 Ambient = 11 framing/material sliders, PLUS
         // 2 Atmosphere (fog density, god rays — no Motion Blur section,
-        // BUG-136) = 21.
+        // BUG-136) = 13. No per-object Metallic/Roughness and no SSAO/DoF
+        // card sliders (Peter, 2026-07-15: DoF removed for buggy visuals,
+        // AO/metallic/roughness hidden — defaults still apply, just not on
+        // the card).
         assert_eq!(
             meta.params.len(),
-            21,
-            "15 framing/material + 2 GTAO + 2 DoF + 2 atmosphere (fog + god rays)"
+            13,
+            "11 framing/material + 2 atmosphere (fog + god rays)"
         );
         // Every param routes one-to-one except: the shared Ambient, which
         // fans out to every material's ambient (2 for azalea); and D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 21 + 1 (ambient) + 3 (sun coherence) = 25.
+        // bindings. 13 + 1 (ambient) + 3 (sun coherence) = 17.
         assert_eq!(
             meta.bindings.len(),
-            25,
-            "21 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            17,
+            "13 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1401,21 +1324,10 @@ mod tests {
                 "import card bindings route to inner nodes"
             );
         }
-        // Spot-check the shared framing knobs and the per-object material
-        // knobs. No more numeric label suffix — the `section` (D5/D9) now
-        // carries the per-object identity instead.
-        for id in ["cam_orbit", "cam_dist", "sun_int", "env_intensity", "scene_ambient", "metal_0", "rough_1"] {
+        // Spot-check the shared framing knobs.
+        for id in ["cam_orbit", "cam_dist", "sun_int", "env_intensity", "scene_ambient"] {
             assert!(meta.params.iter().any(|p| p.id == id), "missing card param `{id}`");
         }
-        let metal0 = meta.params.iter().find(|p| p.id == "metal_0").unwrap();
-        assert_eq!(metal0.name, "Metallic", "no ' 1'-style suffix — section carries the identity now");
-        assert!(metal0.section.is_some(), "per-object knob carries a section");
-        let rough1 = meta.params.iter().find(|p| p.id == "rough_1").unwrap();
-        assert_eq!(rough1.name, "Roughness");
-        assert_ne!(
-            metal0.section, rough1.section,
-            "the two azalea objects get distinct sections (their own group names)"
-        );
         // Shared framing/light/environment knobs carry the fixed section names.
         let cam_orbit = meta.params.iter().find(|p| p.id == "cam_orbit").unwrap();
         assert_eq!(cam_orbit.section.as_deref(), Some("Camera"));
@@ -1471,19 +1383,22 @@ mod tests {
             (orbit.scale - 1.0).abs() < 1e-6,
             "camera angle bindings pass radians straight through"
         );
+        // Orbit and tilt both wrap a full 360° instead of clamping at their
+        // edges (Peter, 2026-07-15).
+        assert!(cam_orbit.wraps, "camera orbit must wrap 360°");
+        let cam_tilt = meta.params.iter().find(|p| p.id == "cam_tilt").unwrap();
+        assert!(cam_tilt.wraps, "camera tilt must wrap 360°");
+        assert!(
+            (cam_tilt.min - (-std::f32::consts::PI)).abs() < 1e-4
+                && (cam_tilt.max - std::f32::consts::PI).abs() < 1e-4,
+            "camera tilt spans the full ±180° range to match orbit's wrap"
+        );
 
-        // GTAO, the lens, and DoF's atom chain are wired into the spine.
-        // No motion blur (BUG-136 + fusion cost, see the removal comment
-        // in `build_import_graph`) and atmosphere is a top-level node.
-        for present in [
-            "node.ssao_gtao",
-            "node.bilateral_blur",
-            "node.camera_lens",
-            "node.coc_from_depth",
-            "node.coc_dilate",
-            "node.bokeh_gather",
-            "node.atmosphere",
-        ] {
+        // GTAO and the lens are wired into the spine. No motion blur
+        // (BUG-136 + fusion cost, see the removal comment in
+        // `build_import_graph`), no depth-of-field group (Peter, 2026-07-15:
+        // buggy visuals), and atmosphere is a top-level node.
+        for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens", "node.atmosphere"] {
             assert!(
                 def.nodes.iter().any(|n| n.type_id == present)
                     || def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
@@ -1493,37 +1408,39 @@ mod tests {
             );
         }
         // `node.motion_blur` was removed (BUG-136: no visible effect live,
-        // despite correct wiring — see the removal comment above) and
-        // `node.variable_blur` was P4's superseded DoF blur stage — neither
-        // is reintroduced.
-        for absent in ["node.motion_blur", "node.variable_blur"] {
+        // despite correct wiring — see the removal comment above);
+        // `node.variable_blur` was P4's superseded DoF blur stage; and the
+        // DoF chain itself (`coc_from_depth`/`coc_dilate`/`bokeh_gather`)
+        // was removed 2026-07-15 for buggy visuals. None is reintroduced.
+        for absent in [
+            "node.motion_blur",
+            "node.variable_blur",
+            "node.coc_from_depth",
+            "node.coc_dilate",
+            "node.bokeh_gather",
+        ] {
             assert!(
-                !def.nodes.iter().any(|n| n.type_id == absent),
+                !def.nodes.iter().any(|n| n.type_id == absent)
+                    && !def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
+                        g.nodes.iter().any(|inner| inner.type_id == absent)
+                    }),
                 "`{absent}` should not be in the imported graph"
             );
         }
-        // The GTAO knobs are exposed and still bind the ssao node directly —
-        // grouping doesn't change its explicit stable node_id.
-        for id in ["ssao_intensity", "ssao_radius"] {
-            let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing SSAO card param `{id}`"));
-            assert_eq!(p.section.as_deref(), Some("Ambient Occlusion"), "`{id}` is an AO knob");
-            let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
-            match &b.target {
-                BindingTarget::Node { node_id, .. } => {
-                    assert_eq!(node_id.as_str(), "ssao", "`{id}` binds the ssao node")
-                }
-                other => panic!("expected a Node target for `{id}`, got {other:?}"),
-            }
+        // No SSAO/metallic/roughness/DoF card sliders — the underlying nodes
+        // keep their defaults, they're just no longer exposed on the card.
+        for gone_prefix in ["ssao_", "metal_", "rough_", "dof_"] {
+            assert!(
+                !meta.params.iter().any(|p| p.id.starts_with(gone_prefix)),
+                "no card param should start with `{gone_prefix}`"
+            );
         }
-        // New DoF / atmosphere knobs, each targeting its own node. Fog
-        // density and god rays are two independent sliders, not folded
-        // into one — the atom needs both raised together to show beams
-        // (see the card-authoring comment in `build_import_graph`), but
-        // each still routes to its own atmosphere param 1:1 like every
+        // Fog density and god rays are two independent atmosphere sliders,
+        // not folded into one — the atom needs both raised together to show
+        // beams (see the card-authoring comment in `build_import_graph`),
+        // but each still routes to its own atmosphere param 1:1 like every
         // other card knob.
         for (id, section, target_node) in [
-            ("dof_focus", "Depth of Field", "lens"),
-            ("dof_fstop", "Depth of Field", "lens"),
             ("fog_density", "Atmosphere", "atmosphere"),
             ("god_rays", "Atmosphere", "atmosphere"),
         ] {
@@ -1537,10 +1454,8 @@ mod tests {
                 other => panic!("expected a Node target for `{id}`, got {other:?}"),
             }
         }
-        // Defaults keep a fresh import visually unchanged: DoF/fog/god rays
-        // all start at their neutral (no-op) value.
-        let dof_fstop = meta.params.iter().find(|p| p.id == "dof_fstop").unwrap();
-        assert_eq!(dof_fstop.default_value, 32.0, "f-stop starts at the lens's no-blur top-of-range");
+        // Defaults keep a fresh import visually unchanged: fog/god rays both
+        // start at their neutral (no-op) value.
         let fog_density = meta.params.iter().find(|p| p.id == "fog_density").unwrap();
         assert_eq!(fog_density.default_value, 0.0, "fog starts off");
         let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
@@ -1653,10 +1568,11 @@ mod tests {
         assert_eq!(report.object_count, 2);
         assert_eq!(report.textures_wired, 1);
 
-        // Top level: two per-object group boxes PLUS the "ao" and "dof"
-        // presentation groups (CINEMATIC_POST), no bare producer nodes.
+        // Top level: two per-object group boxes PLUS the "ao" presentation
+        // group (CINEMATIC_POST; "dof" removed 2026-07-15), no bare producer
+        // nodes.
         let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
-        assert_eq!(groups.len(), 4, "2 object groups + ao + dof");
+        assert_eq!(groups.len(), 3, "2 object groups + ao");
         assert!(groups.iter().all(|g| g.group.is_some()));
         for bare in [
             "node.gltf_mesh_source",
@@ -1669,8 +1585,8 @@ mod tests {
                 "producer `{bare}` must live inside a group, not at the top level"
             );
         }
-        // Only the per-object groups carry a tint (CINEMATIC_POST's ao/dof
-        // groups are untinted presentation boxes, not per-object identity).
+        // Only the per-object groups carry a tint (CINEMATIC_POST's ao
+        // group is an untinted presentation box, not per-object identity).
         let object_groups: Vec<_> = groups
             .iter()
             .filter(|g| g.group.as_ref().unwrap().tint.is_some())
@@ -1771,7 +1687,7 @@ mod tests {
             .expect("editor snapshot builds from the grouped def");
         let snap_groups: Vec<_> =
             snap.nodes.iter().filter(|n| n.group.is_some()).collect();
-        assert_eq!(snap_groups.len(), 4, "editor snapshot shows 2 object + ao + dof group boxes");
+        assert_eq!(snap_groups.len(), 3, "editor snapshot shows 2 object + ao group boxes");
         let snap_object_groups: Vec<_> = snap_groups
             .iter()
             .filter(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner.type_id == "node.pbr_material"))
