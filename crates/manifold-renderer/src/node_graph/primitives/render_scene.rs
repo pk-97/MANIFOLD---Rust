@@ -364,6 +364,10 @@ pub struct RenderScene {
     prev_view_proj: Option<[[f32; 4]; 4]>,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
+    /// Material-map sampler (binding 22) — REPEAT both axes, the glTF
+    /// default. See `ensure_sampler` for why it must not share the
+    /// envmap's clamp-V sampler.
+    material_sampler: Option<manifold_gpu::GpuSampler>,
     /// Ring of per-frame light storage buffers (see [`FRAMES_IN_FLIGHT`]).
     /// Grown on demand; rotated each `evaluate` so a frame's write never
     /// lands on a buffer an in-flight frame is still reading.
@@ -509,6 +513,7 @@ impl RenderScene {
             prev_view_proj: None,
             dummy_texture: None,
             sampler: None,
+            material_sampler: None,
             light_buffers: Vec::new(),
             light_frame: 0,
             light_capacity: 0,
@@ -747,6 +752,23 @@ impl RenderScene {
                 address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+                compare: None,
+            }));
+        }
+        // Material-map sampler (binding 22): REPEAT on both axes — the glTF
+        // default sampler. Assets author UVs outside [0,1] freely (the
+        // DamagedHelmet fixture's V range is [1.0, 2.0]); clamping smears
+        // the texture's edge row across the whole mesh (the 2026-07-15
+        // striped-helmet bug — the five map resolves shared the envmap's
+        // clamp-V sampler, which is correct only for equirect poles).
+        if self.material_sampler.is_none() {
+            self.material_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mip_filter: manifold_gpu::GpuFilterMode::Linear,
+                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
                 compare: None,
             }));
         }
@@ -2159,6 +2181,7 @@ impl EffectNode for RenderScene {
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
+        let material_sampler = self.material_sampler.as_ref().expect("just inserted");
         let dummy = self.dummy_texture.as_ref().expect("just inserted");
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
         let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
@@ -2203,7 +2226,7 @@ impl EffectNode for RenderScene {
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 22]> = draws
+        let binding_sets: Vec<[GpuBinding; 23]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2320,6 +2343,12 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 21,
                         texture: draw.emissive_map.unwrap_or(dummy),
+                    },
+                    // Material-map sampler — REPEAT both axes (glTF default);
+                    // see ensure_sampler.
+                    GpuBinding::Sampler {
+                        binding: 22,
+                        sampler: material_sampler,
                     },
                 ]
             })
