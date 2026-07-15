@@ -149,6 +149,17 @@ impl Primitive for GltfTextureSource {
         port == "out"
     }
 
+    fn io_pending(&self) -> bool {
+        // True while a background decode is in flight or decoded-but-not-
+        // uploaded — this node emits black (or stale content) until then,
+        // so headless convergence loops must not count those frames as
+        // settled. Added with `node.hdri_source` (GLB_CONFORMANCE G-P6
+        // gate-review fix): the same latent race exists here, masked only
+        // by glb-embedded textures decoding faster than the 50ms-paced
+        // stability window.
+        self.pending_load.is_some() || self.pending_upload.is_some()
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // 1. Params.
         let path = match ctx.params.get("path") {

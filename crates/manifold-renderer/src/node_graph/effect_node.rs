@@ -863,6 +863,23 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Background file IO still in flight. IoBridge file sources whose
+    /// `evaluate()` spawns a background decode thread (`node.gltf_texture_
+    /// source`, `node.hdri_source`, `node.image_folder`-family) return
+    /// `true` from the frame the decode is triggered until the decoded
+    /// result has been uploaded to its source texture — i.e. while the
+    /// node's output does NOT yet reflect its `path` param. Consumed by
+    /// `PresetRuntime::io_pending` → headless convergence loops
+    /// (`render-import`, conformance tests): byte-stable frames don't count
+    /// toward convergence while any decode is pending, because a source
+    /// emitting stable black during a multi-second decode (a 74 MB 4k EXR)
+    /// is indistinguishable from a settled frame by readback alone (G-P6
+    /// gate-review fix, GLB_CONFORMANCE_DESIGN.md). Default `false` —
+    /// pure-GPU nodes never have IO in flight.
+    fn io_pending(&self) -> bool {
+        false
+    }
+
     /// The sampler ADDRESS MODE a fused region must bind so this atom's
     /// `Gather` inputs sample identically whether fused or standalone. The
     /// freeze compiler folds a gather atom into a `node.wgsl_compute` kernel

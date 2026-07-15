@@ -55,6 +55,11 @@ const CARD_CURATION_MAX: usize = 16;
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
 const MODEL_FILE_PARAM_ID: &str = "model_file";
+/// GLB_CONFORMANCE_DESIGN.md D6 — the HDRI environment's own Browse field,
+/// a distinct string param from [`MODEL_FILE_PARAM_ID`] (the imported
+/// .glb's path). Empty by default; `node.hdri_source` reads an empty path
+/// as "nothing decoded" and clears its output to black.
+const HDRI_FILE_PARAM_ID: &str = "hdri_file";
 
 /// What the assembler did, for the caller (importer UI, tests) to report
 /// or warn on. Not part of the graph itself.
@@ -482,6 +487,39 @@ fn build_import_graph(
         .params
         .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
     nodes.push(envmap_node);
+
+    // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
+    // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
+    // below) and `node.switch_texture` picks between it and the softbox
+    // bake above by the `env_mode` card enum (default 0 = Softbox, so the
+    // black-void aesthetic stays the import default — Peter, 2026-07-15:
+    // "I quite like the pure void and sunlight only look"). `render_scene`'s
+    // `envmap` input now wires from the switch's `out`, not the bake
+    // directly.
+    let hdri_id = fresh_id();
+    nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
+
+    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
+    // master (the Environment card fader's original target), but a decoded
+    // EXR arrives at the file's true radiance — a real daytime pure-sky
+    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
+    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
+    // an exposure stage the Environment fader would be dead in HDRI mode
+    // and the performer would have no way to bring a real sky up to stage
+    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
+    // card fader) restores symmetry: env_intensity fans out to BOTH
+    // envmap.intensity and this gain, so one fader is the environment
+    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
+    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
+    let hdri_gain_id = fresh_id();
+    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
+
+    let env_select_id = fresh_id();
+    let mut env_select_node =
+        plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
+    env_select_node.params.insert("num_inputs".to_string(), int(2));
+    env_select_node.params.insert("selector".to_string(), float(0.0)); // 0 = Softbox
+    nodes.push(env_select_node);
 
     let camera_id = fresh_id();
     let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
@@ -1105,7 +1143,13 @@ fn build_import_graph(
     // Camera FOV card slider reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
-    wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
+    // D6 env_mode switch: envmap(bake) -> in_0 (Softbox), hdri -> gain ->
+    // in_1 (HDRI, with the exposure stage — see the hdri_gain node above),
+    // the switch's `out` feeds render_scene same as the direct wire used to.
+    wires.push(wire(envmap_id, "envmap", env_select_id, "in_0"));
+    wires.push(wire(hdri_id, "out", hdri_gain_id, "in"));
+    wires.push(wire(hdri_gain_id, "out", env_select_id, "in_1"));
+    wires.push(wire(env_select_id, "out", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
 
     // render_scene → ao (contact AO) → final.
@@ -1217,6 +1261,14 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
     ));
+    // G-P6: the Environment master also drives the HDRI branch's exposure
+    // gain (see the hdri_gain node above), so the fader is live in BOTH
+    // env_mode positions — softbox scales inside the bake, HDRI scales the
+    // decoded map. Each mode passes through exactly one of the two targets,
+    // so there is no double-scaling. Same fan-out pattern as sun_x/y/z.
+    card_bindings.push(card_binding(
+        "env_intensity", "Environment", 1.0, "hdri_gain", "gain", 1.0,
+    ));
     // F-P7 — the softbox dome fill (see the envmap node above). Separate
     // from `env_intensity` (which scales strips + disc + fill together):
     // this one moves ONLY the broad dome radiance, i.e. how much "world"
@@ -1236,6 +1288,38 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "env_strips", "Strip Lights", IMPORT_STRIPS_DEFAULT, "envmap", "emitter_intensity", 1.0,
     ));
+    // GLB_CONFORMANCE_DESIGN.md D6 — HDRI environment mode. env_mode picks
+    // between the softbox bake (default, index 0) and the decoded HDRI file
+    // (index 1) via `env_select`'s `selector` param (a plain Float — the
+    // node.switch_texture family, not an Enum-typed node param — so the
+    // binding is a Float pass-through like the mux-option-table pattern,
+    // not EnumRound). `env_mode = 1` with an empty `hdri_file` reads as
+    // black (node.hdri_source clears `out` to black until a file decodes),
+    // same "nothing wired yet" convention as every other unwired texture
+    // source in this graph.
+    let mut env_mode_param = card_param("env_mode", "Environment Mode", 0.0, 1.0, 0.0, false, "Environment");
+    env_mode_param.whole_numbers = true;
+    env_mode_param.value_labels = vec!["Softbox".to_string(), "HDRI".to_string()];
+    card_params.push(env_mode_param);
+    card_bindings.push(card_binding(
+        "env_mode", "Environment Mode", 0.0, "env_select", "selector", 1.0,
+    ));
+    // The HDRI file itself is a SEPARATE Browse field/string param from
+    // "model_file" (the imported .glb's own path) — a different file, a
+    // different picker, never defaulted to the glb path. Empty until the
+    // performer picks one; `node.hdri_source` reads that as "nothing
+    // decoded yet" and clears `out` to black (step 6 of its `run()`),
+    // which env_mode=0 (Softbox, the default) never reaches anyway.
+    string_bindings.push(StringBindingDef {
+        id: HDRI_FILE_PARAM_ID.to_string(),
+        label: "HDRI File".to_string(),
+        default_value: String::new(),
+        target: BindingTarget::Node {
+            node_id: NodeId::new("hdri"),
+            param: "path".to_string(),
+        },
+    });
+
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
@@ -1270,13 +1354,22 @@ fn build_import_graph(
         skip_mode: SkipModeDef::default(),
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
-        string_params: vec![StringParamSpecDef {
-            id: MODEL_FILE_PARAM_ID.to_string(),
-            name: "Model File".to_string(),
-            default_value: path_str,
-            is_file_picker: true,
-            use_dropdown: false,
-        }],
+        string_params: vec![
+            StringParamSpecDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                name: "Model File".to_string(),
+                default_value: path_str,
+                is_file_picker: true,
+                use_dropdown: false,
+            },
+            StringParamSpecDef {
+                id: HDRI_FILE_PARAM_ID.to_string(),
+                name: "HDRI File".to_string(),
+                default_value: String::new(),
+                is_file_picker: true,
+                use_dropdown: false,
+            },
+        ],
         string_bindings,
     };
 
@@ -1601,37 +1694,53 @@ mod tests {
         );
 
         let meta = def.preset_metadata.as_ref().expect("v2 metadata");
-        assert_eq!(meta.string_params.len(), 1, "exactly one model_file string param");
+        // GLB_CONFORMANCE_DESIGN.md D6: a second string param, `hdri_file`,
+        // holds the HDRI environment's own Browse field — a separate file
+        // from `model_file` (the imported .glb itself).
+        assert_eq!(meta.string_params.len(), 2, "model_file + hdri_file string params");
         assert_eq!(meta.string_params[0].id, "model_file");
         assert!(meta.string_params[0].is_file_picker);
+        assert_eq!(meta.string_params[1].id, "hdri_file");
+        assert!(meta.string_params[1].is_file_picker);
 
-        assert_eq!(meta.string_bindings.len(), 4, "2 mesh + 2 texture path bindings");
+        assert_eq!(
+            meta.string_bindings.len(),
+            5,
+            "2 mesh + 2 texture path bindings (model_file) + 1 HDRI path binding (hdri_file)"
+        );
         for b in &meta.string_bindings {
-            assert_eq!(b.id, "model_file");
+            assert!(b.id == "model_file" || b.id == "hdri_file", "unexpected string binding id {}", b.id);
             match &b.target {
                 BindingTarget::Node { param, .. } => assert_eq!(param, "path"),
                 other => panic!("expected a Node binding target, got {other:?}"),
             }
         }
+        assert_eq!(
+            meta.string_bindings.iter().filter(|b| b.id == "hdri_file").count(),
+            1,
+            "exactly one hdri_file binding, targeting the hdri node"
+        );
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
-        // + 1 Environment + 1 Fill Light + 1 Strip Lights (F-P7) + 1 Ambient
-        // = 13 framing/material sliders. No Atmosphere section (fog + god
-        // rays removed with the atmosphere node, Peter 2026-07-15), no
-        // Motion Blur (BUG-136), no per-object Metallic/Roughness and no
-        // SSAO/DoF card sliders (Peter, 2026-07-15: DoF removed for buggy
-        // visuals, AO/metallic/roughness hidden — defaults still apply,
-        // just not on the card).
-        assert_eq!(meta.params.len(), 13, "13 framing/material sliders");
+        // + 1 Environment + 1 Environment Mode (D6) + 1 Fill Light + 1 Strip
+        // Lights (F-P7) + 1 Ambient = 14 framing/material sliders. No
+        // Atmosphere section (fog + god rays removed with the atmosphere
+        // node, Peter 2026-07-15), no Motion Blur (BUG-136), no per-object
+        // Metallic/Roughness and no SSAO/DoF card sliders (Peter,
+        // 2026-07-15: DoF removed for buggy visuals, AO/metallic/roughness
+        // hidden — defaults still apply, just not on the card).
+        assert_eq!(meta.params.len(), 14, "14 framing/material sliders");
         // Every param routes one-to-one except: the shared Ambient, which
-        // fans out to every material's ambient (2 for azalea); and D7's sun
+        // fans out to every material's ambient (2 for azalea); D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 13 + 1 (ambient) + 3 (sun coherence) = 17.
+        // bindings; and G-P6's Environment master, which fans out to the
+        // softbox bake's intensity AND the HDRI branch's exposure gain — 1
+        // extra. 14 + 1 (ambient) + 3 (sun coherence) + 1 (env fan-out) = 19.
         assert_eq!(
             meta.bindings.len(),
-            17,
-            "13 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            19,
+            "14 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets, env_intensity fanned to bake + hdri gain"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {

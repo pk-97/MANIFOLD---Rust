@@ -13,7 +13,13 @@
 //! `--param id=value` overrides an outer-card param by id (same mechanism
 //! `render-generator-preset` uses — the import graph's own
 //! `preset_metadata.params`, e.g. `cam_dist`, `sun_int`, `env_intensity`).
-//! `--orbit`/`--tilt` are convenience sugar for the two camera params
+//! The SAME flag also accepts a `preset_metadata.string_params` id (e.g.
+//! `hdri_file` — GLB_CONFORMANCE_DESIGN.md G-P6): whether `id` names a
+//! numeric card param or a string param is resolved AFTER the import graph
+//! is assembled (only then do we know which `string_params`/`params` ids
+//! exist), so `--param env_mode=1 --param hdri_file=/path/to.exr` works in
+//! one consistent flag rather than a second `--string` flag callers have to
+//! remember. `--orbit`/`--tilt` are convenience sugar for the two camera params
 //! (`cam_orbit`/`cam_tilt`) every import graph carries. `--non-black-floor F`
 //! (default 0.02, the DamagedHelmet-gpu-test precedent) lowers the
 //! convergence floor for a DELIBERATELY dim render (e.g. a lights-off pass
@@ -45,7 +51,10 @@ struct Args {
     width: u32,
     height: u32,
     out: PathBuf,
-    overrides: Vec<(String, f32)>,
+    // Raw id=value pairs from `--param`, resolved into numeric vs string
+    // overrides once the import graph's `preset_metadata` is available (see
+    // the module doc comment).
+    overrides: Vec<(String, String)>,
     frames_max: u32,
     non_black_floor: f64,
 }
@@ -88,16 +97,13 @@ fn parse_args() -> Result<Args, String> {
                 let (id, v) = value
                     .split_once('=')
                     .ok_or_else(|| format!("--param wants id=value, got {value}"))?;
-                let v: f32 = v.parse().map_err(|e| format!("bad value for {id}: {e}"))?;
-                args.overrides.push((id.to_string(), v));
+                args.overrides.push((id.to_string(), v.to_string()));
             }
             "--orbit" => {
-                let v: f32 = value.parse().map_err(|e| format!("bad orbit: {e}"))?;
-                args.overrides.push(("cam_orbit".to_string(), v));
+                args.overrides.push(("cam_orbit".to_string(), value));
             }
             "--tilt" => {
-                let v: f32 = value.parse().map_err(|e| format!("bad tilt: {e}"))?;
-                args.overrides.push(("cam_tilt".to_string(), v));
+                args.overrides.push(("cam_tilt".to_string(), value));
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -125,17 +131,34 @@ fn main() {
 
     // Same outer-card override mechanism `render-generator-preset` uses: the
     // import graph carries its own `preset_metadata.params` (cam_orbit,
-    // cam_tilt, cam_dist, sun_int, env_intensity, ...).
+    // cam_tilt, cam_dist, sun_int, env_intensity, ...) AND
+    // `preset_metadata.string_params` (model_file, hdri_file). `--param`
+    // resolves against both — a numeric card param id sets `params`; a
+    // string param id sets `string_overrides` instead (see module doc).
     let mut params: Vec<Param> = def
         .preset_metadata
         .as_ref()
         .map(|m| m.params.iter().map(|s| Param::bundled(s.clone())).collect())
         .unwrap_or_default();
+    let string_param_ids: std::collections::BTreeSet<String> = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| m.string_params.iter().map(|s| s.id.clone()).collect())
+        .unwrap_or_default();
+    let mut string_overrides: std::collections::BTreeMap<String, String> = Default::default();
     for (id, v) in &args.overrides {
+        if string_param_ids.contains(id) {
+            string_overrides.insert(id.clone(), v.clone());
+            continue;
+        }
         match params.iter_mut().find(|p| p.id() == id) {
-            Some(p) => p.value = *v,
+            Some(p) => {
+                p.value = v
+                    .parse()
+                    .unwrap_or_else(|e| panic!("bad value for numeric param '{id}': {e}"))
+            }
             None => {
-                eprintln!("error: import graph has no outer param '{id}'");
+                eprintln!("error: import graph has no outer param or string param '{id}'");
                 std::process::exit(2);
             }
         }
@@ -163,6 +186,10 @@ fn main() {
             std::process::exit(3);
         }
     };
+
+    if !string_overrides.is_empty() {
+        runtime.apply_string_params(Some(&string_overrides));
+    }
 
     let target = RenderTarget::new(&device, args.width, args.height, format, "render-import-target");
 
@@ -221,10 +248,19 @@ fn main() {
         }
         enc.commit_and_wait_completed();
 
+        // G-P6 gate-review fix: byte-stability alone can't see a decode
+        // that hasn't LANDED yet — a 74 MB 4k EXR decodes for seconds while
+        // `node.hdri_source` emits stable black, and the helmet (sun-lit,
+        // emissive) clears the non-black floor without any environment at
+        // all, so the loop declared convergence on frame 5 with the sky
+        // still missing. `PresetRuntime::io_pending` surfaces the IoBridge
+        // sources' in-flight decodes (`EffectNode::io_pending`); while any
+        // decode is pending, stable frames don't count.
+        let io_pending = runtime.io_pending();
         let raw = readback_raw_halves(&device, &target.texture, args.width, args.height);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         prev_raw = Some(raw);
-        if byte_stable {
+        if byte_stable && !io_pending {
             stable_count += 1;
         } else {
             stable_count = 0;

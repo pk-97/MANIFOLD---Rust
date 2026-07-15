@@ -2349,3 +2349,65 @@ when one is fixed).
 **Root cause:** unknown/not fully investigated this session — the `material_sampler` binding is provably one GPU sampler object shared by every map (`render_scene.rs`, landed `85b5bb9d`); confirming the *consequence* (which specific TextureSettingsTest cells actually render wrong) needs either a per-cell pixel comparison or reading `render_scene.wgsl`'s resolve path end to end, neither done here.
 
 **Fix shape:** likely a per-texture (or per-material, since a group owns one texture set) sampler keyed by the glTF's own wrap/filter fields, rather than the single shared `material_sampler` — mirrors the anisotropy field's shape (D7 in GLB_CONFORMANCE_DESIGN.md): read wrap/filter off `gltf_load`'s parsed sampler, thread it through `node.gltf_texture_source`/`node.pbr_material`, and build (or select from a small pool of) samplers keyed by the resolved `(wrap_u, wrap_v, min, mag)` tuple at draw time.
+
+### BUG-166 (gltf-crate-vetoes-extensionsrequired-we-already-support) — `gltf::import` hard-fails any asset that lists a required extension the crate's own validator doesn't recognize, even when MANIFOLD's importer downstream already handles that extension — blocks otherwise-supported assets before our code ever runs
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification.
+
+**Symptom:** Khronos `ClearCoatCarPaint.glb` (`extensionsRequired: ["KHR_texture_transform", "KHR_materials_clearcoat"]`) and `UnlitTest.glb` (`extensionsRequired: ["KHR_materials_unlit"]`) both fail at `gltf::import()` itself with `invalid glTF: extensionsRequired[N] = "...": Unsupported extension` — never reaching `assemble_import_graph`'s own logic. Both extensions are ones MANIFOLD already has real support for elsewhere: clearcoat factors render correctly on `ClearCoatTest.glb` (G-P5, `extensionsUsed` not `extensionsRequired` there — the crate only vetoes *required* extensions it doesn't know), and `MATERIAL_SYSTEM_DESIGN.md` names `unlit` as a supported Material shading mode. The gate is upstream of MANIFOLD's code — the `gltf` crate (v1.4.1, pinned) validates `extensionsRequired` against its own internal known-extension list at `gltf::import()` time and refuses to proceed if an entry isn't on it, independent of what MANIFOLD does with the parsed data afterward.
+
+**Root cause:** not investigated past confirming the crate-level veto (empirically: identical extension listed under `extensionsUsed` imports fine; the same extension listed under `extensionsRequired` hard-fails). Whether the pinned `gltf` crate version exposes a validation-strategy knob (e.g. a lower-level `Import`/`Root::from_slice` entry point that skips extension-requirement validation) is unverified.
+
+**Fix shape:** likely swap `gltf::import(path)`'s convenience call for the crate's lower-level slice-based import (parse JSON + buffers/images ourselves, as `gltf_load.rs` already partially does) with extension validation disabled or pre-filtered — strip the specific extensions MANIFOLD supports out of `extensionsRequired` before validation, or vendor a permissive validator. Affects any spec-legal glb that correctly marks a load-bearing extension `extensionsRequired` (the compliant authoring choice) rather than `extensionsUsed`.
+
+### BUG-167 (spec-gloss-pbrspecularglossiness-entirely-unhandled) — `KHR_materials_pbrSpecularGlossiness` (the legacy spec-gloss workflow) is not parsed at all — falls back to a default material with no diffuse/specular/glossiness mapped
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`SpecGlossVsMetalRough.glb`, the only Khronos glTF-Binary asset using this extension).
+
+**Root cause:** not investigated — `rg "pbrSpecularGlossiness|SpecularGlossiness"` across `gltf_import.rs`/`gltf_load.rs` returns zero hits; the extension is simply never read. Not in `GLB_CONFORMANCE_DESIGN.md` D5's scoped extension list and not covered by any §7 deferred item (D5 names sheen/iridescence/anisotropy-the-extension/volume/Draco/KTX2/meshopt as the deferred set; spec-gloss isn't in that list — a genuinely new gap this session's audit surfaced).
+
+**Fix shape:** parse `KHR_materials_pbrSpecularGlossiness`'s `diffuseFactor`/`diffuseTexture`/`specularFactor`/`glossinessFactor`/`specularGlossinessTexture` and either convert to the existing metallic-roughness port set at import time (the common approach — diffuse≈baseColor, invert glossiness→roughness) or add a dedicated spec-gloss shading path. Low priority: legacy extension, one asset in the whole Khronos suite.
+
+### BUG-168 (ext-mesh-gpu-instancing-unhandled) — `EXT_mesh_gpu_instancing` nodes import as "no materials with geometry — nothing to import", not as N instanced copies
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`SimpleInstancing.glb`, the only Khronos glTF-Binary asset using this extension).
+
+**Symptom:** `render-import` on `SimpleInstancing.glb` fails with the same "no materials with geometry" error `gltf_import.rs` emits when a glb genuinely has zero material-bearing primitives — but this asset does have a mesh with a material; the geometry is expressed as per-instance attributes (`EXT_mesh_gpu_instancing`'s `attributes.TRANSLATION/ROTATION/SCALE`) on a node that owns no vertex data of its own, which the importer's material/geometry summary walk apparently doesn't recognize as geometry-bearing.
+
+**Root cause:** not investigated. `rg "mesh_gpu_instancing|gpu_instancing"` returns zero hits in the importer — the extension is unparsed.
+
+**Fix shape:** read `node.extensions.EXT_mesh_gpu_instancing.attributes`, and for each instance either emit N copies of the node's ports (if the graph node budget allows) or add per-object instancing support to the relevant primitive. Not scoped to any G-P phase; one asset in the suite.
+
+### BUG-169 (metalroughspheresnotextures-renders-fully-black) — 98 texture-less PBR-factor-only materials render 0.0000 non-black fraction after 600 frames — not a decode-race (zero textures to decode), a genuine lighting/material-setup bug
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`MetalRoughSpheresNoTextures.glb`).
+
+**Symptom:** `render-import` reports `material_count: 98, object_count: 98, textures_wired: 0` (every material is `baseColorFactor`/`metallicFactor`/`roughnessFactor` only, no maps at all) and never converges above the non-black floor — confirmed with `--frames-max 600` and a wider `--orbit 3.0` (ruling out camera framing and ruling out the BUG-165-style "background decode still in flight" theory, since there is nothing to decode). The sibling asset `MetalRoughSpheres.glb` (same spheres, WITH texture maps) is already `expect_pass` and renders correctly — the divergence is specifically the texture-less path.
+
+**Root cause:** not investigated. Suspect the material/lighting setup for a texture-less `PbrMaterial` port wiring differs from the textured path in a way that zeroes contribution (e.g. a port left unbound expecting a texture sample that silently reads black instead of falling back to the factor, or an env/softbox term gated on texture presence).
+
+**Fix shape:** compare `assemble_import_graph`'s per-material node wiring for a material with zero textures against one with at least one texture map; find where the texture-less path diverges. Likely a real-world hazard beyond this one asset — any legitimately simple, unTextured glb (a flat-color prop, common in a live-show library) could hit the same bug.
+
+### BUG-170 (gltf-crate-missing-field-node-parse-failure) — three Khronos assets fail at `gltf::import()` itself with `missing field 'node'` — a crate-level JSON-shape parse gap, not an extension-support gap
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`AnimatedColorsCube.glb`, `CubeVisibility.glb`, `LightVisibility.glb` — all three fail identically).
+
+**Root cause:** not investigated. All three assets use `KHR_animation_pointer` and/or `KHR_node_visibility`, both of which target extension data through pointer-style JSON paths; the pinned `gltf` crate (v1.4.1)'s typed deserializer apparently expects a `node` field somewhere in that shape that these assets' JSON doesn't provide in the form the crate wants. Unclear whether this is a crate version gap (a newer `gltf` release parses it) or a MANIFOLD-side pre-processing step needed before handing JSON to the crate.
+
+**Fix shape:** first check whether a newer `gltf` crate version fixes this (`cargo update -p gltf --dry-run` / changelog check); if not, the animation/visibility pointer extensions are out of this doc's scope anyway (deferred item 7 — animation/skinning/morph owned by IMPORT_DESIGN), so this may simply be inherited scope there.
+
+### BUG-171 (boxvertexcolors-no-material-primitive-skipped-entirely) — a mesh primitive with vertex colors but no material index (spec-legal — implies the glTF default material) is skipped entirely, not imported with a default material
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`BoxVertexColors.glb`: `render-import` fails "no materials with geometry — nothing to import" despite the asset containing one textured, colored box).
+
+**Root cause:** not investigated. `gltf_import.rs`'s geometry-summary walk (the "no materials with geometry" error path, `gltf_import.rs:385`) appears to require every counted primitive to carry an explicit `material` index; a primitive that omits it (relying on glTF's implicit default material, spec-legal) contributes no geometry to the summary, so an asset built entirely of such primitives imports as empty.
+
+**Fix shape:** treat a materialless primitive as using glTF's default material (base fallback PBR values) rather than excluding it from the geometry summary — likely a small addition next to the existing `default_material_vertex_count` report-line path (`gltf_import.rs:416`), which already tracks materialless *sub*-geometry within an otherwise-material asset but apparently doesn't cover an asset that is *entirely* materialless primitives.
+
+### BUG-172 (recursiveskeletons-no-default-scene-rejected) — a glb with no `scene` index (spec-legal — importer should fall back to all root nodes) is rejected outright
+**Status:** OPEN — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification (`RecursiveSkeletons.glb`: `render-import` fails "glb has no default scene").
+
+**Root cause:** not investigated — the importer requires `document.default_scene()` (or equivalent) to resolve, and errors rather than falling back to importing every root-level node when the glTF omits the top-level `scene` field (legal per spec: absence just means "no default scene is suggested," not "there is no content").
+
+**Fix shape:** when no default scene is present, fall back to unioning all nodes referenced by any `scenes[]` entry (or, if `scenes` is also empty, all nodes with no parent) rather than erroring. Low priority: RecursiveSkeletons is a skinning stress-test asset (also out of scope per deferred item 7), and no-default-scene is a rare authoring choice.
+
+### BUG-173 (nodeperformancetest-exceeds-object-safety-bound-by-design) — Khronos `NodePerformanceTest.glb` (10,000 materials) exceeds `OBJECT_SAFETY_MAX` (1024) and is correctly rejected, not silently truncated — GLB_CONFORMANCE_DESIGN's "any glb, 1:1" promise doesn't reach mega-scene stress-test assets
+**Status:** OPEN (informational — not a defect) — found 2026-07-15 during GLB_CONFORMANCE_DESIGN G-P7 full-suite classification.
+
+**Symptom:** `render-import` on `NodePerformanceTest.glb` errors "10000 materials with geometry exceeds the 1024-object safety bound — this asset cannot be imported 1:1 without risking a runaway port-list" — exactly the D4-designed behavior (`GLB_CONFORMANCE_DESIGN.md` D4: `>1024` objects errors loudly, never truncates). This is the safety net working as intended, not a bug in the conventional sense — logged so the gap between "drop in any glb" and "this specific renderer-performance stress-test asset" is durable and traceable (the conformance manifest needs a named reason to classify it `xfail`, and this is that name) rather than silently invented.
+
+**Fix shape:** none owed — raising `OBJECT_SAFETY_MAX` to cover 10k-object scenes would reintroduce the exact runaway-port-list risk D4 was written to prevent, for an asset class (renderer stress tests) outside Peter's actual show library (`typical-project-scale`: 53 layers, 2928 clips — not 10k static mesh objects in one glb). Revisit only if a real show asset needs it.

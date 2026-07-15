@@ -51,3 +51,10 @@ tests/fixtures/audio/
 # manifest.json itself (the pin + per-asset checks) stays tracked.
 tests/fixtures/gltf/khronos/*
 !tests/fixtures/gltf/khronos/manifest.json
+
+# G-P6 HDRI demo material (Poly Haven CC0, fetched by
+# scripts/fetch-gltf-conformance.sh) + the held-out AMG GT3 fixture
+# (licensing unverified) — both kept untracked for repo size / licensing,
+# never vendored (audit table, GLB_CONFORMANCE_DESIGN.md §1).
+tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
+tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb

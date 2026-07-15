@@ -29,16 +29,134 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${REPO_ROOT}/tests/fixtures/gltf/khronos"
 mkdir -p "${OUT_DIR}"
 
-# Every asset named in manifest.json's glTF-Binary (.glb) variant, EXCEPT
-# TextureTransformTest — see below.
+# GLB_CONFORMANCE_DESIGN.md G-P7: every asset in the pinned Khronos commit
+# that has a glTF-Binary variant (118 as of the pin below), EXCEPT
+# TextureTransformTest — fetched separately below via its established
+# gltf+sidecar handling (G-P4), since the pin ships it only as a multi-file
+# `glTF` variant. The 30 assets with NO glTF-Binary variant at this pin
+# (FlightHelmet, SciFiHelmet, Sponza, Cube, Triangle, ... — enumerated via
+# the GitHub API tree at fetch-list generation time, G-P7) are NOT fetched;
+# they carry an explicit `xfail:G-P7` manifest entry noting the absence
+# rather than being silently missing (the forbidden third state).
 ASSETS="
-MetalRoughSpheres
-EmissiveStrengthTest
-ClearCoatTest
+ABeautifulGame
 AlphaBlendModeTest
+AnimatedColorsCube
+AnimatedMorphCube
+AnimationPointerUVs
+AnisotropyBarnLamp
+AnisotropyDiscTest
+AnisotropyRotationTest
+AnisotropyStrengthTest
+AntiqueCamera
+AttenuationTest
+Avocado
+BarramundiFish
+BoomBox
+Box
+BoxAnimated
+BoxInterleaved
+BoxTextured
+BoxTexturedNonPowerOfTwo
+BoxVertexColors
+BrainStem
+CarConcept
+CarbonFibre
+CesiumMan
+CesiumMilkTruck
+ChairDamaskPurplegold
+ChronographWatch
+ClearCoatCarPaint
+ClearCoatTest
+ClearcoatWicker
+CommercialRefrigerator
+CompareAlphaCoverage
+CompareAmbientOcclusion
+CompareAnisotropy
+CompareBaseColor
+CompareClearcoat
+CompareDispersion
+CompareEmissiveStrength
+CompareIor
+CompareIridescence
+CompareMetallic
+CompareNormal
+CompareRoughness
+CompareSheen
+CompareSpecular
+CompareTransmission
+CompareVolume
+Corset
+CubeVisibility
+DamagedHelmet
+DiffuseTransmissionPlant
+DiffuseTransmissionTeacup
+DiffuseTransmissionTest
+DirectionalLight
+DispersionTest
+DragonAttenuation
+DragonDispersion
+Duck
+EmissiveStrengthTest
+Fox
+GlamVelvetSofa
+GlassBrokenWindow
+GlassHurricaneCandleHolder
+GlassVaseFlowers
+IORTestGrid
+InterpolationTest
+IridescenceAbalone
+IridescenceLamp
+IridescenceSuzanne
+IridescentDishWithOlives
+Lantern
+LightVisibility
+LightsPunctualLamp
+MaterialsVariantsShoe
+MetalRoughSpheres
+MetalRoughSpheresNoTextures
+MorphPrimitivesTest
+MorphStressTest
+MosquitoInAmber
+MultiUVTest
+NegativeScaleTest
+NodePerformanceTest
 NormalTangentMirrorTest
+NormalTangentTest
+OrientationTest
+PlaysetLightTest
+PointLightIntensityTest
+PotOfCoals
+PotOfCoalsAnimationPointer
+RecursiveSkeletons
+RiggedFigure
+RiggedSimple
+ScatteringSkull
+SheenChair
+SheenTestGrid
+SheenWoodLeatherSofa
+SimpleInstancing
+SpecGlossVsMetalRough
+SpecularSilkPouf
 SpecularTest
+SunglassesKhronos
+TextureCoordinateTest
+TextureEncodingTest
+TextureLinearInterpolationTest
 TextureSettingsTest
+TextureTransformMultiTest
+ToyCar
+TransmissionOrderTest
+TransmissionRoughnessTest
+TransmissionTest
+TransmissionThinwallTestGrid
+USDShaderBallForGltf
+Unicode❤♻Test
+UnlitTest
+VertexColorTest
+VirtualCity
+WaterBottle
+XmpMetadataRoundedCube
 "
 
 fetched=0
@@ -101,4 +219,31 @@ for f in ${TT_FILES}; do
     tt_fetched=$((tt_fetched + 1))
 done
 
-echo "[fetch-gltf-conformance] done: $((fetched + tt_fetched)) fetched, $((skipped + tt_skipped)) already present"
+
+# G-P6 — node.hdri_source's demo material. NOT part of the Khronos suite:
+# Poly Haven CC0 4k equirect HDRI, direct URL, no commit-pin needed (single
+# stable asset, not a versioned repo tree). Skip-demo-if-absent, same
+# pattern as everything above and the held-out AMG fixture — G-P6's own
+# tests generate a synthetic EXR in-process rather than depending on this
+# file; only the acceptance-demo render (`render-import ... --param
+# env_mode=1 --param hdri_file=...`) needs it. Never vendored/committed —
+# see .gitignore.
+HDRI_URL="https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/4k/kloppenheim_07_puresky_4k.exr"
+HDRI_OUT="${REPO_ROOT}/tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr"
+hdri_fetched=0
+hdri_skipped=0
+if [ -s "${HDRI_OUT}" ]; then
+    echo "[fetch-gltf-conformance] already have kloppenheim_07_puresky_4k.exr, skipping"
+    hdri_skipped=1
+else
+    echo "[fetch-gltf-conformance] fetching kloppenheim_07_puresky_4k.exr"
+    if ! curl -sfL -o "${HDRI_OUT}.tmp" "${HDRI_URL}"; then
+        echo "[fetch-gltf-conformance] ERROR: failed to fetch ${HDRI_URL}" >&2
+        rm -f "${HDRI_OUT}.tmp"
+        exit 1
+    fi
+    mv "${HDRI_OUT}.tmp" "${HDRI_OUT}"
+    hdri_fetched=1
+fi
+
+echo "[fetch-gltf-conformance] done: $((fetched + tt_fetched + hdri_fetched)) fetched, $((skipped + tt_skipped + hdri_skipped)) already present"
