@@ -570,6 +570,16 @@ pub(crate) struct ParamView {
     /// hint. Removing the wire is the only way to reclaim control. Recomputed per
     /// snapshot from the level's wires (`apply_driven_state`). (Phase 5.)
     pub(crate) wire_driven: bool,
+    /// `Some("driven by <node>.<port>")` when [`wire_driven`](Self::wire_driven)
+    /// is set — the feeding wire's source, resolved once here so the hover
+    /// tooltip (`draw_hover_tooltip`) doesn't need its own wire/node join. The
+    /// row's normal help text (`tooltip`) still exists but is shadowed while
+    /// driven — knowing *what* drives the row is more useful than the param's
+    /// static doc line once it's read-only anyway (D5). `None` when not
+    /// wire-driven, and for group-face mirror rows ([`build_group_param_rows`]),
+    /// which don't have the feeding wire's *level* in scope to resolve a source
+    /// title from.
+    pub(crate) driven_by: Option<String>,
     /// `Some(outer_label)` when an outer performance-card slider routes into this
     /// inner param every frame. The row **stays editable** (the binding apply
     /// path skips when the outer slot is unchanged, so inline edits survive) but
@@ -742,6 +752,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         // Filled by `apply_driven_state` once the node's wires + the snapshot's
         // outer routings are in scope (they aren't per-param on the snapshot).
         wire_driven: false,
+        driven_by: None,
         outer_driver: None,
         // Ordinary node-face row — never a group-face mirror. See
         // `build_group_param_rows` for the other constructor.
@@ -1394,6 +1405,12 @@ impl GraphCanvas {
     fn apply_driven_state(&mut self, outer_routings: &[crate::graph_view::OuterParamRouting]) {
         // Split the borrow: read `wires`, mutate `nodes`.
         let Self { wires, nodes, .. } = self;
+        // Node id → title, so a wire-driven param's hover hint (`driven_by`,
+        // D5) can name its source without a second pass over `nodes` once the
+        // mutable walk below starts. Collected (not borrowed) so it survives
+        // past the immutable borrow of `nodes` this statement takes.
+        let titles: ahash::AHashMap<u32, String> =
+            nodes.iter().map(|n| (n.id, n.title.clone())).collect();
         for node in nodes.iter_mut() {
             // Group-face mirror rows (D6) already carry their own correct
             // `wire_driven` — computed by `build_group_param_rows` against the
@@ -1410,9 +1427,13 @@ impl GraphCanvas {
             }
             let handle = node.handle.clone();
             for p in &mut node.params {
-                p.wire_driven = wires
-                    .iter()
-                    .any(|w| w.to_node == node.id && w.to_port == p.name);
+                let feeding_wire =
+                    wires.iter().find(|w| w.to_node == node.id && w.to_port == p.name);
+                p.wire_driven = feeding_wire.is_some();
+                p.driven_by = feeding_wire.map(|w| {
+                    let src = titles.get(&w.from_node).map(String::as_str).unwrap_or("?");
+                    format!("driven by {src}.{}", w.from_port)
+                });
                 p.outer_driver = handle.as_deref().and_then(|h| {
                     outer_routings
                         .iter()
