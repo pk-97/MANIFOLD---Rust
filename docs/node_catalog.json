@@ -11645,6 +11645,181 @@
           "name": "alpha_cutoff",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "specular",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "specular_tint_r",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "specular_tint_g",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "specular_tint_b",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ior",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_m00",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_m01",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_m10",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_m11",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_tx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "uv_ty",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_m00",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_m01",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_m10",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_m11",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_tx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nrm_uv_ty",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_m00",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_m01",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_m10",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_m11",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_tx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mr_uv_ty",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_m00",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_m01",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_m10",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_m11",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_tx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "occ_uv_ty",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_m00",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_m01",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_m10",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_m11",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_tx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "em_uv_ty",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "PBR Material",
@@ -11798,6 +11973,356 @@
           "range": [
             "0",
             "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Specular",
+          "name": "specular",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Specular Tint R",
+          "name": "specular_tint_r",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Specular Tint G",
+          "name": "specular_tint_g",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Specular Tint B",
+          "name": "specular_tint_b",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1.5",
+          "label": "Index of Refraction",
+          "name": "ior",
+          "range": [
+            "1",
+            "3"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "UV Transform M00",
+          "name": "uv_m00",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "UV Transform M01",
+          "name": "uv_m01",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "UV Transform M10",
+          "name": "uv_m10",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "UV Transform M11",
+          "name": "uv_m11",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "UV Transform Offset X",
+          "name": "uv_tx",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "UV Transform Offset Y",
+          "name": "uv_ty",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Normal UV M00",
+          "name": "nrm_uv_m00",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Normal UV M01",
+          "name": "nrm_uv_m01",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Normal UV M10",
+          "name": "nrm_uv_m10",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Normal UV M11",
+          "name": "nrm_uv_m11",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Normal UV Offset X",
+          "name": "nrm_uv_tx",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Normal UV Offset Y",
+          "name": "nrm_uv_ty",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "MR UV M00",
+          "name": "mr_uv_m00",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "MR UV M01",
+          "name": "mr_uv_m01",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "MR UV M10",
+          "name": "mr_uv_m10",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "MR UV M11",
+          "name": "mr_uv_m11",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "MR UV Offset X",
+          "name": "mr_uv_tx",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "MR UV Offset Y",
+          "name": "mr_uv_ty",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Occlusion UV M00",
+          "name": "occ_uv_m00",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Occlusion UV M01",
+          "name": "occ_uv_m01",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Occlusion UV M10",
+          "name": "occ_uv_m10",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Occlusion UV M11",
+          "name": "occ_uv_m11",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Occlusion UV Offset X",
+          "name": "occ_uv_tx",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Occlusion UV Offset Y",
+          "name": "occ_uv_ty",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Emissive UV M00",
+          "name": "em_uv_m00",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Emissive UV M01",
+          "name": "em_uv_m01",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Emissive UV M10",
+          "name": "em_uv_m10",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Emissive UV M11",
+          "name": "em_uv_m11",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Emissive UV Offset X",
+          "name": "em_uv_tx",
+          "range": [
+            "-128",
+            "128"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Emissive UV Offset Y",
+          "name": "em_uv_ty",
+          "range": [
+            "-128",
+            "128"
           ],
           "type": "float"
         }

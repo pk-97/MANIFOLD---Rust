@@ -32,9 +32,12 @@
     "status": "expect_pass"
   },
   {
-    "asset": "TextureTransformTest.glb",
-    "checks": [],
-    "status": "xfail:G-P4"
+    "asset": "TextureTransformTest/TextureTransformTest.gltf",
+    "checks": [
+      { "kind": "region_green_minus_red_above", "region": [0.3906, 0.2292, 0.4453, 0.4028], "value": 40.0 },
+      { "kind": "golden", "file": "goldens/texture_transform.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "ClearCoatTest.glb",
@@ -43,8 +46,11 @@
   },
   {
     "asset": "SpecularTest.glb",
-    "checks": [],
-    "status": "xfail:G-P4"
+    "checks": [
+      { "kind": "region_mean_luminance_below", "region": [0.5039, 0.2292, 0.5391, 0.2986], "reference_region": [0.6602, 0.2292, 0.7148, 0.3264], "value": 0.75 },
+      { "kind": "golden", "file": "goldens/specular_test.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "TextureSettingsTest.glb",

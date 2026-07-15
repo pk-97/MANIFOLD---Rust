@@ -43,6 +43,50 @@ crate::primitive! {
         emission_b: ScalarF32 optional,
         emission_intensity: ScalarF32 optional,
         alpha_cutoff: ScalarF32 optional,
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior.
+        specular: ScalarF32 optional,
+        specular_tint_r: ScalarF32 optional,
+        specular_tint_g: ScalarF32 optional,
+        specular_tint_b: ScalarF32 optional,
+        ior: ScalarF32 optional,
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
+        // per-map — one folded 2×3 affine
+        // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
+        // (`uv_*` = base color, `nrm_uv_*` = normal, `mr_uv_*` =
+        // metallic-roughness, `occ_uv_*` = occlusion, `em_uv_*` =
+        // emissive). The glTF importer wires these as literal per-object
+        // params; a hand-authored PBR material leaves them at the identity
+        // default.
+        uv_m00: ScalarF32 optional,
+        uv_m01: ScalarF32 optional,
+        uv_m10: ScalarF32 optional,
+        uv_m11: ScalarF32 optional,
+        uv_tx: ScalarF32 optional,
+        uv_ty: ScalarF32 optional,
+        nrm_uv_m00: ScalarF32 optional,
+        nrm_uv_m01: ScalarF32 optional,
+        nrm_uv_m10: ScalarF32 optional,
+        nrm_uv_m11: ScalarF32 optional,
+        nrm_uv_tx: ScalarF32 optional,
+        nrm_uv_ty: ScalarF32 optional,
+        mr_uv_m00: ScalarF32 optional,
+        mr_uv_m01: ScalarF32 optional,
+        mr_uv_m10: ScalarF32 optional,
+        mr_uv_m11: ScalarF32 optional,
+        mr_uv_tx: ScalarF32 optional,
+        mr_uv_ty: ScalarF32 optional,
+        occ_uv_m00: ScalarF32 optional,
+        occ_uv_m01: ScalarF32 optional,
+        occ_uv_m10: ScalarF32 optional,
+        occ_uv_m11: ScalarF32 optional,
+        occ_uv_tx: ScalarF32 optional,
+        occ_uv_ty: ScalarF32 optional,
+        em_uv_m00: ScalarF32 optional,
+        em_uv_m01: ScalarF32 optional,
+        em_uv_m10: ScalarF32 optional,
+        em_uv_m11: ScalarF32 optional,
+        em_uv_tx: ScalarF32 optional,
+        em_uv_ty: ScalarF32 optional,
     },
     outputs: {
         out: Material,
@@ -152,6 +196,286 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("specular"),
+            label: "Specular",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("specular_tint_r"),
+            label: "Specular Tint R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("specular_tint_g"),
+            label: "Specular Tint G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("specular_tint_b"),
+            label: "Specular Tint B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("ior"),
+            label: "Index of Refraction",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.5),
+            range: Some((1.0, 3.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_m00"),
+            label: "UV Transform M00",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_m01"),
+            label: "UV Transform M01",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_m10"),
+            label: "UV Transform M10",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_m11"),
+            label: "UV Transform M11",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_tx"),
+            label: "UV Transform Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("uv_ty"),
+            label: "UV Transform Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_m00"),
+            label: "Normal UV M00",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_m01"),
+            label: "Normal UV M01",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_m10"),
+            label: "Normal UV M10",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_m11"),
+            label: "Normal UV M11",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_tx"),
+            label: "Normal UV Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_uv_ty"),
+            label: "Normal UV Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_m00"),
+            label: "MR UV M00",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_m01"),
+            label: "MR UV M01",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_m10"),
+            label: "MR UV M10",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_m11"),
+            label: "MR UV M11",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_tx"),
+            label: "MR UV Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_uv_ty"),
+            label: "MR UV Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_m00"),
+            label: "Occlusion UV M00",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_m01"),
+            label: "Occlusion UV M01",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_m10"),
+            label: "Occlusion UV M10",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_m11"),
+            label: "Occlusion UV M11",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_tx"),
+            label: "Occlusion UV Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_uv_ty"),
+            label: "Occlusion UV Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_m00"),
+            label: "Emissive UV M00",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_m01"),
+            label: "Emissive UV M01",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_m10"),
+            label: "Emissive UV M10",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_m11"),
+            label: "Emissive UV M11",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_tx"),
+            label: "Emissive UV Offset X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_uv_ty"),
+            label: "Emissive UV Offset Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-128.0, 128.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
     examples: [],
@@ -190,6 +514,30 @@ impl Primitive for PbrMaterial {
         };
         let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);
 
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5.
+        let specular = ctx.scalar_or_param("specular", 1.0);
+        let specular_tint_r = ctx.scalar_or_param("specular_tint_r", 1.0);
+        let specular_tint_g = ctx.scalar_or_param("specular_tint_g", 1.0);
+        let specular_tint_b = ctx.scalar_or_param("specular_tint_b", 1.0);
+        let ior = ctx.scalar_or_param("ior", 1.5);
+        // One folded per-map UV affine per family (G-P4). The closure keeps
+        // the 30 reads mechanical; identity defaults are exactly inert.
+        let uv_xf = |prefix: &str| -> [f32; 6] {
+            [
+                ctx.scalar_or_param(&format!("{prefix}m00"), 1.0),
+                ctx.scalar_or_param(&format!("{prefix}m01"), 0.0),
+                ctx.scalar_or_param(&format!("{prefix}m10"), 0.0),
+                ctx.scalar_or_param(&format!("{prefix}m11"), 1.0),
+                ctx.scalar_or_param(&format!("{prefix}tx"), 0.0),
+                ctx.scalar_or_param(&format!("{prefix}ty"), 0.0),
+            ]
+        };
+        let base_color_uv_transform = uv_xf("uv_");
+        let normal_uv_transform = uv_xf("nrm_uv_");
+        let mr_uv_transform = uv_xf("mr_uv_");
+        let occlusion_uv_transform = uv_xf("occ_uv_");
+        let emissive_uv_transform = uv_xf("em_uv_");
+
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
             ambient,
@@ -200,6 +548,14 @@ impl Primitive for PbrMaterial {
         );
         material.alpha_mode = alpha_mode;
         material.alpha_cutoff = alpha_cutoff;
+        material.specular_factor = specular;
+        material.specular_tint = [specular_tint_r, specular_tint_g, specular_tint_b];
+        material.ior = ior;
+        material.base_color_uv_transform = base_color_uv_transform;
+        material.normal_uv_transform = normal_uv_transform;
+        material.mr_uv_transform = mr_uv_transform;
+        material.occlusion_uv_transform = occlusion_uv_transform;
+        material.emissive_uv_transform = emissive_uv_transform;
         ctx.outputs.set_material("out", material);
     }
 }

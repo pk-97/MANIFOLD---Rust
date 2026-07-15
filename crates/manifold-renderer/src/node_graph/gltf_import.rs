@@ -581,6 +581,20 @@ fn build_import_graph(
                 "{group_name}: KHR_materials_clearcoat present — clearcoat coat layer not imported (report-only, no clear-coat lobe in v1)"
             ));
         }
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform is
+        // applied per-map (all five families) — the only variant still
+        // unmapped is a texCoord index override (v1 imports TEXCOORD_0
+        // only), which is reported rather than silently dropped.
+        if m.uv_tex_coord_override {
+            report_lines.push(format!(
+                "{group_name}: KHR_texture_transform.texCoord override — only TEXCOORD_0 is imported in v1, the override is ignored (report-only; the transform itself IS applied)"
+            ));
+        }
+        if m.specular_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_specular has a specularTexture/specularColorTexture — only the factor (specularFactor/specularColorFactor) is imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
         // `render_scene` shipped no per-object normal-scale / occlusion-strength
         // uniform (F-P2's texture ports carry no multiplier) — a non-neutral
         // value is genuinely unmapped, not silently dropped, so it's a report
@@ -689,6 +703,41 @@ fn build_import_graph(
         mat_node
             .params
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior
+        // → F0 scale (`fs_pbr`); KHR_texture_transform → base-color UV
+        // affine (`resolve_albedo`). Every field defaults to the neutral
+        // value verified in `gltf_load.rs` (ior=1.5, specular_factor=1.0,
+        // specular_color_factor=[1,1,1], identity uv transform), so a
+        // material without these extensions wires byte-identical params.
+        mat_node.params.insert("ior".to_string(), float(m.ior));
+        mat_node
+            .params
+            .insert("specular".to_string(), float(m.specular_factor));
+        mat_node
+            .params
+            .insert("specular_tint_r".to_string(), float(m.specular_color_factor[0]));
+        mat_node
+            .params
+            .insert("specular_tint_g".to_string(), float(m.specular_color_factor[1]));
+        mat_node
+            .params
+            .insert("specular_tint_b".to_string(), float(m.specular_color_factor[2]));
+        // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
+        // per map family, identity when the extension is absent.
+        let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
+        for (prefix, xf) in [
+            ("uv_", &m.base_color_uv_transform),
+            ("nrm_uv_", &m.normal_uv_transform),
+            ("mr_uv_", &m.mr_uv_transform),
+            ("occ_uv_", &m.occlusion_uv_transform),
+            ("em_uv_", &m.emissive_uv_transform),
+        ] {
+            for (part, value) in parts.iter().zip(xf.iter()) {
+                mat_node
+                    .params
+                    .insert(format!("{prefix}{part}"), float(*value));
+            }
+        }
         group_nodes.push(mat_node);
 
         // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
@@ -1860,6 +1909,16 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,
@@ -2036,6 +2095,16 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: Some(4),
             emissive_strength: 2.5,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,
@@ -2438,6 +2507,16 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,

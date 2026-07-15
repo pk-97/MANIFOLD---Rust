@@ -454,7 +454,98 @@ pub(crate) struct GltfMaterialInfo {
     /// is already `true` when this is) and the importer emits a report
     /// line noting the downgrade.
     pub was_blend: bool,
+    /// `KHR_materials_ior`'s `ior` (default 1.5 — glTF's implicit default,
+    /// and the value that makes `dielectric_f0` below collapse to today's
+    /// hardcoded 0.04). GLB_CONFORMANCE_DESIGN.md G-P4/D5.
+    pub ior: f32,
+    /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
+    pub specular_factor: f32,
+    /// `KHR_materials_specular`'s `specularColorFactor` (default
+    /// `[1,1,1]`). `specular_texture`/`specular_color_texture` (map
+    /// variants of the same extension) are report-only in v1 — factor
+    /// only, same doctrine as clearcoat — see `specular_has_texture`.
+    pub specular_color_factor: [f32; 3],
+    /// `true` when `KHR_materials_specular` carries a `specularTexture`
+    /// and/or `specularColorTexture` — v1 maps the FACTOR only (see
+    /// `specular_factor`/`specular_color_factor`), so a textured specular
+    /// map is unmapped and reported rather than silently dropped.
+    pub specular_has_texture: bool,
+    /// `KHR_texture_transform` on the base-color texture reference, folded
+    /// ONCE here (not per frame — CLAUDE.md hot-path discipline) into a
+    /// 2×3 affine `[m00, m01, m10, m11, tx, ty]` s.t.
+    /// `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)`. Identity
+    /// (`[1,0,0,1,0,0]`) when the extension is absent on this texture
+    /// reference — byte-identical to no transform. GLB_CONFORMANCE_DESIGN.md
+    /// G-P4: EVERY map family carries its own transform (the four fields
+    /// below) — the AMG puts transforms on 9 normalTexture infos and only
+    /// 1 baseColorTexture, so base-color-only would leave its normal maps
+    /// sampling untransformed UVs. A `texCoord` index override inside any
+    /// map's transform is a report line (nothing silently dropped) — see
+    /// `uv_tex_coord_override`.
+    pub base_color_uv_transform: [f32; 6],
+    /// Same folded affine for the normal map's `KHR_texture_transform`
+    /// (gltf 1.4.1's `NormalTexture` has no typed accessor — parsed from
+    /// the raw `extensions` JSON via [`parse_uv_transform_json`]).
+    pub normal_uv_transform: [f32; 6],
+    /// Same for the metallic-roughness map (typed accessor).
+    pub mr_uv_transform: [f32; 6],
+    /// Same for the occlusion map (raw JSON, like normal).
+    pub occlusion_uv_transform: [f32; 6],
+    /// Same for the emissive map (typed accessor).
+    pub emissive_uv_transform: [f32; 6],
+    /// `true` when ANY map's `KHR_texture_transform` specifies a
+    /// `texCoord` override (i.e. samples `TEXCOORD_n, n>0`) — v1 has one
+    /// UV channel end to end (`MeshVertex` carries a single `uv`), so a
+    /// texCoord override can't be honoured. Report-only.
+    pub uv_tex_coord_override: bool,
     pub vertex_count: u32,
+}
+
+/// Fold glTF `KHR_texture_transform`'s `(offset, rotation, scale)` into the
+/// affine `[m00, m01, m10, m11, tx, ty]` `resolve_albedo` applies as
+/// `uv' = M*uv + t`. Matches the spec's documented composition order,
+/// `translation * rotation * scale` applied to the UV as a column vector
+/// (scale innermost, then rotate, then translate) — verified against
+/// three.js/Babylon's glTF loaders and the extension README's worked
+/// matrices. Identity in, identity out (`sin(0)==0.0`, `cos(0)==1.0`
+/// exactly in f32), so an absent extension is byte-identical.
+pub(crate) fn fold_uv_transform(offset: [f32; 2], rotation: f32, scale: [f32; 2]) -> [f32; 6] {
+    let (s, c) = rotation.sin_cos();
+    [
+        scale[0] * c,
+        -scale[1] * s,
+        scale[0] * s,
+        scale[1] * c,
+        offset[0],
+        offset[1],
+    ]
+}
+
+pub(crate) const IDENTITY_UV_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// Parse a raw `KHR_texture_transform` extension JSON object (the shape the
+/// spec defines: optional `offset: [f32; 2]`, `rotation: f32`,
+/// `scale: [f32; 2]`, `texCoord: u32`) and fold it via
+/// [`fold_uv_transform`]. Returns `(folded_affine, has_tex_coord_override)`.
+/// Needed for the normal and occlusion maps, whose gltf-1.4.1 wrappers
+/// (`NormalTexture`/`OcclusionTexture`) expose no typed
+/// `texture_transform()` — only `extension_value()` raw JSON. Spec defaults
+/// on absent fields (offset `[0,0]`, rotation `0`, scale `[1,1]`) match the
+/// typed accessor's defaults exactly.
+pub(crate) fn parse_uv_transform_json(v: &serde_json::Value) -> ([f32; 6], bool) {
+    let f2 = |key: &str, default: [f32; 2]| -> [f32; 2] {
+        v.get(key)
+            .and_then(|a| a.as_array())
+            .and_then(|a| {
+                Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+            })
+            .unwrap_or(default)
+    };
+    let offset = f2("offset", [0.0, 0.0]);
+    let scale = f2("scale", [1.0, 1.0]);
+    let rotation = v.get("rotation").and_then(|r| r.as_f64()).unwrap_or(0.0) as f32;
+    let tex_coord_override = v.get("texCoord").is_some();
+    (fold_uv_transform(offset, rotation, scale), tex_coord_override)
 }
 
 /// What the importer needs to know about a glb up front: the distinct
@@ -565,6 +656,64 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // `alpha_mask` reflects ONLY the genuine glTF MASK mode.
             let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
             let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask);
+
+            // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
+            // per-map (all five families — see the field doc comments).
+            // base-color/mr/emissive route through `texture::Info`, which
+            // has the typed `texture_transform()` accessor; normal and
+            // occlusion (`NormalTexture`/`OcclusionTexture`) don't, so
+            // those parse the raw `extensions` JSON via
+            // `parse_uv_transform_json` (identical spec defaults).
+            let mut uv_tex_coord_override = false;
+            let mut fold_typed = |info: Option<gltf::texture::Info>| -> [f32; 6] {
+                match info.as_ref().and_then(|t| t.texture_transform()) {
+                    Some(t) => {
+                        uv_tex_coord_override |= t.tex_coord().is_some();
+                        fold_uv_transform(t.offset(), t.rotation(), t.scale())
+                    }
+                    None => IDENTITY_UV_TRANSFORM,
+                }
+            };
+            let base_color_info = pbr.base_color_texture();
+            let base_color_uv_transform = fold_typed(pbr.base_color_texture());
+            let mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
+            let emissive_uv_transform = fold_typed(m.emissive_texture());
+            let mut fold_raw = |ext: Option<&serde_json::Value>| -> [f32; 6] {
+                match ext {
+                    Some(v) => {
+                        let (folded, has_override) = parse_uv_transform_json(v);
+                        uv_tex_coord_override |= has_override;
+                        folded
+                    }
+                    None => IDENTITY_UV_TRANSFORM,
+                }
+            };
+            let normal_uv_transform = fold_raw(
+                m.normal_texture()
+                    .as_ref()
+                    .and_then(|t| t.extension_value("KHR_texture_transform")),
+            );
+            let occlusion_uv_transform = fold_raw(
+                m.occlusion_texture()
+                    .as_ref()
+                    .and_then(|t| t.extension_value("KHR_texture_transform")),
+            );
+
+            // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
+            // KHR_materials_ior, mapped to F0 scale downstream
+            // (gltf_import.rs). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
+            // today's hardcoded F0=0.04 exactly — see `fs_pbr`.
+            let ior = m.ior().unwrap_or(1.5);
+            let specular_ext = m.specular();
+            let specular_factor = specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0);
+            let specular_color_factor = specular_ext
+                .as_ref()
+                .map(|s| s.specular_color_factor())
+                .unwrap_or([1.0, 1.0, 1.0]);
+            let specular_has_texture = specular_ext.as_ref().is_some_and(|s| {
+                s.specular_texture().is_some() || s.specular_color_texture().is_some()
+            });
+
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
@@ -574,9 +723,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 emissive: m.emissive_factor(),
                 alpha_mask,
                 alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
-                base_color_texture: pbr
-                    .base_color_texture()
-                    .map(|t| t.texture().index() as u32),
+                base_color_texture: base_color_info.map(|t| t.texture().index() as u32),
                 normal_texture: m.normal_texture().map(|t| t.texture().index() as u32),
                 normal_scale: m.normal_texture().map(|t| t.scale()).unwrap_or(1.0),
                 mr_texture: pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32),
@@ -584,6 +731,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
                 emissive_texture: m.emissive_texture().map(|t| t.texture().index() as u32),
                 emissive_strength: m.emissive_strength().unwrap_or(1.0),
+                ior,
+                specular_factor,
+                specular_color_factor,
+                specular_has_texture,
+                base_color_uv_transform,
+                normal_uv_transform,
+                mr_uv_transform,
+                occlusion_uv_transform,
+                emissive_uv_transform,
+                uv_tex_coord_override,
                 transmission_factor: m
                     .transmission()
                     .map(|t| t.transmission_factor())

@@ -33,11 +33,17 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # KHR_materials_clearcoat, which this crate version has no typed support
 # for) + KHR_lights_punctual (IMPORT_DESIGN P1's light mapping needs it;
 # enabling here costs nothing — no lights/cameras work happens in F-P4).
+# GLB_CONFORMANCE_DESIGN.md G-P4: KHR_texture_transform (typed
+# `texture::Info::texture_transform()`) + KHR_materials_specular (typed
+# `Material::specular()`) + KHR_materials_ior (typed `Material::ior()`).
 gltf = { version = "1", features = [
     "KHR_materials_emissive_strength",
     "KHR_materials_transmission",
     "extensions",
     "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -258,8 +258,37 @@ struct RenderSceneUniforms {
     camera_pos: [f32; 4],
     base_color: [f32; 4],
     emission: [f32; 4],
+    /// `x`: metallic `[0,1]`, `y`: roughness `[0.01,1]`. `z`/`w` were
+    /// permanently-zero reserved slots until GLB_CONFORMANCE_DESIGN.md
+    /// G-P4/D5 repurposed them: `z` = `ior` (KHR_materials_ior, default
+    /// `1.5`), `w` = `specular_factor` (KHR_materials_specular, default
+    /// `1.0`) — both feed `fs_pbr`'s dielectric F0 term. Defaults collapse
+    /// the formula to the pre-G-P4 hardcoded `F0 = 0.04` exactly, so this
+    /// reuse is byte-identical for every asset without the extensions.
     pbr_metallic_roughness: [f32; 4],
     specular: [f32; 4],
+    /// GLB_CONFORMANCE_DESIGN.md G-P4/D5: `KHR_materials_specular`'s
+    /// `specularColorFactor` (rgb, default `[1,1,1]`) — `w` reserved.
+    /// A NEW field (not a reserved-slot reuse) since no existing vec4 had
+    /// 3 free floats for the rgb triplet.
+    pbr_specular_tint: [f32; 4],
+    /// GLB_CONFORMANCE_DESIGN.md G-P4/D5: per-map `KHR_texture_transform`
+    /// folded 2×3 affines, one `vec4 + vec4` pair per map family. `*_uv_m`
+    /// = linear part `(m00, m01, m10, m11)` s.t. `uv' = (m00*u + m01*v +
+    /// tx, m10*u + m11*v + ty)`, default identity `(1,0,0,1)`; `*_uv_t` =
+    /// translation `(tx, ty, 0, 0)` (`z`/`w` reserved), default zero.
+    /// Per-map, not one shared transform: the AMG GT3 carries transforms
+    /// on 9 normalTexture infos and only 1 baseColorTexture.
+    base_color_uv_m: [f32; 4],
+    base_color_uv_t: [f32; 4],
+    normal_uv_m: [f32; 4],
+    normal_uv_t: [f32; 4],
+    mr_uv_m: [f32; 4],
+    mr_uv_t: [f32; 4],
+    occlusion_uv_m: [f32; 4],
+    occlusion_uv_t: [f32; 4],
+    emissive_uv_m: [f32; 4],
+    emissive_uv_t: [f32; 4],
     cel_params: [f32; 4],
     /// `x` = 1.0 when `normal_map_n` is wired (IMPORT_FIDELITY_DESIGN.md
     /// D3/F-P2, tangent-space cotangent-frame reconstruction), `z` = 1.0
@@ -306,10 +335,12 @@ struct RenderSceneUniforms {
     prev_model: [[f32; 4]; 4],
 }
 
-// 480 = 30 × 16 → the naga 16-byte uniform-size rule holds. Was 464 before
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2's `texture_flags2` field (+16 bytes,
-// the four new per-object map presence flags).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 480);
+// 656 = 41 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
+// `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
+// `ior`/`specular_factor` rode existing reserved slots on
+// `pbr_metallic_roughness` instead of growing the struct).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 656);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -1550,6 +1581,16 @@ fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     out
 }
 
+/// Split a folded `[m00, m01, m10, m11, tx, ty]` per-map UV affine
+/// (G-P4) into its `vec4` linear part / `vec4` translation part for the
+/// uniform.
+fn uv_m(t: &[f32; 6]) -> [f32; 4] {
+    [t[0], t[1], t[2], t[3]]
+}
+fn uv_t(t: &[f32; 6]) -> [f32; 4] {
+    [t[4], t[5], 0.0, 0.0]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_uniforms(
     view_proj: [[f32; 4]; 4],
@@ -1567,13 +1608,37 @@ fn build_uniforms(
         camera_pos: [cam.pos[0], cam.pos[1], cam.pos[2], 1.0],
         base_color: material.base_color,
         emission: material.emission,
-        pbr_metallic_roughness: [material.metallic, material.roughness, 0.0, 0.0],
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: z/w were permanently-zero
+        // reserved slots, now ior/specular_factor — see the struct's field
+        // doc comment.
+        pbr_metallic_roughness: [
+            material.metallic,
+            material.roughness,
+            material.ior,
+            material.specular_factor,
+        ],
         specular: [
             material.specular_color[0],
             material.specular_color[1],
             material.specular_color[2],
             material.specular_power,
         ],
+        pbr_specular_tint: [
+            material.specular_tint[0],
+            material.specular_tint[1],
+            material.specular_tint[2],
+            0.0,
+        ],
+        base_color_uv_m: uv_m(&material.base_color_uv_transform),
+        base_color_uv_t: uv_t(&material.base_color_uv_transform),
+        normal_uv_m: uv_m(&material.normal_uv_transform),
+        normal_uv_t: uv_t(&material.normal_uv_transform),
+        mr_uv_m: uv_m(&material.mr_uv_transform),
+        mr_uv_t: uv_t(&material.mr_uv_transform),
+        occlusion_uv_m: uv_m(&material.occlusion_uv_transform),
+        occlusion_uv_t: uv_t(&material.occlusion_uv_transform),
+        emissive_uv_m: uv_m(&material.emissive_uv_transform),
+        emissive_uv_t: uv_t(&material.emissive_uv_transform),
         cel_params: [
             material.cel_bands as f32,
             material.band_low,

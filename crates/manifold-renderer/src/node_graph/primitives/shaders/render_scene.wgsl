@@ -68,10 +68,35 @@ struct Uniforms {
     base_color: vec4<f32>,
     // rgb: emission PREMULTIPLIED with intensity, w: reserved.
     emission: vec4<f32>,
-    // x: metallic [0,1], y: roughness [0.01,1], z/w: reserved.
+    // x: metallic [0,1], y: roughness [0.01,1]. z/w were permanently-zero
+    // reserved slots until GLB_CONFORMANCE_DESIGN.md G-P4/D5 repurposed
+    // them: z = ior (KHR_materials_ior, default 1.5), w = specular_factor
+    // (KHR_materials_specular, default 1.0) — both feed fs_pbr's
+    // dielectric F0 term below. Defaults collapse the formula to the
+    // pre-G-P4 hardcoded F0 = 0.04 exactly.
     pbr_metallic_roughness: vec4<f32>,
     // rgb: specular tint, w: Phong exponent.
     specular: vec4<f32>,
+    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular's
+    // specularColorFactor (rgb, default [1,1,1]), w reserved.
+    pbr_specular_tint: vec4<f32>,
+    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: per-map KHR_texture_transform,
+    // one folded 2×3 affine per map family. *_uv_m = linear part
+    // (m00, m01, m10, m11) s.t. uv' = (m00*u + m01*v + tx, m10*u +
+    // m11*v + ty), default identity (1,0,0,1); *_uv_t = translation
+    // (tx, ty, 0, 0), z/w reserved, default zero. Per-map, not shared:
+    // the AMG GT3 carries transforms on 9 normalTexture infos and only
+    // 1 baseColorTexture.
+    base_color_uv_m: vec4<f32>,
+    base_color_uv_t: vec4<f32>,
+    normal_uv_m: vec4<f32>,
+    normal_uv_t: vec4<f32>,
+    mr_uv_m: vec4<f32>,
+    mr_uv_t: vec4<f32>,
+    occlusion_uv_m: vec4<f32>,
+    occlusion_uv_t: vec4<f32>,
+    emissive_uv_m: vec4<f32>,
+    emissive_uv_t: vec4<f32>,
     // x: cel_bands (as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
     // Surface-texture presence flags. x: normal_map_n wired (D3/F-P2,
@@ -559,17 +584,38 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
 fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
         let n = normalize(vertex_normal);
-        let sampled = textureSample(normal_map, material_sampler, uv).rgb;
+        // G-P4: per-map KHR_texture_transform. The cotangent frame is
+        // built from the SAME transformed UV the texture is sampled with
+        // — a rotated/scaled UV space rotates/scales the tangent
+        // directions, and deriving T/B from the untransformed uv would
+        // bend the decoded normals off-axis. Identity transform makes
+        // uv_t == uv bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
+        // byte-identical.
+        let uv_t = apply_uv_transform(uv, u.normal_uv_m, u.normal_uv_t);
+        let sampled = textureSample(normal_map, material_sampler, uv_t).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
-        let tbn = cotangent_frame(n, world_pos, uv);
+        let tbn = cotangent_frame(n, world_pos, uv_t);
         return normalize(tbn * tangent_normal);
     }
     return normalize(vertex_normal);
 }
 
+// GLB_CONFORMANCE_DESIGN.md G-P4/D5: apply the base-color
+// KHR_texture_transform's folded affine — `uv' = M*uv + t`, folded ONCE at
+// import time (gltf_load::fold_uv_transform), never per frame. Identity
+// (m=(1,0,0,1), t=(0,0)) reduces to `uv` exactly (no branch needed: 1*u +
+// 0*v + 0 == u bit-for-bit in f32).
+fn apply_uv_transform(uv: vec2<f32>, m: vec4<f32>, t: vec4<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        m.x * uv.x + m.y * uv.y + t.x,
+        m.z * uv.x + m.w * uv.y + t.y,
+    );
+}
+
 fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
-        let t = textureSample(base_color_map, material_sampler, uv);
+        let uv_t = apply_uv_transform(uv, u.base_color_uv_m, u.base_color_uv_t);
+        let t = textureSample(base_color_map, material_sampler, uv_t);
         return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
     }
     return u.base_color;
@@ -582,7 +628,8 @@ fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
 // (roughness, metallic).
 fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
-        let t = textureSample(mr_map, material_sampler, uv);
+        let uv_t = apply_uv_transform(uv, u.mr_uv_m, u.mr_uv_t);
+        let t = textureSample(mr_map, material_sampler, uv_t);
         return vec2<f32>(max(t.g, 0.01), clamp(t.b, 0.0, 1.0));
     }
     return vec2<f32>(max(u.pbr_metallic_roughness.y, 0.01), clamp(u.pbr_metallic_roughness.x, 0.0, 1.0));
@@ -594,7 +641,8 @@ fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
 // table.
 fn resolve_occlusion(uv: vec2<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
-        return textureSample(occlusion_map, material_sampler, uv).r;
+        let uv_t = apply_uv_transform(uv, u.occlusion_uv_m, u.occlusion_uv_t);
+        return textureSample(occlusion_map, material_sampler, uv_t).r;
     }
     return 1.0;
 }
@@ -606,7 +654,8 @@ fn resolve_occlusion(uv: vec2<f32>) -> f32 {
 // M6-D1's albedo precedent) — emission is always added AFTER lighting.
 fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
     if u.texture_flags2.z > 0.5 {
-        let t = textureSample(emissive_map, material_sampler, uv).rgb;
+        let uv_t = apply_uv_transform(uv, u.emissive_uv_m, u.emissive_uv_t);
+        let t = textureSample(emissive_map, material_sampler, uv_t).rgb;
         return u.emission.rgb * t;
     }
     return u.emission.rgb;
@@ -707,7 +756,27 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let metallic = mr.y;
 
     let n_dot_v = max(dot(N, V), 0.001);
-    let F0 = mix(vec3<f32>(0.04), albedo.rgb, metallic);
+    // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior →
+    // F0 scale. Verified against the Khronos KHR_materials_specular
+    // extension README (not the design doc's own draft formula, which
+    // omitted specularFactor and carried a spurious 0.16 constant — see
+    // the G-P4 execution report):
+    //   dielectric_f0 = min(((ior-1)/(ior+1))^2 * specularColorFactor, 1.0)
+    //                   * specularFactor
+    // Defaults (ior=1.5, specular_factor=1.0, specular_tint=(1,1,1))
+    // reduce this to exactly (0.04, 0.04, 0.04) — the pre-G-P4 hardcoded
+    // dielectric baseline. v1 scope: F0 only (dielectric_f90 stays 1.0,
+    // i.e. the Schlick term below still assumes a white grazing edge —
+    // KHR_materials_specular also modulates f90 by specular_factor, which
+    // this phase's brief scoped OUT ("map to F0 scale"); a specular_factor
+    // of 0 dims but does not zero the grazing reflection, a known v1
+    // limitation).
+    let ior = u.pbr_metallic_roughness.z;
+    let specular_factor = u.pbr_metallic_roughness.w;
+    let specular_tint = u.pbr_specular_tint.rgb;
+    let dielectric_reflectance = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    let dielectric_f0 = min(dielectric_reflectance * specular_tint, vec3<f32>(1.0)) * specular_factor;
+    let F0 = mix(dielectric_f0, albedo.rgb, metallic);
     let a = roughness * roughness;
     let a2 = a * a;
     let r = roughness + 1.0;
