@@ -260,6 +260,39 @@ def run_hook_main(payload):
     return result["out"]
 
 
+# --- worktree-ring guard (2026-07-15: pool capped at 6 slots; raw
+# `git worktree add` denied in every mode so the ring can't be bypassed) ---
+
+def test_worktree_add_denied_all_modes():
+    for mode in ("default", "auto", "bypassPermissions"):
+        out = run_hook_main({
+            "tool_input": {"command": "git worktree add -b feat/x .claude/worktrees/x HEAD"},
+            "cwd": MAIN_CWD,
+            "permission_mode": mode,
+        })
+        check(f"worktree add ({mode} mode) -> deny", '"deny"' in out and "slot ring" in out, out)
+
+
+def test_worktree_add_in_compound_denied():
+    out = run_hook_main({
+        "tool_input": {"command": "git fetch origin main && git worktree add wt feat/y"},
+        "cwd": MAIN_CWD,
+        "permission_mode": "auto",
+    })
+    check("worktree add inside compound -> deny", '"deny"' in out, out)
+
+
+def test_worktree_read_and_remove_unaffected():
+    for cmd in ("git worktree list", "git worktree prune",
+                "git worktree remove --force .claude/worktrees/slot-0"):
+        out = run_hook_main({
+            "tool_input": {"command": cmd},
+            "cwd": MAIN_CWD,
+            "permission_mode": "default",
+        })
+        check(f"`{cmd}` -> not denied", '"deny"' not in out, out)
+
+
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
 
 
@@ -472,6 +505,10 @@ def main():
     test_compound_landing_merge_verified_in_between_unaffected()
     test_single_landing_merge_not_compound_unaffected()
     test_compound_landing_merge_worktree_unaffected()
+
+    test_worktree_add_denied_all_modes()
+    test_worktree_add_in_compound_denied()
+    test_worktree_read_and_remove_unaffected()
 
     for name in PASS:
         print(f"PASS: {name}")

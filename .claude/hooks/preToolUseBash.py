@@ -731,6 +731,45 @@ def detect_unverified_compound_landing_merge(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Worktree-ring guard (scripts/agent-worktree.py)
+#
+# 2026-07-15: 19 hand-rolled per-task worktrees × 15-60 GB cargo targets
+# filled Peter's disk (455 GB). The pool is now a fixed ring of at most 6
+# slots, and scripts/agent-worktree.py is the ONLY sanctioned way to get a
+# worktree — its acquire path is structurally incapable of exceeding the
+# cap. This guard closes the bypass: any `git worktree add` from an agent
+# is denied, in EVERY permission mode (in auto/bypass modes there is no
+# prompt to catch it otherwise). The script itself runs git as a
+# subprocess, outside this hook's reach, so it is unaffected. `git
+# worktree remove/prune/list` stay allowed — cleanup shrinks the pool.
+# ---------------------------------------------------------------------------
+
+WORKTREE_ADD_REASON = (
+    "`git worktree add` is denied — worktrees come ONLY from the slot ring: "
+    "`python3 scripts/agent-worktree.py acquire <task-label> <branch> "
+    "[--tip REF]`. The ring caps the pool at 6 slots because hand-rolled "
+    "worktrees filled the disk once (455 GB, 2026-07-15). If acquire says "
+    "POOL FULL, surface that to Peter instead of working around it."
+)
+
+
+def worktree_add_guard(cmd, cwd):
+    """Return a deny reason if any segment is a `git worktree add`, else
+    None. Never raises — any failure yields None (normal flow)."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            _target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if sub == "worktree" and rest and rest[0] == "add":
+                return WORKTREE_ADD_REASON
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Warning-only lints (never deny, never ask) — additionalContext on allow
 #
 # TICKETS.md T4/T5/T8: three independent shell-shape mistakes that have each
@@ -941,6 +980,14 @@ def main() -> int:
     landing_ask, landing_context = landing_protocol_guard(cmd, cwd)
     if landing_ask:
         json.dump(build_ask(landing_ask), sys.stdout)
+        return 0
+
+    # 0d. Worktree-ring guard: `git worktree add` is denied in every mode —
+    # the slot ring (scripts/agent-worktree.py) is the only way to get a
+    # worktree. Runs before the mode skip and the pre-approved allow.
+    worktree_deny = worktree_add_guard(cmd, cwd)
+    if worktree_deny:
+        json.dump(build_deny([worktree_deny]), sys.stdout)
         return 0
 
     # 0c. Unverified compound landing-merge guard (T6): denies a compound

@@ -144,22 +144,24 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   --is-ancestor <tip> origin/main` confirms its commits are on main.
 - `git branch -f main <tip>` and force-pushes to main are anti-patterns now
   (§1b asks before either).
-- A session doing sustained code work still gets a LONG-LIVED worktree at
-  `.claude/worktrees/<branch>`, created off a verified tip (the playbook's
-  step-0 base-verification guard) with gitignored fixtures copied in. It
-  persists across sessions until the branch merges; per-session worktrees pay
-  the cargo cold-build tax and are not the pattern. Acquire through
-  `scripts/agent-worktree.py` (§2c) — it REUSES an idle warm worktree before
-  it ever creates a cold one.
+- A session doing sustained code work still gets a LONG-LIVED worktree slot
+  for the workstream, acquired off a verified tip (the playbook's step-0
+  base-verification guard) with gitignored fixtures copied in; per-session
+  worktrees pay the cargo cold-build tax and are not the pattern. Acquire
+  through `scripts/agent-worktree.py` (§2c) — the ONLY sanctioned source
+  (raw `git worktree add` is hook-denied since the 2026-07-15 455 GB
+  incident). It reuses an idle warm slot before it ever creates a cold one.
 - The main checkout is the only place merges to main happen. Sessions in
   worktrees never run bare git/cargo (always `-C` / `--manifest-path`,
   absolute, quoted — the repo path contains a space).
 - **Workers never land.** Only the orchestrating session (or Peter) merges
   into main.
 - **Never use the Agent tool's built-in `isolation: "worktree"` for repo
-  work** — it bases the worktree off the default branch, not your tip.
-  Manual `git worktree add` off the verified tip only, with the step-0
-  base-verification guard in the brief.
+  work** — it bases the worktree off the default branch, not your tip, and
+  bypasses the slot ring's cap. Hook-denied
+  (`agent-worktree-isolation-guard.py`), as is raw `git worktree add`
+  (`preToolUseBash.py`). Worktrees come from `scripts/agent-worktree.py
+  acquire` only, with the step-0 base-verification guard in the brief.
 
 ## §2c. Build-speed rules (added 2026-07-10 — orchestration wall-clock pass)
 
@@ -167,15 +169,22 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
 2026-07-03); by 2026-07-10 ten live worktrees carried 5–41 GB of cold-built
 `target/` each. Three rules:
 
-1. **Reuse warm worktrees.** `python3 scripts/agent-worktree.py acquire
-   <name> <branch> [--tip REF] [--owner TEXT]` re-points the warmest idle
-   worktree with `checkout -B` and only creates a fresh (cold) one when the
-   pool is empty. Idle = clean status + HEAD is-ancestor of origin/main +
-   lease absent or stale (8 h). The script writes a lease, copies missing
-   `tests/fixtures` files from the main checkout (the gitignored-fixture
-   hazard), and prints the step-0 base-verification line — the caller still
-   confirms the tip. `list` shows the pool; `release <name>` drops the lease
-   at session end. A WORKTREE_HANDOFF.md or any dirt marks a worktree busy.
+1. **Reuse warm slots — the pool is a capped ring (reworked 2026-07-15
+   after 19 per-task worktrees × 15–60 GB targets = 455 GB filled the
+   disk).** `python3 scripts/agent-worktree.py acquire <task-label> <branch>
+   [--tip REF] [--owner TEXT]` re-points the warmest idle slot with
+   `checkout -B`; slots are anonymous (`slot-0`…`slot-5`, task label lives
+   in the lease), capped at 6 with no override — all-busy is a loud `POOL
+   FULL` error to surface to Peter, never to work around. A slot's
+   `target/` past 25 GB is wiped at acquire. Idle = clean status + HEAD
+   is-ancestor of origin/main + lease absent or stale (8 h). The script
+   writes a lease, copies missing GITIGNORED `tests/fixtures` files from
+   the main checkout (non-ignored files would mark the slot permanently
+   dirty — the exact bug that grew the old pool), and prints the step-0
+   base-verification line — the caller still confirms the tip. `list`
+   shows the ring; `release <slot-name>` (as printed by acquire) drops the
+   lease at session end. A WORKTREE_HANDOFF.md or any dirt marks a slot
+   busy. Raw `git worktree add` is hook-denied.
 2. **sccache wraps rustc globally** (`.cargo/config.toml`). External deps are
    compiled non-incrementally by cargo, so they cache across worktrees and
    survive wiped targets; workspace crates stay incremental and pass through.
