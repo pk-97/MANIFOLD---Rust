@@ -151,7 +151,22 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   `emitter_width` — strip math is executor-free within those params, gated by
   F-P3's numeric readback (luminance histogram + strip count), never a look.
   (The on-screen background was never at issue — the envmap is lighting-only and
-  is not drawn; the visible void is the clear colour, pure black regardless.) This
+  is not drawn; the visible void is the clear colour, pure black regardless.)
+  **Sun coherence (added 2026-07-15, Peter: "Can we place these fake strips and
+  lights in the same positions as the real scene lights so it looks coherent and
+  'makes sense'?"):** `softbox` mode additionally paints ONE bright sun disc at
+  the direction given by new params `sun_x/sun_y/sun_z` + `sun_disc_intensity` /
+  `sun_disc_size` (all defaulted to 0 = no disc; direction params bind 1:1 —
+  no conversion math in a binding). The importer binds the SAME card macros that
+  drive the sun `node.light`'s direction into these params, so one gesture moves
+  the sun's illumination, its shadows, AND its reflection together. Sun only:
+  a sun is directional (infinitely far), which an envmap represents exactly;
+  point lights are near-field (their reflections need parallax an envmap cannot
+  express) and keep their correct specular-dot reflections — do NOT paint point
+  lights into the envmap. *Consequences, stated honestly:* while the sun
+  direction is being performed, the envmap re-bakes and (post F-P1) re-prefilters
+  every frame it changes — the fixed cost F-P1's gate measures, paid only during
+  the gesture. This
   is Peter's call, quoted: "I prefer the black void look rather than the pure white
   studio … the pure black void AND proper lighting". Background stays the clear
   colour (the envmap is lighting-only — audit table); chrome reflects light streaks,
@@ -282,14 +297,21 @@ instead of reading it (`feedback_synthesis_drift`).
   readback: every texel outside the strips and their falloff bands is EXACTLY
   0.0 (D7 pure-black base — assert max luminance over the non-strip region == 0,
   not merely small), emitter rows above 1.0 (HDR),
-  emitter_count changes the strip count (counted, not eyeballed). Demo: none —
+  emitter_count changes the strip count (counted, not eyeballed); sun disc — with
+  `sun_x/y/z` set and `sun_disc_intensity` > 0, the brightest texel sits within a
+  committed pixel radius of the direction's computed equirect coordinates
+  (numeric position assert), and `sun_disc_intensity = 0` is byte-identical to
+  no-disc. Demo: none —
   Peter's check is in-app (chrome sphere under softbox, named in the landing
   click-script). Test scope: focused.
 - **F-P4 — Loader + importer + defaults.** D5 parse fields + Cargo features, D6
   colour spaces, importer wiring of all four map ports, report lines
   (clearcoat/transmission/BLEND-as-Mask — the transmission and BLEND lines are
   the stopgap F-P5 replaces), import defaults flip to
-  `softbox @ 1.0` (D7), Environment card default 1.0. Read-back: D5–D7;
+  `softbox @ 1.0` (D7), Environment card default 1.0, and the D7 sun-coherence
+  bindings — the card's sun-direction macros bind to BOTH the sun `node.light`
+  AND the envmap's `sun_x/y/z` (unit test asserts each sun macro carries both
+  binding targets). Read-back: D5–D7;
   `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/§8. Gate
   (positive): unit tests — a synthetic summary with all texture kinds wires all
   ports with correct colour spaces; **held-out fixture** — Khronos DamagedHelmet
