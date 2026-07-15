@@ -3,7 +3,7 @@
 //! Each generator submits a `GeneratorMetadata` from its implementation file.
 //! The definition and type registries collect these at startup.
 
-use crate::effects::ParamDef;
+use crate::effects::RegistryParamDef;
 use crate::preset_type_id::PresetTypeId;
 use crate::preset_type_registry::PresetTypeRegistration;
 use crate::preset_def::{PresetDef, PresetKind};
@@ -158,44 +158,38 @@ impl ParamSpec {
         }
     }
 
-    /// Convert to the existing `ParamDef` type (allocates Strings).
-    pub fn to_param_def(&self) -> ParamDef {
-        ParamDef {
-            id: self.id.to_string(),
-            name: self.name.to_string(),
-            min: self.min,
-            max: self.max,
-            default_value: self.default_value,
-            whole_numbers: self.whole_numbers,
-            is_toggle: self.is_toggle,
-            is_trigger: self.is_trigger,
-            value_labels: if self.value_labels.is_empty() {
-                None
-            } else {
-                Some(self.value_labels.iter().map(|s| s.to_string()).collect())
+    /// Convert to the unified [`RegistryParamDef`] (allocates Strings).
+    pub fn to_param_def(&self) -> RegistryParamDef {
+        RegistryParamDef {
+            spec: crate::effect_graph_def::ParamSpecDef {
+                id: self.id.to_string(),
+                name: self.name.to_string(),
+                min: self.min,
+                max: self.max,
+                default_value: self.default_value,
+                whole_numbers: self.whole_numbers,
+                is_toggle: self.is_toggle,
+                is_trigger: self.is_trigger,
+                value_labels: self.value_labels.iter().map(|s| s.to_string()).collect(),
+                format_string: self.format_string.map(|s| s.to_string()),
+                osc_suffix: self.osc_suffix.to_string(),
+                // Inventory-submitted generator params ship identity slider
+                // response; preset-authored curve/invert live in the disk JSON.
+                curve: crate::macro_bank::MacroCurve::Linear,
+                invert: false,
+                // §8 D6: this compile-time inventory struct pre-dates the
+                // trigger-gate flag and carries no field for it — every
+                // trigger-gate card ships via the JSON preset path
+                // (`ParamSpecDef`/`preset_metadata_to_def`), not this one.
+                is_trigger_gate: false,
+                // Same story for D5 sections and the is_angle/wraps mirrors: an
+                // inventory-submitted (hand-written Rust) generator has none —
+                // only JSON-authored/glTF-imported presets do, via
+                // `preset_metadata_to_def`.
+                is_angle: false,
+                wraps: false,
+                section: None,
             },
-            format_string: self.format_string.map(|s| s.to_string()),
-            osc_suffix: if self.osc_suffix.is_empty() {
-                None
-            } else {
-                Some(self.osc_suffix.to_string())
-            },
-            // Inventory-submitted generator params ship identity slider
-            // response; preset-authored curve/invert live in the disk JSON.
-            curve: crate::macro_bank::MacroCurve::Linear,
-            invert: false,
-            // §8 D6: this compile-time inventory struct pre-dates the
-            // trigger-gate flag and carries no field for it — every
-            // trigger-gate card ships via the JSON preset path
-            // (`ParamSpecDef`/`preset_metadata_to_def`), not this one.
-            is_trigger_gate: false,
-            // Same story for D5 sections and the is_angle/wraps mirrors: an
-            // inventory-submitted (hand-written Rust) generator has none —
-            // only JSON-authored/glTF-imported presets do, via
-            // `preset_metadata_to_def`.
-            is_angle: false,
-            wraps: false,
-            section: None,
             // Same story for range contracts: this compile-time inventory
             // struct describes an outer card param, which never carries a
             // contract (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4).
@@ -229,7 +223,7 @@ inventory::collect!(GeneratorAliasMetadata);
 impl GeneratorMetadata {
     /// Convert to the unified `PresetDef` (kind = `Generator`).
     pub fn to_generator_def(&self) -> PresetDef {
-        let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
+        let param_defs: Vec<RegistryParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         PresetDef {
             kind: PresetKind::Generator,
             display_name: self.display_name.to_string(),

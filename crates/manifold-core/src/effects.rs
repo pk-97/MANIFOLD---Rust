@@ -22,111 +22,34 @@ pub use manifold_foundation::ParamId;
 
 // ─── Param Definition ───
 
-/// Metadata for a single parameter slot.
-/// Port of Unity ParamDef.cs.
+/// Registry-side param descriptor: the manifest's [`crate::effect_graph_def::ParamSpecDef`]
+/// (the ONE slider-surface shape, shared with the graph metadata now that
+/// `ParamDef` no longer exists as a separate near-twin) plus the one fact a
+/// registry entry genuinely owns that a card manifest must not carry — the
+/// range contract (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4: the card manifest
+/// must stay unable to carry a contract). Not serialized: `PresetDef` and its
+/// `param_defs` are built in-memory at registry-construction time from
+/// `inventory::submit!` sources or JSON-loaded `ParamSpecDef`s, never
+/// deserialized as this shape.
 ///
-/// `id` is the **stable mapping key** referenced by every external
-/// addressing site (OSC, Ableton, modulation drivers, project file
-/// storage). Once shipped, `id` is forever — renaming an `id` is a
-/// breaking change for every saved project.
-///
-/// `name` is the display label on the slider. Free to edit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ParamDef {
-    /// Stable mapping key. `snake_case` convention. Empty for legacy
-    /// `ParamDef` instances loaded from V1.0.0 project files; the
-    /// post-load alignment pass fills it in from the registry.
-    #[serde(default)]
-    pub id: String,
-    pub name: String,
-    pub min: f32,
-    pub max: f32,
-    #[serde(default)]
-    pub default_value: f32,
-    #[serde(default)]
-    pub whole_numbers: bool,
-    #[serde(default)]
-    pub is_toggle: bool,
-    #[serde(default)]
-    pub is_trigger: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_labels: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format_string: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub osc_suffix: Option<String>,
-    /// Slider response curve applied to the normalized position before
-    /// scaling back to `[min, max]`. Part of the preset-authored slider
-    /// surface (Phase 2 of `docs/PRESET_INSTANCE_COLLAPSE_PLAN.md`): a
-    /// preset can ship a non-Linear knob feel. Defaults to `Linear` and is
-    /// skipped on serialize when Linear so existing presets stay
-    /// byte-identical.
-    #[serde(default, skip_serializing_if = "curve_is_linear")]
-    pub curve: crate::macro_bank::MacroCurve,
-    /// Slider invert: card-left drives the param max. Defaults to `false`
-    /// and is skipped on serialize when false.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub invert: bool,
-    /// §8 D6: identifies the outer-card gate for a generator's/effect's audio
-    /// trigger response (the `clip_trigger` toggle on the 11 trigger-
-    /// responsive generators; the Strobe `clip_trigger` card, P3). Mirrors
-    /// [`crate::effect_graph_def::ParamSpecDef::is_trigger_gate`] — carried
-    /// here too (not just the graph-metadata twin) because the registry
-    /// `param_defs` is what a STOCK, never-forked instance's card reads
-    /// (`PresetInstance.graph` is `None` until the user edits the graph), and
-    /// every trigger-gate card ships on a stock instance. `false` by default,
-    /// skipped on serialize when false so every existing preset stays
-    /// byte-identical.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_trigger_gate: bool,
-    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
-    /// D5) — mirrors [`crate::effect_graph_def::ParamSpecDef::section`] here
-    /// too, not just the graph-metadata twin, for the SAME reason
-    /// `is_trigger_gate` above does: a STOCK instance whose graph is `None`
-    /// (never forked) reads its card descriptors from here. This is load-
-    /// bearing for glTF-imported generators specifically — D9/BUG-016
-    /// deliberately makes them TRACK their embedded preset (`graph: None`)
-    /// rather than carry an inline override, so `gather_known_params`'s only
-    /// descriptor source for them IS this registry path; without this field,
-    /// every section the importer seeds is silently dropped the moment
-    /// `param_spec_def_to_param_def` converts the catalog JSON into the
-    /// registry. `false`/`None` by default, skipped on serialize (registry
-    /// entries aren't part of a saved project anyway, but the field must
-    /// still round-trip through the JSON catalog file itself).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub section: Option<String>,
-    /// Angle display flag — mirrors [`crate::effect_graph_def::ParamSpecDef::is_angle`]
-    /// here for the SAME reason `is_trigger_gate`/`section` above do: a
-    /// glTF-imported generator TRACKS its embedded preset (`graph: None`,
-    /// D9/BUG-016), so this registry path is its only descriptor source.
-    /// Without the mirror, `to_spec`'s hardcoded `false` stripped the flag
-    /// and the import card's Camera Orbit/Tilt sliders displayed raw
-    /// radians instead of degrees (Peter, 2026-07-15).
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_angle: bool,
-    /// Wrap-at-range-edges flag — mirrors
-    /// [`crate::effect_graph_def::ParamSpecDef::wraps`]; same carry-through
-    /// rationale as `is_angle` above (the modulation/automation write
-    /// boundary reads it via the manifest spec, so a stock imported
-    /// generator's 360° camera sliders only wrap if it survives the
-    /// registry round-trip).
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub wraps: bool,
+/// Collapses the former `effects::ParamDef` / `effect_graph_def::ParamSpecDef`
+/// twin (and the three hand-written converters between them) into one
+/// descriptor that exists once — see `handoff_param_descriptor_unification_brief`.
+#[derive(Debug, Clone, Default)]
+pub struct RegistryParamDef {
+    pub spec: crate::effect_graph_def::ParamSpecDef,
     /// A real physical/mathematical boundary this param's inner value must
-    /// not cross — as opposed to `min`/`max` above, which are display hints
-    /// (default slider travel) a card, text entry, or modulation is free to
-    /// exceed. `None` for the overwhelming majority of params (PARAM_RANGE_CONTRACT_DESIGN.md
-    /// D6: remove-by-default — no kernel/shader proof, no contract). Additive
-    /// serde field: every saved project and bundled preset loads byte-identical
-    /// with zero migration. See [`RangeContract`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// not cross — as opposed to `spec.min`/`spec.max`, which are display
+    /// hints (default slider travel) a card, text entry, or modulation is
+    /// free to exceed. `None` for the overwhelming majority of params
+    /// (PARAM_RANGE_CONTRACT_DESIGN.md D6: remove-by-default — no
+    /// kernel/shader proof, no contract). See [`RangeContract`].
     pub contract: Option<RangeContract>,
 }
 
 /// A named, real boundary on a param's inner value — the ONLY thing card
 /// range validation (`node_graph::validate` lint (h)) enforces as an error.
-/// Everything else (`ParamDef::min`/`max`) is a display hint that never
+/// Everything else (`RegistryParamDef::spec.min`/`max`) is a display hint that never
 /// restricts (Peter, `docs/PARAM_RANGE_CONTRACT_DESIGN.md`: *"Inner nodes
 /// that don't have a real physical range or boundary shouldn't have a
 /// boundary — that's what the card mappings and ranges are for."*).
@@ -169,7 +92,7 @@ pub enum RangeReason {
     NormalizedDomain,
 }
 
-/// serde `skip_serializing_if` for [`ParamDef::curve`] / [`ParamSpecDef::curve`].
+/// serde `skip_serializing_if` for [`crate::effect_graph_def::ParamSpecDef::curve`].
 pub(crate) fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
     matches!(c, crate::macro_bank::MacroCurve::Linear)
 }
@@ -177,102 +100,6 @@ pub(crate) fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
 /// serde `skip_serializing_if` for a defaulted `false` bool field.
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
-}
-
-impl Default for ParamDef {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            name: String::new(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: None,
-            format_string: None,
-            osc_suffix: None,
-            curve: crate::macro_bank::MacroCurve::Linear,
-            invert: false,
-            is_trigger_gate: false,
-            section: None,
-            is_angle: false,
-            wraps: false,
-            contract: None,
-        }
-    }
-}
-
-impl ParamDef {
-    /// View this registry `ParamDef` as a [`crate::effect_graph_def::ParamSpecDef`]
-    /// — the manifest's descriptor type. Used to seed a bundled
-    /// [`crate::params::Param`] from the registry template at instantiation
-    /// (PARAM_STORAGE_DESIGN.md D2). The two structs carry the same slider
-    /// surface; only the optional-vs-empty representations of
-    /// `value_labels`/`osc_suffix` differ.
-    pub fn to_spec(&self) -> crate::effect_graph_def::ParamSpecDef {
-        crate::effect_graph_def::ParamSpecDef {
-            id: self.id.clone(),
-            name: self.name.clone(),
-            min: self.min,
-            max: self.max,
-            default_value: self.default_value,
-            whole_numbers: self.whole_numbers,
-            is_toggle: self.is_toggle,
-            is_trigger: self.is_trigger,
-            value_labels: self.value_labels.clone().unwrap_or_default(),
-            format_string: self.format_string.clone(),
-            osc_suffix: self.osc_suffix.clone().unwrap_or_default(),
-            curve: self.curve,
-            invert: self.invert,
-            // Carried through since 2026-07-15 (same load-bearing rationale
-            // as `section` below): a glTF-imported generator's angle sliders
-            // read the registry, and the old hardcoded `false` here showed
-            // radians on the import card.
-            is_angle: self.is_angle,
-            is_trigger_gate: self.is_trigger_gate,
-            wraps: self.wraps,
-            // Carries through now (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
-            // D5, load-bearing fix): a glTF-imported generator TRACKS its
-            // embedded preset (`graph: None`, D9/BUG-016), so this registry
-            // path is its ONLY descriptor source — without this, the
-            // importer's per-object sections would silently vanish the
-            // moment `param_spec_def_to_param_def` round-tripped them
-            // through the catalog.
-            section: self.section.clone(),
-        }
-    }
-}
-
-/// Inverse of [`ParamDef::to_spec`]: render a manifest descriptor back as a
-/// registry-shaped [`ParamDef`] for the [`ParamSource::get_param_def`] view,
-/// which several editor/inspector consumers still take by value.
-pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> ParamDef {
-    ParamDef {
-        id: s.id.clone(),
-        name: s.name.clone(),
-        min: s.min,
-        max: s.max,
-        default_value: s.default_value,
-        whole_numbers: s.whole_numbers,
-        is_toggle: s.is_toggle,
-        is_trigger: s.is_trigger,
-        value_labels: (!s.value_labels.is_empty()).then(|| s.value_labels.clone()),
-        format_string: s.format_string.clone(),
-        osc_suffix: (!s.osc_suffix.is_empty()).then(|| s.osc_suffix.clone()),
-        curve: s.curve,
-        invert: s.invert,
-        is_trigger_gate: s.is_trigger_gate,
-        section: s.section.clone(),
-        is_angle: s.is_angle,
-        wraps: s.wraps,
-        // `ParamSpecDef` (the card manifest) deliberately carries no
-        // contract — contracts are an inner-node fact the card can't own
-        // (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4); this view synthesizes a
-        // registry-shaped `ParamDef` from card data, so it has none either.
-        contract: None,
-    }
 }
 
 // ─── Traits ───
@@ -296,7 +123,7 @@ pub trait EffectContainer {
 pub trait ParamSource {
     fn display_name(&self) -> &str;
     fn param_count(&self) -> usize;
-    fn get_param_def(&self, id: &str) -> ParamDef;
+    fn get_param_def(&self, id: &str) -> crate::effect_graph_def::ParamSpecDef;
     fn get_param(&self, id: &str) -> f32;
     fn set_param(&mut self, id: &str, value: f32);
     fn get_base_param(&self, id: &str) -> f32;
@@ -995,7 +822,7 @@ fn gather_known_params(
     let mut out = Vec::new();
     if let Some(def) = crate::preset_definition_registry::try_get(effect_type) {
         for pd in def.param_defs.iter() {
-            out.push((pd.to_spec(), ParamOrigin::Bundled));
+            out.push((pd.spec.clone(), ParamOrigin::Bundled));
         }
     }
     if let Some(meta) = meta {
@@ -2737,7 +2564,7 @@ impl PresetInstance {
             let entries = def
                 .param_defs
                 .iter()
-                .map(|pd| crate::params::Param::bundled(pd.to_spec()))
+                .map(|pd| crate::params::Param::bundled(pd.spec.clone()))
                 .collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
@@ -2832,12 +2659,12 @@ impl ParamSource for PresetInstance {
         self.params.len()
     }
 
-    fn get_param_def(&self, id: &str) -> ParamDef {
+    fn get_param_def(&self, id: &str) -> crate::effect_graph_def::ParamSpecDef {
         // The manifest entry's `spec` is the descriptor for every param
         // (bundled + user-added, calibrated in place). Unknown id → default.
         self.params
             .get(id)
-            .map(|p| param_def_from_spec(&p.spec))
+            .map(|p| p.spec.clone())
             .unwrap_or_default()
     }
 
@@ -4796,7 +4623,7 @@ mod tests {
 
     #[test]
     fn get_param_def_synthesizes_user_binding_def() {
-        // ParamSource::get_param_def must return a ParamDef shaped from
+        // ParamSource::get_param_def must return a ParamSpecDef shaped from
         // the user binding for indices past the static count, so UI code
         // (slider rendering, OSC formatting) gets correct min/max/label.
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
