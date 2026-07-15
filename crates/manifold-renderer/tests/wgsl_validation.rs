@@ -47,6 +47,12 @@ const PARTIAL_SHADERS: &[&str] = &[
     // exercised by the bundled-preset execute tests.
     "gaussian_blur_variable_width.wgsl",
     "radial_burst_force_field.wgsl",
+    // IMPORT_FIDELITY_DESIGN.md D2/F-P1: prepend pbr_brdf.wgsl at
+    // pipeline-creation time (Hammersley / GGX importance sample / equirect
+    // direction helpers). Composed validators below.
+    "ibl_prefilter_specular.wgsl",
+    "ibl_irradiance.wgsl",
+    "ibl_brdf_lut.wgsl",
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {
@@ -179,6 +185,48 @@ fn instance_rotation_jitter_composed_validates() {
         include_str!(
             "../src/node_graph/primitives/shaders/instance_rotation_jitter.wgsl"
         ),
+    );
+}
+
+/// Composed-source validators for the split-sum IBL convolution passes
+/// (IMPORT_FIDELITY_DESIGN.md D2/F-P1), which prepend `pbr_brdf.wgsl` at
+/// pipeline-creation time — same "partial + composed validator" idiom as
+/// the noise_common consumers above, just against a different shared file.
+fn validate_composed_with_pbr_brdf(label: &str, main_src: &str) {
+    let brdf = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+    let composed = format!("{brdf}\n{main_src}");
+    let module = naga::front::wgsl::parse_str(&composed)
+        .unwrap_or_else(|e| panic!("{label} composed parse error: {e}"));
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label} composed validation error: {e}"));
+}
+
+#[test]
+fn ibl_prefilter_specular_composed_validates() {
+    validate_composed_with_pbr_brdf(
+        "ibl_prefilter_specular",
+        include_str!("../src/node_graph/primitives/shaders/ibl_prefilter_specular.wgsl"),
+    );
+}
+
+#[test]
+fn ibl_irradiance_composed_validates() {
+    validate_composed_with_pbr_brdf(
+        "ibl_irradiance",
+        include_str!("../src/node_graph/primitives/shaders/ibl_irradiance.wgsl"),
+    );
+}
+
+#[test]
+fn ibl_brdf_lut_composed_validates() {
+    validate_composed_with_pbr_brdf(
+        "ibl_brdf_lut",
+        include_str!("../src/node_graph/primitives/shaders/ibl_brdf_lut.wgsl"),
     );
 }
 

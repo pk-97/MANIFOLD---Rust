@@ -138,6 +138,62 @@ const FRAMES_IN_FLIGHT: usize = 3;
 /// through SPIRV-Cross → MSL — same discipline as the light buffer.
 const CASTER_VEC4_STRIDE: usize = 5;
 
+/// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered specular
+/// chain base resolution + mip count. `PREFILTER_MIP_COUNT` mips span
+/// roughness 0 (mip 0, base resolution) to roughness 1 (the last mip,
+/// 16×8) — a fixed, compile-time-shared constant with
+/// `render_scene.wgsl`'s `PREFILTER_MAX_MIP` (same discipline as
+/// `MAX_SHADOW_CASTING_LIGHTS`/`CASTER_STRIDE` staying in sync across the
+/// Rust/WGSL boundary).
+const PREFILTER_BASE_WIDTH: u32 = 512;
+const PREFILTER_BASE_HEIGHT: u32 = 256;
+const PREFILTER_MIP_COUNT: u32 = 6;
+/// Diffuse irradiance map resolution (D2's committed default).
+const IRRADIANCE_WIDTH: u32 = 32;
+const IRRADIANCE_HEIGHT: u32 = 16;
+/// Split-sum BRDF LUT resolution (D2's committed default).
+const BRDF_LUT_SIZE: u32 = 128;
+
+const _: () = assert!(
+    PREFILTER_BASE_WIDTH >> (PREFILTER_MIP_COUNT - 1) >= 1
+        && PREFILTER_BASE_HEIGHT >> (PREFILTER_MIP_COUNT - 1) >= 1,
+    "PREFILTER_MIP_COUNT must not shrink the chain below 1x1"
+);
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PrefilterUniforms {
+    dst_width: u32,
+    dst_height: u32,
+    src_width: u32,
+    src_height: u32,
+    roughness: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+const _: () = assert!(std::mem::size_of::<PrefilterUniforms>() == 32);
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct IrradianceUniforms {
+    dst_width: u32,
+    dst_height: u32,
+    src_width: u32,
+    src_height: u32,
+}
+const _: () = assert!(std::mem::size_of::<IrradianceUniforms>() == 16);
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LutUniforms {
+    width: u32,
+    height: u32,
+    _pad0: f32,
+    _pad1: f32,
+}
+const _: () = assert!(std::mem::size_of::<LutUniforms>() == 16);
+
 // Per-object AND per-light port names are generated on demand
 // (`mesh_{i}`, `transform_{i}`, `light_{i}`, …) now that `NodePort.name` is
 // `Cow<'static, str>` — no static name tables, no object cap, no light cap.
@@ -345,6 +401,22 @@ pub struct RenderScene {
     shaft_downsample_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     shaft_march_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     shaft_composite_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered
+    /// specular mip chain (`PREFILTER_BASE_WIDTH`×`PREFILTER_BASE_HEIGHT`,
+    /// `PREFILTER_MIP_COUNT` mips) — allocated ONCE (fixed size, never
+    /// resized) and re-convolved every frame `envmap` is wired (see
+    /// `run_ibl_convolution`'s doc comment for why "skip when unchanged"
+    /// isn't implemented this phase).
+    prefiltered_specular: Option<manifold_gpu::GpuTexture>,
+    /// Diffuse irradiance map (`IRRADIANCE_WIDTH`×`IRRADIANCE_HEIGHT`).
+    irradiance_map: Option<manifold_gpu::GpuTexture>,
+    /// Split-sum BRDF LUT (`BRDF_LUT_SIZE`²). Envmap-independent —
+    /// computed ONCE per device, gated by `brdf_lut_built`, never rebuilt.
+    brdf_lut: Option<manifold_gpu::GpuTexture>,
+    brdf_lut_built: bool,
+    ibl_prefilter_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    ibl_irradiance_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    ibl_brdf_lut_pipeline: Option<manifold_gpu::GpuComputePipeline>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -432,6 +504,13 @@ impl RenderScene {
             shaft_downsample_pipeline: None,
             shaft_march_pipeline: None,
             shaft_composite_pipeline: None,
+            prefiltered_specular: None,
+            irradiance_map: None,
+            brdf_lut: None,
+            brdf_lut_built: false,
+            ibl_prefilter_pipeline: None,
+            ibl_irradiance_pipeline: None,
+            ibl_brdf_lut_pipeline: None,
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -855,6 +934,209 @@ impl RenderScene {
                 buf.write(0, bytemuck::bytes_of(&stub));
             }
             self.identity_instance_stub = Some(buf);
+        }
+    }
+
+    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: ensure the three split-sum IBL
+    /// GPU resources exist — the prefiltered specular mip chain, the
+    /// diffuse irradiance map, and the BRDF LUT — plus their three compute
+    /// pipelines. All three are FIXED size (never resized, so this only
+    /// ever allocates once); called every frame like the other ABI-stub
+    /// ensures (`ensure_dummy_texture`, `ensure_shadow_binding_stubs`) so
+    /// `@binding(16..18)` always has something valid bound regardless of
+    /// whether `envmap` is wired or any object is PBR.
+    fn ensure_ibl_resources(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.prefiltered_specular.is_none() {
+            self.prefiltered_specular = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: PREFILTER_BASE_WIDTH,
+                height: PREFILTER_BASE_HEIGHT,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                label: "node.render_scene ibl prefiltered specular",
+                mip_levels: PREFILTER_MIP_COUNT,
+            }));
+        }
+        if self.irradiance_map.is_none() {
+            self.irradiance_map = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: IRRADIANCE_WIDTH,
+                height: IRRADIANCE_HEIGHT,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                label: "node.render_scene ibl irradiance",
+                mip_levels: 1,
+            }));
+        }
+        if self.brdf_lut.is_none() {
+            self.brdf_lut = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: BRDF_LUT_SIZE,
+                height: BRDF_LUT_SIZE,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rg16Float,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::SHADER_WRITE,
+                label: "node.render_scene ibl brdf lut",
+                mip_levels: 1,
+            }));
+        }
+        if self.ibl_prefilter_pipeline.is_none() {
+            self.ibl_prefilter_pipeline = Some(device.create_compute_pipeline(
+                concat!(
+                    include_str!("shaders/pbr_brdf.wgsl"),
+                    include_str!("shaders/ibl_prefilter_specular.wgsl"),
+                ),
+                "cs_main",
+                "node.render_scene ibl prefilter",
+            ));
+        }
+        if self.ibl_irradiance_pipeline.is_none() {
+            self.ibl_irradiance_pipeline = Some(device.create_compute_pipeline(
+                concat!(
+                    include_str!("shaders/pbr_brdf.wgsl"),
+                    include_str!("shaders/ibl_irradiance.wgsl"),
+                ),
+                "cs_main",
+                "node.render_scene ibl irradiance",
+            ));
+        }
+        if self.ibl_brdf_lut_pipeline.is_none() {
+            self.ibl_brdf_lut_pipeline = Some(device.create_compute_pipeline(
+                concat!(
+                    include_str!("shaders/pbr_brdf.wgsl"),
+                    include_str!("shaders/ibl_brdf_lut.wgsl"),
+                ),
+                "cs_main",
+                "node.render_scene ibl brdf lut",
+            ));
+        }
+    }
+
+    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: run the split-sum IBL convolution
+    /// passes. Call ONLY after [`Self::ensure_ibl_resources`].
+    ///
+    /// The BRDF LUT is envmap-independent (view/roughness-only) — built
+    /// EXACTLY ONCE per device, gated by `brdf_lut_built`, a genuine cache
+    /// hit every frame after the first (see the `ibl_brdf_lut_builds_once`
+    /// gpu-proofs test).
+    ///
+    /// The prefiltered specular chain and irradiance map are NOT
+    /// content-cached — they re-convolve every call this function is
+    /// invoked with `envmap = Some(_)`, matching D2's own stated
+    /// consequence ("an animated envmap re-prefilters every frame — a
+    /// fixed, small cost, not a correctness hazard") rather than the
+    /// alternative of skipping on an unchanged (texture identity, size)
+    /// key: `bake_equirect_envmap`'s `run()` mutates the SAME persistent
+    /// output texture in place every frame regardless of whether its
+    /// params changed (confirmed by reading that primitive — no internal
+    /// caching), so a pointer/size-based skip would silently treat every
+    /// animated envmap (including the D7 sun-coherence gesture this design
+    /// exists to support) as "unchanged" and go stale — worse than the
+    /// fixed per-frame cost. See `ESCALATION_FP1.md` for the full
+    /// reasoning and the open question this leaves for a future phase.
+    fn run_ibl_convolution(
+        &mut self,
+        gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+        sampler: &manifold_gpu::GpuSampler,
+        envmap: Option<&manifold_gpu::GpuTexture>,
+    ) {
+        if !self.brdf_lut_built {
+            let lut = self.brdf_lut.as_ref().expect("ensured");
+            let pipeline = self.ibl_brdf_lut_pipeline.as_ref().expect("ensured");
+            let uniforms = LutUniforms {
+                width: BRDF_LUT_SIZE,
+                height: BRDF_LUT_SIZE,
+                _pad0: 0.0,
+                _pad1: 0.0,
+            };
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture { binding: 1, texture: lut },
+                ],
+                [BRDF_LUT_SIZE.div_ceil(16), BRDF_LUT_SIZE.div_ceil(16), 1],
+                "node.render_scene ibl brdf lut",
+            );
+            self.brdf_lut_built = true;
+        }
+
+        let Some(envmap) = envmap else { return };
+        let src_width = envmap.width;
+        let src_height = envmap.height;
+
+        // Irradiance: one dispatch, whole 32x16 texture.
+        {
+            let irradiance = self.irradiance_map.as_ref().expect("ensured");
+            let pipeline = self.ibl_irradiance_pipeline.as_ref().expect("ensured");
+            let uniforms = IrradianceUniforms {
+                dst_width: IRRADIANCE_WIDTH,
+                dst_height: IRRADIANCE_HEIGHT,
+                src_width,
+                src_height,
+            };
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture { binding: 1, texture: envmap },
+                    GpuBinding::Sampler { binding: 2, sampler },
+                    GpuBinding::Texture { binding: 3, texture: irradiance },
+                ],
+                [IRRADIANCE_WIDTH.div_ceil(8), IRRADIANCE_HEIGHT.div_ceil(8), 1],
+                "node.render_scene ibl irradiance",
+            );
+        }
+
+        // Prefiltered specular chain: one dispatch per mip, each writing
+        // into a single-mip VIEW of the chain (`GpuTexture::mip_level_view`
+        // — the hardware `generate_mipmaps` box-filter blit cannot express
+        // GGX importance convolution, so each level is its own compute
+        // pass rather than a derived box-filtered downsample).
+        {
+            let chain = self.prefiltered_specular.as_ref().expect("ensured");
+            let pipeline = self.ibl_prefilter_pipeline.as_ref().expect("ensured");
+            for mip in 0..PREFILTER_MIP_COUNT {
+                let mip_w = (PREFILTER_BASE_WIDTH >> mip).max(1);
+                let mip_h = (PREFILTER_BASE_HEIGHT >> mip).max(1);
+                let roughness = mip as f32 / (PREFILTER_MIP_COUNT - 1) as f32;
+                let view = chain.mip_level_view(mip, mip_w, mip_h);
+                let uniforms = PrefilterUniforms {
+                    dst_width: mip_w,
+                    dst_height: mip_h,
+                    src_width,
+                    src_height,
+                    roughness,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                    _pad2: 0.0,
+                };
+                gpu.native_enc.dispatch_compute(
+                    pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&uniforms),
+                        },
+                        GpuBinding::Texture { binding: 1, texture: envmap },
+                        GpuBinding::Sampler { binding: 2, sampler },
+                        GpuBinding::Texture { binding: 3, texture: &view },
+                    ],
+                    [mip_w.div_ceil(16), mip_h.div_ceil(16), 1],
+                    "node.render_scene ibl prefilter mip",
+                );
+            }
         }
     }
 
@@ -1531,6 +1813,11 @@ impl EffectNode for RenderScene {
             }
             self.ensure_sampler(gpu.device);
             self.ensure_dummy_texture(gpu.device);
+            // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL resources —
+            // always ensured (fixed size, allocated once) so
+            // `@binding(16..18)` always has something valid, regardless of
+            // whether `envmap` is wired this frame.
+            self.ensure_ibl_resources(gpu.device);
             // Identity instance stub (D11) — bound to any object's
             // instances_n when unwired, both in the main pass and every
             // caster's shadow pass below.
@@ -1578,6 +1865,17 @@ impl EffectNode for RenderScene {
                 self.light_buffers[self.light_frame]
                     .write(0, bytemuck::cast_slice(&light_data));
             }
+        }
+
+        // ---- Split-sum IBL convolution (IMPORT_FIDELITY_DESIGN.md
+        // D2/F-P1). Runs before the main pass so the prefiltered/irradiance/
+        // LUT textures are ready to sample; see `run_ibl_convolution`'s doc
+        // comment for the cache-vs-correctness tradeoff on the two
+        // envmap-dependent resources. ----
+        {
+            let gpu = ctx.gpu_encoder();
+            let sampler = self.sampler.as_ref().expect("ensured").clone();
+            self.run_ibl_convolution(gpu, &sampler, envmap_wired);
         }
 
         // ---- Shadow depth pre-passes. One depth-only pass per caster
@@ -1719,7 +2017,10 @@ impl EffectNode for RenderScene {
         // object's set borrows the same ones.
         let light_buffer = &self.light_buffers[self.light_frame];
         let caster_bytes: &[u8] = bytemuck::cast_slice(&caster_table);
-        let binding_sets: Vec<[GpuBinding; 16]> = draws
+        let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
+        let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
+        let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
+        let binding_sets: Vec<[GpuBinding; 19]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -1796,6 +2097,25 @@ impl EffectNode for RenderScene {
                         binding: 15,
                         buffer: draw.instances.unwrap_or(identity_stub),
                         offset: 0,
+                    },
+                    // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL.
+                    // Always bound (same always-bind ABI-stub discipline as
+                    // bindings 4/5/7/10-14 above) — `ensure_ibl_resources`
+                    // guarantees these three exist regardless of whether
+                    // `envmap` is wired this frame; `fs_pbr` only actually
+                    // samples them for PBR materials, which already require
+                    // `envmap` wired (the `requires_envmap` gate above).
+                    GpuBinding::Texture {
+                        binding: 16,
+                        texture: prefiltered_specular,
+                    },
+                    GpuBinding::Texture {
+                        binding: 17,
+                        texture: irradiance_map,
+                    },
+                    GpuBinding::Texture {
+                        binding: 18,
+                        texture: brdf_lut,
                     },
                 ]
             })
@@ -1979,6 +2299,25 @@ mod tests {
         assert!(
             scene.shaft_inscatter.is_none(),
             "off -> no ensure_ call -> the shaft slot stays None"
+        );
+    }
+
+    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1 negative gate: the old flat lod-0
+    /// envmap sample + `ibl_strength = 1.0 - roughness*0.7` heuristic is
+    /// gone, not paralleled — split-sum (prefiltered chain × BRDF LUT +
+    /// cosine irradiance) is the only IBL path left in `fs_pbr`. Plain
+    /// source-text check (no GPU needed) rather than an `rg` shell-out, so
+    /// it runs in the default nextest sweep.
+    #[test]
+    fn ibl_strength_heuristic_is_deleted() {
+        let src = include_str!("shaders/render_scene.wgsl");
+        assert!(
+            !src.contains("ibl_strength"),
+            "ibl_strength heuristic must be fully deleted, not left dead/commented"
+        );
+        assert!(
+            src.contains("prefiltered_specular") && src.contains("irradiance_map") && src.contains("brdf_lut"),
+            "fs_pbr must consume the split-sum IBL bindings"
         );
     }
 

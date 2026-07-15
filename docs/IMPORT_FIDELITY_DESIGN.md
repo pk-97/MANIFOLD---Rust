@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: APPROVED design, not built · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3, (2) F-P2 → F-P4, (3) F-P5.**
+**Status: IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 → F-P4 next, (3) F-P5.**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -223,7 +223,8 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 |---|---|
 | Unwired new ports change nothing: a pre-design scene renders byte-identical | gpu-proof `render_scene_ibl` parity case + bundled 3D preset PNG diff (zero) — the P8 identity-parity pattern |
 | IBL responds to roughness: rough ≠ mirror | gpu-proof numeric case (F-P1 gate) — reflection gradient width ratio, no eyeballing |
-| Prefilter cache invalidates on envmap change | gpu-proof: re-bake with different params → readback changes; same params → cached (no re-convolve, asserted via dispatch counter) |
+| BRDF LUT (envmap-independent) built once per device, never rebuilt | gpu-proof: dispatch-count assert, built exactly once (SHIPPED F-P1, `cddc618f`) |
+| Prefiltered specular chain + diffuse irradiance re-convolve whenever the wired envmap is present, every frame — no stale-content skip | **Corrected 2026-07-15 at F-P1 landing: this row previously said "same params → cached"; that contradicted D2's own consequence prose ("an animated envmap re-prefilters every frame — a fixed, small cost, not a correctness hazard") and was unbuildable besides — no `DataVersion`/generation-counter signal exists on `EffectNodeContext` inputs, and `bake_equirect_envmap` mutates its output texture in place every frame regardless of param change, so a pointer/size-keyed skip would treat the D7 sun-sweep gesture's animated envmap as "unchanged" and go stale (a correctness regression on the design's own showcase gesture). F-P1 built the two resources to re-convolve unconditionally per D2's prose instead; full reasoning in the F-P1 landing report. A generation-counter signal for `EffectNodeContext` is real infrastructure, deferred — see §7 Deferred #6 below.** Enforcement: `prefilter_and_irradiance_cost_is_measured_and_reported` gpu-proof reports the fixed per-frame cost as a number (3.09ms/frame measured 2026-07-15, well under the 10ms re-tune trigger). |
 | Colour space per map type never regresses | unit test on the importer's `color_space` assignments per map kind |
 | No unmapped feature is silently dropped | importer unit test: over-featured fixture → report enumerates clearcoat etc. (transmission until F-P5 lands, then it maps instead) |
 | `mode = gradient` is byte-identical legacy | gpu-proof: bake with explicit `gradient` vs build-of-record readback |
@@ -257,7 +258,7 @@ channel-select mode flags on shared resolve functions (D3) · touching fog/BUG-1
 `Arc<Mutex>` anywhere · synthesizing the uniform block or binding table from memory
 instead of reading it (`feedback_synthesis_drift`).
 
-- **F-P1 — Split-sum IBL in `render_scene`.** Prefiltered chain + irradiance map +
+- **F-P1 — SHIPPED 2026-07-15, `cddc618f`.** Split-sum IBL in `render_scene`. Prefiltered chain + irradiance map +
   BRDF LUT (D2), `fs_pbr` rewritten to consume them, `ibl_strength` heuristic
   deleted. Convolution sample counts are DEFAULTED, not open: 256
   importance-samples per prefiltered-mip texel, 512 per irradiance texel, 1024
@@ -291,7 +292,7 @@ instead of reading it (`feedback_synthesis_drift`).
   Peter's check is in-app (normal-mapped cube vs flat cube, named in the landing
   click-script). Performer gesture: emissive
   material's emission intensity on a fader → glow pulses through bloom.
-- **F-P3 — Softbox bake mode.** D7 params on `node.bake_environment`; `gradient`
+- **F-P3 — SHIPPED 2026-07-15, `9e4b0b7f`+`c0df7921`.** Softbox bake mode. D7 params on `node.bake_environment`; `gradient`
   byte-identity; strip math free within the committed param names. Gate:
   gpu-proof — `gradient` mode byte-identical to build-of-record; `softbox`
   readback: every texel outside the strips and their falloff bands is EXACTLY
@@ -392,3 +393,13 @@ surface + Material enum = infra); F-P3/F-P4 focused per the scope rule.
    quality consequence visibly bites on a hero asset.
 5. **KHR_materials_specular / IOR mapping** — parse features are enabled by F-P4;
    mapping into Material waits for an asset that needs non-default F0.
+6. **Per-input generation-counter signal on `EffectNodeContext`** (found at F-P1
+   landing, 2026-07-15) — a genuine "did this input's producer change its
+   output since I last ran" signal, which would let the prefiltered/irradiance
+   IBL resources skip re-convolution when the wired envmap is truly unchanged
+   frame-to-frame (today they re-convolve unconditionally whenever `envmap` is
+   wired — see the Invariants table row above). Not built here: it's executor
+   infrastructure bigger than one primitive and belongs in its own design.
+   Trigger: the fixed per-frame IBL cost (3.09ms measured) becomes a real
+   budget problem on the live rig, or a second primitive independently wants
+   the same signal.

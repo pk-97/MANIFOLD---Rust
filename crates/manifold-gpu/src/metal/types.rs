@@ -69,6 +69,62 @@ impl GpuTexture {
     pub fn is_shader_readable(&self) -> bool {
         unsafe { self.raw.usage() }.contains(objc2_metal::MTLTextureUsage::ShaderRead)
     }
+
+    /// Whether two handles refer to the SAME underlying Metal texture object
+    /// (identity, not value/size equality) — the `GpuBuffer::ptr_eq` idiom,
+    /// extended to textures. A mip-level view created by
+    /// [`mip_level_view`](Self::mip_level_view) is a DIFFERENT Metal object
+    /// backed by the same storage, so this does NOT consider a texture and
+    /// its own mip view equal.
+    pub fn ptr_eq(&self, other: &GpuTexture) -> bool {
+        (Retained::as_ptr(&self.raw) as *const ()) == (Retained::as_ptr(&other.raw) as *const ())
+    }
+
+    /// Raw pointer identity as a plain integer — a lighter-weight sibling of
+    /// [`ptr_eq`](Self::ptr_eq) for callers that want to cache the identity
+    /// (e.g. "did the wired texture change since last frame") rather than
+    /// compare two live references directly.
+    pub fn identity_key(&self) -> usize {
+        Retained::as_ptr(&self.raw) as *const () as usize
+    }
+
+    /// Create a VIEW of a single mip level of `self`, sharing the same
+    /// underlying storage (no new GPU allocation) but presented to the
+    /// shader as its own complete, single-mip `GpuTexture` of the given
+    /// level's dimensions. Used to bind one destination mip of a
+    /// mip-mapped texture to a compute pass that writes per-level content
+    /// the hardware `GpuEncoder::generate_mipmaps` blit (box filter) cannot
+    /// express — e.g. GGX-importance-convolved specular prefiltering
+    /// (IMPORT_FIDELITY_DESIGN.md D2/F-P1's prefiltered specular chain).
+    ///
+    /// `self` must have been created with `mip_levels > level` and with
+    /// `SHADER_WRITE` usage (the view inherits the parent's usage bits —
+    /// Metal texture views cannot add usage the parent lacks).
+    pub fn mip_level_view(&self, level: u32, mip_width: u32, mip_height: u32) -> GpuTexture {
+        let mtl_format = super::format::to_mtl_pixel_format(self.format);
+        let view = unsafe {
+            self.raw.newTextureViewWithPixelFormat_textureType_levels_slices(
+                mtl_format,
+                objc2_metal::MTLTextureType::Type2D,
+                objc2_foundation::NSRange {
+                    location: level as usize,
+                    length: 1,
+                },
+                objc2_foundation::NSRange {
+                    location: 0,
+                    length: 1,
+                },
+            )
+        }
+        .expect("newTextureViewWithPixelFormat_textureType_levels_slices failed");
+        GpuTexture {
+            raw: view,
+            width: mip_width,
+            height: mip_height,
+            depth: 1,
+            format: self.format,
+        }
+    }
 }
 
 // ─── GpuBuffer ────────────────────────────────────────────────────────
@@ -159,6 +215,12 @@ impl GpuBuffer {
 
 // ─── GpuSampler ───────────────────────────────────────────────────────
 
+/// `Clone` is cheap — a `Retained` clone is one atomic retain on the
+/// underlying `MTLSamplerState`, no GPU allocation (same rationale as
+/// `GpuTexture`'s `Clone` above). Lets a caller extract an owned sampler
+/// handle before a subsequent `&mut self` call that would otherwise
+/// conflict with holding a borrow of the field it came from.
+#[derive(Clone)]
 pub struct GpuSampler {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }

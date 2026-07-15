@@ -168,6 +168,20 @@ struct Instance {
 };
 @group(0) @binding(15) var<storage, read> instances: array<Instance>;
 
+// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Always bound (same
+// always-bind ABI-stub discipline as bindings 4/5/7/10-14 above) —
+// `render_scene.rs::ensure_ibl_resources` guarantees all three exist
+// regardless of whether `envmap` is wired; `fs_pbr` only actually samples
+// them for PBR materials, which already require `envmap` wired.
+// `PREFILTER_MAX_MIP` must stay in sync with the Rust-side
+// `PREFILTER_MIP_COUNT - 1` (render_scene.rs) — same
+// shared-compile-time-constant discipline as `CASTER_STRIDE`/
+// `MAX_SHADOW_CASTING_LIGHTS` above.
+const PREFILTER_MAX_MIP: f32 = 5.0;
+@group(0) @binding(16) var prefiltered_specular: texture_2d<f32>;
+@group(0) @binding(17) var irradiance_map: texture_2d<f32>;
+@group(0) @binding(18) var brdf_lut: texture_2d<f32>;
+
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 // Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
 // forked, not shared, per this file's header convention.
@@ -641,14 +655,38 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
     }
 
+    // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
+    // specular reflection (mip selected by roughness) combined with the
+    // BRDF LUT's scale/bias, plus cosine-convolved diffuse irradiance —
+    // replaces the old single lod-0 envmap sample + roughness-fade
+    // heuristic entirely.
     let R = reflect(-V, N);
-    let azimuth = atan2(R.z, R.x);
-    let elevation = asin(clamp(R.y, -1.0, 1.0));
-    let uv = vec2<f32>(azimuth / (2.0 * PI) + 0.5, elevation / PI + 0.5);
-    let ibl_sample = textureSampleLevel(envmap, envmap_sampler, uv, 0.0).rgb;
-    let ibl_strength = 1.0 - roughness * 0.7;
+    let r_azimuth = atan2(R.z, R.x);
+    let r_elevation = asin(clamp(R.y, -1.0, 1.0));
+    let r_uv = vec2<f32>(r_azimuth / (2.0 * PI) + 0.5, r_elevation / PI + 0.5);
+    let prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, roughness * PREFILTER_MAX_MIP).rgb;
+
+    let n_azimuth = atan2(N.z, N.x);
+    let n_elevation = asin(clamp(N.y, -1.0, 1.0));
+    let n_uv = vec2<f32>(n_azimuth / (2.0 * PI) + 0.5, n_elevation / PI + 0.5);
+    let irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
+
+    let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
+    let specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
+
+    // View-angle Fresnel splits IBL energy between specular and diffuse —
+    // the standard split-sum substitute for the light-dependent N·H term a
+    // single direct light would give, and the only well-defined choice
+    // when light_count can be 0 (same reasoning the deleted roughness-fade
+    // heuristic's neighbouring comment already documented for this split).
     let f_view = F0 + (1.0 - F0) * pow(clamp(1.0 - n_dot_v, 0.0, 1.0), 5.0);
-    let ibl = f_view * ibl_sample * ibl_strength;
+    let kd_ibl = (1.0 - f_view) * (1.0 - metallic);
+    // No per-object occlusion map yet (F-P2) — occlusion defaults to 1.0
+    // (no darkening), matching resolve_* above's "no per-object surface
+    // texture inputs in P1" scope fence.
+    let diffuse_ibl = kd_ibl * albedo.rgb * irradiance;
+
+    let ibl = specular_ibl + diffuse_ibl;
 
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
