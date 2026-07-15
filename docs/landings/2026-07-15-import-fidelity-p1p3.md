@@ -1,4 +1,4 @@
-# IMPORT_FIDELITY F-P1 + F-P3 — landed 2026-07-15 @ (pending merge SHA, filled at push)
+# IMPORT_FIDELITY F-P1 + F-P3 — landed 2026-07-15 @ `234ce6f6` (pushed to origin/main, `c41acc61..234ce6f6`)
 
 **Branch:** `feat/import-fidelity-fp1` (F-P1, `cddc618f`) + `feat/import-fidelity-fp3` (F-P3, `9e4b0b7f` + fix `c0df7921`), merged into `main` as one batch per `.claude/GIT_TREE_DISCIPLINE.md` §2c.
 **Level reached:** L1 (numeric gpu-proofs gates, run by the orchestrator, all green) / target L4 (§10) — L4 is Peter's click-script below; not yet run by him.
