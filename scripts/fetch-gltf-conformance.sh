@@ -29,16 +29,134 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${REPO_ROOT}/tests/fixtures/gltf/khronos"
 mkdir -p "${OUT_DIR}"
 
-# Every asset named in manifest.json's glTF-Binary (.glb) variant, EXCEPT
-# TextureTransformTest — see below.
+# GLB_CONFORMANCE_DESIGN.md G-P7: every asset in the pinned Khronos commit
+# that has a glTF-Binary variant (118 as of the pin below), EXCEPT
+# TextureTransformTest — fetched separately below via its established
+# gltf+sidecar handling (G-P4), since the pin ships it only as a multi-file
+# `glTF` variant. The 30 assets with NO glTF-Binary variant at this pin
+# (FlightHelmet, SciFiHelmet, Sponza, Cube, Triangle, ... — enumerated via
+# the GitHub API tree at fetch-list generation time, G-P7) are NOT fetched;
+# they carry an explicit `xfail:G-P7` manifest entry noting the absence
+# rather than being silently missing (the forbidden third state).
 ASSETS="
-MetalRoughSpheres
-EmissiveStrengthTest
-ClearCoatTest
+ABeautifulGame
 AlphaBlendModeTest
+AnimatedColorsCube
+AnimatedMorphCube
+AnimationPointerUVs
+AnisotropyBarnLamp
+AnisotropyDiscTest
+AnisotropyRotationTest
+AnisotropyStrengthTest
+AntiqueCamera
+AttenuationTest
+Avocado
+BarramundiFish
+BoomBox
+Box
+BoxAnimated
+BoxInterleaved
+BoxTextured
+BoxTexturedNonPowerOfTwo
+BoxVertexColors
+BrainStem
+CarConcept
+CarbonFibre
+CesiumMan
+CesiumMilkTruck
+ChairDamaskPurplegold
+ChronographWatch
+ClearCoatCarPaint
+ClearCoatTest
+ClearcoatWicker
+CommercialRefrigerator
+CompareAlphaCoverage
+CompareAmbientOcclusion
+CompareAnisotropy
+CompareBaseColor
+CompareClearcoat
+CompareDispersion
+CompareEmissiveStrength
+CompareIor
+CompareIridescence
+CompareMetallic
+CompareNormal
+CompareRoughness
+CompareSheen
+CompareSpecular
+CompareTransmission
+CompareVolume
+Corset
+CubeVisibility
+DamagedHelmet
+DiffuseTransmissionPlant
+DiffuseTransmissionTeacup
+DiffuseTransmissionTest
+DirectionalLight
+DispersionTest
+DragonAttenuation
+DragonDispersion
+Duck
+EmissiveStrengthTest
+Fox
+GlamVelvetSofa
+GlassBrokenWindow
+GlassHurricaneCandleHolder
+GlassVaseFlowers
+IORTestGrid
+InterpolationTest
+IridescenceAbalone
+IridescenceLamp
+IridescenceSuzanne
+IridescentDishWithOlives
+Lantern
+LightVisibility
+LightsPunctualLamp
+MaterialsVariantsShoe
+MetalRoughSpheres
+MetalRoughSpheresNoTextures
+MorphPrimitivesTest
+MorphStressTest
+MosquitoInAmber
+MultiUVTest
+NegativeScaleTest
+NodePerformanceTest
 NormalTangentMirrorTest
+NormalTangentTest
+OrientationTest
+PlaysetLightTest
+PointLightIntensityTest
+PotOfCoals
+PotOfCoalsAnimationPointer
+RecursiveSkeletons
+RiggedFigure
+RiggedSimple
+ScatteringSkull
+SheenChair
+SheenTestGrid
+SheenWoodLeatherSofa
+SimpleInstancing
+SpecGlossVsMetalRough
+SpecularSilkPouf
 SpecularTest
+SunglassesKhronos
+TextureCoordinateTest
+TextureEncodingTest
+TextureLinearInterpolationTest
 TextureSettingsTest
+TextureTransformMultiTest
+ToyCar
+TransmissionOrderTest
+TransmissionRoughnessTest
+TransmissionTest
+TransmissionThinwallTestGrid
+USDShaderBallForGltf
+Unicode❤♻Test
+UnlitTest
+VertexColorTest
+VirtualCity
+WaterBottle
+XmpMetadataRoundedCube
 "
 
 fetched=0
