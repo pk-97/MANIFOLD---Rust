@@ -223,9 +223,34 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   `tests/fixtures/gltf/khronos/manifest.json` v1 with exactly these assets:
   `MetalRoughSpheres`, `EmissiveStrengthTest`, `TextureTransformTest`,
   `ClearCoatTest`, `AlphaBlendModeTest`, `NormalTangentMirrorTest`,
-  `SpecularTest`, `TextureSettingsTest` — the first four `expect_pass` where
-  current code already should pass, the rest `xfail:<phase>` tagged to G-P4/G-P5;
-  conformance test module `crates/manifold-renderer/tests/glb_conformance.rs`
+  `SpecularTest`, `TextureSettingsTest`.
+  **Corrected 2026-07-15 during G-P1 execution** (the original bullet here
+  grouped `expect_pass`/`xfail` by list position — "the first four
+  `expect_pass`... the rest `xfail:<phase>`" — which put `TextureTransformTest`
+  and `ClearCoatTest` in the pass bucket and `AlphaBlendModeTest`/
+  `NormalTangentMirrorTest` in the fail bucket, directly contradicting this
+  doc's own G-P4 entry state ("`TextureTransformTest` and `SpecularTest`
+  currently xfail") and G-P5 entry state ("`ClearCoatTest` xfail"), and
+  contradicting D5's own phasing — `KHR_materials_clearcoat`/
+  `KHR_texture_transform`/`specular+ior` are explicitly *not yet mapped*
+  (G-P4/G-P5), while base PBR/alpha-blend/normal-mapping are already shipped.
+  Resolved by running all seven fetchable assets through `render-import` and
+  reading the PNGs — the correct split, by whether a D5-deferred extension
+  gates the asset:
+  `expect_pass` = `MetalRoughSpheres`, `EmissiveStrengthTest`,
+  `AlphaBlendModeTest`, `NormalTangentMirrorTest` (no deferred extension;
+  all four render cleanly, non-degenerate, this session);
+  `xfail:G-P4` = `TextureTransformTest` (also has no `glTF-Binary` variant in
+  the pinned Khronos commit — `Models/TextureTransformTest/glTF` only, JSON +
+  side-car `.bin`/textures; the fetch script skips it and the conformance
+  test treats it as not-yet-fetchable, same as any other missing fixture),
+  `SpecularTest`; `xfail:G-P5` = `ClearCoatTest`. `TextureSettingsTest`
+  renders non-degenerate but exercises per-texture sampler wrap/filter
+  settings that the current importer cannot honor (BUG-164, logged this
+  session: every material map shares one hardcoded REPEAT sampler) — no
+  future phase in this doc currently owns that fix, so it is `xfail:BUG-164`
+  pending a phase assignment.
+  Conformance test module `crates/manifold-renderer/tests/glb_conformance.rs`
   (skip-if-absent, table-driven from the manifest); goldens for the
   `expect_pass` set.
 - **Gate (positive):** `bash scripts/fetch-gltf-conformance.sh && cargo test -p

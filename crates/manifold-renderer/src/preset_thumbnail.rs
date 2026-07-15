@@ -19,7 +19,7 @@ use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{
-    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -47,11 +47,10 @@ pub fn render_preset_thumbnail(
     def: &EffectGraphDef,
     size: u32,
 ) -> Result<Vec<u8>, String> {
-    let rgba = match kind {
-        PresetKind::Generator => render_generator(device, def, size)?,
-        PresetKind::Effect => render_effect(device, def, size)?,
-    };
-    encode_png(&rgba, size, size)
+    match kind {
+        PresetKind::Generator => render_generator(device, def, size),
+        PresetKind::Effect => render_effect(device, def, size),
+    }
 }
 
 /// [`render_preset_thumbnail`] plus writing the result straight to `out_path`
@@ -186,7 +185,12 @@ fn render_generator(
         enc.commit_and_wait_completed();
     }
 
-    Ok(readback_tonemapped_rgba8(device, &target.texture, size, size))
+    Ok(crate::headless_readback::readback_to_srgb_png(
+        device,
+        &target.texture,
+        size,
+        size,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -323,51 +327,12 @@ fn render_effect(
         .backend()
         .texture_2d(output_slot)
         .ok_or_else(|| "output texture missing after execute".to_string())?;
-    Ok(readback_tonemapped_rgba8(device, tex, size, size))
+    Ok(crate::headless_readback::readback_to_srgb_png(device, tex, size, size))
 }
 
 // ---------------------------------------------------------------------------
-// Readback + encode
+// Decode (browser side)
 // ---------------------------------------------------------------------------
-
-/// Read an `Rgba16Float` texture back and Reinhard-tonemap to RGBA8 — same
-/// convention `mesh_snapshot.rs`'s headless PNG dumps use (this crate's
-/// established "linear HDR graph output → a PNG a human can look at" path).
-fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
-    let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
-    let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
-    let mut enc = device.create_encoder("preset-thumb-readback");
-    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
-
-    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-
-    let tonemap = |v: f32| -> u8 {
-        let ldr = (v / (1.0 + v)).clamp(0.0, 1.0);
-        (ldr * 255.0).round() as u8
-    };
-    let mut out = Vec::with_capacity((w * h * 4) as usize);
-    for px in halves.chunks_exact(4) {
-        let r = f16::from_bits(px[0]).to_f32();
-        let g = f16::from_bits(px[1]).to_f32();
-        let b = f16::from_bits(px[2]).to_f32();
-        // Composite over OPAQUE BLACK before saving. Generators leave their
-        // background transparent (alpha 0), and a transparent PNG is shown as
-        // white by image viewers — the "white background" thumbnail bug
-        // (BUG-024). Generators produce STRAIGHT alpha (alpha-standardisation:
-        // producers are not premultiplied), so over black the visible colour
-        // is `rgb * a`; fully-opaque content (effects, a = 1) is unchanged.
-        // The saved thumbnail is always fully opaque.
-        let a = f16::from_bits(px[3]).to_f32().clamp(0.0, 1.0);
-        out.push(tonemap(r * a));
-        out.push(tonemap(g * a));
-        out.push(tonemap(b * a));
-        out.push(255);
-    }
-    out
-}
 
 /// Decode a PNG file at `path` to (width, height, RGBA8 bytes) — the browser-
 /// side of D7: the app decodes a saved thumbnail ONCE (cached by the caller,
@@ -382,18 +347,6 @@ pub fn decode_png_rgba8(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
         .to_rgba8();
     let (w, h) = (img.width(), img.height());
     Ok((w, h, img.into_raw()))
-}
-
-fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
-    let mut bytes: Vec<u8> = Vec::new();
-    {
-        use image::ImageEncoder;
-        let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
-        encoder
-            .write_image(rgba, w, h, image::ExtendedColorType::Rgba8)
-            .map_err(|e| format!("png encode failed: {e}"))?;
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -479,21 +432,4 @@ mod tests {
         assert!(p.ends_with("assets/preset-thumbnails/effects/Bloom.png"));
     }
 
-    #[test]
-    fn png_encode_round_trips_a_known_gradient() {
-        let w = 4u32;
-        let h = 4u32;
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for i in 0..(w * h) as usize {
-            rgba[i * 4] = (i * 10) as u8;
-            rgba[i * 4 + 1] = 20;
-            rgba[i * 4 + 2] = 30;
-            rgba[i * 4 + 3] = 255;
-        }
-        let png = encode_png(&rgba, w, h).expect("encode");
-        let decoded = image::load_from_memory(&png).expect("decode").to_rgba8();
-        assert_eq!(decoded.width(), w);
-        assert_eq!(decoded.height(), h);
-        assert_eq!(decoded.as_raw(), &rgba);
-    }
 }

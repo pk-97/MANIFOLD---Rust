@@ -43,7 +43,14 @@ use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
 use super::gltf_load::GltfImportSummary;
 
-use crate::node_graph::primitives::render_scene::OBJECT_SLIDER_MAX;
+use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
+
+/// How many of the largest (by vertex count) objects get a per-object card
+/// slider (currently just glass's Opacity knob). GLB_CONFORMANCE_DESIGN.md
+/// D4: the graph wires EVERY material 1:1 — this cap is pure UI curation on
+/// top of a fully-imported graph, never a reason to drop geometry. Distinct
+/// from [`OBJECT_SAFETY_MAX`], which bounds the graph itself.
+const CARD_CURATION_MAX: usize = 16;
 
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
@@ -53,17 +60,15 @@ const MODEL_FILE_PARAM_ID: &str = "model_file";
 /// or warn on. Not part of the graph itself.
 #[derive(Debug, Clone)]
 pub struct ImportReport {
-    /// Distinct materials with geometry, as parsed (before the
-    /// [`OBJECT_SLIDER_MAX`] truncation threshold).
+    /// Distinct materials with geometry, as parsed. Import is 1:1
+    /// (GLB_CONFORMANCE_DESIGN.md D4) — always equal to `object_count`.
     pub material_count: usize,
-    /// Objects actually wired into `node.render_scene` — `min(material_count, OBJECT_SLIDER_MAX)`.
+    /// Objects wired into `node.render_scene` — always equal to
+    /// `material_count`; nothing is ever dropped for exceeding a count
+    /// (`assemble_import_graph` errors instead, see [`OBJECT_SAFETY_MAX`]).
     pub object_count: usize,
     /// How many objects got a `node.gltf_texture_source` → `base_color_map_N` wire.
     pub textures_wired: usize,
-    /// Materials dropped because the glb has more than `OBJECT_SLIDER_MAX`
-    /// (the smallest by vertex count, so the most visually significant
-    /// objects survive).
-    pub dropped_over_cap: usize,
     /// Triangle-list vertices belonging to glTF's unassigned default
     /// material — v1 does not import these (mirrors
     /// [`gltf_load::GltfImportSummary::default_material_vertex_count`]).
@@ -334,15 +339,17 @@ fn group_tint(index: usize) -> [f32; 4] {
 }
 
 /// Parse `path` and assemble a generator [`EffectGraphDef`] that renders it
-/// faithfully: one `node.render_scene` object per distinct material
-/// (capped at [`OBJECT_SLIDER_MAX`], largest-by-vertex-count first),
-/// each fed its material-filtered geometry + base-color texture (if any) +
-/// a PBR material, framed by a synthesized orbit camera sized to the glb's
+/// faithfully: one `node.render_scene` object per distinct material — 1:1,
+/// no truncation (GLB_CONFORMANCE_DESIGN.md D4) — each fed its
+/// material-filtered geometry + base-color texture (if any) + a PBR
+/// material, framed by a synthesized orbit camera sized to the glb's
 /// bounding box, lit by one sun light, under a baked IBL envmap (required —
 /// `node.pbr_material` is degenerate without one). Pure function: one CPU
 /// parse via [`gltf_load::gltf_import_summary`], no GPU, no other I/O.
 ///
-/// Errors when the glb has no materials with geometry (nothing to import) —
+/// Errors when the glb has no materials with geometry (nothing to import),
+/// or when it has more than [`OBJECT_SAFETY_MAX`] materials with geometry
+/// (a real GPU/port-list safety bound, D4 — never silently truncated) —
 /// propagated from [`gltf_load::gltf_import_summary`] or raised here.
 pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportReport), String> {
     let summary = gltf_load::gltf_import_summary(path)?;
@@ -375,24 +382,32 @@ fn build_import_graph(
         ));
     }
 
-    // Largest-by-vertex-count first, so a >OBJECT_SLIDER_MAX-material glb
-    // keeps its most visually significant objects when capped, not an
-    // arbitrary prefix.
-    let object_cap = OBJECT_SLIDER_MAX as usize;
-    let mut materials = summary.materials.clone();
-    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
-    let dropped_over_cap = materials.len().saturating_sub(object_cap);
-    materials.truncate(object_cap);
-    let n = materials.len();
-    if dropped_over_cap > 0 {
-        log::warn!(
-            "gltf_import::assemble_import_graph({}): {} materials with geometry, \
-             node.render_scene caps at {object_cap} objects — dropping the \
-             {dropped_over_cap} smallest by vertex count",
+    // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — every material with
+    // geometry gets its own render_scene object, never a truncated prefix.
+    // `OBJECT_SAFETY_MAX` (1024) is a real GPU/port-list safety bound, not a
+    // curation cap: an asset beyond it errors loudly instead of silently
+    // dropping geometry (the AMG GT3's black body, BUG-163, was exactly
+    // this — 14 of 78 materials, including the livery, dropped over the old
+    // 64-object cap).
+    if summary.materials.len() > OBJECT_SAFETY_MAX as usize {
+        return Err(format!(
+            "{}: {} materials with geometry exceeds the {}-object safety bound — \
+             this asset cannot be imported 1:1 without risking a runaway port-list \
+             (raise OBJECT_SAFETY_MAX in render_scene.rs if a real asset legitimately \
+             needs more; never silently truncate)",
             path.display(),
             summary.materials.len(),
-        );
+            OBJECT_SAFETY_MAX,
+        ));
     }
+    // Largest-by-vertex-count first: not a truncation boundary anymore
+    // (every material is wired), but it IS the ordering the card curation
+    // below relies on — the largest CARD_CURATION_MAX objects by vertex
+    // count get per-object sliders, everything after them still gets full
+    // geometry/material/texture wiring, just no card exposure.
+    let mut materials = summary.materials.clone();
+    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
+    let n = materials.len();
     if summary.default_material_vertex_count > 0 {
         log::warn!(
             "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
@@ -685,8 +700,12 @@ fn build_import_graph(
         // ONLY get an Opacity knob (solid → ghost mid-set on the material's
         // alpha) — opaque/mask objects don't expose it, matching the
         // "inline mux option table params" discipline of not over-exposing
-        // every knob to every object.
-        if is_glass {
+        // every knob to every object. GLB_CONFORMANCE_DESIGN.md D4: card
+        // curation is UI-only and caps at CARD_CURATION_MAX — `materials`
+        // is sorted largest-vertex-count-first above, so `k < CARD_CURATION_MAX`
+        // IS "the largest 16"; every object still gets full graph wiring
+        // regardless of `k`, this gate only withholds the card slider.
+        if is_glass && k < CARD_CURATION_MAX {
             let opacity_id = format!("opacity_{k}");
             card_params.push(card_param(&opacity_id, "Opacity", 0.0, 1.0, effective_alpha, false, &group_name));
             card_bindings.push(card_binding(
@@ -1254,7 +1273,6 @@ fn build_import_graph(
         material_count: summary.materials.len(),
         object_count: n,
         textures_wired,
-        dropped_over_cap,
         default_material_vertex_count: summary.default_material_vertex_count,
         camera_synthesized: true,
         report_lines,
@@ -1273,6 +1291,256 @@ mod tests {
     fn azalea_fixture_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb")
+    }
+
+    /// Build a minimal, valid `.glb` with `n` distinct materials, each owning
+    /// exactly one triangle (so every material has geometry and therefore
+    /// counts toward `ImportReport::material_count`) — hand-rolled binary
+    /// container (12-byte header + JSON chunk + BIN chunk, no external
+    /// `.bin`/textures, no `uri` on the buffer so it resolves to the BIN
+    /// chunk per spec §Binary glTF). GLB_CONFORMANCE_DESIGN.md G-P2: proves
+    /// the FULL production parse path (`gltf::import` → `gltf_import_summary`
+    /// → `build_import_graph`) imports every material 1:1, not just the
+    /// graph-assembly half a synthetic [`GltfImportSummary`] would exercise.
+    /// Written to the OS temp dir, not committed — a builder fn, not a
+    /// binary asset (the phase brief's explicit call).
+    fn write_synthetic_multimaterial_glb(n: usize) -> std::path::PathBuf {
+        let mut accessors = Vec::with_capacity(n);
+        let mut buffer_views = Vec::with_capacity(n);
+        let mut materials = Vec::with_capacity(n);
+        let mut primitives = Vec::with_capacity(n);
+        let mut bin = Vec::with_capacity(n * 36);
+
+        for i in 0..n {
+            // One triangle per material, spread along X so no two overlap —
+            // cosmetic, but keeps bbox/normal math non-degenerate.
+            let ox = i as f32 * 2.0;
+            let tri: [[f32; 3]; 3] = [[ox, 0.0, 0.0], [ox + 1.0, 0.0, 0.0], [ox, 1.0, 0.0]];
+            for v in &tri {
+                for c in v {
+                    bin.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+            let byte_offset = i * 36;
+            buffer_views.push(serde_json::json!({
+                "buffer": 0,
+                "byteOffset": byte_offset,
+                "byteLength": 36,
+            }));
+            accessors.push(serde_json::json!({
+                "bufferView": i,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [ox, 0.0, 0.0],
+                "max": [ox + 1.0, 1.0, 0.0],
+            }));
+            materials.push(serde_json::json!({
+                "name": format!("Mat{i}"),
+                "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] },
+            }));
+            // Mode omitted — glTF's default primitive mode is 4 (TRIANGLES).
+            primitives.push(serde_json::json!({
+                "attributes": { "POSITION": i },
+                "material": i,
+            }));
+        }
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": primitives }],
+            "accessors": accessors,
+            "bufferViews": buffer_views,
+            "materials": materials,
+            "buffers": [{ "byteLength": bin.len() }],
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+        // GLB container: header + JSON chunk (space-padded to 4 bytes) + BIN
+        // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
+        // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
+        let mut json_padded = json_bytes;
+        while json_padded.len() % 4 != 0 {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while bin_padded.len() % 4 != 0 {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_{n}mat_{}_{}.glb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+        path
+    }
+
+    /// GLB_CONFORMANCE_DESIGN.md D4 / G-P2's named gate test: a 100-material
+    /// synthetic asset — well past the old (dead) 64-object cap, well under
+    /// `OBJECT_SAFETY_MAX` (1024) — imports every single material 1:1, no
+    /// truncation. Also proves the card-curation split: only the largest
+    /// `CARD_CURATION_MAX` (16) objects would get a per-object slider (none
+    /// of these materials are glass, so no Opacity sliders exist either way
+    /// — the object/wire count is what this test pins).
+    #[test]
+    fn over_cap_asset_imports_one_to_one() {
+        let path = write_synthetic_multimaterial_glb(100);
+        let (def, report) = assemble_import_graph(&path).expect("assemble 100-material synthetic glb");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(report.material_count, 100, "all 100 materials have geometry");
+        assert_eq!(
+            report.object_count, 100,
+            "import is 1:1 — object_count must equal material_count, no truncation (D4)"
+        );
+
+        // Every material got its own render_scene wire — mesh_0..mesh_99 all
+        // present, nothing dropped past the old 64-object boundary.
+        for k in 0..100 {
+            assert!(
+                def.wires.iter().any(|w| w.to_port == format!("mesh_{k}")),
+                "material {k} (past the old 64-object cap) must still wire mesh_{k}"
+            );
+            assert!(
+                def.wires.iter().any(|w| w.to_port == format!("material_{k}")),
+                "material {k} must still wire material_{k}"
+            );
+        }
+        // render_scene's own `objects` param must reflect the true count,
+        // not a clamped one.
+        let render_node = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("assembled graph has a render_scene node");
+        assert_eq!(
+            render_node.params.get("objects"),
+            Some(&int(100)),
+            "render_scene.objects must be the true unclamped count"
+        );
+
+        // Structural gate: the assembled graph — 100 objects, well past the
+        // dead 64-object UI cap — must still compile through the real
+        // registry (catches a bad port/wire before any GPU proof).
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry, None)
+            .expect("100-object import graph must compile through PresetRuntime::from_def");
+    }
+
+    /// D4's other half: a glb whose material count exceeds `OBJECT_SAFETY_MAX`
+    /// (1024) must error loudly at import time — never silently truncate.
+    /// `object_cap_exceeded_glb_errors_loudly_never_truncates` deliberately
+    /// builds only ONE material past the limit (1025) rather than a much
+    /// larger number — the synthetic-glb builder is O(n) JSON, and this test
+    /// only needs to cross the boundary, not stress it.
+    #[test]
+    fn object_cap_exceeded_glb_errors_loudly_never_truncates() {
+        let n = OBJECT_SAFETY_MAX as usize + 1;
+        let path = write_synthetic_multimaterial_glb(n);
+        let result = assemble_import_graph(&path);
+        std::fs::remove_file(&path).ok();
+
+        let err = result.expect_err("a glb past OBJECT_SAFETY_MAX must error, not truncate");
+        assert!(
+            err.contains(&n.to_string()) && err.contains(&OBJECT_SAFETY_MAX.to_string()),
+            "error must name both the actual count and the safety bound, got: {err}"
+        );
+    }
+
+    /// GLB_CONFORMANCE_DESIGN.md D4's card-curation half, plus the standard
+    /// §5 round-trip rule (imports serialize — same pattern as
+    /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`): 20
+    /// glass objects, largest-vertex-count-first — the first `CARD_CURATION_MAX`
+    /// (16) get an Opacity card slider, the remaining 4 don't, but ALL 20
+    /// still get full graph wiring. Every bit of that — object count, the
+    /// curated/uncurated split, and the wiring — must survive a save/reload
+    /// (JSON round trip of `EffectGraphDef`, the actual persisted artifact
+    /// for an imported generator layer).
+    #[test]
+    fn card_curation_caps_at_16_but_wiring_and_round_trip_stay_1_to_1() {
+        let n = 20;
+        let materials: Vec<_> = (0..n)
+            .map(|k| {
+                let mut m = full_material(k as u32, &format!("Glass{k}"), (n - k) as u32 * 100);
+                // All glass, so every object is a curation candidate — makes
+                // the 16/4 split unambiguous.
+                m.was_blend = true;
+                m.transmission_factor = 0.5;
+                m
+            })
+            .collect();
+        let summary = GltfImportSummary {
+            materials,
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
+        let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
+        assert_eq!(report.object_count, 20, "1:1 — every glass object gets full wiring");
+
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        for (def, label) in [(&def, "pre-reload"), (&reloaded, "post-reload")] {
+            let meta = def.preset_metadata.as_ref().unwrap_or_else(|| panic!("{label}: v2 metadata"));
+            let opacity_count = meta.params.iter().filter(|p| p.name == "Opacity").count();
+            assert_eq!(
+                opacity_count, CARD_CURATION_MAX,
+                "{label}: exactly the largest {CARD_CURATION_MAX} objects get an Opacity slider"
+            );
+            for k in 0..CARD_CURATION_MAX {
+                assert!(
+                    meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
+                    "{label}: object {k} (top {CARD_CURATION_MAX}) must have a card slider"
+                );
+            }
+            for k in CARD_CURATION_MAX..n {
+                assert!(
+                    !meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
+                    "{label}: object {k} (past the curation cap) must NOT have a card slider"
+                );
+            }
+
+            // Curation is UI-only — full graph wiring survives for every
+            // object, curated or not (the forbidden-move: "per-object slider
+            // explosion" never becomes "per-object geometry drop").
+            let flat = manifold_core::flatten::flatten_groups(def)
+                .unwrap_or_else(|e| panic!("{label}: flatten failed: {e}"));
+            let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+            for k in 0..n {
+                assert!(
+                    flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == format!("mesh_{k}")),
+                    "{label}: object {k} must still wire mesh_{k} regardless of card curation"
+                );
+            }
+        }
+
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(reloaded, &registry, None)
+            .expect("reloaded 20-object import graph must build through PresetRuntime::from_def");
     }
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
@@ -1297,7 +1565,6 @@ mod tests {
         assert_eq!(report.material_count, 2, "azalea has 2 materials with geometry");
         assert_eq!(report.object_count, 2);
         assert_eq!(report.textures_wired, 2, "both azalea materials carry a base-color texture");
-        assert_eq!(report.dropped_over_cap, 0);
         assert_eq!(report.default_material_vertex_count, 0);
         assert!(report.camera_synthesized);
 
@@ -3128,6 +3395,14 @@ mod tests {
 
         let (def, report) = assemble_import_graph(&path).expect("assemble AMG GT3");
         println!("AMG GT3 import report: {report:?}");
+        // GLB_CONFORMANCE_DESIGN.md G-P2 conformance gate: the AMG GT3 has
+        // 78 materials with geometry; with the cap dead, ALL of them must be
+        // wired (pre-G-P2 this was 64, dropping the livery — BUG-163).
+        assert_eq!(
+            report.object_count, 78,
+            "AMG GT3 import must be 1:1 — 78 materials, 78 objects, no cap-drop (BUG-163)"
+        );
+        assert_eq!(report.material_count, 78);
 
         let (w, h) = (512u32, 512u32);
         let device = crate::test_device();

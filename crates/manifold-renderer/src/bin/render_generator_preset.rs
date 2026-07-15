@@ -17,11 +17,11 @@
 
 use std::path::PathBuf;
 
-use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_gpu::{GpuDevice, GpuTexture};
+use manifold_gpu::GpuDevice;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
@@ -223,66 +223,9 @@ fn main() {
         );
     }
 
-    let rgba = readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height);
-    image::save_buffer(
-        &args.out,
-        &rgba,
-        args.width,
-        args.height,
-        image::ExtendedColorType::Rgba8,
-    )
-    .expect("write PNG");
+    // D2: the ONE shared tonemap/encode (`headless_readback::readback_to_srgb_png`)
+    // — never a local Reinhard implementation here.
+    let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
+    std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
     println!("OK {} ({}x{}, {} frames)", args.out.display(), args.width, args.height, args.frames);
-}
-
-/// Raw Rgba16Float bytes, untouched — no tonemap, no alpha composite. Used
-/// only to detect "did the render actually change between frames" for the
-/// convergence check (BUG-117): comparing the pre-tonemap bytes catches any
-/// change the final PNG would show, and skips the composite math on every
-/// candidate frame, not just the one that's written out.
-fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
-    let bytes_per_row = w * 8;
-    let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
-    let mut enc = device.create_encoder("look-dev-convergence-readback");
-    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
-    let ptr = buf
-        .mapped_ptr()
-        .expect("shared readback buffer must expose mapped pointer");
-    unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
-}
-
-/// Same convention as `preset_thumbnail::readback_tonemapped_rgba8` (private
-/// there): Reinhard tonemap + straight-alpha composite over opaque black.
-fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
-    let bytes_per_row = w * 8;
-    let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
-    let mut enc = device.create_encoder("look-dev-readback");
-    enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
-
-    let ptr = buf
-        .mapped_ptr()
-        .expect("shared readback buffer must expose mapped pointer");
-    let halves: &[u16] =
-        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-
-    let tonemap = |v: f32| -> u8 {
-        let ldr = (v / (1.0 + v)).clamp(0.0, 1.0);
-        (ldr * 255.0).round() as u8
-    };
-    let mut out = Vec::with_capacity((w * h * 4) as usize);
-    for px in halves.chunks_exact(4) {
-        let r = f16::from_bits(px[0]).to_f32();
-        let g = f16::from_bits(px[1]).to_f32();
-        let b = f16::from_bits(px[2]).to_f32();
-        let a = f16::from_bits(px[3]).to_f32().clamp(0.0, 1.0);
-        out.push(tonemap(r * a));
-        out.push(tonemap(g * a));
-        out.push(tonemap(b * a));
-        out.push(255);
-    }
-    out
 }

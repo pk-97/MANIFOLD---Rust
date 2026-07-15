@@ -2164,7 +2164,7 @@ fn scene_build_wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str
 /// `transform_k`) is resolved by the caller from the LIVE `objects` param
 /// value shown on the node face at click time — not re-derived here. This
 /// command can't fall back on `render_scene`'s own `DEFAULT_OBJECTS`/
-/// `OBJECT_SLIDER_MAX` (they're private to `manifold-renderer`, which
+/// `OBJECT_SAFETY_MAX` (they're private to `manifold-renderer`, which
 /// `manifold-editing` does not depend on), so the UI's already-resolved count
 /// is the one source of truth; `execute()` is a deterministic function of it.
 #[derive(Debug)]

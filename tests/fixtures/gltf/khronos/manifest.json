@@ -1,0 +1,54 @@
+[
+  {
+    "asset": "MetalRoughSpheres.glb",
+    "checks": [
+      { "kind": "non_black_fraction_min", "value": 0.05 },
+      { "kind": "golden", "file": "goldens/metal_rough_spheres.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "EmissiveStrengthTest.glb",
+    "checks": [
+      { "kind": "lights_off_nonblack_min", "value": 0.002 },
+      { "kind": "golden", "file": "goldens/emissive_strength.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "AlphaBlendModeTest.glb",
+    "checks": [
+      { "kind": "non_black_fraction_min", "value": 0.05 },
+      { "kind": "golden", "file": "goldens/alpha_blend_mode.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "NormalTangentMirrorTest.glb",
+    "checks": [
+      { "kind": "non_black_fraction_min", "value": 0.05 },
+      { "kind": "golden", "file": "goldens/normal_tangent_mirror.png", "mean_abs_tol": 2.0 }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureTransformTest.glb",
+    "checks": [],
+    "status": "xfail:G-P4"
+  },
+  {
+    "asset": "ClearCoatTest.glb",
+    "checks": [],
+    "status": "xfail:G-P5"
+  },
+  {
+    "asset": "SpecularTest.glb",
+    "checks": [],
+    "status": "xfail:G-P4"
+  },
+  {
+    "asset": "TextureSettingsTest.glb",
+    "checks": [],
+    "status": "xfail:BUG-164"
+  }
+]

@@ -14,6 +14,7 @@ pub mod gpu;
 pub mod gpu_encoder;
 pub mod gpu_readback;
 pub mod gpu_types;
+pub mod headless_readback;
 pub mod layer_bitmap_gpu;
 pub mod layer_compositor;
 pub mod metalfx_upscaler;
