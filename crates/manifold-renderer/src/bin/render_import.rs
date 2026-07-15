@@ -248,10 +248,19 @@ fn main() {
         }
         enc.commit_and_wait_completed();
 
+        // G-P6 gate-review fix: byte-stability alone can't see a decode
+        // that hasn't LANDED yet — a 74 MB 4k EXR decodes for seconds while
+        // `node.hdri_source` emits stable black, and the helmet (sun-lit,
+        // emissive) clears the non-black floor without any environment at
+        // all, so the loop declared convergence on frame 5 with the sky
+        // still missing. `PresetRuntime::io_pending` surfaces the IoBridge
+        // sources' in-flight decodes (`EffectNode::io_pending`); while any
+        // decode is pending, stable frames don't count.
+        let io_pending = runtime.io_pending();
         let raw = readback_raw_halves(&device, &target.texture, args.width, args.height);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         prev_raw = Some(raw);
-        if byte_stable {
+        if byte_stable && !io_pending {
             stable_count += 1;
         } else {
             stable_count = 0;

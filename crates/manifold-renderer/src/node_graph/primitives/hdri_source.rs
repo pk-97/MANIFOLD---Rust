@@ -172,6 +172,18 @@ impl Primitive for HdriSource {
         port == "out"
     }
 
+    fn io_pending(&self) -> bool {
+        // True from the frame `run()` step 2 spawns the decode thread until
+        // step 4 has uploaded the result — a 74 MB 4k EXR decodes for
+        // seconds while this node emits stable black, which a headless
+        // convergence loop would otherwise mistake for a settled frame
+        // (G-P6 gate-review fix). `pending_upload` is drained and uploaded
+        // within the same `run()` call that receives it, so by the time a
+        // caller observes `false` the current frame already contains the
+        // decoded content.
+        self.pending_load.is_some() || self.pending_upload.is_some()
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // 1. Params.
         let path = match ctx.params.get("path") {
@@ -466,6 +478,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// G-P6 gate-review fix: while a background decode is in flight (or
+    /// decoded-but-not-uploaded), the node must report `io_pending` so
+    /// `render-import`'s convergence loop doesn't declare byte-stable
+    /// black "converged" before the EXR ever lands.
+    #[test]
+    fn io_pending_tracks_in_flight_and_unuploaded_decodes() {
+        let mut prim = HdriSource::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(!node.io_pending(), "fresh node has no IO in flight");
+
+        let (_tx, rx) = mpsc::channel();
+        prim.pending_load = Some(rx);
+        let node: &dyn EffectNode = &prim;
+        assert!(node.io_pending(), "in-flight decode must report pending");
+
+        prim.pending_load = None;
+        prim.pending_upload = Some((1, 1, vec![0u8; 8]));
+        let node: &dyn EffectNode = &prim;
+        assert!(node.io_pending(), "decoded-but-not-uploaded must report pending");
+
+        prim.pending_upload = None;
+        let node: &dyn EffectNode = &prim;
+        assert!(!node.io_pending(), "settled node reports no pending IO");
+    }
+
     #[test]
     fn decode_reports_a_loud_error_for_a_missing_file() {
         let err = load_hdri(Path::new("/nonexistent/does-not-exist.exr")).unwrap_err();
@@ -597,3 +634,4 @@ mod gpu_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+

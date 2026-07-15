@@ -499,6 +499,21 @@ fn build_import_graph(
     let hdri_id = fresh_id();
     nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
 
+    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
+    // master (the Environment card fader's original target), but a decoded
+    // EXR arrives at the file's true radiance — a real daytime pure-sky
+    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
+    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
+    // an exposure stage the Environment fader would be dead in HDRI mode
+    // and the performer would have no way to bring a real sky up to stage
+    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
+    // card fader) restores symmetry: env_intensity fans out to BOTH
+    // envmap.intensity and this gain, so one fader is the environment
+    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
+    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
+    let hdri_gain_id = fresh_id();
+    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
+
     let env_select_id = fresh_id();
     let mut env_select_node =
         plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
@@ -1128,11 +1143,12 @@ fn build_import_graph(
     // Camera FOV card slider reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
-    // D6 env_mode switch: envmap(bake) -> in_0 (Softbox), hdri -> in_1
-    // (HDRI), the switch's `out` feeds render_scene same as the direct
-    // wire used to.
+    // D6 env_mode switch: envmap(bake) -> in_0 (Softbox), hdri -> gain ->
+    // in_1 (HDRI, with the exposure stage — see the hdri_gain node above),
+    // the switch's `out` feeds render_scene same as the direct wire used to.
     wires.push(wire(envmap_id, "envmap", env_select_id, "in_0"));
-    wires.push(wire(hdri_id, "out", env_select_id, "in_1"));
+    wires.push(wire(hdri_id, "out", hdri_gain_id, "in"));
+    wires.push(wire(hdri_gain_id, "out", env_select_id, "in_1"));
     wires.push(wire(env_select_id, "out", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
 
@@ -1244,6 +1260,14 @@ fn build_import_graph(
     card_params.push(card_param("env_intensity", "Environment", 0.0, 4.0, 1.0, false, "Environment"));
     card_bindings.push(card_binding(
         "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
+    ));
+    // G-P6: the Environment master also drives the HDRI branch's exposure
+    // gain (see the hdri_gain node above), so the fader is live in BOTH
+    // env_mode positions — softbox scales inside the bake, HDRI scales the
+    // decoded map. Each mode passes through exactly one of the two targets,
+    // so there is no double-scaling. Same fan-out pattern as sun_x/y/z.
+    card_bindings.push(card_binding(
+        "env_intensity", "Environment", 1.0, "hdri_gain", "gain", 1.0,
     ));
     // F-P7 — the softbox dome fill (see the envmap node above). Separate
     // from `env_intensity` (which scales strips + disc + fill together):
@@ -1707,14 +1731,16 @@ mod tests {
         // hidden — defaults still apply, just not on the card).
         assert_eq!(meta.params.len(), 14, "14 framing/material sliders");
         // Every param routes one-to-one except: the shared Ambient, which
-        // fans out to every material's ambient (2 for azalea); and D7's sun
+        // fans out to every material's ambient (2 for azalea); D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 14 + 1 (ambient) + 3 (sun coherence) = 18.
+        // bindings; and G-P6's Environment master, which fans out to the
+        // softbox bake's intensity AND the HDRI branch's exposure gain — 1
+        // extra. 14 + 1 (ambient) + 3 (sun coherence) + 1 (env fan-out) = 19.
         assert_eq!(
             meta.bindings.len(),
-            18,
-            "14 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            19,
+            "14 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets, env_intensity fanned to bake + hdri gain"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
