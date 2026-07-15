@@ -27,8 +27,18 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # glTF/.glb parse for node.gltf_mesh_source (node_graph::gltf_load) — a
 # production import primitive, not test-only. mesh_snapshot's azalea proof
-# test also uses this.
-gltf = "1"
+# test also uses this. IMPORT_FIDELITY_DESIGN.md D5/F-P4: KHR_materials_emissive_strength
+# + KHR_materials_transmission (typed presence/factor — transmission stays
+# report-only until F-P5 maps it) + extensions (raw JSON sniff for
+# KHR_materials_clearcoat, which this crate version has no typed support
+# for) + KHR_lights_punctual (IMPORT_DESIGN P1's light mapping needs it;
+# enabling here costs nothing — no lights/cameras work happens in F-P4).
+gltf = { version = "1", features = [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_transmission",
+    "extensions",
+    "KHR_lights_punctual",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text = "20"

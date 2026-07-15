@@ -73,6 +73,12 @@ pub struct ImportReport {
     /// consumed). Kept as a field so a future embedded-camera path has
     /// somewhere to report `false`.
     pub camera_synthesized: bool,
+    /// D9 doctrine ("every import produces a report") applied to the
+    /// per-material features F-P4 parses but cannot yet map: clearcoat
+    /// (Deferred #1), transmission (report-only until F-P5), and BLEND
+    /// materials downgraded to Mask cutout (the F-P5 stopgap). One line per
+    /// occurrence, naming the material. Never silently dropped.
+    pub report_lines: Vec<String>,
 }
 
 /// Build an [`EffectGraphNode`] with the given identity and every other
@@ -104,6 +110,66 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
         to_node,
         to_port: to_port.to_string(),
     }
+}
+
+/// Wire one glTF map texture (normal / metallic-roughness / occlusion /
+/// emissive) into this object's group: creates a `node.gltf_texture_source`
+/// (or reuses one already created for the same `texture_index` within this
+/// object — D5's ORM-packing case, where the occlusion and
+/// metallic-roughness maps are the same physical image), adds the group's
+/// outward `port_name` interface port, wires the source into it, and adds
+/// the outer-card Model File → source-node `path` string binding (the same
+/// convention `assemble_import_graph`'s base-color wiring above uses).
+/// `cache` is scoped to ONE object (`k`) — keyed by glTF `texture_index` so
+/// a second map wired from the same physical image reuses the first map's
+/// decode rather than doubling the GPU decode + memory cost.
+#[allow(clippy::too_many_arguments)]
+fn wire_map_texture(
+    tex_index: u32,
+    color_space: u32,
+    node_prefix: &str,
+    port_name: &str,
+    k: usize,
+    path_str: &str,
+    fresh_id: &mut impl FnMut() -> u32,
+    group_nodes: &mut Vec<EffectGraphNode>,
+    group_wires: &mut Vec<EffectGraphWire>,
+    outputs: &mut Vec<InterfacePortDef>,
+    string_bindings: &mut Vec<StringBindingDef>,
+    cache: &mut std::collections::HashMap<u32, (u32, String)>,
+    out_id: u32,
+) {
+    let (node_numeric_id, _node_id_str) = if let Some(existing) = cache.get(&tex_index) {
+        existing.clone()
+    } else {
+        let node_id_str = format!("{node_prefix}_{k}");
+        let tid = fresh_id();
+        let mut node = plain_node(tid, &node_id_str, "node.gltf_texture_source", &node_id_str);
+        node.params.insert("texture_index".to_string(), int(tex_index as i32));
+        node.params.insert("color_space".to_string(), enum_val(color_space));
+        // Same v1 default the base-color wiring uses — see its TODO about
+        // threading real per-texture dimensions through the summary.
+        node.params.insert("width".to_string(), int(1024));
+        node.params.insert("height".to_string(), int(1024));
+        group_nodes.push(node);
+
+        string_bindings.push(StringBindingDef {
+            id: MODEL_FILE_PARAM_ID.to_string(),
+            label: "Model File".to_string(),
+            default_value: path_str.to_string(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new(&node_id_str),
+                param: "path".to_string(),
+            },
+        });
+
+        let entry = (tid, node_id_str);
+        cache.insert(tex_index, entry.clone());
+        entry
+    };
+
+    outputs.push(InterfacePortDef { name: port_name.to_string(), port_type: "Texture2D".to_string() });
+    group_wires.push(wire(node_numeric_id, "out", out_id, port_name));
 }
 
 fn float(v: f32) -> SerializedParamValue {
@@ -364,14 +430,18 @@ fn build_import_graph(
     let input_id = fresh_id();
     nodes.push(plain_node(input_id, "input", GENERATOR_INPUT_TYPE_ID, "input"));
 
-    // The IBL envmap is still baked and wired (node.pbr_material needs an
-    // envmap bound), but at intensity 0 the map is fully black — so PBR objects
-    // receive no image-based lighting and are lit purely by the scene's lights,
-    // the hard dramatic "model on black" look. The Environment card below turns
-    // it back up for a softer, reflective studio look.
+    // IMPORT_FIDELITY_DESIGN.md D7 (F-P4) — the default import look is the
+    // "black-void studio": `mode = softbox` (exact-zero black base + bright
+    // emitter strips, never the legacy gradient studio) at `intensity = 1.0`
+    // (the F-P1/F-P3 default already matches `mode`'s own primitive
+    // defaults — emitter_count/intensity/elevation/width — so nothing else
+    // needs stamping here). Superseded the old "intensity 0, lights-only"
+    // default; the Environment card below (`env_intensity`) now starts at
+    // 1.0 to match.
     let envmap_id = fresh_id();
     let mut envmap_node = plain_node(envmap_id, "envmap", "node.bake_environment", "envmap");
-    envmap_node.params.insert("intensity".to_string(), float(0.0));
+    envmap_node.params.insert("intensity".to_string(), float(1.0));
+    envmap_node.params.insert("mode".to_string(), enum_val(1)); // Softbox
     nodes.push(envmap_node);
 
     let camera_id = fresh_id();
@@ -447,6 +517,8 @@ fn build_import_graph(
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
     let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut textures_wired = 0usize;
+    // D9 doctrine — see `ImportReport::report_lines`.
+    let mut report_lines: Vec<String> = Vec::new();
 
     // Group names, deduped so two identically-named glTF materials don't collide
     // in the flattened handle map (the flattener prefixes every inner handle with
@@ -461,6 +533,45 @@ fn build_import_graph(
         // `section` (D5/D9) — the section now carries the per-object
         // identity the old " 2"-style label suffix used to.
         let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
+
+        // D9 — every unmapped feature this material carries is a report
+        // line, never a silent drop. clearcoat/transmission stay
+        // report-only in F-P4 (Deferred #1 / F-P5 respectively); BLEND is
+        // actually downgraded (to Mask cutout, above in gltf_load.rs), so
+        // its line documents what changed, not just what's missing.
+        if m.clearcoat {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_clearcoat present — clearcoat coat layer not imported (report-only, no clear-coat lobe in v1)"
+            ));
+        }
+        if m.transmission {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_transmission present — transmission/glass not imported (report-only until IMPORT_FIDELITY F-P5 lands)"
+            ));
+        }
+        // `render_scene` shipped no per-object normal-scale / occlusion-strength
+        // uniform (F-P2's texture ports carry no multiplier) — a non-neutral
+        // value is genuinely unmapped, not silently dropped, so it's a report
+        // line rather than an applied effect. Neutral (1.0, or no texture
+        // wired) produces no line — the common case stays quiet.
+        if m.normal_texture.is_some() && (m.normal_scale - 1.0).abs() > 1e-4 {
+            report_lines.push(format!(
+                "{group_name}: normalTexture.scale = {:.2} (≠1.0) not applied — render_scene has no per-object normal-scale port yet (report-only)",
+                m.normal_scale
+            ));
+        }
+        if m.occlusion_texture.is_some() && (m.occlusion_strength - 1.0).abs() > 1e-4 {
+            report_lines.push(format!(
+                "{group_name}: occlusionTexture.strength = {:.2} (≠1.0) not applied — render_scene has no per-object occlusion-strength port yet (report-only)",
+                m.occlusion_strength
+            ));
+        }
+        if m.was_blend {
+            report_lines.push(format!(
+                "{group_name}: glTF alphaMode BLEND downgraded to Mask cutout (alpha_cutoff {:.2}) — smooth blending arrives with IMPORT_FIDELITY F-P5",
+                m.alpha_cutoff
+            ));
+        }
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -516,10 +627,17 @@ fn build_import_graph(
         mat_node
             .params
             .insert("emission_b".to_string(), float(m.emissive[2]));
+        // `emission_intensity` is the existing wired multiplier on
+        // `node.pbr_material` — `KHR_materials_emissive_strength` folds
+        // into it directly rather than growing a new param (D5: the
+        // strength extension IS a multiplier on the same quantity this
+        // param already controls). No extension present → factor 1.0, so
+        // an emissive material still needs SOME emissive factor to glow
+        // (matches the pre-F-P4 "any factor channel > 0" gate).
         let emissive_lit = m.emissive.iter().any(|&c| c > 0.0);
         mat_node.params.insert(
             "emission_intensity".to_string(),
-            float(if emissive_lit { 1.0 } else { 0.0 }),
+            float(if emissive_lit { m.emissive_strength } else { 0.0 }),
         );
         mat_node
             .params
@@ -640,6 +758,89 @@ fn build_import_graph(
             textures_wired += 1;
         }
 
+        // D3/D5/D6 — normal / metallic-roughness / occlusion / emissive
+        // maps. `map_tex_cache` is scoped to THIS object and keyed by glTF
+        // `texture_index`: ORM-packed files (occlusion index == mr index,
+        // a common glTF convention) reuse the same `node.gltf_texture_source`
+        // for both ports instead of decoding the same physical image
+        // twice. Colour space per D6: normal/MR/occlusion decode linear
+        // (data maps — the raw bytes ARE the value), emissive decodes sRGB
+        // (a colour map, same as base-colour).
+        let mut map_tex_cache: std::collections::HashMap<u32, (u32, String)> =
+            std::collections::HashMap::new();
+        let has_normal = m.normal_texture.is_some();
+        if let Some(tex_index) = m.normal_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear
+                "normal_tex",
+                "normalMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+            );
+        }
+        let has_mr = m.mr_texture.is_some();
+        if let Some(tex_index) = m.mr_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear
+                "mr_tex",
+                "mrMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+            );
+        }
+        let has_occlusion = m.occlusion_texture.is_some();
+        if let Some(tex_index) = m.occlusion_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear
+                "occlusion_tex",
+                "occlusionMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+            );
+        }
+        let has_emissive = m.emissive_texture.is_some();
+        if let Some(tex_index) = m.emissive_texture {
+            wire_map_texture(
+                tex_index,
+                0, // sRGB — a colour map, same convention as base-colour
+                "emissive_tex",
+                "emissiveMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+            );
+        }
+
         // `system.group_output` closes the body; its port names are the
         // interface output names the inner wires above target. A boundary node
         // carries no params and no title.
@@ -674,6 +875,18 @@ fn build_import_graph(
         wires.push(wire(group_id, "transform", render_id, &format!("transform_{k}")));
         if has_tex {
             wires.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{k}")));
+        }
+        if has_normal {
+            wires.push(wire(group_id, "normalMap", render_id, &format!("normal_map_{k}")));
+        }
+        if has_mr {
+            wires.push(wire(group_id, "mrMap", render_id, &format!("mr_map_{k}")));
+        }
+        if has_occlusion {
+            wires.push(wire(group_id, "occlusionMap", render_id, &format!("occlusion_map_{k}")));
+        }
+        if has_emissive {
+            wires.push(wire(group_id, "emissiveMap", render_id, &format!("emissive_map_{k}")));
         }
     }
 
@@ -892,12 +1105,24 @@ fn build_import_graph(
 
     card_params.push(card_param("sun_int", "Sun Intensity", 0.0, 10.0, 3.5, false, "Sun"));
     card_bindings.push(card_binding("sun_int", "Sun Intensity", 3.5, "sun", "intensity", 1.0));
+    // D7 sun coherence (2026-07-15, Peter: "place these fake strips and
+    // lights in the same positions as the real scene lights so it looks
+    // coherent") — each sun_x/y/z macro fans out to TWO targets: the sun
+    // `node.light`'s position (unchanged, pre-existing) AND the envmap's
+    // new `sun_x/sun_y/sun_z` disc-direction params (F-P2/F-P3). Direction
+    // params bind 1:1 (no conversion math) — `node.bake_environment`
+    // normalizes the raw vector internally, and `aim` stays fixed at the
+    // origin, so this object's `pos_*` IS already the sun's direction. One
+    // fader now moves illumination, shadow, AND envmap reflection together.
     card_params.push(card_param("sun_x", "Sun X", -15.0, 15.0, 5.0, false, "Sun"));
     card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "sun", "pos_x", 1.0));
+    card_bindings.push(card_binding("sun_x", "Sun X", 5.0, "envmap", "sun_x", 1.0));
     card_params.push(card_param("sun_y", "Sun Y", -15.0, 15.0, 2.0, false, "Sun"));
     card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "sun", "pos_y", 1.0));
+    card_bindings.push(card_binding("sun_y", "Sun Y", 2.0, "envmap", "sun_y", 1.0));
     card_params.push(card_param("sun_z", "Sun Z", -15.0, 15.0, 3.0, false, "Sun"));
     card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "sun", "pos_z", 1.0));
+    card_bindings.push(card_binding("sun_z", "Sun Z", 3.0, "envmap", "sun_z", 1.0));
     // Shadow tier on the outer card: crisp-vs-soft is a look decision, so it
     // rides next to the sun sliders instead of requiring a trip into the
     // graph. Labels must stay in `ShadowSoftness` variant order — the
@@ -921,11 +1146,13 @@ fn build_import_graph(
     // `node.bake_environment`'s `intensity` master scales the WHOLE baked map
     // (every studio term), so 0 = a black environment and no image-based
     // lighting at all — unlike `horizon_strength`, which only dims the horizon
-    // band and leaves the bright zenith/sun terms lighting the scene. Default 0
-    // gives the lights-only look; raise it for a reflective studio environment.
-    card_params.push(card_param("env_intensity", "Environment", 0.0, 4.0, 0.0, false, "Environment"));
+    // band and leaves the bright zenith/sun terms lighting the scene. D7
+    // (F-P4): default flips to 1.0 — the softbox black-void studio is now
+    // the import default (envmap node param above), so the card's default
+    // must mirror it (range stays 0–4, unchanged).
+    card_params.push(card_param("env_intensity", "Environment", 0.0, 4.0, 1.0, false, "Environment"));
     card_bindings.push(card_binding(
-        "env_intensity", "Environment", 0.0, "envmap", "intensity", 1.0,
+        "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
     ));
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
@@ -1046,6 +1273,7 @@ fn build_import_graph(
         dropped_over_cap,
         default_material_vertex_count: summary.default_material_vertex_count,
         camera_synthesized: true,
+        report_lines,
     };
 
     Ok((def, report))
@@ -1123,12 +1351,15 @@ mod tests {
             21,
             "15 framing/material + 2 GTAO + 2 DoF + 2 atmosphere (fog + god rays)"
         );
-        // Every param routes one-to-one except the shared Ambient, which fans
-        // out to every material's ambient (2 for azalea). 21 + 1 = 22.
+        // Every param routes one-to-one except: the shared Ambient, which
+        // fans out to every material's ambient (2 for azalea); and D7's sun
+        // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
+        // (the sun light AND the envmap's disc direction) — 3 extra
+        // bindings. 21 + 1 (ambient) + 3 (sun coherence) = 25.
         assert_eq!(
             meta.bindings.len(),
-            22,
-            "21 params, Ambient fanned to 2 materials"
+            25,
+            "21 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1173,10 +1404,11 @@ mod tests {
         assert_eq!(sun_int.section.as_deref(), Some("Sun"));
         let env_intensity = meta.params.iter().find(|p| p.id == "env_intensity").unwrap();
         assert_eq!(env_intensity.section.as_deref(), Some("Environment"));
-        // Lights-only defaults: the environment master and the shared ambient
-        // fill both start at 0, so a freshly imported model is lit purely by
-        // its scene lights.
-        assert_eq!(env_intensity.default_value, 0.0, "environment bakes dark by default");
+        // D7 (F-P4): the black-void softbox studio is now the import
+        // default, so Environment starts at 1.0 (range unchanged); the
+        // shared Ambient fill still starts at 0 — softbox lighting comes
+        // from the envmap + sun, not a flat fill floor.
+        assert_eq!(env_intensity.default_value, 1.0, "environment bakes at softbox intensity 1.0 by default (D7)");
         let scene_ambient = meta.params.iter().find(|p| p.id == "scene_ambient").unwrap();
         assert_eq!(scene_ambient.default_value, 0.0, "no ambient fill by default");
         // The Ambient card fans out to every material's `ambient` param.
@@ -1377,6 +1609,16 @@ mod tests {
             alpha_mask: false,
             alpha_cutoff: 0.5,
             base_color_texture: tex,
+            normal_texture: None,
+            normal_scale: 1.0,
+            mr_texture: None,
+            occlusion_texture: None,
+            occlusion_strength: 1.0,
+            emissive_texture: None,
+            emissive_strength: 1.0,
+            transmission: false,
+            clearcoat: false,
+            was_blend: false,
             vertex_count: verts,
         };
         let summary = GltfImportSummary {
@@ -1523,6 +1765,318 @@ mod tests {
             .expect("grouped import graph must build through PresetRuntime::from_def");
     }
 
+    /// A synthetic [`GltfMaterialInfo`] carrying every texture kind F-P4
+    /// wires, with independent test-controlled fields for the three
+    /// report-only features (clearcoat/transmission/BLEND). Defaults mirror
+    /// a "fully-mapped, nothing extra" material — callers override only
+    /// what a specific test cares about (Rust has no field-update syntax
+    /// across `..` for `pub(crate)` structs outside the defining module, so
+    /// this is a plain builder-by-closure, not `..Default::default()`).
+    fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_load::GltfMaterialInfo {
+        use super::gltf_load::GltfMaterialInfo;
+        GltfMaterialInfo {
+            material_index,
+            name: Some(name.to_string()),
+            base_color_factor: [0.8, 0.8, 0.8, 1.0],
+            metallic: 1.0,
+            roughness: 0.4,
+            emissive: [1.0, 0.5, 0.2],
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: Some(0),
+            normal_texture: Some(1),
+            normal_scale: 1.0,
+            mr_texture: Some(2),
+            occlusion_texture: Some(3),
+            occlusion_strength: 1.0,
+            emissive_texture: Some(4),
+            emissive_strength: 2.5,
+            transmission: false,
+            clearcoat: false,
+            was_blend: false,
+            vertex_count: verts,
+        }
+    }
+
+    /// D6 colour-space pinning + D3 port-wiring: a synthetic material
+    /// carrying all five texture kinds (base-colour, normal, MR, occlusion,
+    /// emissive) must wire all four NEW ports (`normal_map_0`, `mr_map_0`,
+    /// `occlusion_map_0`, `emissive_map_0`) into `node.render_scene`, each
+    /// fed by a `node.gltf_texture_source` whose `color_space` matches D6:
+    /// base-colour and emissive decode sRGB (0), normal/MR/occlusion decode
+    /// Linear (1) — the data-map convention (raw bytes ARE the value).
+    #[test]
+    fn imports_all_map_kinds_with_correct_color_spaces() {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Helmet", 1000)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
+        let (def, report) = build_import_graph(&summary, path).expect("build graph");
+        assert_eq!(report.textures_wired, 1, "base-colour wired");
+
+        // Flatten so the group-internal texture-source nodes and the
+        // top-level render_scene wires are both queryable in one flat
+        // node/wire list (same recipe the grouping-equivalence test above
+        // uses).
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+
+        let render = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("render_scene node");
+        for port in ["normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+            assert!(
+                flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == port),
+                "expected a wire into render_scene port `{port}`"
+            );
+        }
+
+        // Each new map's own source node carries the D6-correct color_space.
+        let expect_color_space = |prefix: &str, expected: u32| {
+            let node = flat
+                .nodes
+                .iter()
+                .find(|n| n.node_id.starts_with(prefix) && n.type_id == "node.gltf_texture_source")
+                .unwrap_or_else(|| panic!("expected a `{prefix}*` gltf_texture_source node"));
+            let cs = node.params.get("color_space").expect("color_space param set");
+            assert_eq!(
+                *cs,
+                enum_val(expected),
+                "`{prefix}*` color_space must be {expected} ({})",
+                if expected == 0 { "sRGB" } else { "Linear" }
+            );
+        };
+        expect_color_space("tex_", 0); // base-colour: sRGB
+        expect_color_space("normal_tex_", 1); // normal: Linear
+        expect_color_space("mr_tex_", 1); // metallic-roughness: Linear
+        expect_color_space("occlusion_tex_", 1); // occlusion: Linear
+        expect_color_space("emissive_tex_", 0); // emissive: sRGB
+
+        // KHR_materials_emissive_strength folds into the existing
+        // emission_intensity param rather than growing a new one (D5).
+        let mat = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.pbr_material")
+            .expect("pbr_material node");
+        assert_eq!(
+            mat.params.get("emission_intensity"),
+            Some(&float(2.5)),
+            "emissive_strength (2.5) must land on emission_intensity"
+        );
+
+        // Fully-mapped, nothing report-worthy: no clearcoat/transmission/BLEND lines.
+        assert!(
+            report.report_lines.is_empty(),
+            "a fully-mapped material with no clearcoat/transmission/BLEND should report nothing, got {:?}",
+            report.report_lines
+        );
+    }
+
+    /// D5 ORM-packing: when `occlusion_texture` and `mr_texture` share the
+    /// same glTF texture index (the common "one packed ORM image" case),
+    /// the importer must wire ONE `node.gltf_texture_source` into BOTH
+    /// `occlusion_map_0` and `mr_map_0` — never decode the same physical
+    /// image twice.
+    #[test]
+    fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
+        let mut m = full_material(0, "ORM", 500);
+        m.occlusion_texture = Some(7);
+        m.mr_texture = Some(7); // same physical image as occlusion
+        let summary = GltfImportSummary {
+            materials: vec![m],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_orm.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+
+        let orm_sources: Vec<_> = flat
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.type_id == "node.gltf_texture_source"
+                    && n.params.get("texture_index") == Some(&int(7))
+            })
+            .collect();
+        assert_eq!(
+            orm_sources.len(),
+            1,
+            "occlusion_texture == mr_texture must decode through exactly ONE source node, found {}",
+            orm_sources.len()
+        );
+        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+        let source_id = orm_sources[0].id;
+        for port in ["occlusion_map_0", "mr_map_0"] {
+            assert!(
+                flat.wires
+                    .iter()
+                    .any(|w| w.to_node == render.id && w.to_port == port && w.from_node == source_id),
+                "expected `{port}` wired directly from the shared ORM source node"
+            );
+        }
+    }
+
+    /// D9 doctrine ("every import produces a report") applied to F-P4's
+    /// three not-yet-mapped features: an over-featured synthetic material
+    /// (clearcoat + transmission + BLEND alphaMode all present at once)
+    /// must produce one report line per feature — never a silent drop.
+    #[test]
+    fn over_featured_material_reports_clearcoat_transmission_and_blend_downgrade() {
+        let mut m = full_material(0, "Kitchen Sink", 300);
+        m.clearcoat = true;
+        m.transmission = true;
+        m.was_blend = true;
+        m.alpha_mask = true; // matches gltf_load's BLEND→Mask downgrade
+        let summary = GltfImportSummary {
+            materials: vec![m],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
+        let (_def, report) = build_import_graph(&summary, path).expect("build graph");
+        println!("over-featured report: {:#?}", report.report_lines);
+        assert_eq!(report.report_lines.len(), 3, "clearcoat + transmission + BLEND = 3 lines");
+        assert!(
+            report.report_lines.iter().any(|l| l.contains("clearcoat")),
+            "missing a clearcoat report line: {:?}",
+            report.report_lines
+        );
+        assert!(
+            report.report_lines.iter().any(|l| l.contains("transmission")),
+            "missing a transmission report line: {:?}",
+            report.report_lines
+        );
+        assert!(
+            report.report_lines.iter().any(|l| l.contains("BLEND") && l.contains("Mask")),
+            "missing a BLEND-downgraded-to-Mask report line: {:?}",
+            report.report_lines
+        );
+    }
+
+    /// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
+    /// binding targets — the sun `node.light`'s position (unchanged,
+    /// pre-existing) AND the envmap's new `sun_x`/`sun_y`/`sun_z` disc-
+    /// direction params — so performing the sun macro moves illumination,
+    /// shadow, AND the envmap's reflected sun disc together (Peter,
+    /// 2026-07-15: "place these fake strips and lights in the same
+    /// positions as the real scene lights").
+    #[test]
+    fn sun_macros_bind_both_the_light_and_the_envmap_disc_direction() {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Object", 100)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_sun.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+        let meta = def.preset_metadata.as_ref().expect("v2 metadata");
+
+        for (macro_id, sun_param, env_param) in
+            [("sun_x", "pos_x", "sun_x"), ("sun_y", "pos_y", "sun_y"), ("sun_z", "pos_z", "sun_z")]
+        {
+            let bindings: Vec<_> = meta.bindings.iter().filter(|b| b.id == macro_id).collect();
+            assert_eq!(
+                bindings.len(),
+                2,
+                "`{macro_id}` must carry exactly 2 binding targets (sun light + envmap disc), got {}",
+                bindings.len()
+            );
+            let targets_sun = bindings.iter().any(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    node_id.as_str() == "sun" && param == sun_param
+                }
+                _ => false,
+            });
+            let targets_envmap = bindings.iter().any(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    node_id.as_str() == "envmap" && param == env_param
+                }
+                _ => false,
+            });
+            assert!(targets_sun, "`{macro_id}` must bind the sun light's `{sun_param}`");
+            assert!(
+                targets_envmap,
+                "`{macro_id}` must ALSO bind the envmap's `{env_param}` disc-direction param"
+            );
+            // Both bindings must carry the same default (scale 1.0, "no
+            // conversion math in a binding" per D7) so the card reproduces
+            // the assembled look with no drift on first frame.
+            let defaults: std::collections::HashSet<_> =
+                bindings.iter().map(|b| b.default_value.to_bits()).collect();
+            assert_eq!(defaults.len(), 1, "`{macro_id}`'s two bindings must share one default value");
+        }
+
+        // D7 import defaults: softbox @ 1.0, not the legacy gradient @ 0.
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+        let envmap = flat.nodes.iter().find(|n| n.type_id == "node.bake_environment").unwrap();
+        assert_eq!(envmap.params.get("mode"), Some(&enum_val(1)), "import default mode = Softbox");
+        assert_eq!(envmap.params.get("intensity"), Some(&float(1.0)), "import default intensity = 1.0");
+        let env_intensity_param = meta.params.iter().find(|p| p.id == "env_intensity").unwrap();
+        assert_eq!(env_intensity_param.default_value, 1.0, "Environment card default = 1.0");
+        assert_eq!(env_intensity_param.min, 0.0);
+        assert_eq!(env_intensity_param.max, 4.0, "range stays 0-4 (D7: only the default flips)");
+    }
+
+    /// BUG-036 round-trip gate: the assembled import graph — including the
+    /// new map-port wires and the D7 sun-coherence dual bindings — must
+    /// survive a save/reload cycle. `EffectGraphDef` (this function's
+    /// return type) IS the persisted artifact for a generator layer's
+    /// override (`ImportModelLayerCommand` stores it verbatim), so a JSON
+    /// round trip through its own `Serialize`/`Deserialize` impl is the
+    /// real save/reload path, not a stand-in for it. Asserts the wires and
+    /// bindings survive AND that the reloaded def still builds through the
+    /// production loader (`PresetRuntime::from_def`) — proving the ports
+    /// resolve after reload, not only right after assembly.
+    #[test]
+    fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Helmet", 1000)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        let flat = manifold_core::flatten::flatten_groups(&reloaded).expect("flatten reloaded def");
+        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+        for port in ["normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+            assert!(
+                flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == port),
+                "reloaded def must still wire `{port}` — maps must stay bound after reload"
+            );
+        }
+        let meta = reloaded.preset_metadata.as_ref().expect("reloaded v2 metadata");
+        for macro_id in ["sun_x", "sun_y", "sun_z"] {
+            let count = meta.bindings.iter().filter(|b| b.id == macro_id).count();
+            assert_eq!(count, 2, "`{macro_id}`'s dual binding must survive reload");
+        }
+
+        // Modulation live after reload, not just structurally present: the
+        // reloaded def must still build through the production loader.
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(reloaded, &registry, None)
+            .expect("reloaded import graph must build through PresetRuntime::from_def");
+    }
+
     /// GRAPH_TOOLING_DESIGN D6: `assemble_import_graph`'s output must be
     /// validated through `validate_def` before it reaches the project — the
     /// assembler is code and has bugs. This proves the mechanism the
@@ -1547,6 +2101,16 @@ mod tests {
             alpha_mask: false,
             alpha_cutoff: 0.5,
             base_color_texture: tex,
+            normal_texture: None,
+            normal_scale: 1.0,
+            mr_texture: None,
+            occlusion_texture: None,
+            occlusion_strength: 1.0,
+            emissive_texture: None,
+            emissive_strength: 1.0,
+            transmission: false,
+            clearcoat: false,
+            was_blend: false,
             vertex_count: verts,
         };
         let summary = GltfImportSummary {
@@ -2056,6 +2620,273 @@ mod tests {
         image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
             .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
         println!("create_with_override proof: wrote {out_path} (fraction {fraction:.4})");
+    }
+
+    // Only used by the `#[cfg(feature = "gpu-proofs")]` render gates below —
+    // gated the same way to avoid a dead-code warning on the default
+    // (GPU-free) test sweep.
+    #[cfg(feature = "gpu-proofs")]
+    fn damaged_helmet_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/DamagedHelmet.glb")
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    fn amg_gt3_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb")
+    }
+
+    /// F-P4 held-out-input gate (DESIGN_DOC_STANDARD.md §5): Khronos
+    /// `DamagedHelmet.glb` (CC-BY 4.0 — attribution in
+    /// `tests/fixtures/gltf/README.md`) carries all five glTF PBR map types
+    /// and was never used to develop this importer — the fixture-overfitting
+    /// check. Must import with every one of F-P2's four new map ports wired
+    /// (asserted by port name), render headless through the real
+    /// `PresetRuntime::from_def_with_device` + `render()` path without error,
+    /// and produce a non-degenerate frame: mean luminance strictly between
+    /// 0.02 and 0.98 (catches both an all-black failure — e.g. a stuck
+    /// background decode — and a blown-out one — e.g. a light-leak from a
+    /// broken IBL term — without judging the LOOK, which is Peter's L4 call).
+    /// Needs a GPU device: run deliberately with `--features gpu-proofs`.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_core::flatten::flatten_groups;
+        use manifold_gpu::GpuTextureFormat;
+
+        let path = damaged_helmet_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate: fixture not \
+                 found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+
+        let (def, report) = assemble_import_graph(&path).expect("assemble DamagedHelmet");
+        println!("DamagedHelmet import report: {report:?}");
+        assert_eq!(report.object_count, 1, "DamagedHelmet is a single-material model");
+
+        // Every one of F-P2's four new map ports must be wired, by name —
+        // not just "the import didn't error".
+        let flat = flatten_groups(&def).expect("DamagedHelmet import graph flattens");
+        let render_ports: std::collections::HashSet<String> = flat
+            .wires
+            .iter()
+            .filter(|w| {
+                flat.nodes
+                    .iter()
+                    .any(|n| n.id == w.to_node && n.node_id.as_str() == "render")
+            })
+            .map(|w| w.to_port.clone())
+            .collect();
+        for port in ["base_color_map_0", "normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+            assert!(
+                render_ports.contains(port),
+                "DamagedHelmet must wire `{port}` — carries all five glTF PBR maps; got {render_ports:?}"
+            );
+        }
+
+        let (w, h) = (512u32, 512u32);
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("DamagedHelmet import graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "damaged-helmet");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        // Same convergence-polling loop as `imported_azalea_renders_faithfully_to_png`
+        // — background texture/mesh decodes need to land before the readback
+        // means anything. Byte-identical across STABLE_STREAK consecutive
+        // frames is the completion signal, but (BUG-100) byte-identical
+        // alone isn't enough: DamagedHelmet wires FIVE background texture
+        // decodes (base-color/normal/mr/occlusion/emissive, each its own
+        // `node.gltf_texture_source` background thread), and
+        // `node.gltf_texture_source` emits solid black on every frame until
+        // its own decode lands (see that primitive's `run()` step 6) — so a
+        // frame where every wired source is STILL mid-decode is *also*
+        // byte-stable (three identical black frames) and would falsely read
+        // as "converged" before any decode actually finished. Require
+        // `fraction > 0.02` (measured, non-black) alongside byte-stability,
+        // exactly like the azalea proof's own convergence check.
+        const STABLE_STREAK: u32 = 3;
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        let mut converged = false;
+        let mut fraction = 0.0f64;
+        for attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("damaged-helmet-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+
+            let bytes_per_row = w * 8;
+            let total_bytes = u64::from(h * bytes_per_row);
+            let readback_buf = device.create_buffer_shared(total_bytes);
+            let mut readback_enc = device.create_encoder("damaged-helmet-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            fraction = non_black as f64 / (w * h) as f64;
+
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+
+            if stable_count >= STABLE_STREAK {
+                println!(
+                    "damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate: converged \
+                     on attempt {attempt} (non-black fraction {fraction:.4})"
+                );
+                converged = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            converged,
+            "DamagedHelmet render never stabilized non-black after {max_attempts} attempts \
+             (last non-black fraction {fraction:.4}) — a background texture decode may be stuck"
+        );
+
+        // Mean luminance (Rec. 601 luma over the tonemapped LDR frame),
+        // strictly between 0.02 and 0.98 — non-degenerate without judging
+        // the look.
+        let mut sum_luma = 0.0f64;
+        let pixel_count = (w * h) as usize;
+        for px in rgba.chunks_exact(4) {
+            let (r, g, b) = (px[0] as f64 / 255.0, px[1] as f64 / 255.0, px[2] as f64 / 255.0);
+            sum_luma += 0.299 * r + 0.587 * g + 0.114 * b;
+        }
+        let mean_luminance = sum_luma / pixel_count as f64;
+        println!(
+            "damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate: mean luminance = {mean_luminance:.4}"
+        );
+
+        let out_path = std::env::var("MESH_SNAP_OUT")
+            .unwrap_or_else(|_| "target/mesh-snap/damaged_helmet.png".to_string());
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            std::fs::create_dir_all(parent).expect("create output dir");
+        }
+        image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+
+        assert!(
+            mean_luminance.is_finite() && mean_luminance > 0.02 && mean_luminance < 0.98,
+            "expected non-degenerate mean luminance in (0.02, 0.98), got {mean_luminance:.4}"
+        );
+    }
+
+    /// Peter-facing look-check sanity, NOT a machine gate (the AMG fixture
+    /// is untracked, licensing-unverified — vecarz — and absent in a fresh
+    /// checkout, per the design's explicit "stays untracked" call). Skips
+    /// cleanly when the file is absent so it never fails CI; when present,
+    /// only proves the import + render pipeline doesn't error — the actual
+    /// look (chrome + void + glow) is Peter's in-app L4 check.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn amg_gt3_glb_imports_and_renders_without_error_if_present() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let path = amg_gt3_fixture_path();
+        if !path.exists() {
+            println!(
+                "amg_gt3_glb_imports_and_renders_without_error_if_present: fixture not tracked, \
+                 skipping (expected in a fresh checkout — vecarz licensing unverified)"
+            );
+            return;
+        }
+
+        let (def, report) = assemble_import_graph(&path).expect("assemble AMG GT3");
+        println!("AMG GT3 import report: {report:?}");
+
+        let (w, h) = (512u32, 512u32);
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("AMG GT3 import graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "amg-gt3-sanity");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = device.create_encoder("amg-gt3-sanity-render");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            generator.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+        println!("amg_gt3_glb_imports_and_renders_without_error_if_present: rendered without error");
     }
 }
 
