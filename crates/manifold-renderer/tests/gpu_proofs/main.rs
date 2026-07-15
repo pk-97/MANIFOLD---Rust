@@ -28,6 +28,7 @@ mod gbuffer_depth;
 mod gbuffer_velocity;
 mod render_scene_exposure;
 mod render_scene_fog;
+mod render_scene_ibl;
 mod render_scene_instances;
 mod render_scene_lights;
 mod render_scene_pcss;
