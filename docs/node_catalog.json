@@ -11399,8 +11399,8 @@
           "label": "Tilt",
           "name": "tilt",
           "range": [
-            "-1.5",
-            "1.5"
+            "-6.2831855",
+            "6.2831855"
           ],
           "tooltip": "Raises and lowers the camera over the target, in degrees. Positive looks down from above, negative looks up from below.",
           "type": "angle"
