@@ -11,3 +11,12 @@ Two tiers — see `docs/IMPORT_DESIGN.md` §8 addendum:
 
 P1's gate renders the stewartia headless to PNG and compares against Sketchfab's
 own preview by eye — a look, not just a green test.
+
+3. **`DamagedHelmet.glb`** (IMPORT_FIDELITY_DESIGN.md F-P4 held-out fixture) —
+   Khronos Sample Models "Damaged Helmet" (glTF-Sample-Assets), CC-BY 4.0,
+   https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DamagedHelmet
+   (model by theblueturtle_, © 2016, licensed CC-BY 4.0). Chosen because it
+   carries all five glTF PBR map types (base colour, normal, metallic-
+   roughness, occlusion, emissive) — exactly F-P4's per-map colour-space and
+   port-wiring gate. Tracked (not gitignored): CC-BY permits redistribution
+   with attribution, satisfied by this line.

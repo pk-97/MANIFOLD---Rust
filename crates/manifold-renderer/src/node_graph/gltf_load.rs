@@ -414,6 +414,46 @@ pub(crate) struct GltfMaterialInfo {
     pub alpha_cutoff: f32,
     /// Index into `document.textures()` for the base-color map, if any.
     pub base_color_texture: Option<u32>,
+    /// Index into `document.textures()` for the tangent-space normal map,
+    /// if any (glTF `normalTexture`) — IMPORT_FIDELITY_DESIGN.md D3/D5/D6.
+    pub normal_texture: Option<u32>,
+    /// glTF `normalTexture.scale` (default 1.0). `render_scene` wires no
+    /// port for it yet (no per-object normal-intensity multiplier exists;
+    /// adding one is shader-ABI scope, out of bounds for this phase) — the
+    /// importer reads this field to emit a D9 report line whenever it
+    /// deviates from neutral, so it is never a silent drop even though it
+    /// isn't applied.
+    pub normal_scale: f32,
+    /// Index into `document.textures()` for the glTF metallic-roughness map
+    /// (G = roughness, B = metallic), if any.
+    pub mr_texture: Option<u32>,
+    /// Index into `document.textures()` for the occlusion map (R channel),
+    /// if any. May be the SAME texture index as `mr_texture` (ORM packing)
+    /// — the importer wires one source node into both ports in that case.
+    pub occlusion_texture: Option<u32>,
+    /// glTF `occlusionTexture.strength` (default 1.0) — same "no wired port
+    /// yet, reported instead" note as `normal_scale`.
+    pub occlusion_strength: f32,
+    /// Index into `document.textures()` for the emissive map, if any.
+    pub emissive_texture: Option<u32>,
+    /// `KHR_materials_emissive_strength` multiplier (1.0 when the
+    /// extension is absent) — the importer folds this into the imported
+    /// `emission_intensity`, an existing wired param.
+    pub emissive_strength: f32,
+    /// `KHR_materials_transmission` extension present on this material.
+    /// Report-only in F-P4 (D8/F-P5 maps transmission to a real `Blend`
+    /// material); F-P4 imports the material unchanged otherwise and emits
+    /// a report line naming the loss.
+    pub transmission: bool,
+    /// `KHR_materials_clearcoat` extension present (raw `extensions` JSON
+    /// presence check — gltf 1.4.1 has no typed clearcoat support).
+    /// Report-only, Deferred #1 in IMPORT_FIDELITY_DESIGN.md.
+    pub clearcoat: bool,
+    /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
+    /// these to `alpha_mask` cutout (the F-P5 stopgap — `alpha_mask` above
+    /// is already `true` when this is) and the importer emits a report
+    /// line noting the downgrade.
+    pub was_blend: bool,
     pub vertex_count: u32,
 }
 
@@ -520,6 +560,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 return None;
             }
             let pbr = m.pbr_metallic_roughness();
+            // IMPORT_FIDELITY_DESIGN.md F-P4: BLEND downgrades to Mask
+            // cutout (the F-P5 stopgap) rather than being dropped or
+            // imported as if OPAQUE — D9 "everything unmapped is a report
+            // line", never a silent drop.
+            let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
+            let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask) || was_blend;
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
@@ -527,11 +573,21 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
                 emissive: m.emissive_factor(),
-                alpha_mask: matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask),
+                alpha_mask,
                 alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
                 base_color_texture: pbr
                     .base_color_texture()
                     .map(|t| t.texture().index() as u32),
+                normal_texture: m.normal_texture().map(|t| t.texture().index() as u32),
+                normal_scale: m.normal_texture().map(|t| t.scale()).unwrap_or(1.0),
+                mr_texture: pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32),
+                occlusion_texture: m.occlusion_texture().map(|t| t.texture().index() as u32),
+                occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
+                emissive_texture: m.emissive_texture().map(|t| t.texture().index() as u32),
+                emissive_strength: m.emissive_strength().unwrap_or(1.0),
+                transmission: m.transmission().is_some(),
+                clearcoat: m.extension_value("KHR_materials_clearcoat").is_some(),
+                was_blend,
                 vertex_count,
             })
         })
