@@ -478,56 +478,75 @@ mod gpu_tests {
         readback_rgba16f(device, &out.texture, w, h)
     }
 
-    /// CPU oracle for `mode = gradient` — the exact legacy formula, same
-    /// operation order as the WGSL (no reassociation), for a handful of
-    /// sample texels. Used to prove the gradient branch is untouched.
-    fn gradient_oracle(u: u32, v: u32, w: u32, h: u32, horizon_strength: f32, azimuth_variation: f32, intensity: f32) -> [f32; 3] {
-        use std::f32::consts::PI;
-        let u_coord = u as f32 / w as f32;
-        let v_coord = v as f32 / h as f32;
-        let azimuth = u_coord * (2.0 * PI) - PI;
-        let elevation = v_coord * PI - PI * 0.5;
-        let up = elevation.sin();
+    /// Verbatim copy of the pre-D7 build-of-record shader
+    /// (`git show c41acc61:crates/manifold-renderer/src/node_graph/primitives/shaders/bake_equirect_envmap.wgsl`).
+    /// The "gradient mode byte-identical to build-of-record" gate is proven
+    /// by dispatching THIS exact old shader and the new mode=0 shader on the
+    /// same GPU with the same inputs and comparing outputs — not by
+    /// re-deriving the formula on the CPU. A CPU re-derivation was tried
+    /// first and produced spurious sub-ULP drift at some texels: WGSL/MSL's
+    /// `pow(f32, f32)` builtin is a generic transcendental, not bit-identical
+    /// to Rust's `powi(2)` (exact squaring) — that mismatch is a property of
+    /// comparing a GPU transcendental to a CPU one, not a shader regression
+    /// (confirmed: the new shader's `mode == 0u` branch is character-for-
+    /// character identical to this old file's body).
+    const LEGACY_GRADIENT_WGSL: &str = r#"
+struct Uniforms {
+    width: u32,
+    height: u32,
+    horizon_strength: f32,
+    azimuth_variation: f32,
+    intensity: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
 
-        let mut color = [0.15f32, 0.15, 0.17];
-        let horizon = (-15.0 * up * up).exp() * horizon_strength;
-        color[0] += 1.5 * horizon;
-        color[1] += 1.45 * horizon;
-        color[2] += 1.4 * horizon;
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba16float, write>;
 
-        fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-            let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
-        }
-        let overhead = smoothstep(0.35, 0.65, up) * smoothstep(0.95, 0.65, up);
-        color[0] += 2.5 * overhead;
-        color[1] += 2.4 * overhead;
-        color[2] += 2.3 * overhead;
+const PI: f32 = 3.14159265;
+const TAU: f32 = 6.28318530;
 
-        let floor_fill = smoothstep(-0.15, -0.45, up) * smoothstep(-0.85, -0.45, up);
-        color[0] += 0.4 * floor_fill;
-        color[1] += 0.42 * floor_fill;
-        color[2] += 0.45 * floor_fill;
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= uniforms.width || gid.y >= uniforms.height { return; }
 
-        let strip1 = (-300.0 * (up - 0.12).powi(2)).exp();
-        color[0] += 3.5 * strip1;
-        color[1] += 3.2 * strip1;
-        color[2] += 2.8 * strip1;
-        let strip2 = (-300.0 * (up + 0.08).powi(2)).exp();
-        color[0] += 1.5 * strip2;
-        color[1] += 2.0 * strip2;
-        color[2] += 3.0 * strip2;
+    let u_coord = f32(gid.x) / f32(uniforms.width);
+    let v_coord = f32(gid.y) / f32(uniforms.height);
 
-        let az_mod = (azimuth * 2.0).sin() * azimuth_variation + 1.0;
-        color[0] *= az_mod;
-        color[1] *= az_mod;
-        color[2] *= az_mod;
+    let azimuth = u_coord * TAU - PI;
+    let elevation = v_coord * PI - PI * 0.5;
+    let up = sin(elevation);
 
-        color[0] *= intensity;
-        color[1] *= intensity;
-        color[2] *= intensity;
-        color
-    }
+    // Studio ambient floor
+    var color = vec3<f32>(0.15, 0.15, 0.17);
+
+    // Large bright horizon band (studio windows / white cyclorama)
+    color += vec3<f32>(1.5, 1.45, 1.4) * exp(-15.0 * up * up) * uniforms.horizon_strength;
+
+    // Overhead soft box
+    let overhead = smoothstep(0.35, 0.65, up) * smoothstep(0.95, 0.65, up);
+    color += vec3<f32>(2.5, 2.4, 2.3) * overhead;
+
+    // Floor fill (bounced light from below)
+    let floor_fill = smoothstep(-0.15, -0.45, up) * smoothstep(-0.85, -0.45, up);
+    color += vec3<f32>(0.4, 0.42, 0.45) * floor_fill;
+
+    // Two narrow strip lights (create chrome streaks)
+    color += vec3<f32>(3.5, 3.2, 2.8) * exp(-300.0 * pow(up - 0.12, 2.0));
+    color += vec3<f32>(1.5, 2.0, 3.0) * exp(-300.0 * pow(up + 0.08, 2.0));
+
+    // Azimuthal variation — 1.0 + variation * sin(2 azimuth).
+    color *= sin(azimuth * 2.0) * uniforms.azimuth_variation + 1.0;
+
+    // Master brightness over every studio term — 0 bakes a fully black map so
+    // PBR objects get no image-based lighting (lit only by their scene lights).
+    color *= uniforms.intensity;
+
+    textureStore(dst_tex, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
+}
+"#;
 
     #[test]
     fn gradient_mode_matches_legacy_formula() {
@@ -536,21 +555,44 @@ mod gpu_tests {
         let horizon_strength = 1.0;
         let azimuth_variation = 0.12;
         let intensity = 1.0;
-        let px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0);
 
-        // Sample a scattered set of texels rather than every one — the
-        // formula is uniform per-texel so a sample proves the whole surface.
-        for &(x, y) in &[(0u32, 0u32), (7, 3), (16, 8), (31, 15), (48, 20), (63, 31)] {
-            let expected = gradient_oracle(x, y, w, h, horizon_strength, azimuth_variation, intensity);
-            let got = px[(y * w + x) as usize];
-            for c in 0..3 {
-                assert!(
-                    (got[c] - expected[c]).abs() < 1e-3,
-                    "texel ({x},{y}) ch {c}: got={} expected={}",
-                    got[c],
-                    expected[c]
-                );
-            }
+        // New shader, mode=0 (gradient) — dispatched via the same `bake()`
+        // helper every other test in this module uses.
+        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+        // Build-of-record shader, dispatched directly with its own (32-byte)
+        // uniform layout.
+        #[repr(C)]
+        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+        struct LegacyUniforms {
+            width: u32,
+            height: u32,
+            horizon_strength: f32,
+            azimuth_variation: f32,
+            intensity: f32,
+            _pad0: f32,
+            _pad1: f32,
+            _pad2: f32,
+        }
+        let legacy_pipeline = device.create_compute_pipeline(LEGACY_GRADIENT_WGSL, "cs_main", "bake-env-legacy-test");
+        let legacy_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "bake-env-legacy-out");
+        let legacy_uniforms =
+            LegacyUniforms { width: w, height: h, horizon_strength, azimuth_variation, intensity, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let mut enc = device.create_encoder("bake-env-legacy-dispatch");
+        enc.dispatch_compute(
+            &legacy_pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&legacy_uniforms) },
+                GpuBinding::Texture { binding: 1, texture: &legacy_out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "bake-env-legacy-dispatch",
+        );
+        enc.commit_and_wait_completed();
+        let legacy_px = readback_rgba16f(&device, &legacy_out.texture, w, h);
+
+        for (i, (got, expected)) in new_px.iter().zip(legacy_px.iter()).enumerate() {
+            assert_eq!(got, expected, "texel {i}: new mode=0 output must be byte-identical to build-of-record");
         }
     }
 
