@@ -764,6 +764,7 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
                 compare: None,
+                ..Default::default()
             }));
         }
         // Material-map sampler (binding 22): REPEAT on both axes — the glTF
@@ -781,6 +782,11 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
                 compare: None,
+                // Anisotropic filtering (D7, GLB_CONFORMANCE G-P3): glancing-angle
+                // minification on grazing surfaces (floors, the AMG's paint) stays
+                // sharp instead of over-blurring. Material sampler only — every
+                // other sampler in this file keeps the field's default (1).
+                max_anisotropy: 8,
             }));
         }
     }
@@ -819,6 +825,7 @@ impl RenderScene {
                 address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
                 address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
                 compare: Some(manifold_gpu::GpuCompareFunction::Less),
+                ..Default::default()
             }));
         }
         if self.dummy_depth.is_none() {
@@ -3498,6 +3505,7 @@ mod gpu_tests {
             address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
             compare: Some(GpuCompareFunction::Less),
+            ..Default::default()
         });
 
         let fog_density = 0.05f32;
@@ -3633,6 +3641,198 @@ mod gpu_tests {
             device.render_pipeline_cache_len(),
             cache_before_use,
             "pipeline_for after prewarm must be a cache hit, not compile a new pipeline"
+        );
+    }
+
+    // --- G-P3 anisotropic filtering (GLB_CONFORMANCE_DESIGN.md D7) -----
+    //
+    // Both proofs sample the SAME horizontally-striped texture (constant
+    // along U, alternating bands along V — no detail in U at all) with the
+    // SAME highly anisotropic derivative via `textureSampleGrad` (ddx large
+    // in U, ddy small in V): the "floor viewed edge-on" case. Isotropic
+    // filtering picks its LOD off the larger (U) footprint and blurs V
+    // along with it even though V never needed blurring; anisotropic
+    // filtering takes multiple taps along U at a sharper effective LOD,
+    // preserving V's stripe edges. `textureSampleGrad` (not the implicit-
+    // derivative `textureSample`) is required here because a compute
+    // kernel has no rasterizer-derived screen-space derivatives to draw
+    // an implicit LOD from — WGSL restricts `textureSample` to fragment
+    // shaders for exactly that reason.
+
+    const ANISO_TEST_SIZE: u32 = 128;
+    const ANISO_TEST_BANDS: u32 = 8;
+    const ANISO_TEST_ROW_LEN: u32 = 256;
+
+    const ANISO_TEST_WGSL: &str = r#"
+const N: u32 = 256u;
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<storage, read_write> out_buf: array<vec4<f32>>;
+
+@compute @workgroup_size(64)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= N) {
+        return;
+    }
+    let v = (f32(gid.x) + 0.5) / f32(N);
+    let uv = vec2<f32>(0.5, v);
+    // Grazing-minification derivative: large in U (the axis the texture
+    // carries no detail in — Metal's isotropic LOD pick is driven by
+    // this larger footprint regardless), small in V (the axis the
+    // stripes actually live in).
+    let ddx = vec2<f32>(0.5, 0.0);
+    let ddy = vec2<f32>(0.0, 0.02);
+    out_buf[gid.x] = textureSampleGrad(src_tex, samp, uv, ddx, ddy);
+}
+"#;
+
+    /// 128x128 Rgba8Unorm, `ANISO_TEST_BANDS` horizontal bands alternating
+    /// ~0.05 / ~0.95 (avoids pure 0/1 clipping ambiguity), full mip chain
+    /// via the same hardware `generate_mipmaps` blit `gltf_texture_source`
+    /// uses (F-P6 precedent) — a synthesized fixture, not production
+    /// texture-decode code, so this does not touch mip generation itself
+    /// (forbidden move).
+    fn make_striped_grazing_texture(device: &manifold_gpu::GpuDevice) -> manifold_gpu::GpuTexture {
+        let n = ANISO_TEST_SIZE;
+        let band_h = n / ANISO_TEST_BANDS;
+        let mut data = vec![0u8; (n * n * 4) as usize];
+        for y in 0..n {
+            let band = y / band_h;
+            let v: u8 = if band % 2 == 0 { 13 } else { 242 };
+            for x in 0..n {
+                let o = ((y * n + x) * 4) as usize;
+                data[o] = v;
+                data[o + 1] = v;
+                data[o + 2] = v;
+                data[o + 3] = 255;
+            }
+        }
+        let mip_levels = manifold_gpu::GpuTextureDesc::max_mip_levels(n, n);
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: n,
+            height: n,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
+            label: "aniso-test-stripes",
+            mip_levels,
+        });
+        device.upload_texture(&tex, &data);
+        let mut enc = device.create_encoder("aniso-test-mip-gen");
+        enc.generate_mipmaps(&tex);
+        enc.commit_and_wait_completed();
+        tex
+    }
+
+    /// Dispatch `ANISO_TEST_WGSL` and read back `ANISO_TEST_ROW_LEN` grazing
+    /// samples as RGBA floats.
+    fn sample_grazing_row(
+        device: &manifold_gpu::GpuDevice,
+        tex: &manifold_gpu::GpuTexture,
+        sampler: &manifold_gpu::GpuSampler,
+    ) -> Vec<[f32; 4]> {
+        let pipeline = device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
+        let out_buf = device.create_buffer_shared(u64::from(ANISO_TEST_ROW_LEN) * 16);
+        let bindings = [
+            GpuBinding::Texture { binding: 0, texture: tex },
+            GpuBinding::Sampler { binding: 1, sampler },
+            GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
+        ];
+        let mut enc = device.create_encoder("aniso-test-dispatch");
+        enc.dispatch_compute(&pipeline, &bindings, [ANISO_TEST_ROW_LEN / 64, 1, 1], "aniso-test");
+        enc.commit_and_wait_completed();
+        let ptr = out_buf.mapped_ptr().expect("shared output buffer");
+        let floats: &[f32] = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<f32>(), (ANISO_TEST_ROW_LEN * 4) as usize)
+        };
+        (0..ANISO_TEST_ROW_LEN as usize)
+            .map(|i| {
+                let o = i * 4;
+                [floats[o], floats[o + 1], floats[o + 2], floats[o + 3]]
+            })
+            .collect()
+    }
+
+    /// D7 invariant (`docs/GLB_CONFORMANCE_DESIGN.md` §4): `max_anisotropy:
+    /// 1` must be byte-identical to pre-field behavior. Every call site that
+    /// predates the field builds its `GpuSamplerDesc` via `..Default::
+    /// default()` and never mentions the field at all — that shape, and a
+    /// sampler that explicitly spells `max_anisotropy: 1`, must sample
+    /// identically.
+    #[test]
+    fn sampler_aniso_one_is_byte_identical() {
+        let device = crate::test_device();
+        let tex = make_striped_grazing_texture(&device);
+
+        let untouched = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        });
+        let explicit_one = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            compare: None,
+            max_anisotropy: 1,
+        });
+
+        let a = sample_grazing_row(&device, &tex, &untouched);
+        let b = sample_grazing_row(&device, &tex, &explicit_one);
+        assert_eq!(a.len(), b.len());
+        for (i, (pa, pb)) in a.iter().zip(b.iter()).enumerate() {
+            assert_eq!(
+                pa, pb,
+                "row sample {i}: default-spread sampler (max_anisotropy never mentioned) must \
+                 be byte-identical to an explicit max_anisotropy: 1 sampler"
+            );
+        }
+    }
+
+    /// G-P3 gate proof (`docs/GLB_CONFORMANCE_DESIGN.md`, the F-P3 numeric-
+    /// not-look style): aniso 8 must sharpen grazing minification relative
+    /// to aniso 1. High-frequency energy (total variation — sum of absolute
+    /// consecutive-sample deltas along the sampled row) is high when the
+    /// alternating bands stay resolved and collapses toward zero as they
+    /// blur into a uniform mid-grey, so it is a direct, numeric proxy for
+    /// "did anisotropic filtering keep this sharp."
+    #[test]
+    fn aniso_sharpens_grazing_minification() {
+        let device = crate::test_device();
+        let tex = make_striped_grazing_texture(&device);
+
+        let aniso_1 = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            max_anisotropy: 1,
+            ..Default::default()
+        });
+        let aniso_8 = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Linear,
+            max_anisotropy: 8,
+            ..Default::default()
+        });
+
+        let low = sample_grazing_row(&device, &tex, &aniso_1);
+        let high = sample_grazing_row(&device, &tex, &aniso_8);
+
+        let energy =
+            |row: &[[f32; 4]]| -> f32 { row.windows(2).map(|w| (w[1][0] - w[0][0]).abs()).sum() };
+        let e1 = energy(&low);
+        let e8 = energy(&high);
+        assert!(
+            e8 > e1 * 1.1,
+            "aniso 8 must sharpen the grazing-angle stripe pattern relative to aniso 1: \
+             e(aniso=1)={e1:.4} e(aniso=8)={e8:.4}"
         );
     }
 }

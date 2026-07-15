@@ -281,6 +281,7 @@ impl Primitive for DigitalPlantsRender {
                 address_mode_v: GpuAddressMode::ClampToEdge,
                 address_mode_w: GpuAddressMode::ClampToEdge,
                 compare: Some(manifold_gpu::GpuCompareFunction::Less),
+                ..Default::default()
             }));
         }
         self.ensure_depth_texture(gpu.device, width, height);

@@ -50,6 +50,11 @@ pub struct GpuTexture {
 
 /// GPU sampler — `VkSampler` under the hood. Configuration comes from
 /// `GpuSamplerDesc` (shared crate-level type).
+// VULKAN_BACKEND_DESIGN: `GpuSamplerDesc.max_anisotropy` (GLB_CONFORMANCE_DESIGN
+// G-P3, D7) is not wired here yet — Phase 0 has no `create_sampler` at all. When
+// Phase 1 brings up `vkCreateSampler`, map it to
+// `VkSamplerCreateInfo.anisotropyEnable`/`maxAnisotropy` (requires the
+// `samplerAnisotropy` physical-device feature). Tracked gap, not silently ignored.
 pub struct GpuSampler {
     pub(crate) _reserved: (),
 }

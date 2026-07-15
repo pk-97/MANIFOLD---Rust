@@ -151,6 +151,9 @@ pub struct GpuSamplerDesc {
     /// Comparison function for depth comparison samplers (WGSL `sampler_comparison`).
     /// None for regular samplers.
     pub compare: Option<GpuCompareFunction>,
+    /// Max anisotropic sample count. 1 = isotropic (the default; byte-identical
+    /// to pre-field behavior). Metal: `setMaxAnisotropy` (1..=16).
+    pub max_anisotropy: u32,
 }
 
 impl Default for GpuSamplerDesc {
@@ -163,6 +166,7 @@ impl Default for GpuSamplerDesc {
             address_mode_v: GpuAddressMode::ClampToEdge,
             address_mode_w: GpuAddressMode::ClampToEdge,
             compare: None,
+            max_anisotropy: 1,
         }
     }
 }
