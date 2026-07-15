@@ -1,6 +1,6 @@
 # GLB Conformance — drop in any glb and it renders accurately
 
-**Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) SHIPPED. G-P3–G-P7 not yet executed.**
+**Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) + G-P3 (anisotropic filtering) + G-P4 (KHR_texture_transform all five map families + specular/ior F0) + G-P5 (clearcoat lobe, factor-only) SHIPPED. G-P6 (hdri_source) + G-P7 (burn-down) not yet executed.**
 **Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15, `44b921cf`). Nothing else.**
 **Execution contract: read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
 
@@ -306,7 +306,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   (curation cap is UI-only and stays).
 - **Test scope:** focused + the conformance sweep.
 
-### G-P3 — anisotropic filtering
+### G-P3 — anisotropic filtering — SHIPPED 2026-07-15 (session 2)
 
 - **Entry state:** G-P1 landed. Re-verify: `rg -n "max_anisotropy" crates/` → zero
   hits (else stop: someone built it).
@@ -330,7 +330,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   aniso on samplers other than render_scene's material sampler "while at it".
 - **Test scope:** focused; gpu-proofs render_scene + the two new proofs.
 
-### G-P4 — KHR_texture_transform + specular/ior mapping
+### G-P4 — KHR_texture_transform + specular/ior mapping — SHIPPED 2026-07-15 (session 2)
 
 - **Entry state:** G-P1+G-P2 landed; conformance sweep runs; `TextureTransformTest`
   and `SpecularTest` currently xfail.
@@ -343,8 +343,14 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   vec4` per map family or a packed `mat2x3` per the uniform-alignment rules in
   `docs/MANIFOLD_GPU_ARCHITECTURE.md` (read before choosing packing — the doc's
   alignment table is binding); resolve fns apply `uv' = M * uv` when the flag is
-  set; specular/ior → F0 scale in `fs_pbr` (spec formula: `F0 = 0.16 * ((ior-1)/
-  (ior+1))^2 * specular_color_factor`, dielectrics only); conformance flips
+  set; specular/ior → F0 scale in `fs_pbr` (**corrected 2026-07-15 during G-P4
+  execution:** this brief originally wrote `F0 = 0.16 * ((ior-1)/(ior+1))^2 *
+  specular_color_factor`, which is NOT the spec — the `0.16 *` is spurious
+  (default IOR 1.5 would give F0≈0.0064 instead of 0.04) and `specularFactor`
+  was missing. The Khronos KHR_materials_specular README formula, implemented:
+  `dielectric_f0 = min(((ior-1)/(ior+1))^2 * specularColorFactor, 1.0) *
+  specularFactor`, dielectrics only; defaults proven inert by byte-stable
+  goldens); conformance flips
   `TextureTransformTest` + `SpecularTest` to `expect_pass` with goldens.
 - **Gate:** those two assets pass their numeric checks; all previously-passing
   conformance cases byte-stable (goldens unchanged — transforms default to
@@ -357,7 +363,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   uniform-alignment doc.
 - **Test scope:** focused + gpu-proofs render_scene + conformance sweep.
 
-### G-P5 — clearcoat lobe
+### G-P5 — clearcoat lobe — SHIPPED 2026-07-15 (session 2)
 
 - **Entry state:** G-P4 landed (uniform packing precedent set); `ClearCoatTest`
   xfail.
