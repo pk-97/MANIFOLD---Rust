@@ -440,11 +440,11 @@ pub(crate) struct GltfMaterialInfo {
     /// extension is absent) — the importer folds this into the imported
     /// `emission_intensity`, an existing wired param.
     pub emissive_strength: f32,
-    /// `KHR_materials_transmission` extension present on this material.
-    /// Report-only in F-P4 (D8/F-P5 maps transmission to a real `Blend`
-    /// material); F-P4 imports the material unchanged otherwise and emits
-    /// a report line naming the loss.
-    pub transmission: bool,
+    /// `KHR_materials_transmission` factor (0.0 when the extension is
+    /// absent). IMPORT_FIDELITY_DESIGN.md D8/F-P5: a nonzero factor makes
+    /// the importer map this material to `Blend`, with
+    /// `alpha = base_color.a * (1 - transmission_factor)`.
+    pub transmission_factor: f32,
     /// `KHR_materials_clearcoat` extension present (raw `extensions` JSON
     /// presence check — gltf 1.4.1 has no typed clearcoat support).
     /// Report-only, Deferred #1 in IMPORT_FIDELITY_DESIGN.md.
@@ -560,12 +560,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 return None;
             }
             let pbr = m.pbr_metallic_roughness();
-            // IMPORT_FIDELITY_DESIGN.md F-P4: BLEND downgrades to Mask
-            // cutout (the F-P5 stopgap) rather than being dropped or
-            // imported as if OPAQUE — D9 "everything unmapped is a report
-            // line", never a silent drop.
+            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
+            // `Blend` material (see `gltf_import.rs`), never Mask cutout —
+            // `alpha_mask` reflects ONLY the genuine glTF MASK mode.
             let was_blend = matches!(m.alpha_mode(), gltf::material::AlphaMode::Blend);
-            let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask) || was_blend;
+            let alpha_mask = matches!(m.alpha_mode(), gltf::material::AlphaMode::Mask);
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
@@ -585,7 +584,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
                 emissive_texture: m.emissive_texture().map(|t| t.texture().index() as u32),
                 emissive_strength: m.emissive_strength().unwrap_or(1.0),
-                transmission: m.transmission().is_some(),
+                transmission_factor: m
+                    .transmission()
+                    .map(|t| t.transmission_factor())
+                    .unwrap_or(0.0),
                 clearcoat: m.extension_value("KHR_materials_clearcoat").is_some(),
                 was_blend,
                 vertex_count,

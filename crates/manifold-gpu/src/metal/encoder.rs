@@ -121,6 +121,7 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
 /// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`]
 /// batch: its own material pipeline, its own bindings, its own vertex count.
 /// Construct via [`GpuEncoder::depth_msaa_draw`].
+#[derive(Clone, Copy)]
 pub struct DepthMsaaDraw<'a> {
     pipeline: &'a GpuRenderPipeline,
     bindings: &'a [GpuBinding<'a>],
@@ -149,6 +150,14 @@ pub struct DepthMsaaPassDesc<'a> {
     /// produces exactly the pre-D3 single-color-attachment pass.
     pub aux_color: &'a [(&'a GpuTexture, &'a GpuTexture)],
     pub depth_stencil_state: &'a GpuDepthStencilState,
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: an optional second draw group,
+    /// run immediately after `draws` within the SAME render pass — no
+    /// second clear, no new pass, just a `setDepthStencilState` switch
+    /// before the second group's draw calls. Used for the sorted
+    /// transparent pass (depth test on, write off) layered over the
+    /// opaque pass's already-resolved-on-tile depth. `None` reproduces
+    /// exactly today's single-group pass (I1).
+    pub second_pass: Option<(&'a GpuDepthStencilState, &'a [DepthMsaaDraw<'a>])>,
 }
 
 impl GpuEncoder {
@@ -771,6 +780,7 @@ impl GpuEncoder {
             depth_resolve: None,
             aux_color: &[],
             depth_stencil_state,
+            second_pass: None,
         };
         self.draw_instanced_depth_msaa_batch_desc(&desc, draws, label);
     }
@@ -883,6 +893,35 @@ impl GpuEncoder {
                     draw.vertex_count as usize,
                     draw.instance_count as usize,
                 );
+            }
+        }
+
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the sorted transparent group,
+        // drawn into the SAME pass right after the opaque group — no second
+        // clear, so the opaque pass's on-tile MSAA depth is still resolved
+        // against (occlusion by opaque geometry works for free), just with
+        // depth WRITE off so transparent objects never occlude each other
+        // or later opaque work.
+        if let Some((second_depth_stencil, second_draws)) = desc.second_pass {
+            unsafe {
+                enc.setDepthStencilState(Some(&second_depth_stencil.raw));
+            }
+            for draw in second_draws {
+                if draw.vertex_count == 0 || draw.instance_count == 0 {
+                    continue;
+                }
+                unsafe {
+                    enc.setRenderPipelineState(&draw.pipeline.state);
+                }
+                apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+                unsafe {
+                    enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                        MTLPrimitiveType::Triangle,
+                        0,
+                        draw.vertex_count as usize,
+                        draw.instance_count as usize,
+                    );
+                }
             }
         }
 

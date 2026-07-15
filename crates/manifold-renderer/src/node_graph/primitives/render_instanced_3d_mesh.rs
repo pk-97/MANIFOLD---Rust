@@ -239,7 +239,9 @@ fn build_uniforms(
         alpha_params: [
             match material.alpha_mode {
                 crate::node_graph::material::AlphaMode::Mask => 1.0,
-                crate::node_graph::material::AlphaMode::Opaque => 0.0,
+                // IMPORT_FIDELITY_DESIGN.md D1: same fallback as render_mesh.
+                crate::node_graph::material::AlphaMode::Opaque
+                | crate::node_graph::material::AlphaMode::Blend => 0.0,
             },
             material.alpha_cutoff,
             0.0,

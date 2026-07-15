@@ -2632,13 +2632,14 @@
           "default": "0",
           "enum_values": [
             "Opaque",
-            "Mask"
+            "Mask",
+            "Blend"
           ],
           "label": "Alpha Mode",
           "name": "alpha_mode",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         },
@@ -11769,13 +11770,14 @@
           "default": "0",
           "enum_values": [
             "Opaque",
-            "Mask"
+            "Mask",
+            "Blend"
           ],
           "label": "Alpha Mode",
           "name": "alpha_mode",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         },
@@ -12258,13 +12260,14 @@
           "default": "0",
           "enum_values": [
             "Opaque",
-            "Mask"
+            "Mask",
+            "Blend"
           ],
           "label": "Alpha Mode",
           "name": "alpha_mode",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         },
@@ -18953,13 +18956,14 @@
           "default": "0",
           "enum_values": [
             "Opaque",
-            "Mask"
+            "Mask",
+            "Blend"
           ],
           "label": "Alpha Mode",
           "name": "alpha_mode",
           "range": [
             "0",
-            "1"
+            "2"
           ],
           "type": "enum"
         },
