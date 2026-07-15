@@ -356,7 +356,7 @@ const PARAM_EXPOSE_OFF: Color32 = Color32::new(150, 150, 165, 130);
 /// enough alpha to read as a tint around the socket rather than a second
 /// solid dot, so the row's "something feeds this" jack is legible without
 /// following the wire back through the graph.
-const PARAM_DRIVEN_JACK: Color32 = Color32::new(128, 199, 255, 130);
+const PARAM_DRIVEN_JACK: Color32 = PARAM_EXPOSE_ON.with_alpha(130);
 // Enum dropdown (Phase 2 on-node editing): the selected row reads with an accent
 // wash, the cursor row with a faint white lift, over the floating menu backing.
 const ENUM_DD_CURRENT_BG: Color32 = Color32::new(128, 199, 255, 46);
