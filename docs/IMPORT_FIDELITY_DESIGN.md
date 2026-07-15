@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped.**
+**Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped. · F-P6 (material-map mip pipeline) + F-P7 (softbox dome fill + rig defaults) SHIPPED 2026-07-15 (session 4, same-day fix after Peter's helmet/AMG renders exposed LOD-0 map aliasing and the metals-in-a-black-void failure; his fill/strip look pass is owed).**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -354,8 +354,53 @@ instead of reading it (`feedback_synthesis_drift`).
   sorting "while at it" (D8 rejected them) · depth write in the blend pass ·
   premultiplying in the shader · touching the Mask/cutout path.
 
-Full workspace sweep gates F-P1, F-P2, and F-P5 at landing (shader ABI + port
-surface + Material enum = infra); F-P3/F-P4 focused per the scope rule.
+- **F-P6 — SHIPPED 2026-07-15 (same-day fidelity fix).** Material-map mip
+  pipeline. Diagnosis (probe A/B renders, session of 2026-07-15): every map
+  was uploaded flat (`mip_levels: 1`) and sampled at forced LOD 0
+  (`textureSampleLevel(..., 0.0)`), so a 2048² map minified onto a few
+  hundred pixels aliased into coherent metallic-looking bands — poisoning
+  albedo, roughness, metallic, normals, occlusion and emissive at once (the
+  DamagedHelmet "chrome stripes"). Mechanism: (a) `EffectNode::
+  output_mipmapped` / `Primitive::output_mipmapped` compile-time hook →
+  `ExecutionPlan::mipmapped_resources` → `Backend::declare_mipmapped`
+  (installed by the executor before any acquire); `MetalBackend` keys the
+  slot pool on mippedness so mipped/flat slots never recycle into each
+  other, and lazy-alloc builds the full chain (`RenderTarget::
+  new_mipmapped`, direct-device — deliberately bypasses the heap
+  `TexturePool`, which recycles by `(w,h,format)` only). (b)
+  `node.gltf_texture_source` declares `out` mipmapped and runs
+  `generate_mipmaps` after its blit — only on fresh upload or output
+  identity change, plus the black-clear path (stale-tail guard). (c)
+  `render_scene.wgsl`'s five map resolves switch to `textureSample`
+  (derivative LOD; the shared sampler was already trilinear). Gates:
+  `declared_mipmapped_resource_allocates_a_mip_chain_and_pools_separately`
+  (backend, gpu-proofs); the full `render_scene` map-set/PCSS/shadow proof
+  suite green unmodified; uniform-dome probe render shows the banding gone.
+- **F-P7 — SHIPPED 2026-07-15 (same-day fidelity fix).** Softbox dome fill +
+  rig defaults. Diagnosis: metals have no diffuse term — they are lit
+  exclusively by the environment — so D7's pure-black void made every
+  metallic import read as dark chrome regardless of albedo (helmet + AMG,
+  Peter's screenshots). Mechanism: `fill` param on `node.bake_environment`
+  (softbox mode only; uniform slot reuses the pad, stays 64 B): a broad
+  neutral dome (`fill * (0.55 + 0.45·up)`, never zero anywhere) added under
+  the strips; strips accumulate separately so `emitter_intensity` scales
+  strips ONLY (first-cut bug: it multiplied the fill too — Strip Lights at 0
+  blacked out the world; caught by probe K, locked by
+  `softbox_fill_lights_every_texel_and_ignores_strip_intensity`). `fill = 0`
+  keeps the D7 pure-black contract byte-identical (existing zero-outside-
+  strips gate bakes at fill 0). Importer defaults: `IMPORT_FILL_DEFAULT =
+  0.6`, `IMPORT_STRIPS_DEFAULT = 3.0` (half the primitive default — full
+  strips dominate every curved reflection once the fill exists), plus two
+  new card faders (Fill Light, Strip Lights) under Environment. The
+  environment is never drawn as a backdrop, so imports still composite over
+  black. **Peter's look pass owed**: fill/strip levels were tuned against
+  the probe harness's Reinhard, not the app's display transform. Sun
+  verdict from the same session: not a bug — intensity 3.5 side-on is just
+  a dim key; it reads fine once the fill exists, and it stays on the card.
+
+Full workspace sweep gates F-P1, F-P2, F-P5, and F-P6 at landing (shader ABI +
+port surface + Material enum + executor/backend allocation contract = infra);
+F-P3/F-P4/F-P7 focused per the scope rule.
 
 ## 6. Decided — do not reopen
 

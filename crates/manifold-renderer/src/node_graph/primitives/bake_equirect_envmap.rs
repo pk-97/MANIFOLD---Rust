@@ -42,9 +42,10 @@ struct EnvmapUniforms {
     sun_z: f32,
     sun_disc_intensity: f32,
     sun_disc_size: f32,
-    // Padded to 64 bytes (16-field × 4-byte, 15 real fields) so the uniform
-    // stays a 16-byte multiple (naga uniform-size rule).
-    _pad0: f32,
+    // Softbox dome fill (IMPORT_FIDELITY F-P7) — occupies the former pad
+    // slot, so the uniform stays 64 bytes (16 × 4-byte fields, naga
+    // uniform-size rule). 0.0 = pure-black void, byte-identical to D7.
+    fill_intensity: f32,
 }
 
 crate::primitive! {
@@ -189,6 +190,19 @@ crate::primitive! {
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("fill"),
+            label: "Fill Light",
+            ty: ParamType::Float,
+            // Softbox dome fill (IMPORT_FIDELITY F-P7): broad neutral
+            // studio radiance so metals have a world to reflect. 0 keeps
+            // D7's pure-black void byte-identical (existing saved graphs
+            // are untouched); the glTF importer sets a non-zero default.
+            // Gradient mode ignores it.
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
     ],
     composition_notes: "One-shot per chain rebuild — the runtime allocates a persistent slot for this output; the shader writes once on the first frame and downstream samplers read across frames. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail. Sun disc direction (`sun_x/y/z`) is consumed as-is (no conversion math here); F-P4 is responsible for binding it to the scene sun.",
     examples: [],
@@ -257,6 +271,7 @@ impl Primitive for BakeEquirectEnvmap {
         let sun_z = read_float("sun_z", 0.0);
         let sun_disc_intensity = read_float("sun_disc_intensity", 0.0);
         let sun_disc_size = read_float("sun_disc_size", 0.0);
+        let fill_intensity = read_float("fill", 0.0);
 
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
@@ -292,7 +307,7 @@ impl Primitive for BakeEquirectEnvmap {
             sun_z,
             sun_disc_intensity,
             sun_disc_size,
-            _pad0: 0.0,
+            fill_intensity,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -442,6 +457,7 @@ mod gpu_tests {
         sun_z: f32,
         sun_disc_intensity: f32,
         sun_disc_size: f32,
+        fill_intensity: f32,
     ) -> Vec<[f32; 4]> {
         let pipeline =
             device.create_compute_pipeline(include_str!("shaders/bake_equirect_envmap.wgsl"), "cs_main", "bake-env-test");
@@ -462,7 +478,7 @@ mod gpu_tests {
             sun_z,
             sun_disc_intensity,
             sun_disc_size,
-            _pad0: 0.0,
+            fill_intensity,
         };
         let mut enc = device.create_encoder("bake-env-dispatch");
         enc.dispatch_compute(
@@ -558,7 +574,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // New shader, mode=0 (gradient) — dispatched via the same `bake()`
         // helper every other test in this module uses.
-        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let new_px = bake(&device, w, h, 0, horizon_strength, azimuth_variation, intensity, 3, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
         // Build-of-record shader, dispatched directly with its own (32-byte)
         // uniform layout.
@@ -602,7 +618,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (w, h) = (64u32, 64u32);
         let emitter_elevation = 0.15;
         let emitter_width = 0.03; // half_width; falloff band = ±0.03 in "up"
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, emitter_elevation, emitter_width, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, emitter_elevation, emitter_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
         use std::f32::consts::PI;
         let mut max_luminance_outside_band: f32 = 0.0;
@@ -629,11 +645,59 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(max_luminance_outside_band, 0.0, "softbox base must be exact zero outside strips");
     }
 
+    /// F-P7 dome fill. Three contracts: (a) fill 0 keeps the D7 pure-black
+    /// void (covered byte-exactly by `softbox_base_is_exact_zero_outside_
+    /// strip_bands` above, which bakes with fill 0); (b) fill > 0 lights
+    /// EVERY texel — no direction reflects pure black, which is the whole
+    /// point (metals live off the environment); (c) `emitter_intensity`
+    /// scales the strips ONLY — a fill-only bake is byte-identical across
+    /// strip intensities (the first-cut bug multiplied the fill by it, so
+    /// Strip Lights at 0 blacked out the world).
+    #[test]
+    fn softbox_fill_lights_every_texel_and_ignores_strip_intensity() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+
+        // (b) fill only (strip intensity 0): every texel strictly positive.
+        let filled = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 0.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
+        let min_luminance = filled
+            .iter()
+            .fold(f32::INFINITY, |m, p| m.min(p[0].max(p[1]).max(p[2])));
+        assert!(
+            min_luminance > 0.0,
+            "fill must light every direction: min luminance = {min_luminance}"
+        );
+
+        // (c) same fill, wildly different strip intensity, strips still 0-wide
+        // contribution because intensity 0 vs 9 only scales the strip term —
+        // compare with strips genuinely disabled (intensity 0) on both sides
+        // by masking the strip band out of the comparison instead: cheaper
+        // and exact — bake twice with strip intensity 0 and 9 and assert the
+        // OUTSIDE-band texels are bit-identical.
+        let with_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 9.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
+        let no_strips = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 0.0, 0.15, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8);
+        use std::f32::consts::PI;
+        for y in 0..h {
+            let v_coord = y as f32 / h as f32;
+            let up = (v_coord * PI - PI * 0.5).sin();
+            if (up - 0.15).abs() < 0.03 * 1.5 {
+                continue; // inside/adjacent to the strip band
+            }
+            for x in 0..w {
+                let i = (y * w + x) as usize;
+                assert_eq!(
+                    with_strips[i], no_strips[i],
+                    "fill texels outside the strip band must not depend on emitter_intensity (texel {x},{y})"
+                );
+            }
+        }
+    }
+
     #[test]
     fn softbox_emitter_rows_exceed_hdr_one() {
         let device = crate::test_device();
         let (w, h) = (32u32, 64u32);
-        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         let max_channel = px.iter().fold(0.0f32, |m, p| m.max(p[0]).max(p[1]).max(p[2]));
         assert!(max_channel > 1.0, "emitter strip must exceed 1.0 (HDR): max={max_channel}");
     }
@@ -659,10 +723,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             bands
         }
 
-        let px1 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px1 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         assert_eq!(count_bands(&px1, w, h), 1, "emitter_count=1 must bake exactly one strip");
 
-        let px3 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let px3 = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 3u32, 6.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         assert_eq!(count_bands(&px3, w, h), 3, "emitter_count=3 must bake exactly three strips");
     }
 
@@ -679,7 +743,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         };
         let px = bake(
             &device, w, h, 1, 1.0, 0.12, 1.0, 0u32, // zero strips: isolate the disc
-            0.0, 0.0, 0.05, sun_dir.0, sun_dir.1, sun_dir.2, 20.0, 0.08,
+            0.0, 0.0, 0.05, sun_dir.0, sun_dir.1, sun_dir.2, 20.0, 0.08, 0.0,
         );
 
         use std::f32::consts::PI;
@@ -719,8 +783,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Direction IS set, but intensity is 0 — must be byte-identical to
         // the direction being unset entirely (D7: "sun_disc_intensity = 0
         // is byte-identical to no-disc").
-        let with_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2);
-        let no_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let with_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.5, 0.5, 0.5, 0.0, 0.2, 0.0);
+        let no_direction_zero_intensity = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 2u32, 6.0, 0.1, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
         for (i, (a, b)) in with_direction_zero_intensity.iter().zip(no_direction_zero_intensity.iter()).enumerate() {
             assert_eq!(a, b, "texel {i}: sun_disc_intensity=0 must be byte-identical regardless of direction");
