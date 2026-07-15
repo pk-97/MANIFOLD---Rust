@@ -13628,6 +13628,26 @@
           "type": "Texture2D"
         },
         {
+          "name": "normal_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "mr_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "occlusion_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "emissive_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
           "name": "transform_0",
           "required": false,
           "type": "Transform"
@@ -13649,6 +13669,26 @@
         },
         {
           "name": "base_color_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "normal_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "mr_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "occlusion_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "emissive_map_1",
           "required": false,
           "type": "Texture2D"
         },
