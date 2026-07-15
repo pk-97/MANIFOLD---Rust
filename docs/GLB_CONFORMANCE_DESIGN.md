@@ -1,6 +1,6 @@
 # GLB Conformance — drop in any glb and it renders accurately
 
-**Status: PROPOSED · 2026-07-15 · Fable 5 (authored the same day as the F-P6/F-P7 fidelity session; every audit claim was verified live in that session's probe harness)**
+**Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) SHIPPED. G-P3–G-P7 not yet executed.**
 **Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15, `44b921cf`). Nothing else.**
 **Execution contract: read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
 
@@ -204,7 +204,7 @@ object counts that goldens would otherwise churn on. Every phase: clippy scoped
 `-p <touched crates>`; full workspace sweep only at landing in the main checkout.
 Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard §8.7.
 
-### G-P1 — the conformance harness (vertical slice)
+### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15 (`909976d2`)
 
 - **Entry state:** `git log --oneline -1` contains `44b921cf` in ancestry
   (`git merge-base --is-ancestor 44b921cf HEAD`); `cargo run -p manifold-renderer
@@ -274,7 +274,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 - **Test scope:** focused (`-p manifold-renderer`); gpu-proofs for the conformance
   binary only.
 
-### G-P2 — 1:1 import (the cap dies)
+### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15 (`909976d2`)
 
 - **Entry state:** G-P1 landed (`cargo test ... --test glb_conformance` runs);
   re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-renderer/src/` —
