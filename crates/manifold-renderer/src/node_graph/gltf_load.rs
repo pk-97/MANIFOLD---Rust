@@ -417,13 +417,12 @@ pub(crate) struct GltfMaterialInfo {
     /// Index into `document.textures()` for the tangent-space normal map,
     /// if any (glTF `normalTexture`) — IMPORT_FIDELITY_DESIGN.md D3/D5/D6.
     pub normal_texture: Option<u32>,
-    /// glTF `normalTexture.scale` (default 1.0). Parsed for the record —
-    /// F-P4 wires no `render_scene` port for it yet (no per-object
-    /// normal-intensity multiplier exists; adding one is shader-ABI scope,
-    /// out of bounds for this phase). Un-suppression trigger: a
-    /// `render_scene`/`pbr_material` normal-intensity port lands (tracked
-    /// alongside IMPORT_FIDELITY_DESIGN.md Deferred #4/#5).
-    #[allow(dead_code)]
+    /// glTF `normalTexture.scale` (default 1.0). `render_scene` wires no
+    /// port for it yet (no per-object normal-intensity multiplier exists;
+    /// adding one is shader-ABI scope, out of bounds for this phase) — the
+    /// importer reads this field to emit a D9 report line whenever it
+    /// deviates from neutral, so it is never a silent drop even though it
+    /// isn't applied.
     pub normal_scale: f32,
     /// Index into `document.textures()` for the glTF metallic-roughness map
     /// (G = roughness, B = metallic), if any.
@@ -432,11 +431,8 @@ pub(crate) struct GltfMaterialInfo {
     /// if any. May be the SAME texture index as `mr_texture` (ORM packing)
     /// — the importer wires one source node into both ports in that case.
     pub occlusion_texture: Option<u32>,
-    /// glTF `occlusionTexture.strength` (default 1.0). Parsed for the
-    /// record, same "no wired port yet" note as `normal_scale`. Un-suppression
-    /// trigger: same as `normal_scale` — a per-object occlusion-strength
-    /// port lands on `render_scene`/`pbr_material`.
-    #[allow(dead_code)]
+    /// glTF `occlusionTexture.strength` (default 1.0) — same "no wired port
+    /// yet, reported instead" note as `normal_scale`.
     pub occlusion_strength: f32,
     /// Index into `document.textures()` for the emissive map, if any.
     pub emissive_texture: Option<u32>,
