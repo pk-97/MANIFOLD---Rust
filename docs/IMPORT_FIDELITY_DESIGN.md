@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 → F-P4 next, (3) F-P5.**
+**Status: IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 next.**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -278,7 +278,7 @@ instead of reading it (`feedback_synthesis_drift`).
   unmodified. Demo: none — numeric gates above; Peter's check is in-app via the
   landing click-script (mirror sphere vs rough sphere scene named in it). Test
   scope: focused + `--features gpu-proofs render_scene`; workspace sweep at landing.
-- **F-P2 — Per-object map set + tangent-space normals.** D3 ports + resolve
+- **F-P2 — SHIPPED 2026-07-15, `c778dbe3`.** Per-object map set + tangent-space normals. D3 ports + resolve
   functions + `texture_flags2`, D4 cotangent frame, emissive/occlusion terms in
   all lit entry points (emissive in `fs_unlit` too, matching M6-D1's albedo
   precedent). Read-back: D3/D4; `render_scene.rs` rebuild + `resolve_*` family;
@@ -305,7 +305,7 @@ instead of reading it (`feedback_synthesis_drift`).
   no-disc. Demo: none —
   Peter's check is in-app (chrome sphere under softbox, named in the landing
   click-script). Test scope: focused.
-- **F-P4 — Loader + importer + defaults.** D5 parse fields + Cargo features, D6
+- **F-P4 — SHIPPED 2026-07-15, `a96e8167`.** Loader + importer + defaults. D5 parse fields + Cargo features, D6
   colour spaces, importer wiring of all four map ports, report lines
   (clearcoat/transmission/BLEND-as-Mask — the transmission and BLEND lines are
   the stopgap F-P5 replaces), import defaults flip to
@@ -403,3 +403,14 @@ surface + Material enum = infra); F-P3/F-P4 focused per the scope rule.
    Trigger: the fixed per-frame IBL cost (3.09ms measured) becomes a real
    budget problem on the live rig, or a second primitive independently wants
    the same signal.
+7. **`normal_texture.scale` / `occlusion_texture.strength` wiring** (found at
+   F-P2+F-P4 landing, 2026-07-15) — D5 parses both, D4 says scale "imports as
+   a multiplier," but neither F-P2's `resolve_normal`/`resolve_occlusion` nor
+   F-P4's importer actually carries the value through: no shader-ABI param
+   exists for either yet, so a non-default value on an imported asset becomes
+   a report line (D9 doctrine) rather than a visible effect. Both fields
+   default to 1.0 in most authored assets (including DamagedHelmet and the
+   AMG), so this is inert on today's held-out fixtures. Trigger: a hero asset
+   whose report enumerates a non-default scale/strength and visibly needs it —
+   fix shape is one uniform field each plus a one-line multiply in the two
+   resolve functions, no ABI growth.
