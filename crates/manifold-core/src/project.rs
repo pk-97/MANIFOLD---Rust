@@ -565,7 +565,7 @@ impl Project {
             current_id: &str,
             legacy_index: Option<i32>,
             aliases: &'a [crate::effect_registration::ParamAlias],
-            param_defs: &'a [crate::effects::ParamDef],
+            param_defs: &'a [crate::effects::RegistryParamDef],
         ) -> ResolveOutcome {
             if !current_id.is_empty() {
                 // V1.2+ id-keyed reference: walk the alias chain so
@@ -584,10 +584,10 @@ impl Project {
                 let Some(pd) = param_defs.get(idx as usize) else {
                     return ResolveOutcome::Drop;
                 };
-                if pd.id.is_empty() {
+                if pd.spec.id.is_empty() {
                     return ResolveOutcome::Drop;
                 }
-                match resolve_param_alias(aliases, pd.id.as_str()) {
+                match resolve_param_alias(aliases, pd.spec.id.as_str()) {
                     Some(resolved) => ResolveOutcome::Update(resolved.to_string()),
                     None => ResolveOutcome::Drop,
                 }

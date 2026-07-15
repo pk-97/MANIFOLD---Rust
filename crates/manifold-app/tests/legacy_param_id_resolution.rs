@@ -63,7 +63,7 @@ fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
     let pid = preset_definition_registry::get(&ty)
         .param_defs
         .first()
-        .map(|pd| pd.id.clone())
+        .map(|pd| pd.spec.id.clone())
         .expect("Bloom must have a param 0 in the live registry");
 
     // Two same-type effects, both seeded to a sentinel so a stray write is

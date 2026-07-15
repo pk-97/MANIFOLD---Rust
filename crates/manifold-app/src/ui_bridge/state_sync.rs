@@ -2657,7 +2657,7 @@ mod fire_meter_roundtrip_tests {
         let mut bloom = PresetInstance::new(PresetTypeId::BLOOM);
         bloom.init_defaults();
         let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+            .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
             .expect("Bloom has at least one param");
         bloom.audio_mods = Some(vec![instant_mod(
             &bloom_param,
