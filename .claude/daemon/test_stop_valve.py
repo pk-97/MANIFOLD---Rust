@@ -955,22 +955,9 @@ def plant_observer(td, session, drained_offset):
         f.write(str(drained_offset))
 
 
-def plant_observation_prompt_fired(td, session, agent_id=None):
-    """Pre-consume the (unrelated) observation-review-prompt's one-shot
-    sentinel so a test can exercise another Stop mechanism in isolation on a
-    long (>=40-event, or >=WORKER_ACTIVITY_MIN_EVENTS for a worker) transcript
-    without the prompt also firing. `agent_id` targets a worker's own
-    sentinel (DESIGN.md §2h.4) instead of the main session's."""
-    key = f"{session}.{agent_id}" if agent_id else session
-    open(os.path.join(td, f"{key}.observation-prompt-fired"), "w").close()
-
-
-def plant_grade_backstop_fired(td, session, agent_id=None):
-    """Pre-consume the grade-backstop's own one-shot sentinel for a mailbox
-    (DESIGN.md §2h.4: a worker's own key when agent_id is given), so a test
-    can isolate the observation prompt without the backstop also firing."""
-    key = f"{session}.{agent_id}" if agent_id else session
-    open(os.path.join(td, f"{key}.grade-backstop-fired"), "w").close()
+# plant_observation_prompt_fired / plant_grade_backstop_fired removed
+# 2026-07-15: both moves left this hook (DESIGN.md §2k) — see
+# test_userpromptsubmit.py, which owns their sentinel-isolation helpers now.
 
 
 def test_stop_wait_delivers_verdict_when_observer_catches_up():
@@ -1301,334 +1288,68 @@ def test_stop_wait_never_runs_for_workers():
     with_temp_verdicts(run)
 
 
-# ---- grade-backstop (2026-07-05 review): sessions never write self-grades
-# at all, so the sleep pass has nothing to join fires against. Direct helper
-# tests first, then full hook runs. ----
+
+# ---- grade-backstop and observation-review-prompt tests moved to
+# test_userpromptsubmit.py 2026-07-15 (DESIGN.md §2k) — both moves left
+# the Stop hook. ----
 
 
-def test_session_gradeable_fires_filters_prefix_agent_and_null_seq():
-    with tempfile.TemporaryDirectory() as td:
-        tpath = os.path.join(td, "telemetry.jsonl")
-        with open(tpath, "w", encoding="utf-8") as f:
-            for rec in (
-                {"event": "injected", "session_id": "s1", "agent_id": None, "move_id": "anchor/verify-claim", "seq": 2, "ts": 100},
-                {"event": "injected", "session_id": "s1", "agent_id": None, "move_id": "mechanical/reasoning-primer", "seq": 1, "ts": 50},
-                {"event": "injected", "session_id": "s1", "agent_id": "w1", "move_id": "anchor/thrash", "seq": 3, "ts": 150},
-                {"event": "injected", "session_id": "s2", "agent_id": None, "move_id": "coaching/define-done", "seq": 1, "ts": 10},
-                {"event": "injected", "session_id": "s1", "agent_id": None, "move_id": "escalate/checkpoint", "seq": 5, "ts": 5},
-                {"event": "injected", "session_id": "s1", "agent_id": None, "move_id": "anchor/skim", "seq": None, "ts": 9},
-                {"event": "observer_spawn", "session_id": "s1", "ts": 1},
-            ):
-                f.write(json.dumps(rec) + "\n")
-        fires = DIRECT._session_gradeable_fires(tpath, "s1")
-        check(
-            "keeps only s1's own main-mailbox anchor/coaching/escalate fires with a seq, oldest first",
-            [m for _, m, _ in fires] == ["anchor/verify-claim", "escalate/checkpoint"],
-            fires,
-        )
+
+# ---- advice-kind never blocks Stop + hardened block wording
+# (2026-07-15, Peter's ruling — DESIGN.md §2k) ----
 
 
-def test_session_grade_count_sums_across_live_grades_files():
-    with tempfile.TemporaryDirectory() as td:
-        eval_dir = os.path.join(td, "eval")
-        os.makedirs(eval_dir)
-        with open(os.path.join(eval_dir, "live_grades.jsonl"), "w", encoding="utf-8") as f:
-            f.write(json.dumps({"session_id": "s1"}) + "\n")
-        with open(os.path.join(eval_dir, "live_grades.session.jsonl"), "w", encoding="utf-8") as f:
-            f.write(json.dumps({"session_id": "s1"}) + "\n")
-            f.write(json.dumps({"session_id": "s2"}) + "\n")
-        check("counts s1 records across both files", DIRECT._session_grade_count(eval_dir, "s1") == 2)
-        check("missing eval dir returns 0, never raises", DIRECT._session_grade_count(os.path.join(td, "nope"), "s1") == 0)
+HARDENED_SENTENCE = "Address only this note, then end your turn — do not resume or begin other work."
 
 
-def test_events_since_counts_tool_results_strictly_after_ts():
-    with tempfile.TemporaryDirectory() as td:
-        path = os.path.join(td, "t.jsonl")
-        base = 1783200000
-        write_transcript_with_events(path, 5, base)
-        check("counts all events after an early since_ts", DIRECT._events_since(path, base) == 5)
-        check("counts only events strictly after a later since_ts", DIRECT._events_since(path, base + 3) == 2)
-        check("since_ts=None -> 0, never raises", DIRECT._events_since(path, None) == 0)
-
-
-def test_grade_backstop_fires_when_ungraded_and_stale():
+def test_pending_advice_flag_is_never_a_stop_block():
     def run(td):
-        session = "sess-backstop-fire"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/verify-claim"}]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, base)
-        out1 = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
-        d1 = json.loads(out1) if out1 else None
-        check("backstop blocks when stale and ungraded", d1 is not None and d1.get("decision") == "block", out1)
-        check("reason names the backstop move", d1 and 'move="mechanical/grade-backstop"' in d1.get("reason", ""), d1)
-        check("reason states the ungraded count", d1 and "1 gradeable" in d1.get("reason", ""), d1)
-        check("session-level sentinel written", os.path.exists(os.path.join(td, f"{session}.grade-backstop-fired")))
-
-        # Isolate: the (unrelated) observation-review prompt also clears its
-        # own >=40-event gate on this transcript — pre-consume its sentinel
-        # so this assertion is about the grade backstop alone.
-        plant_observation_prompt_fired(td, session)
-        out2 = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
-        check("second turn stays silent (once per session, not per turn)", out2 == "", out2)
-
+        session = "sess-advice-noblock"
+        # mechanical/design-primer is a real `kind: advice` move in moves.md.
+        write_verdict(td, session, "mechanical/design-primer", seq=1)
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": "/dev/null"}, td)
+        check("an advice-kind pending flag never blocks Stop", out == "", out)
+        check("advice flag stays unconsumed for PostToolUse/UserPromptSubmit", valve.read_consumed(session) == 0)
+        check("no stopblock sentinel written (nothing was blocked)", not os.path.exists(os.path.join(td, f"{session}.stopblock.p1")))
     with_temp_verdicts(run)
 
 
-def test_grade_backstop_skips_when_not_stale_enough():
+def test_pending_alert_flag_still_blocks():
     def run(td):
-        session = "sess-backstop-fresh"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/verify-claim"}]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 10, base)
-        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
-        check("backstop stays silent when the oldest fire isn't stale yet", out == "", out)
-        check("no sentinel written when it doesn't fire", not os.path.exists(os.path.join(td, f"{session}.grade-backstop-fired")))
-
-    with_temp_verdicts(run)
-
-
-def test_grade_backstop_skips_when_already_graded():
-    def run(td):
-        session = "sess-backstop-graded"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/verify-claim"}]
-        )
-        write_grade_records([{"session_id": session, "seq": 1, "move_id": "anchor/verify-claim", "correct": True, "effective": True, "grader": "session"}])
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, base)
-        plant_observation_prompt_fired(td, session)  # isolate: unrelated 40-event gate
-        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
-        check("backstop stays silent once the fire is graded", out == "", out)
-
-    with_temp_verdicts(run)
-
-
-def test_grade_backstop_never_fires_for_worker_stop():
-    """A telemetry record attributed to the MAIN session's own mailbox
-    (agent_id=None) must never leak into a worker's grade backstop — the two
-    mailboxes are scored independently (DESIGN.md §2h.4). Isolates the
-    (unrelated, and now worker-reachable — see the §2h.4 tests below)
-    observation prompt so this assertion is about backstop cross-attribution
-    alone."""
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-backstop-worker", "wk1"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/verify-claim"}]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, base)
-        plant_observation_prompt_fired(td, session, agent_id=agent)  # isolate: worker's own 20-event gate
-        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        check("a main-session-attributed fire never triggers a worker's own grade backstop", out == "", out)
-
-    with_temp_verdicts(run)
-
-
-def test_worker_grade_backstop_fires_for_own_attributed_fires():
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-worker-backstop-fire", "wk2"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 25, base)  # > WORKER_ACTIVITY_MIN_EVENTS (20), < main's 40
-        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
+        session = "sess-alert-blocks"
+        # anchor/circling has no explicit `kind:` entry -> defaults to alert.
+        write_verdict(td, session, "anchor/circling", seq=1)
+        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": "/dev/null"}, td)
         d = json.loads(out) if out else None
-        check("a worker's own ungraded gradeable fire trips its own backstop", d is not None and d.get("decision") == "block", out)
-        check("reason names the backstop move", d and 'move="mechanical/grade-backstop"' in d.get("reason", ""), d)
-        check("reason tells the worker to include agent_id on its grade line", d and f" --agent-id {agent} " in d.get("reason", ""), d)
-        check(
-            "worker gets its own per-(session, agent_id) sentinel",
-            os.path.exists(os.path.join(td, f"{session}.{agent}.grade-backstop-fired")),
-        )
-        check(
-            "the main session's own sentinel is untouched",
-            not os.path.exists(os.path.join(td, f"{session}.grade-backstop-fired")),
-        )
-
+        check("an alert-kind pending flag still blocks Stop", d is not None and d.get("decision") == "block", out)
+        check("alert flag is consumed on delivery", valve.read_consumed(session) == 1)
     with_temp_verdicts(run)
 
 
-def test_worker_grade_backstop_skips_when_own_fires_already_graded():
+def test_block_reasons_end_with_hardened_sentence():
     def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-worker-backstop-graded", "wk3"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
-        )
-        write_grade_records([{"session_id": session, "agent_id": agent, "seq": 1, "move_id": "anchor/thrash", "correct": True, "effective": True, "grader": "session"}])
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 25, base)
-        plant_observation_prompt_fired(td, session, agent_id=agent)  # isolate: unrelated 20-event gate
-        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        check("a worker's own grade line silences its own backstop", out == "", out)
-
-    with_temp_verdicts(run)
-
-
-def test_worker_grade_backstop_uses_lower_activity_threshold_than_main():
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-worker-backstop-threshold", "wk4"
-        base = 1783200000
-        write_telemetry_records(
-            [{"ts": base, "session_id": session, "agent_id": agent, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "anchor/thrash"}]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        # 25 events: below the main session's 40-event staleness gate, above
-        # the worker's own (lower) 20-event one — proves the threshold really
-        # differs, not just that some threshold exists.
-        write_transcript_with_events(transcript, 25, base)
-        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        d = json.loads(out) if out else None
-        check("25 events is stale enough for a worker's own 20-event gate", d is not None and d.get("decision") == "block", out)
-
-    with_temp_verdicts(run)
-
-
-def test_grade_backstop_ignores_non_gradeable_move_families():
-    def run(td):
-        session = "sess-backstop-advice-only"
-        base = 1783200000
-        write_telemetry_records(
-            [
-                {"ts": base, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 1, "move_id": "mechanical/reasoning-primer"},
-                {"ts": base + 1, "session_id": session, "agent_id": None, "event": "injected", "valve": "PostToolUse", "seq": 2, "move_id": "phase/no-verify-before-reporting"},
-            ]
-        )
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, base)
-        plant_observation_prompt_fired(td, session)  # isolate: unrelated 40-event gate
-        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
-        check("advice/phase fires never require a self-grade", out == "", out)
-
-    with_temp_verdicts(run)
-
-
-# ---- observation review prompt (Peter, 2026-07-05): a standing invitation
-# to log anything worth the next sleep pass's attention. Fires once per
-# session, only once the session has done enough to be worth reviewing —
-# never a repeated demand, since most sessions have nothing to add. ----
-
-
-def test_observation_prompt_stays_silent_on_a_short_session():
-    def run(td):
-        session = "sess-obs-short"
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 5, 1783200000)
-        out = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
-        check("a short session (< 40 events) isn't asked yet", out == "", out)
-        check("no sentinel written when it doesn't fire", not os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")))
-
-    with_temp_verdicts(run)
-
-
-def test_observation_prompt_fires_once_on_a_substantial_session():
-    def run(td):
-        session = "sess-obs-fire"
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, 1783200000)
-        out1 = run_hook({"session_id": session, "prompt_id": "p1", "transcript_path": transcript}, td)
+        # Pending (alert) flag path.
+        session1 = "sess-hardened-pending"
+        write_verdict(td, session1, "anchor/circling", seq=1)
+        out1 = run_hook({"session_id": session1, "prompt_id": "p1", "transcript_path": "/dev/null"}, td)
         d1 = json.loads(out1) if out1 else None
-        check("substantial session gets asked", d1 is not None and d1.get("decision") == "block", out1)
-        check("reason names the observation-prompt move", d1 and 'move="mechanical/observation-prompt"' in d1.get("reason", ""), d1)
-        check("reason says it asks once, not every turn", d1 and "once per session" in d1.get("reason", ""), d1)
-        check("reason never demands a filler record", d1 and "no action needed" in d1.get("reason", ""), d1)
-        check("sentinel written", os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")))
-
-        out2 = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
-        check("second turn stays silent — one ask per session, no logged record required", out2 == "", out2)
-
-    with_temp_verdicts(run)
-
-
-def test_observation_prompt_worker_silent_below_activity_threshold():
-    """DESIGN.md §2h.4 extends the observation prompt to workers — it is no
-    longer true that a worker Stop event never triggers it (see the
-    above-threshold test below). What must still hold: a worker with too
-    little activity (< WORKER_ACTIVITY_MIN_EVENTS) isn't asked yet, same
-    shape as the main session's own short-session test."""
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-obs-worker-short", "wk1"
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 5, 1783200000)
-        out = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        check("a worker below its own 20-event threshold isn't asked yet", out == "", out)
         check(
-            "no worker-scoped sentinel written when it doesn't fire",
-            not os.path.exists(os.path.join(td, f"{session}.{agent}.observation-prompt-fired")),
+            "pending-flag block reason ends with the hardened sentence",
+            d1 is not None and d1.get("reason", "").rstrip().endswith(HARDENED_SENTENCE),
+            d1,
         )
 
-    with_temp_verdicts(run)
-
-
-def test_observation_prompt_fires_for_worker_above_lower_threshold():
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-obs-worker-fire", "wk2"
+        # Deterministic mechanical/announced-not-started path.
+        session2 = "sess-hardened-announce"
         transcript = os.path.join(td, "t.jsonl")
-        # 25 events: below the main session's 40-event gate, above the
-        # worker's own (lower) 20-event one.
-        write_transcript_with_events(transcript, 25, 1783200000)
-        out1 = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        d1 = json.loads(out1) if out1 else None
-        check("a worker above its own lower threshold gets asked", d1 is not None and d1.get("decision") == "block", out1)
-        check("reason names the observation-prompt move", d1 and 'move="mechanical/observation-prompt"' in d1.get("reason", ""), d1)
-        check("reason still says nothing-to-add is fine — no filler required", d1 and "no action needed" in d1.get("reason", ""), d1)
-        check("reason schema mentions this worker's agent_id", d1 and f'"agent_id": "{agent}"' in d1.get("reason", ""), d1)
+        write_transcript(transcript, "I found the issue. Starting the migration now with the new schema.")
+        out2 = run_hook({"session_id": session2, "prompt_id": "p1", "transcript_path": transcript}, td)
+        d2 = json.loads(out2) if out2 else None
         check(
-            "worker gets its own per-(session, agent_id) sentinel",
-            os.path.exists(os.path.join(td, f"{session}.{agent}.observation-prompt-fired")),
+            "announced-not-started block reason ends with the hardened sentence",
+            d2 is not None and d2.get("reason", "").rstrip().endswith(HARDENED_SENTENCE),
+            d2,
         )
-        check(
-            "the main session's own sentinel is untouched",
-            not os.path.exists(os.path.join(td, f"{session}.observation-prompt-fired")),
-        )
-
-        out2 = run_hook({"session_id": session, "prompt_id": "p2", "agent_id": agent, "transcript_path": transcript}, td)
-        check("second turn for the same worker stays silent — one ask per (session, agent_id)", out2 == "", out2)
-
-    with_temp_verdicts(run)
-
-
-def test_observation_prompt_worker_sentinel_independent_of_main_session():
-    """A worker firing its own observation prompt must never block the main
-    session from independently getting its own — own sentinels per mailbox,
-    per DESIGN.md §2h.4's 'own sentinels' requirement."""
-    def run(td):
-        with open(valve.WORKER_NUDGES_FLAG, "w", encoding="utf-8") as f:
-            f.write("1")
-        session, agent = "sess-obs-worker-vs-main", "wk3"
-        transcript = os.path.join(td, "t.jsonl")
-        write_transcript_with_events(transcript, 45, 1783200000)  # clears both gates
-
-        out_worker = run_hook({"session_id": session, "prompt_id": "p1", "agent_id": agent, "transcript_path": transcript}, td)
-        d_worker = json.loads(out_worker) if out_worker else None
-        check("worker's own prompt fires first", d_worker is not None and d_worker.get("decision") == "block", out_worker)
-
-        out_main = run_hook({"session_id": session, "prompt_id": "p2", "transcript_path": transcript}, td)
-        d_main = json.loads(out_main) if out_main else None
-        check("the main session still gets its own independent ask", d_main is not None and d_main.get("decision") == "block", out_main)
-
     with_temp_verdicts(run)
 
 
@@ -1687,22 +1408,9 @@ def main():
         test_stop_wait_no_poke_when_observer_dead,
         test_stop_wait_skip_paths_pay_no_stat_gap,
         test_stop_wait_never_runs_for_workers,
-        test_session_gradeable_fires_filters_prefix_agent_and_null_seq,
-        test_session_grade_count_sums_across_live_grades_files,
-        test_events_since_counts_tool_results_strictly_after_ts,
-        test_grade_backstop_fires_when_ungraded_and_stale,
-        test_grade_backstop_skips_when_not_stale_enough,
-        test_grade_backstop_skips_when_already_graded,
-        test_grade_backstop_never_fires_for_worker_stop,
-        test_worker_grade_backstop_fires_for_own_attributed_fires,
-        test_worker_grade_backstop_skips_when_own_fires_already_graded,
-        test_worker_grade_backstop_uses_lower_activity_threshold_than_main,
-        test_grade_backstop_ignores_non_gradeable_move_families,
-        test_observation_prompt_stays_silent_on_a_short_session,
-        test_observation_prompt_fires_once_on_a_substantial_session,
-        test_observation_prompt_worker_silent_below_activity_threshold,
-        test_observation_prompt_fires_for_worker_above_lower_threshold,
-        test_observation_prompt_worker_sentinel_independent_of_main_session,
+        test_pending_advice_flag_is_never_a_stop_block,
+        test_pending_alert_flag_still_blocks,
+        test_block_reasons_end_with_hardened_sentence,
     ]
     for t in tests:
         t()
