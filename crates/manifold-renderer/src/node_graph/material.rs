@@ -161,6 +161,25 @@ pub struct Material {
     pub mr_uv_transform: [f32; 6],
     pub occlusion_uv_transform: [f32; 6],
     pub emissive_uv_transform: [f32; 6],
+
+    // ---- Clearcoat second specular lobe (GLB_CONFORMANCE_DESIGN.md
+    // G-P5/D5). Inert when `kind != Pbr` — same "unread by other kinds"
+    // pattern as `metallic`/`roughness`. Both default to `0.0`, which is
+    // glTF `KHR_materials_clearcoat`'s own implicit default AND makes the
+    // shader's energy-compensation weight `Fc = clearcoat * fresnel` exactly
+    // zero — byte-identical to pre-G-P5 output on every material without
+    // the extension. Factor-only v1 (D5): clearcoatTexture /
+    // clearcoatRoughnessTexture / clearcoatNormalTexture stay report lines
+    // (Deferred #2 owns map-driven coat). ----
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0`)
+    /// — the coat layer's intensity, `[0, 1]`.
+    pub clearcoat: f32,
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
+    /// `0.0`) — the coat layer's own microfacet roughness, independent of
+    /// the base layer's `roughness`. Clamped to the same `0.01` numerical
+    /// floor as `roughness` wherever it's constructed (a GGX landmine at
+    /// exactly zero).
+    pub clearcoat_roughness: f32,
 }
 
 impl Material {
@@ -192,6 +211,8 @@ impl Material {
             mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             occlusion_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             emissive_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
         }
     }
 

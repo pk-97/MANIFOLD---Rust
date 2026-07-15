@@ -116,8 +116,13 @@ struct Uniforms {
     // wired (sRGB, multiplied by the material's emission factor). w:
     // reserved.
     texture_flags2: vec4<f32>,
-    // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff,
-    // z/w: reserved.
+    // x: alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), y: alpha_cutoff.
+    // z/w were permanently-zero reserved slots until
+    // GLB_CONFORMANCE_DESIGN.md G-P5/D5 repurposed them: z = clearcoat
+    // (KHR_materials_clearcoat's clearcoatFactor, default 0.0), w =
+    // clearcoat_roughness (clearcoatRoughnessFactor, default 0.0) — both
+    // feed fs_pbr's second GGX lobe below. Default 0.0 makes the energy-
+    // compensation weight exactly zero, byte-identical to pre-G-P5 output.
     alpha_params: vec4<f32>,
     // x: light_count (as f32, unbounded — the `lights` storage buffer is
     // runtime-sized), y: ambient (this object's material.ambient),
@@ -783,7 +788,27 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let k = (r * r) / 8.0;
     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
+    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
+    // second, always-dielectric GGX lobe layered on top of the base BRDF.
+    // Reuses the exact D_GGX/G_Smith/F_Schlick shape above with its own
+    // roughness and a FIXED F0 = 0.04 (the Khronos extension's committed
+    // constant — "the clearcoat employs a fixed F0 of 0.04, corresponding
+    // to an IOR of 1.5"), never the dielectric_f0/metal F0 the base layer
+    // uses. v1 is factor-only (D5): no clearcoatNormalTexture, so the coat
+    // shares the base layer's already-resolved shading normal N (this is
+    // also the Khronos-documented fallback: "if this texture is not given,
+    // the geometry/base normal is used instead").
+    const CLEARCOAT_F0: f32 = 0.04;
+    let clearcoat = u.alpha_params.z;
+    let clearcoat_roughness = u.alpha_params.w;
+    let cc_a = clearcoat_roughness * clearcoat_roughness;
+    let cc_a2 = cc_a * cc_a;
+    let cc_r = clearcoat_roughness + 1.0;
+    let cc_k = (cc_r * cc_r) / 8.0;
+    let cc_g_v = n_dot_v / (n_dot_v * (1.0 - cc_k) + cc_k);
+
     var direct = vec3<f32>(0.0);
+    var direct_coat = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
         let l_dir = lights[i * 2u];
@@ -807,6 +832,16 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
+
+        // Coat lobe: same D_GGX/G_Smith shape at clearcoat_roughness,
+        // fixed F0 = 0.04, no diffuse term (a clear lacquer has none).
+        let denom_d_coat = n_dot_h * n_dot_h * (cc_a2 - 1.0) + 1.0;
+        let D_coat = cc_a2 / (PI * denom_d_coat * denom_d_coat);
+        let g_l_coat = n_dot_l / (n_dot_l * (1.0 - cc_k) + cc_k);
+        let G_coat = cc_g_v * g_l_coat;
+        let F_coat = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+        let specular_coat = (D_coat * G_coat * F_coat) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+        direct_coat = direct_coat + specular_coat * l_col.rgb * n_dot_l * l_dir.w * vis;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -828,6 +863,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
     let specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
 
+    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: coat IBL — same split-sum
+    // resample at clearcoat_roughness (Nc = N, same reflection vector R
+    // since v1 has no separate clearcoat normal), fixed F0 = 0.04.
+    let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
+    let coat_env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, clearcoat_roughness), 0.0).rg;
+    let coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
+
     // View-angle Fresnel splits IBL energy between specular and diffuse —
     // the standard split-sum substitute for the light-dependent N·H term a
     // single direct light would give, and the only well-defined choice
@@ -846,8 +888,32 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let ibl = specular_ibl + diffuse_ibl;
 
     let ambient = albedo.rgb * u.scene_params.y * u.ambient_tint.rgb;
+
+    // GLB_CONFORMANCE_DESIGN.md G-P5/D5: clearcoat energy compensation.
+    // Khronos KHR_materials_clearcoat's normative layering equation —
+    // `coated_material = mix(material, clearcoat_brdf, clearcoat *
+    // clearcoat_fresnel)`, i.e. `material * (1 - Fc) + clearcoat_brdf * Fc`
+    // with `Fc = clearcoat * clearcoat_fresnel` and `clearcoat_fresnel =
+    // 0.04 + 0.96 * (1 - |V·Nc|)^5` — verified against the extension
+    // README (see the G-P5 execution report). "material" in the spec's own
+    // words is "the glTF 2.0 Metallic-Roughness material, including
+    // emission and all extensions" — wider than this doc's summarizing
+    // "base *= 1 - Fc" prose (which named only diffuse+base specular); this
+    // implementation follows the README and scales the FULL base term
+    // (direct + IBL + ambient + emission) by `(1 - Fc)`, then adds the
+    // coat's own direct+IBL response weighted by `Fc` — see the report for
+    // why this is not a shape contradiction, only a wider "base".
+    // `clearcoat = 0` (the default, no extension) makes `Fc` exactly zero:
+    // base * 1.0 + coat * 0.0 = base, byte-identical to pre-G-P5.
+    let v_dot_nc = n_dot_v;
+    let clearcoat_fresnel = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_nc, 0.0, 1.0), 5.0);
+    let fc = clearcoat * clearcoat_fresnel;
+    let base_rgb = direct + ibl + ambient + resolve_emissive(in.uv);
+    let coat_rgb = direct_coat + coat_ibl;
+    let lit = base_rgb * (1.0 - fc) + coat_rgb * fc;
+
     // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md §2 D5, see fs_unlit.
-    let rgb = apply_fog(direct + ibl + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
+    let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
     return vec4<f32>(rgb, albedo.a);
 }
 

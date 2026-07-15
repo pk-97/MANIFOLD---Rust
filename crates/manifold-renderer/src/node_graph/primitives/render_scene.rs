@@ -302,6 +302,14 @@ struct RenderSceneUniforms {
     /// `mr_map_n` wired, `y` = `occlusion_map_n` wired, `z` =
     /// `emissive_map_n` wired, `w` reserved.
     texture_flags2: [f32; 4],
+    /// `x` = alpha_mode (1.0 = Mask/cutout, 0.0 = Opaque), `y` =
+    /// alpha_cutoff. `z`/`w` were permanently-zero reserved slots until
+    /// GLB_CONFORMANCE_DESIGN.md G-P5/D5 repurposed them: `z` = `clearcoat`
+    /// (KHR_materials_clearcoat's `clearcoatFactor`, default `0.0`), `w` =
+    /// `clearcoat_roughness` (`clearcoatRoughnessFactor`, default `0.0`) —
+    /// both feed `fs_pbr`'s second GGX lobe. Default `0.0` makes the
+    /// shader's energy-compensation weight exactly zero, byte-identical to
+    /// pre-G-P5 output.
     alpha_params: [f32; 4],
     /// `(light_count, ambient, exposure_ev, 0)`. `light_count` is the sole
     /// source of truth for how many `@binding(8)` entries the shader reads —
@@ -339,7 +347,9 @@ struct RenderSceneUniforms {
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
-// `pbr_metallic_roughness` instead of growing the struct).
+// `pbr_metallic_roughness` instead of growing the struct). Still 656 after
+// G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
+// reserved slots — no struct growth.
 const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 656);
 
 /// Per-(caster, object) uniform for the shadow depth pass
@@ -1656,8 +1666,11 @@ fn build_uniforms(
                 AlphaMode::Opaque | AlphaMode::Blend => 0.0,
             },
             material.alpha_cutoff,
-            0.0,
-            0.0,
+            // GLB_CONFORMANCE_DESIGN.md G-P5/D5: z/w were permanently-zero
+            // reserved slots, now clearcoat/clearcoat_roughness — see the
+            // struct's field doc comment.
+            material.clearcoat,
+            material.clearcoat_roughness,
         ],
         // z = exposure_ev (CAMERA_AND_LENS_DESIGN.md §2 D5) — the fragment
         // shaders multiply their final straight rgb by exp2(scene_params.z).

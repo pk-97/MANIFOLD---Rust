@@ -572,13 +572,17 @@ fn build_import_graph(
         let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
-        // line, never a silent drop. clearcoat stays report-only
-        // (Deferred #1); transmission and BLEND are no longer report-only —
+        // line, never a silent drop. GLB_CONFORMANCE_DESIGN.md G-P5/D5:
+        // clearcoatFactor/clearcoatRoughnessFactor are now REAL mappings
+        // (below, on `node.pbr_material`) — only a TEXTURED coat
+        // (clearcoatTexture/clearcoatRoughnessTexture/
+        // clearcoatNormalTexture, factor-only v1) stays report-only
+        // (Deferred #2). Transmission and BLEND are also real mappings —
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5 maps both to a real `Blend`
         // material below, so they produce no line here.
-        if m.clearcoat {
+        if m.clearcoat_has_texture {
             report_lines.push(format!(
-                "{group_name}: KHR_materials_clearcoat present — clearcoat coat layer not imported (report-only, no clear-coat lobe in v1)"
+                "{group_name}: KHR_materials_clearcoat has a clearcoatTexture/clearcoatRoughnessTexture/clearcoatNormalTexture — only the factors (clearcoatFactor/clearcoatRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
             ));
         }
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform is
@@ -722,6 +726,16 @@ fn build_import_graph(
         mat_node
             .params
             .insert("specular_tint_b".to_string(), float(m.specular_color_factor[2]));
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat
+        // factors → the second GGX lobe (`fs_pbr`). Defaults (0.0/0.0)
+        // reproduce byte-identical pre-G-P5 output — see `gltf_load.rs`.
+        mat_node
+            .params
+            .insert("clearcoat".to_string(), float(m.clearcoat_factor));
+        mat_node.params.insert(
+            "clearcoat_roughness".to_string(),
+            float(m.clearcoat_roughness_factor),
+        );
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
         let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
@@ -1920,7 +1934,9 @@ mod tests {
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         };
@@ -2106,7 +2122,9 @@ mod tests {
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         }
@@ -2239,16 +2257,21 @@ mod tests {
         }
     }
 
-    /// D9 doctrine ("every import produces a report") applied to F-P4's
-    /// one remaining not-yet-mapped feature: clearcoat. Transmission and
-    /// BLEND (F-P5/D8) are now REAL mappings, not report-only — an
-    /// over-featured synthetic material carrying clearcoat + transmission +
-    /// BLEND alphaMode must report only clearcoat, and must build a real
-    /// `Blend` material with the transmission-folded alpha.
+    /// D9 doctrine ("every import produces a report") applied to G-P5's one
+    /// remaining not-yet-mapped clearcoat feature: a TEXTURED coat.
+    /// Transmission and BLEND (F-P5/D8) are real mappings, not
+    /// report-only; clearcoat's FACTOR is now a real mapping too (G-P5/D5).
+    /// An over-featured synthetic material carrying a textured clearcoat
+    /// together with transmission and a BLEND alphaMode must report only
+    /// the clearcoat texture, and must build a real `Blend` material with
+    /// the transmission-folded alpha AND the clearcoat factor wired onto
+    /// `node.pbr_material`.
     #[test]
-    fn over_featured_material_reports_only_clearcoat_and_maps_transmission_to_blend() {
+    fn over_featured_material_reports_only_clearcoat_texture_and_maps_transmission_to_blend() {
         let mut m = full_material(0, "Kitchen Sink", 300);
-        m.clearcoat = true;
+        m.clearcoat_factor = 1.0;
+        m.clearcoat_roughness_factor = 0.1;
+        m.clearcoat_has_texture = true;
         m.transmission_factor = 0.9;
         m.was_blend = true;
         m.alpha_mask = false; // a real glTF BLEND material never sets MASK too
@@ -2263,7 +2286,11 @@ mod tests {
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
         println!("over-featured report: {:#?}", report.report_lines);
-        assert_eq!(report.report_lines.len(), 1, "only clearcoat remains report-only");
+        assert_eq!(
+            report.report_lines.len(),
+            1,
+            "only the clearcoat texture remains report-only (the factor is now mapped)"
+        );
         assert!(
             report.report_lines.iter().any(|l| l.contains("clearcoat")),
             "missing a clearcoat report line: {:?}",
@@ -2295,6 +2322,10 @@ mod tests {
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: the factor IS mapped, only the
+        // texture is report-only.
+        assert_eq!(mat.params.get("clearcoat"), Some(&float(1.0)));
+        assert_eq!(mat.params.get("clearcoat_roughness"), Some(&float(0.1)));
     }
 
     /// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
@@ -2518,7 +2549,9 @@ mod tests {
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         };

@@ -101,6 +101,18 @@ enum CheckSpec {
     /// does). `mean(G) - mean(R)` over `region` must exceed `value`.
     #[serde(rename = "region_green_minus_red_above")]
     RegionGreenMinusRedAbove { region: [f64; 4], value: f64 },
+    /// GLB_CONFORMANCE_DESIGN.md G-P5: "clearcoat=1 sphere has brighter
+    /// specular peak than clearcoat=0" — a PEAK comparison, not a mean one.
+    /// None of the existing mean-based kinds fit: ClearCoatTest's
+    /// "Base layer"/"Coated" panels are near-identical diffuse red over
+    /// most of their area (the coat's Fresnel-weighted contribution is
+    /// concentrated in the specular highlight itself, a small fraction of
+    /// each region — a whole-panel MEAN comparison is diluted to noise,
+    /// verified empirically this session: mean barely moves while max
+    /// moves ~74%). `region`'s max luminance must exceed `value *
+    /// reference_region`'s max luminance.
+    #[serde(rename = "region_max_luminance_above")]
+    RegionMaxLuminanceAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
 }
 
 /// Mean luminance over a normalized `[x0,y0,x1,y1]` rect of a tonemapped
@@ -123,6 +135,30 @@ fn region_mean_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
         }
     }
     sum / n.max(1) as f64
+}
+
+/// Max luminance over a normalized `[x0,y0,x1,y1]` rect — same rect
+/// convention as [`region_mean_luminance`], same luminance weights.
+/// GLB_CONFORMANCE_DESIGN.md G-P5: isolates a specular PEAK, which a mean
+/// over the same region dilutes away (see `RegionMaxLuminanceAbove`'s doc
+/// comment).
+fn region_max_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
+    let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);
+    let y0 = ((region[1] * HEIGHT as f64) as u32).min(HEIGHT - 1);
+    let x1 = ((region[2] * WIDTH as f64) as u32).clamp(x0 + 1, WIDTH);
+    let y1 = ((region[3] * HEIGHT as f64) as u32).clamp(y0 + 1, HEIGHT);
+    let mut max_lum = 0.0f64;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            let r = rgba[i] as f64;
+            let g = rgba[i + 1] as f64;
+            let b = rgba[i + 2] as f64;
+            let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            max_lum = max_lum.max(lum);
+        }
+    }
+    max_lum
 }
 
 /// Mean `(r, g, b)` over a normalized `[x0,y0,x1,y1]` rect — same rect
@@ -379,6 +415,25 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
                 Ok(())
             } else {
                 Err(format!("region mean G-R {diff:.2} <= floor {value}"))
+            }
+        }
+        CheckSpec::RegionMaxLuminanceAbove { region, reference_region, value } => {
+            let rgba = render_asset(path, &[], 0.02)?;
+            let region_max = region_max_luminance(&rgba, *region);
+            let reference_max = region_max_luminance(&rgba, *reference_region);
+            println!(
+                "  {asset}: region_max_luminance = {region_max:.2}, reference_max = {reference_max:.2} \
+                 (region must be > {value} * reference = {:.2})",
+                value * reference_max
+            );
+            if !assert || region_max > value * reference_max {
+                Ok(())
+            } else {
+                Err(format!(
+                    "region_max_luminance {region_max:.2} <= {value} * reference_max {reference_max:.2} \
+                     ({:.2}) — the coated region's specular peak isn't brighter than the base",
+                    value * reference_max
+                ))
             }
         }
     }

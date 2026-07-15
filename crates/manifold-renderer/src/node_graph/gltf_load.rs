@@ -445,10 +445,25 @@ pub(crate) struct GltfMaterialInfo {
     /// the importer map this material to `Blend`, with
     /// `alpha = base_color.a * (1 - transmission_factor)`.
     pub transmission_factor: f32,
-    /// `KHR_materials_clearcoat` extension present (raw `extensions` JSON
-    /// presence check — gltf 1.4.1 has no typed clearcoat support).
-    /// Report-only, Deferred #1 in IMPORT_FIDELITY_DESIGN.md.
-    pub clearcoat: bool,
+    /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
+    /// own implicit default, and the value that makes G-P5's coat lobe
+    /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
+    /// `extensions` JSON, not a typed accessor — gltf 1.4.1 has no
+    /// `KHR_materials_clearcoat` feature (VERIFIED against the pinned
+    /// crate's own `Cargo.toml`/source this session: no such feature name
+    /// exists in either `gltf` or `gltf-json` 1.4.1, unlike `specular`/
+    /// `ior` in G-P4 — see the G-P5 execution report). Same raw-JSON-sniff
+    /// doctrine `specular_has_texture` already uses for map presence.
+    pub clearcoat_factor: f32,
+    /// `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
+    /// `0.0`).
+    pub clearcoat_roughness_factor: f32,
+    /// `true` when `KHR_materials_clearcoat` carries a `clearcoatTexture`,
+    /// `clearcoatRoughnessTexture`, and/or `clearcoatNormalTexture` — v1
+    /// maps the FACTORS only (D5); a textured coat is unmapped and
+    /// reported rather than silently dropped (Deferred #2 in
+    /// GLB_CONFORMANCE_DESIGN.md owns map-driven coat).
+    pub clearcoat_has_texture: bool,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
     /// these to `alpha_mask` cutout (the F-P5 stopgap — `alpha_mask` above
     /// is already `true` when this is) and the importer emits a report
@@ -714,6 +729,29 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 s.specular_texture().is_some() || s.specular_color_texture().is_some()
             });
 
+            // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat.
+            // No typed accessor in gltf 1.4.1 (verified: no
+            // `KHR_materials_clearcoat` feature in either `gltf` or
+            // `gltf-json` 1.4.1's own `Cargo.toml`) — raw JSON sniff via
+            // the same `extension_value` this file already used for the
+            // presence-only boolean, extended to pull the two factors.
+            // glTF's own implicit defaults (0.0 for both) make an absent
+            // extension byte-identical to pre-G-P5.
+            let clearcoat_ext = m.extension_value("KHR_materials_clearcoat");
+            let clearcoat_factor = clearcoat_ext
+                .and_then(|v| v.get("clearcoatFactor"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            let clearcoat_roughness_factor = clearcoat_ext
+                .and_then(|v| v.get("clearcoatRoughnessFactor"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            let clearcoat_has_texture = clearcoat_ext.is_some_and(|v| {
+                v.get("clearcoatTexture").is_some()
+                    || v.get("clearcoatRoughnessTexture").is_some()
+                    || v.get("clearcoatNormalTexture").is_some()
+            });
+
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
@@ -745,7 +783,9 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .transmission()
                     .map(|t| t.transmission_factor())
                     .unwrap_or(0.0),
-                clearcoat: m.extension_value("KHR_materials_clearcoat").is_some(),
+                clearcoat_factor,
+                clearcoat_roughness_factor,
+                clearcoat_has_texture,
                 was_blend,
                 vertex_count,
             })

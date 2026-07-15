@@ -29,7 +29,7 @@ const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 crate::primitive! {
     name: PbrMaterial,
     type_id: "node.pbr_material",
-    purpose: "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",
+    purpose: "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). `clearcoat` (0..1) layers a second, always-dielectric (F0=0.04) GGX specular lobe on top — a car-paint/lacquer coat — with its own `clearcoat_roughness`; the base layer is energy-compensated by the coat's Fresnel (KHR_materials_clearcoat, factor-only v1). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",
     inputs: {
         color_r: ScalarF32 optional,
         color_g: ScalarF32 optional,
@@ -49,6 +49,11 @@ crate::primitive! {
         specular_tint_g: ScalarF32 optional,
         specular_tint_b: ScalarF32 optional,
         ior: ScalarF32 optional,
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat —
+        // second GGX specular lobe. Factor-only v1 (D5); textures stay
+        // report lines.
+        clearcoat: ScalarF32 optional,
+        clearcoat_roughness: ScalarF32 optional,
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -234,6 +239,22 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.5),
             range: Some((1.0, 3.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("clearcoat"),
+            label: "Clearcoat",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("clearcoat_roughness"),
+            label: "Clearcoat Roughness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -520,6 +541,11 @@ impl Primitive for PbrMaterial {
         let specular_tint_g = ctx.scalar_or_param("specular_tint_g", 1.0);
         let specular_tint_b = ctx.scalar_or_param("specular_tint_b", 1.0);
         let ior = ctx.scalar_or_param("ior", 1.5);
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5. clearcoat_roughness clamps to
+        // the same 0.01 floor as the base `roughness` above — zero is a
+        // GGX landmine in the coat lobe's own D/G terms too.
+        let clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
+        let clearcoat_roughness = ctx.scalar_or_param("clearcoat_roughness", 0.0).max(0.01);
         // One folded per-map UV affine per family (G-P4). The closure keeps
         // the 30 reads mechanical; identity defaults are exactly inert.
         let uv_xf = |prefix: &str| -> [f32; 6] {
@@ -551,6 +577,8 @@ impl Primitive for PbrMaterial {
         material.specular_factor = specular;
         material.specular_tint = [specular_tint_r, specular_tint_g, specular_tint_b];
         material.ior = ior;
+        material.clearcoat = clearcoat;
+        material.clearcoat_roughness = clearcoat_roughness;
         material.base_color_uv_transform = base_color_uv_transform;
         material.normal_uv_transform = normal_uv_transform;
         material.mr_uv_transform = mr_uv_transform;
