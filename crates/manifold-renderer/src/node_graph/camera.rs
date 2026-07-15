@@ -140,6 +140,14 @@ impl Camera {
     /// orbiting the same target — radians, positive = clockwise when looking
     /// along `fwd`. `look_at_rh` is rebuilt from the rolled `up` so the view
     /// matrix reflects the roll too.
+    ///
+    /// The basis is the analytic spherical frame (∂pos/∂tilt for up, the
+    /// horizontal orbit tangent for right), NOT `cross(fwd, world_up)`: the
+    /// cross-product frame flips the image the instant |tilt| passes 90°
+    /// (cos(tilt) changes sign), so a wrapped tilt slider mirrored at the
+    /// poles instead of flying over the top. The analytic frame is identical
+    /// for |tilt| < 90° and continuous for every tilt, so a full ±180° tilt
+    /// loop is a smooth over-the-pole orbit with no pole singularity.
     pub fn orbit_perspective(
         orbit: f32,
         tilt: f32,
@@ -156,10 +164,16 @@ impl Camera {
             distance * tilt.sin() + look_y,
             distance * orbit.sin() * tilt.cos(),
         ];
-        let world_up = [0.0, 1.0, 0.0];
         let fwd = normalize3(sub3(target, pos));
-        let right0 = normalize3(cross3(fwd, world_up));
-        let up0 = normalize3(cross3(right0, fwd));
+        // Analytic spherical basis: already unit-length and orthogonal to
+        // `fwd` for every (orbit, tilt) — equals the old
+        // cross(fwd, (0,1,0)) frame wherever cos(tilt) > 0.
+        let right0 = [orbit.sin(), 0.0, -orbit.cos()];
+        let up0 = [
+            -orbit.cos() * tilt.sin(),
+            tilt.cos(),
+            -orbit.sin() * tilt.sin(),
+        ];
         // Roll around the fwd axis. Rotate (right, up) by `roll`.
         let (s, c) = (roll.sin(), roll.cos());
         let right = normalize3([
@@ -206,7 +220,6 @@ impl Camera {
         near: f32,
         far: f32,
     ) -> Self {
-        let world_up = [0.0, 1.0, 0.0];
         // Yaw rotates -Z around Y; pitch tilts that up/down around the
         // resulting right axis. Standard spherical-to-Cartesian derivation.
         let fwd = normalize3([
@@ -214,8 +227,16 @@ impl Camera {
             pitch.sin(),
             -yaw.cos() * pitch.cos(),
         ]);
-        let right0 = normalize3(cross3(fwd, world_up));
-        let up0 = normalize3(cross3(right0, fwd));
+        // Analytic Euler basis (same pole-continuity fix as
+        // `orbit_perspective`): equals cross(fwd, (0,1,0)) wherever
+        // cos(pitch) > 0, stays continuous through pitch = ±90° instead of
+        // mirroring the image there.
+        let right0 = [yaw.cos(), 0.0, -yaw.sin()];
+        let up0 = [
+            yaw.sin() * pitch.sin(),
+            pitch.cos(),
+            yaw.cos() * pitch.sin(),
+        ];
         // Roll around the fwd axis. Rotate (right, up) by `roll` — same
         // formula as `orbit_perspective`.
         let (s, c) = (roll.sin(), roll.cos());
@@ -471,6 +492,56 @@ mod tests {
             + (no_roll.right[1] - rolled.right[1]).abs()
             + (no_roll.right[2] - rolled.right[2]).abs();
         assert!(diff > 0.01, "roll should change `right` vector");
+    }
+
+    /// The pole-flip regression (glb import "Camera Tilt flips past ±90°"):
+    /// the old cross(fwd, world-up) basis mirrored the image the instant
+    /// cos(tilt) went negative. The analytic basis must vary continuously
+    /// as tilt crosses ±90° and around the full ±180° wrap.
+    #[test]
+    fn orbit_basis_is_continuous_through_the_poles() {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        // Sample tilt densely across the full wrap, including both poles.
+        let mut prev = Camera::orbit_perspective(0.7, -half_pi * 2.0, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
+        let steps = 720;
+        for i in 1..=steps {
+            let tilt = -half_pi * 2.0 + (i as f32 / steps as f32) * half_pi * 4.0;
+            let cam = Camera::orbit_perspective(0.7, tilt, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
+            // Adjacent samples (0.5° apart) must keep near-identical frames:
+            // a pole flip shows up as dot ≈ -1 on `up`/`right`.
+            for (name, a, b) in [
+                ("right", prev.right, cam.right),
+                ("up", prev.up, cam.up),
+            ] {
+                assert!(
+                    dot(a, b) > 0.99,
+                    "{name} flipped at tilt {tilt}: dot = {}",
+                    dot(a, b)
+                );
+            }
+            // Basis stays orthonormal everywhere, poles included.
+            assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-4, "unit up at {tilt}");
+            assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-4, "unit right at {tilt}");
+            assert!(dot(cam.fwd, cam.up).abs() < 1e-4, "fwd⊥up at {tilt}");
+            prev = cam;
+        }
+    }
+
+    /// Same continuity contract for the free-look camera's pitch.
+    #[test]
+    fn euler_basis_is_continuous_through_pitch_poles() {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let pi = std::f32::consts::PI;
+        let mut prev = Camera::from_pos_euler([0.0, 0.0, 5.0], 0.4, -pi, 0.0, 0.9, 0.05, 200.0);
+        let steps = 720;
+        for i in 1..=steps {
+            let pitch = -pi + (i as f32 / steps as f32) * 2.0 * pi;
+            let cam = Camera::from_pos_euler([0.0, 0.0, 5.0], 0.4, pitch, 0.0, 0.9, 0.05, 200.0);
+            assert!(dot(prev.up, cam.up) > 0.99, "up flipped at pitch {pitch}");
+            assert!(dot(prev.right, cam.right) > 0.99, "right flipped at pitch {pitch}");
+            prev = cam;
+        }
     }
 
     #[test]

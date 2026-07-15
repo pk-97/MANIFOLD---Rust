@@ -937,25 +937,13 @@ fn build_import_graph(
 
     nodes.push(render_node);
 
-    // Scene-wide atmosphere (fog + god rays): render_scene's `atmosphere`
-    // input is lazy — unwired is byte-identical to wired-at-defaults, since
-    // every param (fog_density, shaft_intensity, …) defaults to 0 (off).
-    // Wired unconditionally, at those same all-off defaults, purely so the
-    // God Rays card has a live node to bind — an import looks unchanged
-    // until that slider moves.
-    let atmosphere_id = fresh_id();
-    let mut atmosphere_node =
-        plain_node(atmosphere_id, "atmosphere", "node.atmosphere", "atmosphere");
-    // Fog color BLACK, not the atom's grey-blue default: an import sits in a
-    // black void, and grey fog mixes the model toward a colour that exists
-    // nowhere in the scene — reads as a cut-out sticker over the void
-    // (BUG-149 follow-up, Peter 2026-07-14). Black fog fades the model's far
-    // side into the same black as the background (depth cueing, no seam),
-    // and the haze look comes from the shaft march lighting the air instead.
-    atmosphere_node.params.insert("fog_color_r".to_string(), float(0.0));
-    atmosphere_node.params.insert("fog_color_g".to_string(), float(0.0));
-    atmosphere_node.params.insert("fog_color_b".to_string(), float(0.0));
-    nodes.push(atmosphere_node);
+    // No atmosphere node (fog + god rays removed, Peter 2026-07-15): the
+    // BUG-149 scene-scaled fog and shaft knobs never produced the look he
+    // wanted on imports — the cinematic void-haze treatment is a pending
+    // design of its own (`project_void_haze_design_pending`), not two
+    // faders on this card. render_scene's `atmosphere` input is lazy, so
+    // leaving it unwired is byte-identical to the old wired-at-defaults
+    // node with both sliders at 0.
 
     // SSAO contact-occlusion arm, packaged as the same "ao" node group
     // CinematicScene ships (CINEMATIC_POST D9): ssao_gtao → bilateral_blur
@@ -1056,7 +1044,6 @@ fn build_import_graph(
     wires.push(wire(lens_id, "out", render_id, "camera"));
     wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
-    wires.push(wire(atmosphere_id, "atmosphere", render_id, "atmosphere"));
 
     // render_scene → ao (contact AO) → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
@@ -1196,36 +1183,9 @@ fn build_import_graph(
     // (`ssao_radius_default`/1.0 intensity, set on the ssao node above);
     // it's just no longer exposed on the outer card.
 
-    // Atmosphere — two independent node.atmosphere knobs, each its own
-    // slider (not folded together): `shaft_intensity` alone does nothing
-    // visible — the shaft march scatters light through the fog medium, so
-    // `fog_density` must also be raised for beams to actually appear
-    // (docs/VOLUMETRIC_LIGHT_DESIGN.md D1/D4: "the two faders", both
-    // required together). Kept separate rather than one combined "God
-    // Rays" knob so fog and shafts stay independently dialable, matching
-    // how every other card knob here maps 1:1 to a node param. Both
-    // default to 0 (off, matches the atom's own defaults) — the sun's
-    // `cast_shadows` (already on above) is what gives the shafts their
-    // shape once both faders are up.
-    //
-    // Fog density is scene-scaled like the internal `ssao_radius_default`
-    // (BUG-149):
-    // the atom's `fog_density` is per-world-unit, so a raw 0–1 slider is a
-    // cliff on any real import (0.13 at the apricot fixture's 27.87-unit
-    // framing distance is optical depth ~3.6 ≈ 97% fog — flat grey mesh,
-    // and the shaft march's in-scattering then blows out the whole frame).
-    // The binding scale maps the slider to optical depth AT THE SUBJECT
-    // (density · framing distance): 3.0/distance puts slider 1.0 at depth
-    // 3 ≈ 95% fogged (whiteout stays reachable), 0.5 ≈ 78%, 0.1 ≈ 26%
-    // haze — the same perceptual fader on any model scale.
-    card_params.push(card_param("fog_density", "Fog Density", 0.0, 1.0, 0.0, false, "Atmosphere"));
-    card_bindings.push(card_binding(
-        "fog_density", "Fog Density", 0.0, "atmosphere", "fog_density", 3.0 / distance,
-    ));
-    card_params.push(card_param("god_rays", "God Rays", 0.0, 2.0, 0.0, false, "Atmosphere"));
-    card_bindings.push(card_binding(
-        "god_rays", "God Rays", 0.0, "atmosphere", "shaft_intensity", 1.0,
-    ));
+    // No Atmosphere section: fog + god rays removed with the atmosphere
+    // node (Peter 2026-07-15) — see the removal comment in
+    // `build_import_graph`.
 
     // Category "Geometry" matches the existing 3D-geometry generator
     // convention (Tesseract / DigitalPlants / NestedCubes / Duocylinder /
@@ -1593,25 +1553,22 @@ mod tests {
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
         // + 1 Environment + 1 Fill Light + 1 Strip Lights (F-P7) + 1 Ambient
-        // = 13 framing/material sliders, PLUS 2 Atmosphere (fog density, god
-        // rays — no Motion Blur section, BUG-136) = 15. No per-object
-        // Metallic/Roughness and no SSAO/DoF card sliders (Peter,
-        // 2026-07-15: DoF removed for buggy visuals, AO/metallic/roughness
-        // hidden — defaults still apply, just not on the card).
-        assert_eq!(
-            meta.params.len(),
-            15,
-            "13 framing/material + 2 atmosphere (fog + god rays)"
-        );
+        // = 13 framing/material sliders. No Atmosphere section (fog + god
+        // rays removed with the atmosphere node, Peter 2026-07-15), no
+        // Motion Blur (BUG-136), no per-object Metallic/Roughness and no
+        // SSAO/DoF card sliders (Peter, 2026-07-15: DoF removed for buggy
+        // visuals, AO/metallic/roughness hidden — defaults still apply,
+        // just not on the card).
+        assert_eq!(meta.params.len(), 13, "13 framing/material sliders");
         // Every param routes one-to-one except: the shared Ambient, which
         // fans out to every material's ambient (2 for azalea); and D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 15 + 1 (ambient) + 3 (sun coherence) = 19.
+        // bindings. 13 + 1 (ambient) + 3 (sun coherence) = 17.
         assert_eq!(
             meta.bindings.len(),
-            19,
-            "15 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            17,
+            "13 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1707,8 +1664,9 @@ mod tests {
         // GTAO and the lens are wired into the spine. No motion blur
         // (BUG-136 + fusion cost, see the removal comment in
         // `build_import_graph`), no depth-of-field group (Peter, 2026-07-15:
-        // buggy visuals), and atmosphere is a top-level node.
-        for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens", "node.atmosphere"] {
+        // buggy visuals), no atmosphere node (fog + god rays removed,
+        // Peter 2026-07-15).
+        for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens"] {
             assert!(
                 def.nodes.iter().any(|n| n.type_id == present)
                     || def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
@@ -1728,6 +1686,7 @@ mod tests {
             "node.coc_from_depth",
             "node.coc_dilate",
             "node.bokeh_gather",
+            "node.atmosphere",
         ] {
             assert!(
                 !def.nodes.iter().any(|n| n.type_id == absent)
@@ -1745,60 +1704,9 @@ mod tests {
                 "no card param should start with `{gone_prefix}`"
             );
         }
-        // Fog density and god rays are two independent atmosphere sliders,
-        // not folded into one — the atom needs both raised together to show
-        // beams (see the card-authoring comment in `build_import_graph`),
-        // but each still routes to its own atmosphere param 1:1 like every
-        // other card knob.
-        for (id, section, target_node) in [
-            ("fog_density", "Atmosphere", "atmosphere"),
-            ("god_rays", "Atmosphere", "atmosphere"),
-        ] {
-            let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing card param `{id}`"));
-            assert_eq!(p.section.as_deref(), Some(section), "`{id}` section");
-            let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
-            match &b.target {
-                BindingTarget::Node { node_id, .. } => {
-                    assert_eq!(node_id.as_str(), target_node, "`{id}` binds `{target_node}`")
-                }
-                other => panic!("expected a Node target for `{id}`, got {other:?}"),
-            }
-        }
-        // Defaults keep a fresh import visually unchanged: fog/god rays both
-        // start at their neutral (no-op) value.
-        let fog_density = meta.params.iter().find(|p| p.id == "fog_density").unwrap();
-        assert_eq!(fog_density.default_value, 0.0, "fog starts off");
-        let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
-        assert_eq!(god_rays.default_value, 0.0, "god rays start off");
-        // BUG-149: fog density is scene-scaled — the binding maps the 0–1
-        // slider to optical depth at the subject (3.0 / framing distance,
-        // where the framing distance is exactly the cam_dist card default),
-        // never raw per-world-unit density.
-        let cam_dist = meta.params.iter().find(|p| p.id == "cam_dist").unwrap();
-        let fog_binding = meta.bindings.iter().find(|b| b.id == "fog_density").unwrap();
-        assert!(
-            (fog_binding.scale * cam_dist.default_value - 3.0).abs() < 1e-4,
-            "fog slider must scale by 3.0/framing-distance (got scale {} at distance {})",
-            fog_binding.scale,
-            cam_dist.default_value
-        );
-        // Imports sit in a black void: fog colour must be black (fade into
-        // the void, no grey cut-out wash), not the atom's grey-blue default.
-        let atmo = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.atmosphere")
-            .expect("import graph has an atmosphere node");
-        for c in ["fog_color_r", "fog_color_g", "fog_color_b"] {
-            assert_eq!(
-                atmo.params.get(c),
-                Some(&float(0.0)),
-                "atmosphere `{c}` must default to black for void imports"
-            );
-        }
         for gone in [
             "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
-            "motion_blur_px", "mb_shutter", "ssao_bias",
+            "motion_blur_px", "mb_shutter", "ssao_bias", "fog_density", "god_rays",
         ] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),
