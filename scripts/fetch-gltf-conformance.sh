@@ -101,4 +101,31 @@ for f in ${TT_FILES}; do
     tt_fetched=$((tt_fetched + 1))
 done
 
-echo "[fetch-gltf-conformance] done: $((fetched + tt_fetched)) fetched, $((skipped + tt_skipped)) already present"
+
+# G-P6 — node.hdri_source's demo material. NOT part of the Khronos suite:
+# Poly Haven CC0 4k equirect HDRI, direct URL, no commit-pin needed (single
+# stable asset, not a versioned repo tree). Skip-demo-if-absent, same
+# pattern as everything above and the held-out AMG fixture — G-P6's own
+# tests generate a synthetic EXR in-process rather than depending on this
+# file; only the acceptance-demo render (`render-import ... --param
+# env_mode=1 --param hdri_file=...`) needs it. Never vendored/committed —
+# see .gitignore.
+HDRI_URL="https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/4k/kloppenheim_07_puresky_4k.exr"
+HDRI_OUT="${REPO_ROOT}/tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr"
+hdri_fetched=0
+hdri_skipped=0
+if [ -s "${HDRI_OUT}" ]; then
+    echo "[fetch-gltf-conformance] already have kloppenheim_07_puresky_4k.exr, skipping"
+    hdri_skipped=1
+else
+    echo "[fetch-gltf-conformance] fetching kloppenheim_07_puresky_4k.exr"
+    if ! curl -sfL -o "${HDRI_OUT}.tmp" "${HDRI_URL}"; then
+        echo "[fetch-gltf-conformance] ERROR: failed to fetch ${HDRI_URL}" >&2
+        rm -f "${HDRI_OUT}.tmp"
+        exit 1
+    fi
+    mv "${HDRI_OUT}.tmp" "${HDRI_OUT}"
+    hdri_fetched=1
+fi
+
+echo "[fetch-gltf-conformance] done: $((fetched + tt_fetched + hdri_fetched)) fetched, $((skipped + tt_skipped + hdri_skipped)) already present"

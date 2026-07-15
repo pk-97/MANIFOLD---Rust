@@ -23,7 +23,7 @@ tiff = "0.9"
 # Still-image decode for node.image_folder. TIFF stays on the dedicated
 # `tiff` path above (bit-exact u16/f32 grayscale for MRI scans); `image`
 # covers the everyday formats. Lean feature set, no default decoders.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # glTF/.glb parse for node.gltf_mesh_source (node_graph::gltf_load) — a
 # production import primitive, not test-only. mesh_snapshot's azalea proof
