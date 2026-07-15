@@ -96,6 +96,23 @@ pub struct ParamDef {
     /// still round-trip through the JSON catalog file itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// Angle display flag — mirrors [`crate::effect_graph_def::ParamSpecDef::is_angle`]
+    /// here for the SAME reason `is_trigger_gate`/`section` above do: a
+    /// glTF-imported generator TRACKS its embedded preset (`graph: None`,
+    /// D9/BUG-016), so this registry path is its only descriptor source.
+    /// Without the mirror, `to_spec`'s hardcoded `false` stripped the flag
+    /// and the import card's Camera Orbit/Tilt sliders displayed raw
+    /// radians instead of degrees (Peter, 2026-07-15).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_angle: bool,
+    /// Wrap-at-range-edges flag — mirrors
+    /// [`crate::effect_graph_def::ParamSpecDef::wraps`]; same carry-through
+    /// rationale as `is_angle` above (the modulation/automation write
+    /// boundary reads it via the manifest spec, so a stock imported
+    /// generator's 360° camera sliders only wrap if it survives the
+    /// registry round-trip).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wraps: bool,
     /// A real physical/mathematical boundary this param's inner value must
     /// not cross — as opposed to `min`/`max` above, which are display hints
     /// (default slider travel) a card, text entry, or modulation is free to
@@ -180,6 +197,8 @@ impl Default for ParamDef {
             invert: false,
             is_trigger_gate: false,
             section: None,
+            is_angle: false,
+            wraps: false,
             contract: None,
         }
     }
@@ -207,13 +226,13 @@ impl ParamDef {
             osc_suffix: self.osc_suffix.clone().unwrap_or_default(),
             curve: self.curve,
             invert: self.invert,
-            // Bundled/registry params carry no angle source (a `ParamDef` never
-            // recorded angle-ness — bundled presets that want degrees use
-            // `format_string`). Angle display is a user-expose concern, seeded
-            // onto the spec in `append_user_binding`.
-            is_angle: false,
+            // Carried through since 2026-07-15 (same load-bearing rationale
+            // as `section` below): a glTF-imported generator's angle sliders
+            // read the registry, and the old hardcoded `false` here showed
+            // radians on the import card.
+            is_angle: self.is_angle,
             is_trigger_gate: self.is_trigger_gate,
-            wraps: false,
+            wraps: self.wraps,
             // Carries through now (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
             // D5, load-bearing fix): a glTF-imported generator TRACKS its
             // embedded preset (`graph: None`, D9/BUG-016), so this registry
@@ -246,6 +265,8 @@ pub(crate) fn param_def_from_spec(s: &crate::effect_graph_def::ParamSpecDef) -> 
         invert: s.invert,
         is_trigger_gate: s.is_trigger_gate,
         section: s.section.clone(),
+        is_angle: s.is_angle,
+        wraps: s.wraps,
         // `ParamSpecDef` (the card manifest) deliberately carries no
         // contract — contracts are an inner-node fact the card can't own
         // (PARAM_RANGE_CONTRACT_DESIGN.md D3/D4); this view synthesizes a
