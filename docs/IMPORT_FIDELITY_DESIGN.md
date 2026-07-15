@@ -144,7 +144,8 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   `softbox` — and imports wire `softbox` at intensity 1.0 (today: gradient at 0.0).**
   Softbox = near-black base with N bright horizontal emitter strips; committed
   params: `mode`, `emitter_count` (default 3), `emitter_intensity`, `emitter_elevation`,
-  `emitter_width` — strip math is executor-free, gated on a reference render. This
+  `emitter_width` — strip math is executor-free within those params, gated by
+  F-P3's numeric readback (luminance histogram + strip count), never a look. This
   is Peter's call, quoted: "I prefer the black void look rather than the pure white
   studio … the pure black void AND proper lighting". Background stays the clear
   colour (the envmap is lighting-only — audit table); chrome reflects light streaks,
@@ -210,6 +211,22 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 
 ## 5. Phasing (Sonnet-executable, one session each)
 
+**Verification protocol for orchestrated (Sonnet → Sonnet) execution.** Every
+worker pass/fail criterion in this section is mechanical — numeric readbacks,
+byte-parity diffs, dispatch-count asserts, `rg` hit counts, named green tests. No
+worker or orchestrator gate in this doc requires looking at an image or judging a
+look. The L2 PNG demos are **artifacts produced for Peter** (attached to the
+landing report per standard §8.8) — they are never a correctness oracle for any
+agent; the AMG GT3 render is Peter's L4 check and his alone. gpu-proofs gate runs
+are **serialized across the wave** — never run two phases' `--features gpu-proofs`
+gates concurrently (device contention flakes them; the in-process `test_device`
+lock only serializes within one process).
+
+**Execution order:** F-P3 is independent of F-P1/F-P2 (it touches only
+`bake_equirect_envmap.rs`) and may run in parallel with them in its own worktree.
+F-P2 needs F-P1's bindings landed. F-P4 needs F-P1–F-P3. F-P5 needs F-P1 + F-P4.
+Landings batch 2–3 phases per the repo protocol.
+
 Forbidden, all phases: touching `render_mesh`/`render_copies` behaviour (D1) ·
 growing `MeshVertex` (D4) · a user-facing prefilter atom or new port type (D2) ·
 channel-select mode flags on shared resolve functions (D3) · touching fog/BUG-118 ·
@@ -218,7 +235,11 @@ instead of reading it (`feedback_synthesis_drift`).
 
 - **F-P1 — Split-sum IBL in `render_scene`.** Prefiltered chain + irradiance map +
   BRDF LUT (D2), `fs_pbr` rewritten to consume them, `ibl_strength` heuristic
-  deleted. Read-back: this doc whole; `render_scene.rs` envmap plumbing + binding
+  deleted. Convolution sample counts are DEFAULTED, not open: 256
+  importance-samples per prefiltered-mip texel, 512 per irradiance texel, 1024
+  per LUT texel — change only if the F-P1 cost measurement exceeds 10ms for the
+  512×256 chain, and record the change in the phase report (no other trigger).
+  Read-back: this doc whole; `render_scene.rs` envmap plumbing + binding
   table end-to-end; `pbr_brdf.wgsl`; MANIFOLD_GPU_ARCHITECTURE uniform rules;
   the two-cache rule (`feedback_effect_chain_state_caches`). Gate (positive,
   gpu-proofs): roughness-response — reflection of a bright emitter across a
@@ -259,11 +280,14 @@ instead of reading it (`feedback_synthesis_drift`).
   `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/§8. Gate
   (positive): unit tests — a synthetic summary with all texture kinds wires all
   ports with correct colour spaces; **held-out fixture** — Khronos DamagedHelmet
-  (all five maps; CC-BY, add attribution line) imports with every map wired,
-  renders headless, PNG eyeballed against the Khronos reference render by the
-  landing session (L2); the AMG GT3 .glb (already local in `tests/fixtures/gltf/`,
-  untracked — **stays untracked**: vecarz licensing unverified, never commit it)
-  renders and is the Peter-facing look check (L4, his call). Gate (negative):
+  (all five maps; CC-BY, add attribution line) imports with every map port wired
+  (asserted by port name), renders headless without error, and the render is
+  non-degenerate (mean luminance above 0.02 AND below 0.98 — catches both
+  all-black and blown-out without judging the look); its PNG is attached to the
+  landing report as a Peter-facing artifact, not a gate; the AMG GT3 .glb
+  (already local in `tests/fixtures/gltf/`, untracked — **stays untracked**:
+  vecarz licensing unverified, never commit it) renders and is the Peter-facing
+  look check (L4, his call, not any agent's). Gate (negative):
   report enumerates every unmapped feature of an over-featured fixture; existing
   assembler tests green; `check-presets` clean. Round-trip gate: save an imported
   project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
