@@ -225,10 +225,10 @@ Corrections to this doc's §1 audit and P1 scope:
 - **glTF `alphaMode` mapping (P1):** `OPAQUE` → `Opaque`; `MASK` → `Mask` +
   `alphaCutoff` → `alpha_cutoff`; `BLEND` → `Mask` (cutoff 0.5) **with an
   import-report warning** (MATERIAL M6-D3 — smooth transparency deferred).
-  **[SUPERSEDED for scene imports 2026-07-15: IMPORT_FIDELITY D8/F-P5 maps
-  `BLEND` and `KHR_materials_transmission` to `AlphaMode::Blend` in
-  `render_scene` once F-P5 lands; the Mask mapping remains the stopgap until
-  then and stays correct for `render_mesh`.]**
+  **[SUPERSEDED for scene imports 2026-07-15: IMPORT_FIDELITY D8/F-P5 (SHIPPED
+  2026-07-15, `61400029`) maps `BLEND` and `KHR_materials_transmission` to
+  `AlphaMode::Blend` in `render_scene`; the Mask mapping stays correct for
+  `render_mesh`/`render_copies` (D1 scope fence — untouched by this doc).]**
   `doubleSided` imports as a no-op with a report note: the engine rasterizes both
   faces already and back-face lighting is corrected by M6-D4.
 - **glTF normal maps are tangent-space; the engine's `normal_map` is world-space**
