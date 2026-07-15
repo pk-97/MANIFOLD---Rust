@@ -142,10 +142,16 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 - **D7 — The default import look becomes "black-void studio": `node.bake_environment`
   gains a `mode` enum — `gradient` (default, byte-identical legacy behaviour) |
   `softbox` — and imports wire `softbox` at intensity 1.0 (today: gradient at 0.0).**
-  Softbox = near-black base with N bright horizontal emitter strips; committed
+  Softbox = **exact-zero black base** (Peter, 2026-07-15: "I want it PURE black
+  void so it looks good for hero shots on stage" — base texels are 0.0, not
+  near-black; the only light in the environment is the strips, so nothing lifts
+  the shadows) with N bright horizontal emitter strips (soft falloff at strip
+  edges is permitted — falloff belongs to the strips, never the base); committed
   params: `mode`, `emitter_count` (default 3), `emitter_intensity`, `emitter_elevation`,
   `emitter_width` — strip math is executor-free within those params, gated by
-  F-P3's numeric readback (luminance histogram + strip count), never a look. This
+  F-P3's numeric readback (luminance histogram + strip count), never a look.
+  (The on-screen background was never at issue — the envmap is lighting-only and
+  is not drawn; the visible void is the clear colour, pure black regardless.) This
   is Peter's call, quoted: "I prefer the black void look rather than the pure white
   studio … the pure black void AND proper lighting". Background stays the clear
   colour (the envmap is lighting-only — audit table); chrome reflects light streaks,
@@ -273,7 +279,9 @@ instead of reading it (`feedback_synthesis_drift`).
 - **F-P3 — Softbox bake mode.** D7 params on `node.bake_environment`; `gradient`
   byte-identity; strip math free within the committed param names. Gate:
   gpu-proof — `gradient` mode byte-identical to build-of-record; `softbox`
-  readback: ≥95% of texels below 0.05 luminance, emitter rows above 1.0 (HDR),
+  readback: every texel outside the strips and their falloff bands is EXACTLY
+  0.0 (D7 pure-black base — assert max luminance over the non-strip region == 0,
+  not merely small), emitter rows above 1.0 (HDR),
   emitter_count changes the strip count (counted, not eyeballed). Demo: none —
   Peter's check is in-app (chrome sphere under softbox, named in the landing
   click-script). Test scope: focused.
