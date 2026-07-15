@@ -1913,6 +1913,57 @@ fn wire_wins_when_both_wire_and_outer_drive_a_param() {
 }
 
 #[test]
+fn click_on_wire_driven_row_highlights_feeding_wire() {
+    let (mut canvas, vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    // Same press as `wire_driven_row_is_read_only_no_scrub` — the click still
+    // consumes (selects, starts no scrub), but now also names the wire that
+    // feeds the row (D5) so it's attributable instead of just inert.
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+    assert_eq!(
+        canvas.highlighted_wire,
+        Some((1, "translate".to_string())),
+        "click on the wire-driven row highlights the wire landing on it"
+    );
+    // A click on a different node is a new interaction — the highlight from
+    // the previous click doesn't linger (empty-space clicks start a Pan
+    // session instead, so this exercises the actual `select_single` /
+    // `click_select` clear path rather than the release-time deselect).
+    let n2 = canvas.find_node(2).unwrap();
+    let (nx, ny) = canvas.to_screen(vp, n2.pos_graph.0, n2.pos_graph.1);
+    canvas.on_left_button_down(vp, nx + 10.0, ny + 10.0, 1.0, false);
+    assert!(
+        canvas.highlighted_wire.is_none(),
+        "a click on another node clears the highlight"
+    );
+}
+
+#[test]
+fn wire_driven_row_carries_source_and_keeps_outer_attribution_too() {
+    // Wire-only: `driven_by` names the feeding node/port (D5's hover text).
+    let (canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    let p = &canvas.find_node(1).unwrap().params[0];
+    assert_eq!(
+        p.driven_by.as_deref(),
+        Some("driven by src.out"),
+        "hover attribution names the wire's source node.port"
+    );
+
+    // Both wire AND outer-card binding present (D6): the wire wins for
+    // interactivity, but the card mapping must stay discoverable in the data
+    // the render pass reads — not silently dropped once a wire lands too.
+    let (canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(true));
+    let p = &canvas.find_node(1).unwrap().params[0];
+    assert!(p.wire_driven, "wire wins for interactivity");
+    assert!(p.driven_by.is_some(), "and still names the wire source");
+    assert_eq!(
+        p.outer_driver.as_deref(),
+        Some("Macro 1"),
+        "card-binding attribution remains visible alongside the wire hint"
+    );
+}
+
+#[test]
 fn removing_the_wire_reclaims_the_param() {
     // Wire present → read-only; then the same topology minus the wire → editable.
     let (mut canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(false));

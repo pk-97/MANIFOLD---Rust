@@ -351,6 +351,12 @@ const PARAM_FILL_FG: Color32 = Color32::new(128, 199, 255, 140);
 /// the performance surface it feeds.
 const PARAM_EXPOSE_ON: Color32 = Color32::new(128, 199, 255, 240);
 const PARAM_EXPOSE_OFF: Color32 = Color32::new(150, 150, 165, 130);
+/// Halo drawn behind a wire-driven param row's input-socket dot (D5) — the
+/// same cyan family as `PARAM_EXPOSE_ON` (the card-routing accent), at a low
+/// enough alpha to read as a tint around the socket rather than a second
+/// solid dot, so the row's "something feeds this" jack is legible without
+/// following the wire back through the graph.
+const PARAM_DRIVEN_JACK: Color32 = PARAM_EXPOSE_ON.with_alpha(130);
 // Enum dropdown (Phase 2 on-node editing): the selected row reads with an accent
 // wash, the cursor row with a faint white lift, over the floating menu backing.
 const ENUM_DD_CURRENT_BG: Color32 = Color32::new(128, 199, 255, 46);
@@ -442,6 +448,15 @@ pub struct GraphCanvas {
     /// rubber-band or Shift-click several nodes before collapsing them into a
     /// group. A plain click selects exactly one; Shift toggles.
     pub(crate) selected: ahash::AHashSet<u32>,
+    /// The wire feeding a wire-driven param row the user just clicked (D5) —
+    /// identified by its `(to_node, to_port)` landing point rather than a
+    /// `self.wires` index, since the wire list is rebuilt on every
+    /// `set_snapshot` and an index would silently drift to a different wire.
+    /// `draw_wire`/`draw_wire_ribbon` (via `wire_touches_focus`) draw the
+    /// matching wire at full focus brightness, same as a hovered/selected
+    /// endpoint. Cleared by `select_single`/`click_select` — any other click
+    /// starts a new interaction, so the highlight shouldn't linger.
+    pub(crate) highlighted_wire: Option<(u32, String)>,
     /// `instance.graph.is_some()` for the watched effect. Drives the
     /// "Reset to Default" affordance in the header — only shown when
     /// the user has diverged from the bundled preset.
@@ -621,6 +636,7 @@ impl GraphCanvas {
             drag: crate::drag::DragController::new(),
             hovered: None,
             selected: ahash::AHashSet::new(),
+            highlighted_wire: None,
             has_graph_mod: false,
             pending_actions: Vec::new(),
             collapsed: ahash::AHashMap::new(),
