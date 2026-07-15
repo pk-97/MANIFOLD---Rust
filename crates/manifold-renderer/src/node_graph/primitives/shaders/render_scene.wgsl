@@ -554,7 +554,7 @@ fn cotangent_frame(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>) -> mat3x3<f32> {
 fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
     if u.texture_flags.x > 0.5 {
         let n = normalize(vertex_normal);
-        let sampled = textureSampleLevel(normal_map, envmap_sampler, uv, 0.0).rgb;
+        let sampled = textureSample(normal_map, envmap_sampler, uv).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
         let tbn = cotangent_frame(n, world_pos, uv);
         return normalize(tbn * tangent_normal);
@@ -564,7 +564,7 @@ fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>)
 
 fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
-        let t = textureSampleLevel(base_color_map, envmap_sampler, uv, 0.0);
+        let t = textureSample(base_color_map, envmap_sampler, uv);
         return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
     }
     return u.base_color;
@@ -577,7 +577,7 @@ fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
 // (roughness, metallic).
 fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
-        let t = textureSampleLevel(mr_map, envmap_sampler, uv, 0.0);
+        let t = textureSample(mr_map, envmap_sampler, uv);
         return vec2<f32>(max(t.g, 0.01), clamp(t.b, 0.0, 1.0));
     }
     return vec2<f32>(max(u.pbr_metallic_roughness.y, 0.01), clamp(u.pbr_metallic_roughness.x, 0.0, 1.0));
@@ -589,7 +589,7 @@ fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
 // table.
 fn resolve_occlusion(uv: vec2<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
-        return textureSampleLevel(occlusion_map, envmap_sampler, uv, 0.0).r;
+        return textureSample(occlusion_map, envmap_sampler, uv).r;
     }
     return 1.0;
 }
@@ -601,7 +601,7 @@ fn resolve_occlusion(uv: vec2<f32>) -> f32 {
 // M6-D1's albedo precedent) — emission is always added AFTER lighting.
 fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
     if u.texture_flags2.z > 0.5 {
-        let t = textureSampleLevel(emissive_map, envmap_sampler, uv, 0.0).rgb;
+        let t = textureSample(emissive_map, envmap_sampler, uv).rgb;
         return u.emission.rgb * t;
     }
     return u.emission.rgb;

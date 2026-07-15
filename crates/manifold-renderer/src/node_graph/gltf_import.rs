@@ -190,6 +190,20 @@ fn enum_val(v: u32) -> SerializedParamValue {
 /// hand-authored MetallicGlass preset).
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
+/// Default softbox dome-fill radiance stamped on imported rigs (F-P7) —
+/// node param and Fill Light card default stay in sync through this one
+/// constant. Tuned against the DamagedHelmet/AMG probe renders: enough
+/// broad radiance that metallic surfaces read their albedo, low enough
+/// that the black-void product look survives.
+const IMPORT_FILL_DEFAULT: f32 = 0.6;
+
+/// Default softbox strip intensity stamped on imported rigs (F-P7): half
+/// the primitive's own 6.0 default. With the fill dome supplying the broad
+/// radiance, full-strength strips dominate every curved reflection (the
+/// banded-visor look); 3.0 keeps the chrome-streak character as an accent.
+/// The Strip Lights card fader dials it live.
+const IMPORT_STRIPS_DEFAULT: f32 = 3.0;
+
 /// One outer-card slider definition. Curated performance surface for an
 /// imported model (camera framing, light, material) — see
 /// [`assemble_import_graph`]'s metadata block. `default_value` must match
@@ -442,6 +456,16 @@ fn build_import_graph(
     let mut envmap_node = plain_node(envmap_id, "envmap", "node.bake_environment", "envmap");
     envmap_node.params.insert("intensity".to_string(), float(1.0));
     envmap_node.params.insert("mode".to_string(), enum_val(1)); // Softbox
+    // F-P7 dome fill: metals are lit exclusively by the environment, so
+    // against D7's pure-black void every metallic import read as dark
+    // chrome regardless of its albedo (the 2026-07-15 helmet/AMG failure).
+    // A modest neutral dome gives metals a world to reflect while the
+    // background stays black (the envmap is never drawn as a backdrop).
+    // The Fill Light card slider below dials it, 0 = the original void.
+    envmap_node.params.insert("fill".to_string(), float(IMPORT_FILL_DEFAULT));
+    envmap_node
+        .params
+        .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
     nodes.push(envmap_node);
 
     let camera_id = fresh_id();
@@ -1124,6 +1148,25 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
     ));
+    // F-P7 — the softbox dome fill (see the envmap node above). Separate
+    // from `env_intensity` (which scales strips + disc + fill together):
+    // this one moves ONLY the broad dome radiance, i.e. how much "world"
+    // the metals reflect, without touching the strip highlights.
+    card_params.push(card_param(
+        "env_fill", "Fill Light", 0.0, 2.0, IMPORT_FILL_DEFAULT, false, "Environment",
+    ));
+    card_bindings.push(card_binding(
+        "env_fill", "Fill Light", IMPORT_FILL_DEFAULT, "envmap", "fill", 1.0,
+    ));
+    // The strip emitters' own fader (F-P7): strips are the chrome-streak
+    // accent, the fill is the world — independent faders, deliberately not
+    // folded into `env_intensity` (which scales the whole bake).
+    card_params.push(card_param(
+        "env_strips", "Strip Lights", 0.0, 12.0, IMPORT_STRIPS_DEFAULT, false, "Environment",
+    ));
+    card_bindings.push(card_binding(
+        "env_strips", "Strip Lights", IMPORT_STRIPS_DEFAULT, "envmap", "emitter_intensity", 1.0,
+    ));
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
@@ -1282,26 +1325,26 @@ mod tests {
         }
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
-        // + 1 Environment + 1 Ambient = 11 framing/material sliders, PLUS
-        // 2 Atmosphere (fog density, god rays — no Motion Blur section,
-        // BUG-136) = 13. No per-object Metallic/Roughness and no SSAO/DoF
-        // card sliders (Peter, 2026-07-15: DoF removed for buggy visuals,
-        // AO/metallic/roughness hidden — defaults still apply, just not on
-        // the card).
+        // + 1 Environment + 1 Fill Light + 1 Strip Lights (F-P7) + 1 Ambient
+        // = 13 framing/material sliders, PLUS 2 Atmosphere (fog density, god
+        // rays — no Motion Blur section, BUG-136) = 15. No per-object
+        // Metallic/Roughness and no SSAO/DoF card sliders (Peter,
+        // 2026-07-15: DoF removed for buggy visuals, AO/metallic/roughness
+        // hidden — defaults still apply, just not on the card).
         assert_eq!(
             meta.params.len(),
-            13,
-            "11 framing/material + 2 atmosphere (fog + god rays)"
+            15,
+            "13 framing/material + 2 atmosphere (fog + god rays)"
         );
         // Every param routes one-to-one except: the shared Ambient, which
         // fans out to every material's ambient (2 for azalea); and D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 13 + 1 (ambient) + 3 (sun coherence) = 17.
+        // bindings. 15 + 1 (ambient) + 3 (sun coherence) = 19.
         assert_eq!(
             meta.bindings.len(),
-            17,
-            "13 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            19,
+            "15 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1982,6 +2025,24 @@ mod tests {
         assert_eq!(env_intensity_param.default_value, 1.0, "Environment card default = 1.0");
         assert_eq!(env_intensity_param.min, 0.0);
         assert_eq!(env_intensity_param.max, 4.0, "range stays 0-4 (D7: only the default flips)");
+
+        // F-P7 import defaults: dome fill on, strips at half the primitive
+        // default — node params and card faders stay in sync through the
+        // shared constants.
+        assert_eq!(
+            envmap.params.get("fill"),
+            Some(&float(IMPORT_FILL_DEFAULT)),
+            "import default fill = IMPORT_FILL_DEFAULT"
+        );
+        assert_eq!(
+            envmap.params.get("emitter_intensity"),
+            Some(&float(IMPORT_STRIPS_DEFAULT)),
+            "import default strips = IMPORT_STRIPS_DEFAULT"
+        );
+        let fill_param = meta.params.iter().find(|p| p.id == "env_fill").unwrap();
+        assert_eq!(fill_param.default_value, IMPORT_FILL_DEFAULT);
+        let strips_param = meta.params.iter().find(|p| p.id == "env_strips").unwrap();
+        assert_eq!(strips_param.default_value, IMPORT_STRIPS_DEFAULT);
     }
 
     /// BUG-036 round-trip gate: the assembled import graph — including the

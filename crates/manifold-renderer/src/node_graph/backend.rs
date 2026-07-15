@@ -66,6 +66,17 @@ pub trait Backend: Send {
         dims: (u32, u32),
     );
 
+    /// Install the set of resources whose `Texture2D` slots must carry a
+    /// full mip chain (producer declared
+    /// [`EffectNode::output_mipmapped`](crate::node_graph::EffectNode::output_mipmapped);
+    /// recorded per plan by `compile()`). The executor calls this before
+    /// any `acquire` each frame; the backend consults it inside
+    /// `acquire`/`release` so mipped and flat slots never share a recycle
+    /// bucket. Default no-op — mock backends have no real textures, so
+    /// mip-chained allocation doesn't change their observable slot
+    /// arithmetic. IMPORT_FIDELITY F-P6.
+    fn declare_mipmapped(&mut self, _ids: &[ResourceId]) {}
+
     /// Currently bound slot for `id`, or `None` if unbound.
     fn slot_for(&self, id: ResourceId) -> Option<Slot>;
 
@@ -248,26 +259,30 @@ pub trait Backend: Send {
 /// `(PortType, GpuTextureFormat, dims)`; all other slot kinds
 /// collapse to `(PortType, None, (0, 0))` so the format and dims
 /// axes don't fragment their recycle pools.
-pub(crate) type PoolKey = (PortType, Option<GpuTextureFormat>, (u32, u32));
+pub(crate) type PoolKey = (PortType, Option<GpuTextureFormat>, (u32, u32), bool);
 
-/// Build the per-(type, format, dims) slot-recycling pool key.
-/// `format` and `dims` are meaningful for `Texture2D` slots only;
-/// for every other port type both axes are normalized away so
+/// Build the per-(type, format, dims, mipmapped) slot-recycling pool key.
+/// `format`, `dims` and `mipmapped` are meaningful for `Texture2D` slots
+/// only; for every other port type all three axes are normalized away so
 /// non-texture slots pool by type alone (avoids fragmenting the
-/// recycle pool by irrelevant axes).
+/// recycle pool by irrelevant axes). `mipmapped` keys mip-chained
+/// material-map slots (IMPORT_FIDELITY F-P6) apart from flat ones — a
+/// flat consumer recycled into a mipped slot would sample stale mip
+/// tails, and vice versa a mipped consumer would sample garbage.
 pub(crate) fn pool_key(
     ty: PortType,
     format: Option<GpuTextureFormat>,
     dims: (u32, u32),
+    mipmapped: bool,
 ) -> PoolKey {
     // Both Texture2D variants share the same pool — the channel
     // signature is a validator concern, not a GPU allocation one.
     // Normalize Texture2DTyped down to Texture2D so a typed producer
     // and an untyped slot recycle through the same pool entry.
     if ty.is_texture_2d() {
-        (PortType::Texture2D, format, dims)
+        (PortType::Texture2D, format, dims, mipmapped)
     } else {
-        (ty, None, (0, 0))
+        (ty, None, (0, 0), false)
     }
 }
 
@@ -342,7 +357,7 @@ impl Backend for MockBackend {
         if let Some(&slot) = self.bound.get(&id) {
             return slot;
         }
-        let key = pool_key(ty, format, dims);
+        let key = pool_key(ty, format, dims, false);
         let pool = self.free_by_type.entry(key).or_default();
         let slot = pool.pop().unwrap_or_else(|| {
             let s = Slot(self.next_slot);
@@ -361,7 +376,7 @@ impl Backend for MockBackend {
         dims: (u32, u32),
     ) {
         if let Some(slot) = self.bound.remove(&id) {
-            let key = pool_key(ty, format, dims);
+            let key = pool_key(ty, format, dims, false);
             self.free_by_type.entry(key).or_default().push(slot);
         }
     }

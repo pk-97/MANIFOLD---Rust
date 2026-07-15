@@ -9,7 +9,18 @@ pub struct RenderTarget {
     pub width: u32,
     pub height: u32,
     pub format: GpuTextureFormat,
+    /// Mip levels on `texture`. `1` everywhere except material-map slots
+    /// allocated via [`Self::new_mipmapped`] (IMPORT_FIDELITY F-P6). Pool
+    /// recycling keys on this so a mip-chained target never aliases a
+    /// flat acquire.
+    pub mip_levels: u32,
     label: String,
+}
+
+/// Full mip-chain length for a `width`×`height` texture:
+/// `floor(log2(max(w, h))) + 1`.
+pub fn full_mip_chain_len(width: u32, height: u32) -> u32 {
+    32 - width.max(height).max(1).leading_zeros()
 }
 
 impl RenderTarget {
@@ -37,6 +48,41 @@ impl RenderTarget {
             width,
             height,
             format,
+            mip_levels: 1,
+            label: label.to_string(),
+        }
+    }
+
+    /// Create with a full mip chain (direct device allocation — mip-chained
+    /// targets deliberately bypass the heap `TexturePool`, which recycles by
+    /// `(w, h, format)` and would hand a flat texture back for a mipped
+    /// request). The producer fills level 0 and runs
+    /// `GpuEncoder::generate_mipmaps` for the rest; consumers sample with a
+    /// mip-filtering sampler and real LOD. IMPORT_FIDELITY F-P6.
+    pub fn new_mipmapped(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        label: &str,
+    ) -> Self {
+        let mip_levels = full_mip_chain_len(width, height);
+        let texture = device.create_texture(&GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label,
+            mip_levels,
+        });
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            mip_levels,
             label: label.to_string(),
         }
     }
@@ -62,6 +108,7 @@ impl RenderTarget {
             width,
             height,
             format,
+            mip_levels: 1,
             label: label.to_string(),
         }
     }
@@ -83,11 +130,13 @@ impl RenderTarget {
     /// [`crate::node_graph::MetalBackend::replace_texture_2d`].
     pub fn view_of(texture: GpuTexture, label: &str) -> Self {
         let (width, height, format) = (texture.width, texture.height, texture.format);
+        let mip_levels = texture.mip_level_count();
         Self {
             texture,
             width,
             height,
             format,
+            mip_levels,
             label: label.to_string(),
         }
     }
@@ -117,6 +166,7 @@ impl RenderTarget {
             width,
             height,
             format,
+            mip_levels: 1,
             label: label.to_string(),
         }
     }

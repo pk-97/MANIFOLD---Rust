@@ -76,6 +76,15 @@ pub struct ExecutionPlan {
     /// preventing a freed rgba16float slot from aliasing into a fresh
     /// rgba32float acquire.
     resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>>,
+    /// Resources whose producer declared
+    /// [`EffectNode::output_mipmapped`](crate::node_graph::EffectNode::output_mipmapped)
+    /// (`Texture2D` only). The executor installs this list into the
+    /// backend via [`Backend::declare_mipmapped`] before any acquire, so
+    /// the slot pool keys mip-chained slots apart from flat ones — a flat
+    /// consumer recycled into a mipped slot would sample stale mip tails.
+    /// Kept as an id list (almost always empty or tiny) rather than a
+    /// parallel `Vec<bool>`. IMPORT_FIDELITY F-P6.
+    mipmapped_resources: Vec<ResourceId>,
     /// Producer-declared texture dims for each `Texture2D` resource,
     /// queried at compile time. `None` means "use the backend's canvas
     /// dims at acquire time" — the common case for full-frame
@@ -182,6 +191,13 @@ impl ExecutionPlan {
             .get(id.0 as usize)
             .copied()
             .flatten()
+    }
+
+    /// Resources whose producer requested a mip-chained slot — the list
+    /// the executor hands to [`Backend::declare_mipmapped`] each frame.
+    /// Empty for every graph without a material-map source.
+    pub fn mipmapped_resources(&self) -> &[ResourceId] {
+        &self.mipmapped_resources
     }
 
     /// Producer-declared texture dims for the given resource, or
@@ -330,6 +346,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         AHashMap::default();
     let mut resource_types: Vec<PortType> = Vec::new();
     let mut resource_formats: Vec<Option<manifold_gpu::GpuTextureFormat>> = Vec::new();
+    let mut mipmapped_resources: Vec<ResourceId> = Vec::new();
     let mut resource_dims: Vec<Option<(u32, u32)>> = Vec::new();
     // Parallel to `resource_dims`. Populated only when `resource_dims`
     // is `None` AND the producer overrides `output_canvas_scale` —
@@ -423,6 +440,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // aligned — the runtime normalizes non-texture formats to
             // `None` when constructing the pool key.
             resource_formats.push(inst.node.output_format(output_port.name.as_ref()));
+            if output_port.ty.is_texture_2d()
+                && inst.node.output_mipmapped(output_port.name.as_ref())
+            {
+                mipmapped_resources.push(id);
+            }
 
             // Dims: only meaningful for Texture2D outputs. Query the
             // producer first; if it has no opinion, apply the default
@@ -785,6 +807,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         steps,
         resource_types,
         resource_formats,
+        mipmapped_resources,
         resource_dims,
         resource_canvas_scales,
         requires,

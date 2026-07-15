@@ -36,7 +36,10 @@ struct Uniforms {
     sun_z: f32,
     sun_disc_intensity: f32,
     sun_disc_size: f32,
-    _pad0: f32,
+    // Softbox dome fill (IMPORT_FIDELITY F-P7): broad low-level studio
+    // radiance so metals have a world to reflect. 0.0 = the original
+    // pure-black-void softbox, byte-identical to pre-F-P7 bakes.
+    fill_intensity: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -83,12 +86,28 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // D7 — softbox: pure-black base. The ONLY light in the environment
         // is the emitter strips (+ optional sun disc) — nothing lifts the
         // shadows, so we start from exact zero, not a dim ambient term.
-        color = vec3<f32>(0.0, 0.0, 0.0);
+        //
+        // F-P7 dome fill: at fill_intensity 0 the base stays EXACTLY 0.0
+        // (the D7 contract, byte-identical). Above 0 it adds a broad
+        // neutral-white studio dome — brighter overhead, dimmer toward
+        // the floor, never zero anywhere — because metals are lit
+        // exclusively by the environment: against a black void every
+        // metallic import reads as dark chrome no matter its albedo
+        // (the 2026-07-15 helmet/AMG fidelity failure). The strips keep
+        // supplying the specular streaks; the fill supplies the world.
+        color = vec3<f32>(1.0, 0.985, 0.96)
+            * uniforms.fill_intensity
+            * (0.55 + 0.45 * clamp(up, -1.0, 1.0));
 
         let half_width = max(uniforms.emitter_width, 1e-4);
         let spacing = half_width * 4.0;
         let n = max(uniforms.emitter_count, 1u);
         let mid = (f32(n) - 1.0) * 0.5;
+        // Strips accumulate separately: `emitter_intensity` scales the
+        // strips ONLY, never the fill dome (they are independent faders
+        // on the import card — coupling them was the F-P7 first-cut bug:
+        // strip intensity 0 blacked out the entire environment).
+        var strips = vec3<f32>(0.0, 0.0, 0.0);
         for (var i: u32 = 0u; i < n; i = i + 1u) {
             let center = uniforms.emitter_elevation + (f32(i) - mid) * spacing;
             let dist = abs(up - center);
@@ -96,9 +115,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // dist >= half_width, so `core` is EXACTLY 0.0 beyond the
             // falloff band (D7's "exact zero outside strips" contract).
             let core = 1.0 - smoothstep(half_width * 0.5, half_width, dist);
-            color += vec3<f32>(3.0, 2.8, 2.5) * core;
+            strips += vec3<f32>(3.0, 2.8, 2.5) * core;
         }
-        color *= uniforms.emitter_intensity;
+        color += strips * uniforms.emitter_intensity;
 
         // Sun disc (D7 sun-coherence addendum) — directional only; a sun is
         // infinitely far, which an equirect envmap represents exactly.

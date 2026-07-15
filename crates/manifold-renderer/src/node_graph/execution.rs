@@ -802,6 +802,10 @@ impl Executor {
         // here keeps the per-step loop free of repeated trait calls.
         let canvas_dims = self.backend.canvas_dims();
 
+        // Install the plan's mip-chained resource set BEFORE any acquire —
+        // acquire/release consult it for pool keying (IMPORT_FIDELITY F-P6).
+        self.backend.declare_mipmapped(plan.mipmapped_resources());
+
         for &res_id in plan.persistent_resources() {
             let ty = plan
                 .resource_type(res_id)
