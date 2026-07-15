@@ -9,6 +9,10 @@ MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MOD
 MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
 any phase.**
+**Ordering note (2026-07-15): `docs/IMPORT_FIDELITY_DESIGN.md` (full PBR map set,
+split-sum IBL, softbox default look) outranks this doc's P1-remaining in build order —
+Peter's call ("really critical infra"). Its F-P4 also absorbs the §8 normal-map
+report-line scope; re-read §8 before briefing P1.**
 
 Peter's directives (2026-07-03): Blender import "would be amazing and seriously open
 up Manifold as a real contender … that beats TouchDesigner at this type of thing";
@@ -224,8 +228,13 @@ Corrections to this doc's §1 audit and P1 scope:
   `doubleSided` imports as a no-op with a report note: the engine rasterizes both
   faces already and back-face lighting is corrected by M6-D4.
 - **glTF normal maps are tangent-space; the engine's `normal_map` is world-space**
-  (MATERIAL M6-D5). P1 skips them — each skip is a report line (D9), not a silent
-  drop. Revive per M6-D5's trigger.
+  (MATERIAL M6-D5). ~~P1 skips them — each skip is a report line (D9), not a silent
+  drop. Revive per M6-D5's trigger.~~ **[SUPERSEDED 2026-07-15: the trigger fired;
+  `docs/IMPORT_FIDELITY_DESIGN.md` owns tangent-space normals, the full per-object
+  map set (normal/MR/occlusion/emissive), split-sum IBL, and the softbox default
+  look. Its F-P4 absorbs this doc's map-wiring and report-line scope; P1-remaining
+  here (lights, cameras, report surface, cap) is unchanged and now ORDERS AFTER
+  IMPORT_FIDELITY per Peter's 2026-07-15 priority call.]**
 - **Fixtures live in `tests/fixtures/gltf/`** (sibling of the `.manifold` fixtures).
   Two tiers: (a) Khronos glTF sample models for conformance, per the P1 brief;
   (b) the **canonical real-world fixture**: the CC0 Stewartia monadelpha photoscan

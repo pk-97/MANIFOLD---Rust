@@ -1,0 +1,271 @@
+# Import Fidelity — imported PBR assets read like their authoring-tool previews
+
+**Status: PROPOSED · 2026-07-15 · Fable 5 (authored at Peter's direction; needs his read before execution — the two product calls he owns are quoted in D6 and Deferred #1).**
+**Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
+
+Peter's directives (2026-07-15, comparing an imported Mercedes-AMG GT3 .glb against
+its store-page preview): "this sounds like really critical infra that should be
+upgraded so models can be imported correctly and accurately", and on the look: "I
+prefer the black void look rather than the pure white studio, can we have the pure
+black void AND proper lighting[?]". The governing insight: a well-authored .glb
+carries its look in per-pixel maps (normal / metallic-roughness / emissive /
+occlusion) and expects image-based lighting to read them; MANIFOLD currently keeps
+only the base-colour map and lights it with a single flat envmap sample, so the
+asset's look is discarded before the graph ever sees it. **On stage this is the
+difference between "drag a store-quality asset in and it plays tonight" and a
+relight job the performer can't win.** The black void and proper lighting do NOT
+conflict: `render_scene` uses the envmap for lighting only, never as background
+(verified — no sky/miss draw exists in `render_scene.rs`), so the fix is a
+mostly-black environment with bright emitter strips: dramatic light streaks on dark
+metal, void stays void.
+
+Companions: `IMPORT_DESIGN.md` (owns the import funnels; its §8 tangent-space skip
+is superseded here), `MATERIAL_SYSTEM_DESIGN.md` (M6-D5's revival trigger fired —
+this doc is the "own designed slice" it called for), `REALTIME_3D_DESIGN.md` (owns
+`render_scene`; this doc grows its per-object surface the way §10/P8 did),
+`RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN.md` (precedent for a single-aspect
+render_scene doc). The pending void-haze design (bounded haze volume, Peter's go
+pending) is orthogonal and complementary — haze adds atmosphere; this doc makes the
+subject itself read correctly. Neither touches BUG-118 (fog wash — Peter: "I don't
+want bug-118 worked on").
+
+---
+
+## 1. Audit — what exists (verified 2026-07-15)
+
+| Piece | Where | State |
+|---|---|---|
+| glTF material parse | `gltf_load.rs:405-418` (`GltfMaterialInfo`) | base_color factor+texture, metallic/roughness **scalars**, emissive **factor**, alphaMode/cutoff. NO normal / metallic-roughness / occlusion / emissive texture indices, no KHR extensions |
+| gltf crate | `manifold-renderer/Cargo.toml:31` (`gltf = "1"`, v1.4.1, default features) | Extension features exist but are OFF: `KHR_lights_punctual`, `KHR_materials_emissive_strength`, `KHR_materials_specular`, `KHR_materials_transmission`, `KHR_materials_ior`. **No typed clearcoat support in 1.4.1** (needs the raw `extensions` feature + manual JSON, or a crate bump — checked in the registry source) |
+| Per-object texture ports | `render_scene.rs:194,493` | `base_color_map_n` ONLY — "no normal_map/roughness_map/metallic_map inputs per object yet" (the file says it itself) |
+| Texture decode + colour space | `gltf_texture_source.rs:197-202` | `color_space` param already selects `Rgba8UnormSrgb` vs linear — reusable as-is for the new map types |
+| IBL in `fs_pbr` | `render_scene.wgsl:648-651` | ONE lod-0 equirect sample along `reflect(-V, N)`, dimmed by heuristic `ibl_strength = 1.0 - roughness*0.7`. No prefiltered mips, no diffuse irradiance, no split-sum BRDF LUT — rough metal gets a sharp reflection faded to grey |
+| Shared BRDF helpers | `shaders/pbr_brdf.wgsl` | D_GGX / G_Smith / F_Schlick / equirect UV — correct and reusable; nothing IBL-specific beyond the UV mapping |
+| Envmap bake | `bake_equirect_envmap.rs:47-…` (`node.bake_environment`) | Procedural gradient studio (horizon_strength / azimuth_variation / intensity). No discrete emitters; import wires it at **intensity 0** (`gltf_import.rs:374`) — the deliberate "model on black", which also means zero IBL |
+| MeshVertex | `mesh_common.rs:34-43` | 48-byte position/normal/uv. **No tangents**; stride pinned by test + `MESH_VERTEX_SPECS` Channels signature — growing it is a workspace-wide ABI change |
+| Normal-map contract (render_mesh) | MATERIAL §11.1 / `render_3d_mesh.rs:66` | Existing `normal_map` is **world-space** (procedural heightfield chains); glTF maps are tangent-space — M6-D5 deferred them with trigger "a hero import that visibly needs them". **The trigger has fired** |
+| Exposure | `gltf_import.rs:396` wires `node.camera_lens` (`exposure_ev` port-shadowed) | Exposure exists; HDR→SDR happens at composite (MetallicGlass precedent). No new tone-map infra needed |
+| Texture-set / HDRI drop | `IMPORT_DESIGN.md` D5 / P4 | Already designed there — HDRI file loading is NOT this doc's scope |
+| Instancing / always-bind stub pattern | REALTIME_3D §10 D11, `render_scene.rs:874` | The precedent every new optional per-object port copies (unwired = dummy bind + flag 0 = byte-identical output) |
+
+Classification: the loader fields and importer wiring are *one wire away from
+existing* (the parse loop, texture-source atom, and port plumbing all exist);
+split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
+*exists, extend*.
+
+## 2. Decisions
+
+- **D1 — Scope is `render_scene` (the import path), not `render_mesh`/`render_copies`.**
+  The single-object renderers keep their flat IBL and world-space `normal_map`
+  contract untouched (their consumers are procedural presets tuned against it —
+  `feedback_shared_shader_topology`: fork, don't change boundary behaviour).
+  *Consequences, stated honestly:* two PBR qualities coexist in the app until a
+  MetallicGlass-class look-pass fires the migration trigger; the shared
+  `pbr_brdf.wgsl` helpers grow the IBL functions so that migration is mechanical
+  later. Rejected: upgrading all three renderers in one wave — triples the parity
+  surface for zero import-path win.
+- **D2 — IBL becomes split-sum, computed inside `render_scene`, invisible to the
+  graph.** Three cached GPU resources, all derived from whatever `Texture2D` is
+  wired to `envmap`:
+  1. **Prefiltered specular chain** — the equirect map GGX-importance-convolved
+     into a mip chain (base 512×256, `rgba16float`); `fs_pbr` samples
+     `textureSampleLevel(prefiltered, uv, roughness * max_mip)`.
+  2. **Diffuse irradiance map** — 32×16 cosine-convolved equirect, sampled with N;
+     replaces nothing (there is no diffuse IBL today) and is multiplied by
+     `kd * albedo` and the occlusion term.
+  3. **BRDF LUT** — 128×128 `rg16float` split-sum scale/bias, computed once per
+     device, keyed in the texture pool. Specular IBL becomes
+     `prefiltered * (F0 * lut.x + lut.y)`, deleting the `ibl_strength` heuristic.
+  Rebuild rule: the chain re-convolves when the wired envmap's `DataVersion`
+  changes (house dirty-check pattern), pooled textures keyed `(node, size)` — no
+  per-frame allocation. *Consequences, stated honestly:* an **animated** envmap
+  (any Texture2D can be wired, including video) re-prefilters every frame — a
+  fixed, small cost (convolving 512×256 + mips), visible in the perf HUD, not a
+  correctness hazard. Rejected: a user-facing `node.prefilter_environment` atom
+  emitting a new port type — every import graph would carry plumbing the renderer
+  can do invisibly, and a new port type reopens shipped plumbing for zero
+  authoring win.
+- **D3 — Each object group grows four optional texture ports:** `normal_map_n`
+  (tangent-space, glTF convention), `mr_map_n` (glTF metallic-roughness packing:
+  G = roughness, B = metallic), `occlusion_map_n` (R channel), `emissive_map_n`
+  (sRGB, multiplied by the material's emission factor). Port group becomes 9 wide;
+  the importer's collapsed per-object node groups keep the editor legible (the
+  existing base_color pattern at `gltf_import.rs:605-640` is the template). Each
+  new port copies the P8 always-bind stub pattern: unwired binds a dummy, its flag
+  stays 0, output byte-identical. The `texture_flags` vec4 is full → a second
+  `texture_flags2` vec4 joins the uniform block (mind naga uniform sizing —
+  `feedback_naga_uniform_size_rule`; the block grew 272→320 in P3, precedent for
+  growing it again). New WGSL bindings for the three new textures (`mr` / `occlusion`
+  / `emissive`) plus prefiltered/irradiance/LUT — ⚠ VERIFY-AT-IMPL: read the
+  current binding table in `render_scene.rs` end-to-end before assigning indices
+  (PCSS reserved 15/16-adjacent slots; Metal's 31-texture argument limit has
+  ample headroom). Rejected: carrying texture refs on the Material wire
+  (MATERIAL §7 "Path B") — Material is a CPU `Copy` struct on a CPU wire;
+  imports are machine-assembled so the "UX wart" Path B exists for never
+  materialised; reopening a shipped contract for it fails dont-cascade-redesign.
+  Rejected: reusing the existing single-channel `roughness_map`/`metallic_map`
+  binding contract with a channel-select mode flag — a mode flag on a shared
+  resolve function is the hidden-fallback shape (`feedback_no_silent_fallbacks`);
+  a dedicated `mr_map` binding with its own resolve function is executor-clear.
+- **D4 — Tangent-space normal mapping via screen-space cotangent frame, NOT
+  MeshVertex tangents.** `fs_*` computes the TBN per fragment from
+  `dpdx/dpdy(world_pos)` and `dpdx/dpdy(uv)` (Mikkelsen's cotangent-frame
+  derivation — the technique three.js/filament use when tangents are absent).
+  `MeshVertex` stays 48 bytes: growing it is a workspace ABI change touching every
+  mesh producer, the Channels signature, codegen, and the stride tests — priced
+  and rejected for a per-fragment computation that costs a handful of ALU ops.
+  glTF `normalTexture.scale` imports as a multiplier. *Consequences, stated
+  honestly:* derivative-based TBN is slightly faceted across UV seams and mirrored
+  UVs on low-poly meshes; on photoscan/production assets (dense, well-unwrapped)
+  it is visually indistinguishable. Trigger to revisit: a hero asset whose normal
+  detail visibly breaks → import-time tangent generation into a **separate
+  optional buffer port**, never MeshVertex growth.
+- **D5 — Loader parses the full material, importer wires it, everything unmapped
+  is a report line (IMPORT D9 doctrine).** `GltfMaterialInfo` gains:
+  `normal_texture + normal_scale`, `mr_texture`, `occlusion_texture +
+  occlusion_strength`, `emissive_texture`, `emissive_strength`
+  (KHR, feature-gated), and parse-for-report fields `transmission: bool`,
+  `clearcoat: bool` (raw `extensions` JSON presence check — no typed support in
+  gltf 1.4.1). Cargo features to enable: `KHR_materials_emissive_strength`,
+  `KHR_materials_transmission` (report only), `extensions` (clearcoat presence),
+  and `KHR_lights_punctual` (IMPORT P1 needs it; enabling here costs nothing).
+  Importer maps each texture through its own `node.gltf_texture_source` with the
+  correct colour space (D6) into the matching `*_map_n` port; ORM-packed files
+  (occlusion index == mr index) wire the same source node into both ports.
+- **D6 — Colour-space discipline:** base-colour and emissive maps decode as sRGB
+  (`color_space = 0`, existing `Rgba8UnormSrgb` path); normal / metallic-roughness /
+  occlusion maps decode linear. The importer sets this per map; a unit test pins
+  the assignment. ⚠ VERIFY-AT-IMPL: `node.bake_environment`'s output format —
+  confirm it is HDR float (read `bake_equirect_envmap.rs` allocation); the
+  prefilter chain inherits it.
+- **D7 — The default import look becomes "black-void studio": `node.bake_environment`
+  gains a `mode` enum — `gradient` (default, byte-identical legacy behaviour) |
+  `softbox` — and imports wire `softbox` at intensity 1.0 (today: gradient at 0.0).**
+  Softbox = near-black base with N bright horizontal emitter strips; committed
+  params: `mode`, `emitter_count` (default 3), `emitter_intensity`, `emitter_elevation`,
+  `emitter_width` — strip math is executor-free, gated on a reference render. This
+  is Peter's call, quoted: "I prefer the black void look rather than the pure white
+  studio … the pure black void AND proper lighting". Background stays the clear
+  colour (the envmap is lighting-only — audit table); chrome reflects light streaks,
+  the void stays void. The Environment macro card keeps its 0–4 range and now
+  defaults to 1.0. *Consequences, stated honestly:* existing presets are untouched
+  (mode defaults to `gradient`, intensity semantics unchanged), but freshly imported
+  cards look different from pre-design imports, and — as with BUG-149's fog scaling —
+  **already-imported projects need a re-import to pick up the new defaults.**
+
+## 3. What it buys on stage
+
+- Drag the AMG GT3 in: chrome reads as chrome (streak reflections off the softbox
+  strips), livery and panel detail come from the maps, headlights glow into bloom —
+  in the black void, on the first beat, no relight session.
+- `emitter_elevation`/`emitter_intensity` are performable: the studio lighting rig
+  itself rides a macro. Sweep the emitters while the camera orbits and the
+  reflections travel across the body.
+- Every skipped feature (clearcoat paint, glass transmission) is a report line, so
+  what the asset can't yet do is known at import time, not discovered on stage.
+
+## 4. Invariants & enforcement
+
+| Invariant | Enforcement |
+|---|---|
+| Unwired new ports change nothing: a pre-design scene renders byte-identical | gpu-proof `render_scene_ibl` parity case + bundled 3D preset PNG diff (zero) — the P8 identity-parity pattern |
+| IBL responds to roughness: rough ≠ mirror | gpu-proof numeric case (F-P1 gate) — reflection gradient width ratio, no eyeballing |
+| Prefilter cache invalidates on envmap change | gpu-proof: re-bake with different params → readback changes; same params → cached (no re-convolve, asserted via dispatch counter) |
+| Colour space per map type never regresses | unit test on the importer's `color_space` assignments per map kind |
+| No unmapped feature is silently dropped | importer unit test: over-featured fixture → report enumerates clearcoat/transmission/etc. |
+| `mode = gradient` is byte-identical legacy | gpu-proof: bake with explicit `gradient` vs build-of-record readback |
+
+## 5. Phasing (Sonnet-executable, one session each)
+
+Forbidden, all phases: touching `render_mesh`/`render_copies` behaviour (D1) ·
+growing `MeshVertex` (D4) · a user-facing prefilter atom or new port type (D2) ·
+channel-select mode flags on shared resolve functions (D3) · touching fog/BUG-118 ·
+`Arc<Mutex>` anywhere · synthesizing the uniform block or binding table from memory
+instead of reading it (`feedback_synthesis_drift`).
+
+- **F-P1 — Split-sum IBL in `render_scene`.** Prefiltered chain + irradiance map +
+  BRDF LUT (D2), `fs_pbr` rewritten to consume them, `ibl_strength` heuristic
+  deleted. Read-back: this doc whole; `render_scene.rs` envmap plumbing + binding
+  table end-to-end; `pbr_brdf.wgsl`; MANIFOLD_GPU_ARCHITECTURE uniform rules;
+  the two-cache rule (`feedback_effect_chain_state_caches`). Gate (positive,
+  gpu-proofs): roughness-response — reflection of a bright emitter across a
+  roughness 0 → 1 sweep widens monotonically (gradient-width ratio ≥3×, PCSS-gate
+  pattern); irradiance — uniform white env, zero lights → lit result ≈ albedo
+  within tolerance (value-level); cache — re-convolve only on version change
+  (dispatch-count assert). Gate (negative): no-envmap presets byte-identical;
+  `rg 'ibl_strength'` → zero hits; existing `render_scene_*` proofs green
+  unmodified. Demo: L2 headless PNG — mirror sphere + rough sphere under the
+  gradient studio, read by the landing session. Test scope: focused +
+  `--features gpu-proofs render_scene`; workspace sweep at landing.
+- **F-P2 — Per-object map set + tangent-space normals.** D3 ports + resolve
+  functions + `texture_flags2`, D4 cotangent frame, emissive/occlusion terms in
+  all lit entry points (emissive in `fs_unlit` too, matching M6-D1's albedo
+  precedent). Read-back: D3/D4; `render_scene.rs` rebuild + `resolve_*` family;
+  P8's stub pattern at `render_scene.rs:874`. Gate (positive, gpu-proofs): per
+  map, a known texel produces the expected shading delta (value-level: normal map
+  tilts N — lit value shifts by a computed amount; MR map's B channel drives F0;
+  emissive adds after lighting; occlusion darkens the IBL term only). Gate
+  (negative): unwired parity (byte-identical), port-rebuild tests (the
+  `base_color_map_n` test family at `render_scene.rs:2098` extended), `rg` zero
+  hits for `texture_flags2` reads outside the resolve functions. Demo: L2 PNG —
+  normal-mapped cube vs flat cube under one sun. Performer gesture: emissive
+  material's emission intensity on a fader → glow pulses through bloom.
+- **F-P3 — Softbox bake mode.** D7 params on `node.bake_environment`; `gradient`
+  byte-identity; strip math free within the committed param names. Gate:
+  gpu-proof — `gradient` mode byte-identical to build-of-record; `softbox`
+  readback: ≥95% of texels below 0.05 luminance, emitter rows above 1.0 (HDR),
+  emitter_count changes the strip count (counted, not eyeballed). Demo: L2 PNG of
+  a chrome sphere under softbox — streak reflections on black. Test scope: focused.
+- **F-P4 — Loader + importer + defaults.** D5 parse fields + Cargo features, D6
+  colour spaces, importer wiring of all four map ports, report lines
+  (clearcoat/transmission/BLEND-as-Mask), import defaults flip to
+  `softbox @ 1.0` (D7), Environment card default 1.0. Read-back: D5–D7;
+  `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/§8. Gate
+  (positive): unit tests — a synthetic summary with all texture kinds wires all
+  ports with correct colour spaces; **held-out fixture** — Khronos DamagedHelmet
+  (all five maps; CC-BY, add attribution line) imports with every map wired,
+  renders headless, PNG eyeballed against the Khronos reference render by the
+  landing session (L2); the AMG GT3 .glb (already local in `tests/fixtures/gltf/`,
+  untracked — **stays untracked**: vecarz licensing unverified, never commit it)
+  renders and is the Peter-facing look check (L4, his call). Gate (negative):
+  report enumerates every unmapped feature of an over-featured fixture; existing
+  assembler tests green; `check-presets` clean. Round-trip gate: save an imported
+  project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
+  click-script for Peter — import the AMG, confirm chrome + void + glow.
+
+Full workspace sweep gates F-P1 and F-P2 at landing (shader ABI + port surface =
+infra); F-P3/F-P4 focused per the scope rule.
+
+## 6. Decided — do not reopen
+
+1. Scope = `render_scene`; single-object renderers migrate later on their own
+   trigger (D1).
+2. IBL prefiltering is renderer-internal, cache-keyed, no new atom, no new port
+   type (D2).
+3. Four new per-object ports with glTF channel conventions; textures never ride
+   the Material wire (D3).
+4. No MeshVertex tangents — cotangent frame in the fragment shader (D4).
+5. Default import look = softbox black studio at intensity 1.0; `gradient` mode
+   stays byte-identical for existing presets (D7, Peter's quoted call).
+6. Clearcoat and transmission are report lines in v1, not shading features
+   (Deferred #1/#2).
+7. HDRI file loading belongs to IMPORT_DESIGN P4, not here.
+
+## 7. Deferred (with triggers)
+
+1. **Clearcoat lobe** (second GGX specular on `fs_pbr`, Material fields
+   `clearcoat`/`clearcoat_roughness` via the M §7 "new fields, defaulted" seam) —
+   trigger: a hero asset whose painted surfaces read flat after F-P1–F-P4 land.
+   Peter's AMG may fire this immediately — the report line makes it visible.
+   Needs typed parse (gltf crate bump or manual JSON), priced then.
+2. **Transmission/glass** — real refraction needs OIT/draw-order design;
+   imports as Mask per M6-D3 with a report line. Trigger: a hero asset that
+   genuinely reads wrong (car glass is the likely first case).
+3. **`render_mesh`/`render_copies` IBL upgrade + MetallicGlass re-tune** —
+   trigger: the next look-pass on a `render_mesh` preset; mechanical once the
+   `pbr_brdf.wgsl` IBL helpers exist.
+4. **Import-time tangent generation** (separate buffer port) — trigger: D4's
+   quality consequence visibly bites on a hero asset.
+5. **KHR_materials_specular / IOR mapping** — parse features are enabled by F-P4;
+   mapping into Material waits for an asset that needs non-default F0.
