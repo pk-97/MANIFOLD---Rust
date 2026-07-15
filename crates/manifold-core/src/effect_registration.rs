@@ -5,7 +5,7 @@
 
 use crate::preset_type_id::PresetTypeId;
 use crate::preset_type_registry::PresetTypeRegistration;
-use crate::effects::ParamDef;
+use crate::effects::RegistryParamDef;
 use crate::generator_registration::ParamSpec;
 use crate::preset_def::{PresetDef, PresetKind};
 
@@ -148,7 +148,7 @@ inventory::collect!(EffectValueAliasMetadata);
 impl EffectMetadata {
     /// Convert to the unified `PresetDef` (kind = `Effect`).
     pub fn to_effect_def(&self) -> PresetDef {
-        let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
+        let param_defs: Vec<RegistryParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         PresetDef {
             kind: PresetKind::Effect,
             display_name: self.display_name.to_string(),
