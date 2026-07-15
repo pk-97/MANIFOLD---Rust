@@ -34,6 +34,21 @@ one prompt_id, regardless of which mailbox supplied the whisper) and the
 defense-in-depth if present). Either one present means this turn already
 spent its one block.
 
+2026-07-15 (Peter's ruling): Stop may only block for DETECTIONS — the
+deterministic mechanical checks and the classifier's anchor/coaching/escalate
+family — never for advice or housekeeping. Two changes: (1) a pending mailbox
+flag whose move is advice-kind (mechanical/reasoning-primer,
+mechanical/design-primer, mechanical/stale-brief — the moves.md `kind:
+advice` entries) is never delivered as a Stop block; it's left unconsumed so
+PostToolUse or UserPromptSubmit deliver it on ordinary schedule instead
+(`_pending_nonadvice_injection` below). (2) the grade-backstop and
+observation-review-prompt housekeeping nags — neither one a detection, both
+just end-of-session reminders — moved out of this hook entirely, into
+`.claude/hooks/daemon-userpromptsubmit.py` as additionalContext instead of a
+turn-ending block. Every reason this hook still blocks with ends in one
+hardened sentence, appended once in `_block` below, per Peter's ruling that a
+delivered note must not license scope creep on the same turn.
+
 Fails open on every error; never raises, never leaves the process non-zero.
 """
 import json
@@ -65,37 +80,10 @@ STOP_WAIT_CAP_S = 10.0
 # _stable_transcript_size below.
 STOP_STAT_GAP_S = 0.2
 
-# Grade-backstop (2026-07-05 review): self-grades can't be joined to fires
-# when sessions never write them at all. Deterministic, mirrors the
-# announced-not-started check below — main-session only, fires at most ONCE
-# per session (its own sentinel, not the per-turn stopblock, since nagging
-# every turn until the backlog clears would defeat "before the session
-# ends"). No moves.md entry: this is valve plumbing, not a drift move, so
-# the reminder text is authored directly here.
-GRADEABLE_MOVE_PREFIXES = ("anchor/", "coaching/", "escalate/")
-GRADE_BACKSTOP_STALE_EVENTS = 40  # matches §2d's oscillation-span convention
-GRADE_BACKSTOP_MOVE_ID = "mechanical/grade-backstop"
-
-# DESIGN.md §2h.4: workers run far shorter than the main session, so the
-# main-session gates above (GRADE_BACKSTOP_STALE_EVENTS / OBSERVATION_PROMPT_
-# MIN_EVENTS below, both 40) would exempt nearly every real worker from ever
-# tripping either one. One lower constant covers both roles for a worker
-# mailbox: how stale an ungraded fire must be before the grade backstop nags,
-# and how much activity a worker needs before the observation prompt is worth
-# asking at all.
-WORKER_ACTIVITY_MIN_EVENTS = 20
-
-# Observation review prompt (2026-07-05, Peter's ask): a standing invitation
-# to log anything worth the next sleep pass's attention, asked at most ONCE
-# per session (own sentinel below, mirroring the grade backstop) — most
-# sessions have nothing to add, and asking every turn until something gets
-# written would force busywork just to go quiet. Also gated on a minimum
-# amount of session activity (same "has this session had enough happen yet"
-# convention as the grade backstop / §2d) — a session a couple of tool calls
-# long hasn't had a "session" worth reviewing. No moves.md entry (valve
-# plumbing, not a drift move).
-OBSERVATION_PROMPT_MOVE_ID = "mechanical/observation-prompt"
-OBSERVATION_PROMPT_MIN_EVENTS = 40
+# Grade-backstop and observation-review-prompt constants/functions moved to
+# .claude/hooks/daemon-userpromptsubmit.py 2026-07-15 (Peter's ruling — see
+# module docstring): neither is a detection, so neither belongs on the
+# turn-ending Stop valve.
 
 # Conservative imminent-action triggers (moves.md mechanical/announced-not-started).
 # Matched against the LAST sentence of the last assistant text only. A
@@ -577,204 +565,6 @@ def _sweep_stale_sentinels(verdicts_dir):
         pass
 
 
-def _session_gradeable_fires(telemetry_path, session_id, agent_id=None):
-    """(seq, move_id, ts) for every gradeable (anchor/coaching/escalate) fire
-    delivered to THIS mailbox — the session's own (agent_id=None, same scope
-    as §4b's scoring) or, per DESIGN.md §2h.4, one worker's own mailbox
-    (agent_id set) — oldest first. Reads telemetry.jsonl directly rather than
-    needing a new field; never raises."""
-    fires = []
-    try:
-        with open(telemetry_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("event") != "injected" or rec.get("agent_id") != agent_id:
-                    continue
-                if rec.get("session_id") != session_id:
-                    continue
-                move_id = rec.get("move_id") or ""
-                if not move_id.startswith(GRADEABLE_MOVE_PREFIXES):
-                    continue
-                if rec.get("seq") is None:
-                    continue
-                fires.append((rec["seq"], move_id, rec.get("ts")))
-    except OSError:
-        return []
-    fires.sort(key=lambda t: t[0])
-    return fires
-
-
-def _session_grade_count(eval_dir, session_id, agent_id=None):
-    """How many grade lines (any file matching live_grades*.jsonl) this
-    mailbox — session-level (agent_id=None) or one worker's own (agent_id
-    set, DESIGN.md §2h.4) — has already written. A coarse backstop count, not
-    the precise per-fire join slice_fires.py does for the sleep pass. Records
-    with no "agent_id" key at all read as agent_id=None via .get, matching
-    every pre-§2h.4 session self-grade line on disk."""
-    import glob
-
-    count = 0
-    for path in glob.glob(os.path.join(eval_dir, "live_grades*.jsonl")):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if rec.get("session_id") != session_id:
-                        continue
-                    if rec.get("agent_id") != agent_id:
-                        continue
-                    count += 1
-        except OSError:
-            continue
-    return count
-
-
-def _events_since(transcript_path, since_ts):
-    """Count tool_result blocks (the same 'event' unit common.py's
-    WindowState counts — one completed tool call) whose containing message
-    postdates `since_ts`. Reads the transcript directly so this needs no new
-    telemetry field."""
-    if since_ts is None:
-        return 0
-    import common
-
-    count = 0
-    try:
-        with open(transcript_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if d.get("type") != "user":
-                    continue
-                ts = common.parse_ts(d.get("timestamp"))
-                if ts is not None and ts <= since_ts:
-                    continue
-                content = (d.get("message") or {}).get("content")
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
-                        count += 1
-    except OSError:
-        return count
-    return count
-
-
-def _grade_backstop_reason(ungraded_count, oldest_events_ago, agent_id=None):
-    # DESIGN.md §2h.4: a worker's grade lines need "agent_id" too — RUNBOOK.md
-    # step 2: "(session_id, seq) alone collides across workers". Only this
-    # clause varies with the mailbox; the rest of the sentence is frozen
-    # (same invariant-5 precedent as the seq numeral elsewhere).
-    agent_note = (
-        f" Since this fire belongs to a worker, also pass --agent-id {agent_id} "
-        f"— (session_id, seq) alone collides across workers."
-        if agent_id
-        else ""
-    )
-    return (
-        f'<daemon move="{GRADE_BACKSTOP_MOVE_ID}">\n'
-        f"This session delivered {ungraded_count} gradeable daemon fire(s) "
-        f"(anchor/coaching/escalate) with no self-grade recorded yet, and the "
-        f"oldest is {oldest_events_ago} tool events old. Before the session "
-        f"ends, log one self-grade per ungraded fire, one shot each: "
-        f"python3 .claude/daemon/log_grade.py <seq> <move_id> "
-        f'<correct y/n> <effective y/n> "<one-sentence evidence>" — use each '
-        f"fire's own seq so the sleep pass can join the grade back to the "
-        f"exact fire it belongs to.{agent_note}\n"
-        f"</daemon>"
-    )
-
-
-def _observation_prompt_reason(agent_id=None):
-    agent_note = f', "agent_id": "{agent_id}"' if agent_id else ""
-    return (
-        f'<daemon move="{OBSERVATION_PROMPT_MOVE_ID}">\n'
-        f"Before this session goes further: is there anything worth logging "
-        f"for the daemon — a drift the observer should have caught but "
-        f"didn't, a pattern that doesn't fit an existing move, or any other "
-        f"note for the next sleep pass? Most sessions won't have anything, "
-        f"and that's fine — no action needed either way. If something IS "
-        f"worth logging, append one record to "
-        f".claude/daemon/eval/observations.session.jsonl: {{ts, session_id, "
-        f'kind: "miss-candidate"|"note", move_id or expect_family, evidence, '
-        f"note{agent_note}}} (schema in RUNBOOK.md step 2/3). This asks once "
-        f"per session, not every turn.\n"
-        f"</daemon>"
-    )
-
-
-def _try_grade_backstop(verdicts_dir, telemetry_path, eval_dir, session_id, agent_id, transcript_path, stale_threshold):
-    """One (reason, telemetry_extra) pair if the grade backstop should fire
-    for this mailbox right now, else None. Shared by the main-session path
-    (agent_id=None, stale_threshold=GRADE_BACKSTOP_STALE_EVENTS) and the
-    worker path (DESIGN.md §2h.4: agent_id set, stale_threshold=
-    WORKER_ACTIVITY_MIN_EVENTS) — same logic, own sentinel per mailbox, own
-    threshold. Never raises (caught by main()'s top-level try/except)."""
-    mailbox_key = f"{session_id}.{agent_id}" if agent_id else session_id
-    sentinel = os.path.join(verdicts_dir, f"{mailbox_key}.grade-backstop-fired")
-    if os.path.exists(sentinel):
-        return None
-    fires = _session_gradeable_fires(telemetry_path, session_id, agent_id)
-    if not fires:
-        return None
-    graded = _session_grade_count(eval_dir, session_id, agent_id)
-    if len(fires) <= graded:
-        return None
-    events_ago = _events_since(transcript_path, fires[0][2])
-    if events_ago <= stale_threshold:
-        return None
-    try:
-        os.makedirs(verdicts_dir, exist_ok=True)
-        open(sentinel, "w").close()
-    except OSError:
-        pass
-    return (
-        _grade_backstop_reason(len(fires) - graded, events_ago, agent_id),
-        {
-            "move_id": GRADE_BACKSTOP_MOVE_ID,
-            "ungraded_count": len(fires) - graded,
-            "oldest_events_ago": events_ago,
-        },
-    )
-
-
-def _try_observation_prompt(verdicts_dir, session_id, agent_id, transcript_path, min_events):
-    """One (reason, telemetry_extra) pair if the observation-review prompt
-    should fire for this mailbox right now, else None. Shared by the main-
-    session path (agent_id=None, min_events=OBSERVATION_PROMPT_MIN_EVENTS)
-    and the worker path (DESIGN.md §2h.4: agent_id set, min_events=
-    WORKER_ACTIVITY_MIN_EVENTS). Never raises."""
-    mailbox_key = f"{session_id}.{agent_id}" if agent_id else session_id
-    sentinel = os.path.join(verdicts_dir, f"{mailbox_key}.observation-prompt-fired")
-    if os.path.exists(sentinel):
-        return None
-    if _events_since(transcript_path, 0) < min_events:
-        return None
-    try:
-        os.makedirs(verdicts_dir, exist_ok=True)
-        open(sentinel, "w").close()
-    except OSError:
-        pass
-    return _observation_prompt_reason(agent_id), {"move_id": OBSERVATION_PROMPT_MOVE_ID}
-
-
 def _move_muted(move_id, verdicts_dir):
     """Mirror of observer.py's _is_muted for the hook-fired mechanical moves.
     A sleep pass's mute must silence a move at EVERY tier — found 2026-07-07
@@ -792,6 +582,36 @@ def _move_muted(move_id, verdicts_dir):
         return float(mute.get("unmute_at", 0)) > time.time()
     except (TypeError, ValueError):
         return False
+
+
+def _is_advice_move(move_id):
+    """True iff `move_id` is one of moves.md's `kind: advice` entries
+    (mechanical/reasoning-primer, mechanical/design-primer,
+    mechanical/stale-brief). Fails open to False — an unresolvable move_id is
+    never advice, so a lookup failure never accidentally suppresses a real
+    detection. Used to keep advice-kind fires off the Stop-block path
+    entirely (2026-07-15, Peter's ruling — see module docstring)."""
+    if not move_id:
+        return False
+    try:
+        import valve
+
+        entry = valve._payloads().get(move_id) or {}
+        return entry.get("kind") == "advice"
+    except Exception:
+        return False
+
+
+def _pending_nonadvice_injection(valve, mailbox_key, agent_id):
+    """Same as `valve.pending_injection`, except a pending flag whose move is
+    advice-kind is treated as absent (None, None, None) — it is left
+    unconsumed in the mailbox so PostToolUse or UserPromptSubmit deliver it
+    on their ordinary schedule instead of spending this turn's one Stop
+    block on a scheduled nudge. 2026-07-15 (Peter's ruling)."""
+    block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
+    if block and _is_advice_move(move_id):
+        return None, None, None
+    return block, seq, move_id
 
 
 def main():
@@ -824,6 +644,11 @@ def main():
         mailbox_key = f"{session_id}.{agent_id}" if agent_id else session_id
 
         def _block(reason, telemetry_extra):
+            # 2026-07-15 (Peter's ruling): every Stop block ends with this
+            # exact sentence, appended once here so every caller gets it —
+            # a delivered note must not license the model to keep working on
+            # something else this same turn.
+            reason = f"{reason}\n\nAddress only this note, then end your turn — do not resume or begin other work."
             try:
                 os.makedirs(valve.VERDICTS_DIR, exist_ok=True)
                 open(sentinel_path, "w").close()
@@ -843,8 +668,9 @@ def main():
 
         # 1. An already-pending, undelivered flag — never wait, never
         # classify synchronously; this only drains what the observer already
-        # decided (DESIGN.md §2, RULED).
-        block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
+        # decided (DESIGN.md §2, RULED). Advice-kind flags are filtered out
+        # here (2026-07-15) — Stop blocks only for detections.
+        block, seq, move_id = _pending_nonadvice_injection(valve, mailbox_key, agent_id)
         if block:
             valve.write_consumed(mailbox_key, seq)
             _block(block, {"seq": seq, "move_id": move_id})
@@ -882,8 +708,9 @@ def main():
                 while True:
                     # Verdicts land inside the drain, before the heartbeat
                     # moves — check the mailbox first so a whisper delivers
-                    # the moment it exists, not a poll later.
-                    block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
+                    # the moment it exists, not a poll later. Advice-kind
+                    # flags never occupy this wait (2026-07-15).
+                    block, seq, move_id = _pending_nonadvice_injection(valve, mailbox_key, agent_id)
                     if block:
                         _clear_poke(poke_path)
                         valve.write_consumed(mailbox_key, seq)
@@ -907,7 +734,7 @@ def main():
                 # Caught up (or capped): one final mailbox read for a verdict
                 # written by the drain that closed the gap.
                 _clear_poke(poke_path)
-                block, seq, move_id = valve.pending_injection(mailbox_key, agent_id=agent_id)
+                block, seq, move_id = _pending_nonadvice_injection(valve, mailbox_key, agent_id)
                 if block:
                     valve.write_consumed(mailbox_key, seq)
                     _block(block, {"seq": seq, "move_id": move_id, "stop_wait": True})
@@ -955,28 +782,10 @@ def main():
                 _block(reason, {"move_id": "mechanical/unverified-done-claim"})
                 return
 
-        # 3/4. Grade-backstop + observation-review prompt. DESIGN.md §2h.4
-        # extends both to worker Stop events (agent_id set, already gated on
-        # the worker-nudges flag above) with their own per-(session, agent_id)
-        # sentinels and a lower activity threshold — workers run far shorter
-        # than the main session, so the main-session gates (both 40 events)
-        # would exempt nearly every real worker. Main session keeps its
-        # original constants and sentinel names (agent_id=None collapses the
-        # mailbox key back to session_id) — byte-identical behavior to before
-        # this section existed.
-        stale_threshold = WORKER_ACTIVITY_MIN_EVENTS if agent_id else GRADE_BACKSTOP_STALE_EVENTS
-        min_events = WORKER_ACTIVITY_MIN_EVENTS if agent_id else OBSERVATION_PROMPT_MIN_EVENTS
-
-        result = _try_grade_backstop(
-            valve.VERDICTS_DIR, valve.TELEMETRY_PATH, valve.EVAL_DIR, session_id, agent_id, transcript_path, stale_threshold
-        )
-        if result:
-            _block(*result)
-            return
-
-        result = _try_observation_prompt(valve.VERDICTS_DIR, session_id, agent_id, transcript_path, min_events)
-        if result:
-            _block(*result)
+        # Grade-backstop and observation-review-prompt used to live here as
+        # sections 3/4. Moved to .claude/hooks/daemon-userpromptsubmit.py
+        # 2026-07-15 (Peter's ruling — see module docstring): neither is a
+        # detection, so neither may block a turn from ending.
     except Exception:
         return
 

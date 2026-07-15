@@ -543,8 +543,6 @@ class Daemon:
                         self._check_design_primer(name, input_, event_count, logf, mailbox=worker)
                         self._check_stale_brief(name, input_, event_count, logf, mailbox=worker)
                     self._check_unread_edit(name, input_, event_count, logf, mailbox=worker, live=classify)
-                    if classify:
-                        self._check_primer(event_count, logf, mailbox=worker)
         if closed and classify:
             self._handle_window(closed, logf, mailbox=worker)
 
@@ -695,8 +693,6 @@ class Daemon:
                         self._check_stale_brief(name, input_, event_count, logf)
                     # live=classify: catchup populates paths_seen, never fires
                     self._check_unread_edit(name, input_, event_count, logf, live=classify)
-                    if classify:
-                        self._check_primer(event_count, logf)
         # Return the closed window (if any) to _drain, which owns the
         # _handle_window dispatch so it can reorder it in Stop-wait priority
         # mode. catchup (classify=False) replays state only — never classifies.
@@ -793,32 +789,12 @@ class Daemon:
         _log(logf, f"mechanical/landing-doc-reflex fired: {hits}")
 
     # ---- priming tier (sleep pass 1: pre-authored advice at predictable
-    # moments — no detection, no classifier, no false-positive budget) ----
-
-    def _check_primer(self, event_count, logf, mailbox=None):
-        """mechanical/reasoning-primer: fire on the first live tool event of a
-        target (main session or worker), then re-arm every advice-recur events
-        (§2e, Peter 2026-07-05) so long orchestration/worker runs get the
-        advice back into context after it scrolls out. Firestate persistence
-        (main) keeps the gate across revives; if another whisper is pending,
-        _resolve_fire declines and this retries on the next event."""
-        mb = mailbox if mailbox is not None else self
-        # Fast path only — _resolve_fire re-checks the same advice-recur gate.
-        prev = mb.last_fire_event.get("mechanical/reasoning-primer")
-        if prev is not None and (event_count - prev) < common.COOLDOWN_EVENTS["advice-recur"]:
-            return
-        verdict = {"evidence": "first live tool event (priming tier)", "confidence": 1.0}
-        flag_out = self._resolve_fire(event_count, "mechanical/reasoning-primer", verdict, logf, mailbox=mailbox)
-        if not flag_out:
-            return
-        record = {
-            "ts": time.time(),
-            "phase": mb.phase,
-            "window_version": common.WINDOW_VERSION,
-            "flag": flag_out,
-        }
-        _atomic_write_json(mb.verdict_path, record)
-        _log(logf, "mechanical/reasoning-primer fired (priming tier)")
+    # moments — no detection, no classifier, no false-positive budget).
+    # mechanical/reasoning-primer moved OUT of this tier 2026-07-15 (Peter's
+    # ruling: firing on the first live tool event landed too early in the
+    # turn to be useful and just added noise) — it now delivers once, at
+    # SessionStart, via .claude/hooks/daemon-session-start.py. Only
+    # mechanical/design-primer (path-triggered) remains observer-selected. ----
 
     DESIGN_DOC_RE = re.compile(r"_(?:DESIGN|PLAN)\.md$")
 
