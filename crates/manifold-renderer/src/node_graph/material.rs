@@ -49,19 +49,28 @@ pub enum MaterialKind {
     Cel,
 }
 
-/// Alpha coverage model for the surface (glTF `alphaMode`, minus BLEND).
+/// Alpha coverage model for the surface (glTF `alphaMode`).
 /// [`Opaque`](AlphaMode::Opaque): alpha is ignored for coverage — every
 /// rasterised fragment is written. [`Mask`](AlphaMode::Mask): a fragment
 /// whose resolved alpha is below [`Material::alpha_cutoff`] is `discard`ed
 /// (cutout), so foliage cards and decals punch holes instead of rendering
-/// as opaque rectangles. Smooth transparency (glTF BLEND) is intentionally
-/// out of scope — it needs draw-order / OIT design (see MATERIAL M6-D3).
+/// as opaque rectangles. [`Blend`](AlphaMode::Blend): the object draws in a
+/// second, sorted, depth-write-off pass in `render_scene` — glTF `BLEND` and
+/// `KHR_materials_transmission` materials import as this (IMPORT_FIDELITY_DESIGN.md
+/// D8/F-P5, superseding MATERIAL M6-D3's "out of scope" call). `render_mesh`/
+/// `render_copies` don't implement the sorted pass (D1 scope fence) — a
+/// `Blend` material wired there renders as `Opaque` coverage (no cutout,
+/// no sorting) until their own IBL-upgrade migration trigger fires
+/// (IMPORT_FIDELITY_DESIGN.md §7 Deferred #3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AlphaMode {
     /// Alpha ignored for coverage; all fragments written.
     Opaque,
     /// Cutout: fragments with `alpha < alpha_cutoff` are discarded.
     Mask,
+    /// Sorted back-to-front blend pass, depth test on / write off
+    /// (`render_scene` only — see the enum doc comment above).
+    Blend,
 }
 
 /// Material struct flowing through [`PortType::Material`](crate::node_graph::ports::PortType::Material)

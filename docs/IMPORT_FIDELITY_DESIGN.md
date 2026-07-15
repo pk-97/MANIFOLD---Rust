@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: IN PROGRESS · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 next.**
+**Status: SHIPPED · F-P1 + F-P3 SHIPPED 2026-07-15 (orchestrator session 1 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p1p3.md`) · F-P2 + F-P4 SHIPPED 2026-07-15 (orchestrator session 2 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p2p4.md`) · F-P5 SHIPPED 2026-07-15 (orchestrator session 3 of 3, landing report `docs/landings/2026-07-15-import-fidelity-p5.md`) · approved by Peter 2026-07-15 ("Approved") · authored 2026-07-15 · Fable 5 (his product calls are quoted in the intro, D7, and D8; glass/F-P5, pure-black base, and sun coherence added same day at his direction). Execution: 3 orchestrator sessions — (1) F-P1 ∥ F-P3 DONE, (2) F-P2 + F-P4 DONE, (3) F-P5 DONE — all phases shipped.**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -328,7 +328,7 @@ instead of reading it (`feedback_synthesis_drift`).
   project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
   click-script for Peter — import the AMG, confirm chrome + void + glow.
 
-- **F-P5 — Glass (sorted blend pass).** D8 whole: `AlphaMode::Blend` variant +
+- **F-P5 — SHIPPED 2026-07-15, `61400029`.** Glass (sorted blend pass). D8 whole: `AlphaMode::Blend` variant +
   atom param arm; opaque/transparent object split; back-to-front centroid sort;
   blend pipelines (per MaterialKind, depth write OFF) alongside the existing
   opaque set; `Blend` objects skipped in every shadow-caster pass; importer flips

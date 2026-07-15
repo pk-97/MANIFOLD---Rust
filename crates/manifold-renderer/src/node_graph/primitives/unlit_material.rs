@@ -19,7 +19,7 @@ use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-const ALPHA_MODES: &[&str] = &["Opaque", "Mask"];
+const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 
 crate::primitive! {
     name: UnlitMaterial,
@@ -148,7 +148,9 @@ impl Primitive for UnlitMaterial {
 
         let alpha_mode = match ctx.params.get("alpha_mode") {
             Some(ParamValue::Enum(v)) if *v == 1 => AlphaMode::Mask,
+            Some(ParamValue::Enum(v)) if *v == 2 => AlphaMode::Blend,
             Some(ParamValue::Float(f)) if f.round() as i32 == 1 => AlphaMode::Mask,
+            Some(ParamValue::Float(f)) if f.round() as i32 == 2 => AlphaMode::Blend,
             _ => AlphaMode::Opaque,
         };
         let alpha_cutoff = ctx.scalar_or_param("alpha_cutoff", 0.5);

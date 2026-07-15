@@ -322,8 +322,18 @@ pub struct RenderScene {
     /// substitution, not a second WGSL file — see `pipeline_for`), so the
     /// cache key grows from `MaterialKind` alone. 4 materials × 2 = 8
     /// entries max.
-    pipelines: AHashMap<(MaterialKind, bool), manifold_gpu::GpuRenderPipeline>,
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: the cache key grows a third
+    /// dimension, `is_blend` — a Blend-material pipeline has its own blend
+    /// state and no alpha-to-coverage (see `pipeline_for`), so it is a
+    /// distinct compiled pipeline from the opaque/mask one for the same
+    /// `(kind, emit_velocity)`. 4 materials × 2 × 2 = 16 entries max.
+    pipelines: AHashMap<(MaterialKind, bool, bool), manifold_gpu::GpuRenderPipeline>,
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: depth TEST on (`Less`, matching
+    /// `depth_stencil` above) but WRITE off — the sorted transparent
+    /// group's depth-stencil state, drawn as `DepthMsaaPassDesc::second_pass`
+    /// right after the opaque group in the same encoder pass.
+    blend_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Memoryless 4x-MSAA color + depth targets for the scene pass, sized
     /// to the render target. Both resolve on-chip; only `msaa_color`
     /// resolves out to the single-sample output.
@@ -487,6 +497,7 @@ impl RenderScene {
             num_lights: 0,
             pipelines: AHashMap::new(),
             depth_stencil: None,
+            blend_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,
             depth_width: 0,
@@ -1213,11 +1224,34 @@ impl RenderScene {
         ),
     ];
 
+    /// IMPORT_FIDELITY_DESIGN.md D8: classic straight-alpha "over" blend —
+    /// `src_alpha / one_minus_src_alpha` on colour, and the matching
+    /// straight-alpha formula on the output alpha channel (`src.a + dst.a *
+    /// (1 - src.a)`). Never premultiplied (alpha-standardisation: this
+    /// producer is straight-alpha, same convention as the P3 fog pass).
+    fn blend_state() -> manifold_gpu::GpuBlendState {
+        manifold_gpu::GpuBlendState {
+            src_factor: manifold_gpu::GpuBlendFactor::SrcAlpha,
+            dst_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+            operation: manifold_gpu::GpuBlendOp::Add,
+            src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+            dst_alpha_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+            alpha_operation: manifold_gpu::GpuBlendOp::Add,
+        }
+    }
+
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: `blend` selects the Blend-material
+    /// pipeline variant — real alpha blending, no alpha-to-coverage (which
+    /// would double up with the blend state). Same shader source and entry
+    /// points as the opaque/mask variant; only the pipeline's fixed-function
+    /// blend + alpha-to-coverage state differs (D8: "lighting, IBL, and fog
+    /// run identically in both passes").
     fn pipeline_for(
         &mut self,
         device: &manifold_gpu::GpuDevice,
         kind: MaterialKind,
         emit_velocity: bool,
+        blend: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
@@ -1226,8 +1260,9 @@ impl RenderScene {
             MaterialKind::Cel => "fs_cel",
         };
         self.pipelines
-            .entry((kind, emit_velocity))
+            .entry((kind, emit_velocity, blend))
             .or_insert_with(|| {
+                let blend_state = if blend { Some(Self::blend_state()) } else { None };
                 if emit_velocity {
                     device.create_specialized_render_pipeline_depth_msaa(
                         include_str!("shaders/render_scene.wgsl"),
@@ -1236,9 +1271,9 @@ impl RenderScene {
                         Self::VELOCITY_SPECIALIZATIONS,
                         manifold_gpu::GpuTextureFormat::Rgba16Float,
                         manifold_gpu::GpuTextureFormat::Depth32Float,
-                        None,
+                        blend_state,
                         MSAA_SAMPLES,
-                        true,
+                        !blend,
                         Some(manifold_gpu::GpuTextureFormat::Rg16Float),
                         "node.render_scene.velocity",
                     )
@@ -1249,9 +1284,13 @@ impl RenderScene {
                         fs_entry,
                         manifold_gpu::GpuTextureFormat::Rgba16Float,
                         manifold_gpu::GpuTextureFormat::Depth32Float,
-                        None,
+                        blend_state,
                         MSAA_SAMPLES,
-                        true, // alpha-to-coverage: antialias the cutout `discard` edge, not just silhouettes
+                        // alpha-to-coverage antialiases the cutout `discard`
+                        // edge for Opaque/Mask; a Blend pipeline has no
+                        // discard and already blends per-fragment alpha, so
+                        // it stays off (the two mechanisms would double up).
+                        !blend,
                         "node.render_scene",
                     )
                 }
@@ -1308,6 +1347,33 @@ impl RenderScene {
                 true,
                 Some(manifold_gpu::GpuTextureFormat::Rg16Float),
                 "node.render_scene.velocity",
+            );
+            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the Blend-material pipeline
+            // variants (BUG-037 discipline — a live project's first glass
+            // draw must be a cache hit, not a first-use compile stall).
+            device.create_render_pipeline_depth_msaa(
+                include_str!("shaders/render_scene.wgsl"),
+                "vs_main",
+                fs_entry,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                Some(Self::blend_state()),
+                MSAA_SAMPLES,
+                false,
+                "node.render_scene.blend",
+            );
+            device.create_specialized_render_pipeline_depth_msaa(
+                include_str!("shaders/render_scene.wgsl"),
+                "vs_main",
+                fs_entry,
+                Self::VELOCITY_SPECIALIZATIONS,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                manifold_gpu::GpuTextureFormat::Depth32Float,
+                Some(Self::blend_state()),
+                MSAA_SAMPLES,
+                false,
+                Some(manifold_gpu::GpuTextureFormat::Rg16Float),
+                "node.render_scene.blend.velocity",
             );
         }
 
@@ -1479,7 +1545,10 @@ fn build_uniforms(
         alpha_params: [
             match material.alpha_mode {
                 AlphaMode::Mask => 1.0,
-                AlphaMode::Opaque => 0.0,
+                // IMPORT_FIDELITY_DESIGN.md D8: Blend never discards — its
+                // coverage comes from the sorted blend pass's pipeline blend
+                // state, not the shader's cutout branch.
+                AlphaMode::Opaque | AlphaMode::Blend => 0.0,
             },
             material.alpha_cutoff,
             0.0,
@@ -1732,6 +1801,20 @@ impl EffectNode for RenderScene {
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
             /// `buffer_size / 32` when wired, else 1 (identity stub).
             instance_count: u32,
+            /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
+            /// model — `Blend` routes into the sorted transparent group and
+            /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
+            /// existing group, unchanged.
+            alpha_mode: AlphaMode,
+            /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
+            /// object's model-matrix translation (the interior's stand-in
+            /// for a full local-space bounding-box centroid — no per-object
+            /// AABB is tracked anywhere in the graph today, and building
+            /// that infra is out of this phase's scope; see the landing
+            /// report's confessed-shortcuts field). Larger = farther from
+            /// the camera along its forward axis. Used only to order the
+            /// Blend group back-to-front; unread for Opaque/Mask objects.
+            sort_depth: f32,
         }
 
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
@@ -1829,9 +1912,11 @@ impl EffectNode for RenderScene {
                 uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
             }
 
+            let alpha_mode = material.alpha_mode;
+            let is_blend = alpha_mode == AlphaMode::Blend;
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired)
+                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
                     .clone()
             };
 
@@ -1845,6 +1930,13 @@ impl EffectNode for RenderScene {
                 None => 1,
             };
 
+            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
+            // object's translation (see the `sort_depth` doc comment above).
+            let world_pos = [model[3][0], model[3][1], model[3][2]];
+            let sort_depth = (world_pos[0] - cam.pos[0]) * cam.fwd[0]
+                + (world_pos[1] - cam.pos[1]) * cam.fwd[1]
+                + (world_pos[2] - cam.pos[2]) * cam.fwd[2];
+
             draws.push(ObjectDraw {
                 vertices,
                 uniforms,
@@ -1856,6 +1948,8 @@ impl EffectNode for RenderScene {
                 emissive_map,
                 instances,
                 instance_count,
+                alpha_mode,
+                sort_depth,
             });
         }
 
@@ -1872,6 +1966,16 @@ impl EffectNode for RenderScene {
                     &manifold_gpu::GpuDepthStencilDesc {
                         compare: manifold_gpu::GpuCompareFunction::Less,
                         write_enabled: true,
+                    },
+                ));
+            }
+            // IMPORT_FIDELITY_DESIGN.md D8/F-P5: same compare, write disabled
+            // — the sorted transparent group's depth-stencil state.
+            if self.blend_depth_stencil.is_none() {
+                self.blend_depth_stencil = Some(gpu.device.create_depth_stencil_state(
+                    &manifold_gpu::GpuDepthStencilDesc {
+                        compare: manifold_gpu::GpuCompareFunction::Less,
+                        write_enabled: false,
                     },
                 ));
             }
@@ -1960,6 +2064,13 @@ impl EffectNode for RenderScene {
         // D11: the shadow pass instances too — bound once here, reused by
         // Pass 2 below (both only ever take an immutable borrow of self).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: "a window must not throw an
+        // opaque shadow" — Blend objects are excluded from every caster's
+        // depth-only pass below, never just the main draw.
+        let shadow_caster_draws: Vec<&ObjectDraw> = draws
+            .iter()
+            .filter(|d| d.alpha_mode != AlphaMode::Blend)
+            .collect();
         if has_casters {
             let shadow_pipeline = self.shadow_pipeline.as_ref().expect("ensured").clone();
             let shadow_ds = self.shadow_depth_stencil.as_ref().expect("ensured");
@@ -1968,14 +2079,14 @@ impl EffectNode for RenderScene {
                     continue;
                 };
                 let vp = l.shadow_view_proj();
-                let shadow_uniforms: Vec<ShadowUniforms> = draws
+                let shadow_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
                     .iter()
                     .map(|d| ShadowUniforms {
                         light_view_proj: vp,
                         model: d.uniforms.model,
                     })
                     .collect();
-                let shadow_bindings: Vec<[GpuBinding; 3]> = draws
+                let shadow_bindings: Vec<[GpuBinding; 3]> = shadow_caster_draws
                     .iter()
                     .zip(&shadow_uniforms)
                     .map(|(d, su)| {
@@ -1997,7 +2108,7 @@ impl EffectNode for RenderScene {
                         ]
                     })
                     .collect();
-                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = draws
+                let shadow_draws: Vec<manifold_gpu::DepthMsaaDraw> = shadow_caster_draws
                     .iter()
                     .zip(&shadow_bindings)
                     .map(|(d, b)| {
@@ -2213,18 +2324,41 @@ impl EffectNode for RenderScene {
                 ]
             })
             .collect();
-        let draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = draws
-            .iter()
-            .zip(&binding_sets)
-            .map(|(draw, bindings)| {
-                manifold_gpu::GpuEncoder::depth_msaa_draw(
-                    &draw.pipeline,
-                    bindings,
-                    vertex_count(draw),
-                    draw.instance_count,
-                )
-            })
-            .collect();
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5: split into the existing
+        // opaque/mask group (order unchanged — a zero-Blend scene produces
+        // byte-identical `draw_calls` to before this phase) and the sorted
+        // transparent group, drawn as `second_pass` in the SAME encoder pass
+        // right after (occlusion by opaque geometry falls out of the shared,
+        // still-live MSAA depth buffer; no separate resolve/reclear).
+        let mut draw_calls: Vec<manifold_gpu::DepthMsaaDraw> = Vec::with_capacity(draws.len());
+        let mut blend_entries: Vec<(f32, manifold_gpu::DepthMsaaDraw)> = Vec::new();
+        for (draw, bindings) in draws.iter().zip(&binding_sets) {
+            let call = manifold_gpu::GpuEncoder::depth_msaa_draw(
+                &draw.pipeline,
+                bindings,
+                vertex_count(draw),
+                draw.instance_count,
+            );
+            if draw.alpha_mode == AlphaMode::Blend {
+                blend_entries.push((draw.sort_depth, call));
+            } else {
+                draw_calls.push(call);
+            }
+        }
+        // Back-to-front: farthest object (largest view-space depth along
+        // the camera's forward axis) drawn first, so nearer glass blends
+        // correctly over farther glass.
+        blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> =
+            blend_entries.into_iter().map(|(_, call)| call).collect();
+        let second_pass = if blend_draw_calls.is_empty() {
+            None
+        } else {
+            Some((
+                self.blend_depth_stencil.as_ref().expect("ensured"),
+                blend_draw_calls.as_slice(),
+            ))
+        };
 
         // GBUFFER_DESIGN.md §2 D5 (P2): the aux-MRT slot P1 built but never
         // exercised. `velocity_pair` is `Some` only when BOTH this node's
@@ -2255,6 +2389,7 @@ impl EffectNode for RenderScene {
             depth_resolve: depth_resolve_target,
             aux_color,
             depth_stencil_state: depth_stencil,
+            second_pass,
         };
         ctx.gpu_encoder()
             .native_enc
@@ -3451,7 +3586,7 @@ mod gpu_tests {
         // isn't just "some pipeline got created."
         let mut scene = RenderScene::default();
         let cache_before_use = device.render_pipeline_cache_len();
-        scene.pipeline_for(&device, MaterialKind::Pbr, false);
+        scene.pipeline_for(&device, MaterialKind::Pbr, false, false);
         assert_eq!(
             device.render_pipeline_cache_len(),
             cache_before_use,

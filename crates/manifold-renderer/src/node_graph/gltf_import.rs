@@ -535,18 +535,13 @@ fn build_import_graph(
         let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
-        // line, never a silent drop. clearcoat/transmission stay
-        // report-only in F-P4 (Deferred #1 / F-P5 respectively); BLEND is
-        // actually downgraded (to Mask cutout, above in gltf_load.rs), so
-        // its line documents what changed, not just what's missing.
+        // line, never a silent drop. clearcoat stays report-only
+        // (Deferred #1); transmission and BLEND are no longer report-only —
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5 maps both to a real `Blend`
+        // material below, so they produce no line here.
         if m.clearcoat {
             report_lines.push(format!(
                 "{group_name}: KHR_materials_clearcoat present — clearcoat coat layer not imported (report-only, no clear-coat lobe in v1)"
-            ));
-        }
-        if m.transmission {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_transmission present — transmission/glass not imported (report-only until IMPORT_FIDELITY F-P5 lands)"
             ));
         }
         // `render_scene` shipped no per-object normal-scale / occlusion-strength
@@ -566,12 +561,14 @@ fn build_import_graph(
                 m.occlusion_strength
             ));
         }
-        if m.was_blend {
-            report_lines.push(format!(
-                "{group_name}: glTF alphaMode BLEND downgraded to Mask cutout (alpha_cutoff {:.2}) — smooth blending arrives with IMPORT_FIDELITY F-P5",
-                m.alpha_cutoff
-            ));
-        }
+        // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
+        // KHR_materials_transmission both become a real `Blend` material.
+        // One formula covers both — `transmission_factor == 0.0` (plain
+        // BLEND, no transmission extension) reduces to the material's own
+        // base_color.a unchanged.
+        let is_glass = m.was_blend || m.transmission_factor > 0.0;
+        let effective_alpha =
+            (m.base_color_factor[3] * (1.0 - m.transmission_factor)).clamp(0.0, 1.0);
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -606,9 +603,12 @@ fn build_import_graph(
         mat_node
             .params
             .insert("color_b".to_string(), float(m.base_color_factor[2]));
+        // IMPORT_FIDELITY_DESIGN.md D8: `effective_alpha` folds the
+        // transmission formula in; for a plain opaque/mask material
+        // (transmission_factor == 0.0) this is exactly base_color.a.
         mat_node
             .params
-            .insert("color_a".to_string(), float(m.base_color_factor[3]));
+            .insert("color_a".to_string(), float(effective_alpha));
         mat_node.params.insert("metallic".to_string(), float(m.metallic));
         mat_node
             .params
@@ -639,9 +639,16 @@ fn build_import_graph(
             "emission_intensity".to_string(),
             float(if emissive_lit { m.emissive_strength } else { 0.0 }),
         );
-        mat_node
-            .params
-            .insert("alpha_mode".to_string(), enum_val(if m.alpha_mask { 1 } else { 0 }));
+        mat_node.params.insert(
+            "alpha_mode".to_string(),
+            enum_val(if is_glass {
+                2 // Blend
+            } else if m.alpha_mask {
+                1 // Mask
+            } else {
+                0 // Opaque
+            }),
+        );
         mat_node
             .params
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
@@ -667,6 +674,18 @@ fn build_import_graph(
         card_bindings.push(card_binding(
             &rough_id, "Roughness", rough_default, &mat_node_id, "roughness", 1.0,
         ));
+        // IMPORT_FIDELITY_DESIGN.md D8/F-P5 performer gesture: glass objects
+        // ONLY get an Opacity knob (solid → ghost mid-set on the material's
+        // alpha) — opaque/mask objects don't expose it, matching the
+        // "inline mux option table params" discipline of not over-exposing
+        // every knob to every object.
+        if is_glass {
+            let opacity_id = format!("opacity_{k}");
+            card_params.push(card_param(&opacity_id, "Opacity", 0.0, 1.0, effective_alpha, false, &group_name));
+            card_bindings.push(card_binding(
+                &opacity_id, "Opacity", effective_alpha, &mat_node_id, "color_a", 1.0,
+            ));
+        }
         // One shared "Ambient" fill knob fans out to every material's ambient
         // (a single source_id across all mat_k bindings — the preset_runtime
         // fan-out). Default 0.0 = the lights-only look; raise it for flat fill.
@@ -1616,7 +1635,7 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
-            transmission: false,
+            transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,
             vertex_count: verts,
@@ -1791,7 +1810,7 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: Some(4),
             emissive_strength: 2.5,
-            transmission: false,
+            transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,
             vertex_count: verts,
@@ -1926,16 +1945,19 @@ mod tests {
     }
 
     /// D9 doctrine ("every import produces a report") applied to F-P4's
-    /// three not-yet-mapped features: an over-featured synthetic material
-    /// (clearcoat + transmission + BLEND alphaMode all present at once)
-    /// must produce one report line per feature — never a silent drop.
+    /// one remaining not-yet-mapped feature: clearcoat. Transmission and
+    /// BLEND (F-P5/D8) are now REAL mappings, not report-only — an
+    /// over-featured synthetic material carrying clearcoat + transmission +
+    /// BLEND alphaMode must report only clearcoat, and must build a real
+    /// `Blend` material with the transmission-folded alpha.
     #[test]
-    fn over_featured_material_reports_clearcoat_transmission_and_blend_downgrade() {
+    fn over_featured_material_reports_only_clearcoat_and_maps_transmission_to_blend() {
         let mut m = full_material(0, "Kitchen Sink", 300);
         m.clearcoat = true;
-        m.transmission = true;
+        m.transmission_factor = 0.9;
         m.was_blend = true;
-        m.alpha_mask = true; // matches gltf_load's BLEND→Mask downgrade
+        m.alpha_mask = false; // a real glTF BLEND material never sets MASK too
+        m.base_color_factor = [0.9, 0.95, 1.0, 1.0];
         let summary = GltfImportSummary {
             materials: vec![m],
             bbox_min: [-1.0, -1.0, -1.0],
@@ -1944,24 +1966,40 @@ mod tests {
             default_material_vertex_count: 0,
         };
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
-        let (_def, report) = build_import_graph(&summary, path).expect("build graph");
+        let (def, report) = build_import_graph(&summary, path).expect("build graph");
         println!("over-featured report: {:#?}", report.report_lines);
-        assert_eq!(report.report_lines.len(), 3, "clearcoat + transmission + BLEND = 3 lines");
+        assert_eq!(report.report_lines.len(), 1, "only clearcoat remains report-only");
         assert!(
             report.report_lines.iter().any(|l| l.contains("clearcoat")),
             "missing a clearcoat report line: {:?}",
             report.report_lines
         );
         assert!(
-            report.report_lines.iter().any(|l| l.contains("transmission")),
-            "missing a transmission report line: {:?}",
+            !report.report_lines.iter().any(|l| l.contains("transmission") || l.contains("BLEND")),
+            "transmission/BLEND must no longer produce report lines: {:?}",
             report.report_lines
         );
-        assert!(
-            report.report_lines.iter().any(|l| l.contains("BLEND") && l.contains("Mask")),
-            "missing a BLEND-downgraded-to-Mask report line: {:?}",
-            report.report_lines
+
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+        let mat = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.pbr_material")
+            .expect("pbr_material node");
+        assert_eq!(
+            mat.params.get("alpha_mode"),
+            Some(&enum_val(2)),
+            "transmission/BLEND material must map to alpha_mode Blend (2)"
         );
+        // base_color.a (1.0) * (1 - transmission_factor 0.9) = 0.1
+        let color_a = mat.params.get("color_a").expect("color_a set");
+        match color_a {
+            SerializedParamValue::Float { value } => assert!(
+                (value - 0.1).abs() < 1e-4,
+                "color_a must fold the transmission formula, got {value}"
+            ),
+            other => panic!("expected Float color_a, got {other:?}"),
+        }
     }
 
     /// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
@@ -2077,6 +2115,54 @@ mod tests {
             .expect("reloaded import graph must build through PresetRuntime::from_def");
     }
 
+    /// IMPORT_FIDELITY_DESIGN.md D8/F-P5 round-trip gate: a `Blend` alpha_mode
+    /// (from a transmission material) and its performer-facing Opacity card
+    /// binding must survive save → reload, and stay live (modulatable) after
+    /// reload — the BUG-036 rule (create-path green is half a gate for
+    /// stateful features).
+    #[test]
+    fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
+        let mut m = full_material(0, "Windshield", 500);
+        m.was_blend = true;
+        m.transmission_factor = 0.9;
+        let summary = GltfImportSummary {
+            materials: vec![m],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        let flat = manifold_core::flatten::flatten_groups(&reloaded).expect("flatten reloaded def");
+        let mat = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.pbr_material")
+            .expect("pbr_material node");
+        assert_eq!(
+            mat.params.get("alpha_mode"),
+            Some(&enum_val(2)),
+            "reloaded def must still carry alpha_mode Blend"
+        );
+
+        let meta = reloaded.preset_metadata.as_ref().expect("reloaded v2 metadata");
+        assert!(
+            meta.bindings.iter().any(|b| b.label == "Opacity"),
+            "reloaded def must still carry the glass object's Opacity card binding"
+        );
+
+        // Modulation live after reload — not just structurally present.
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(reloaded, &registry, None)
+            .expect("reloaded glass import graph must build through PresetRuntime::from_def");
+    }
+
     /// GRAPH_TOOLING_DESIGN D6: `assemble_import_graph`'s output must be
     /// validated through `validate_def` before it reaches the project — the
     /// assembler is code and has bugs. This proves the mechanism the
@@ -2108,7 +2194,7 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
-            transmission: false,
+            transmission_factor: 0.0,
             clearcoat: false,
             was_blend: false,
             vertex_count: verts,
