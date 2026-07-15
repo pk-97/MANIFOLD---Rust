@@ -583,6 +583,11 @@ fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
         // ride the JSON catalog through here, not a per-instance graph
         // override (it deliberately has none — D9/BUG-016).
         section: p.section.clone(),
+        // Same carry-through as `section`/`is_trigger_gate` above: the
+        // import card's degree display and 360° wrap ride the catalog
+        // through here (Peter, 2026-07-15 — radians-on-card bug).
+        is_angle: p.is_angle,
+        wraps: p.wraps,
         // `ParamSpecDef` (the card manifest) carries no contract — see
         // `param_def_from_spec`'s identical comment in effects.rs.
         contract: None,
@@ -734,6 +739,41 @@ mod tests {
         for i in 1..sorted.len() {
             assert!(sorted[i - 1].as_str() <= sorted[i].as_str());
         }
+    }
+
+    /// The registry round-trip must preserve every card-surface flag a
+    /// glTF-imported generator depends on: it TRACKS its embedded preset
+    /// (`graph: None`, D9/BUG-016), so `ParamSpecDef →
+    /// param_spec_def_to_param_def → ParamDef::to_spec` is the ONLY path
+    /// its card descriptors travel. `section` was silently dropped here
+    /// once (D5 fix); `is_angle`/`wraps` were dropped the same way
+    /// (radians-on-card bug, Peter 2026-07-15). This pins the class.
+    #[test]
+    fn registry_round_trip_preserves_card_surface_flags() {
+        let spec = ParamSpecDef {
+            id: "cam_tilt".to_string(),
+            name: "Camera Tilt".to_string(),
+            min: -std::f32::consts::PI,
+            max: std::f32::consts::PI,
+            default_value: 0.3,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: crate::macro_bank::MacroCurve::default(),
+            invert: false,
+            is_angle: true,
+            is_trigger_gate: true,
+            wraps: true,
+            section: Some("Camera".to_string()),
+        };
+        let round_tripped = param_spec_def_to_param_def(&spec).to_spec();
+        assert!(round_tripped.is_angle, "is_angle must survive the registry");
+        assert!(round_tripped.wraps, "wraps must survive the registry");
+        assert!(round_tripped.is_trigger_gate, "is_trigger_gate must survive");
+        assert_eq!(round_tripped.section.as_deref(), Some("Camera"));
     }
 
     // ── ParamAlias resolution (step 15) ────────────────────────────

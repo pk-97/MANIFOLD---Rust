@@ -189,9 +189,12 @@ impl ParamSpec {
             // trigger-gate card ships via the JSON preset path
             // (`ParamSpecDef`/`preset_metadata_to_def`), not this one.
             is_trigger_gate: false,
-            // Same story for D5 sections: an inventory-submitted (hand-
-            // written Rust) generator has no section — only JSON-authored/
-            // glTF-imported presets do, via `preset_metadata_to_def`.
+            // Same story for D5 sections and the is_angle/wraps mirrors: an
+            // inventory-submitted (hand-written Rust) generator has none —
+            // only JSON-authored/glTF-imported presets do, via
+            // `preset_metadata_to_def`.
+            is_angle: false,
+            wraps: false,
             section: None,
             // Same story for range contracts: this compile-time inventory
             // struct describes an outer card param, which never carries a
