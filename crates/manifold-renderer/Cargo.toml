@@ -77,6 +77,10 @@ path = "src/bin/graph_tool.rs"
 name = "render-generator-preset"
 path = "src/bin/render_generator_preset.rs"
 
+[[bin]]
+name = "render-import"
+path = "src/bin/render_import.rs"
+
 # GPU-proof integration binary: the alpha-contract sweep + generator smoke.
 # Gated behind `gpu-proofs` (see [features]) so it's excluded from the
 # default `cargo test` / `cargo nextest` sweep — run it deliberately with
@@ -84,6 +88,15 @@ path = "src/bin/render_generator_preset.rs"
 [[test]]
 name = "gpu_proofs"
 path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
+# glTF conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1): renders each
+# Khronos sample asset through the production import path and gates it with
+# numeric asserts + self-goldens. Needs a real GPU device, same reasons as
+# `gpu_proofs` above — off by default, run with `--features gpu-proofs`.
+[[test]]
+name = "glb_conformance"
+path = "tests/glb_conformance.rs"
 required-features = ["gpu-proofs"]
 
 [features]

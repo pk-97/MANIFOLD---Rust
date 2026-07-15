@@ -44,3 +44,10 @@ __pycache__/
 
 # Real-audio eval fixtures for the mod_harness (copyrighted clips — never commit)
 tests/fixtures/audio/
+
+# Khronos glTF-Sample-Assets conformance fixtures (GLB_CONFORMANCE_DESIGN.md
+# D1) — fetched by scripts/fetch-gltf-conformance.sh from a pinned commit,
+# never vendored (mixed licenses, hundreds of MB across the full suite).
+# manifest.json itself (the pin + per-asset checks) stays tracked.
+tests/fixtures/gltf/khronos/*
+!tests/fixtures/gltf/khronos/manifest.json
