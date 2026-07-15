@@ -45,7 +45,7 @@ Every row below was verified by running code this same day, not recalled.
 | **Object cap — importer side** | `gltf_import.rs:378` (largest-by-vertex-count-first triage), `ImportReport.dropped_over_cap` (`gltf_import.rs:63`) | Materials beyond 64 are **dropped from the graph entirely** — geometry ceases to exist. Proven consequence: the AMG GT3 (78 materials) loses 14, including body panels (BUG-163) |
 | Extension parse state | loader `gltf_load.rs:574-586` parses emissive factor/texture/strength; `KHR_materials_emissive_strength` folds into `emission_intensity` (`gltf_import.rs:659-663`); clearcoat/texture_transform/specular/ior parse via the gltf crate but map to **report lines only** (D9 doctrine) | Report-line doctrine works — nothing silently dropped — but nothing renders either |
 | Emissive term | whole path verified value-level 2026-07-15: map correct on the wire (max 0.502 vs expected 0.5), uniform `[1,1,1]` at draw, add-path proven by unwired-glow probe | **NOT broken.** Was visually drowned pre-F-P6 by strip specular ~10× brighter. No code change needed; G-P1 pins it with a conformance case |
-| Sampler | `GpuSamplerDesc` — `crates/manifold-gpu/src/types.rs:144-154`: min/mag/mip filters, address modes, compare. **No anisotropy field** | Glancing-angle material maps over-blur (vents, dome ribs). Metal supports `maxAnisotropy` on `MTLSamplerDescriptor`; field is genuinely new |
+| Sampler | `GpuSamplerDesc` — `crates/manifold-gpu/src/types.rs:144-154`: min/mag/mip filters, address modes, compare. **No anisotropy field.** Material maps sample via the dedicated REPEAT `material_sampler` (binding 22, landed `85b5bb9d` same day — the striped-helmet root cause was the shared clamp-V envmap sampler pinning out-of-range V, e.g. DamagedHelmet's V∈[1,2], to the texture edge row) | Wrap is FIXED; what remains for G-P3 is genuine anisotropy: glancing-angle minification still over-blurs. Metal supports `maxAnisotropy`; field is genuinely new |
 | EXR decode | `image = { version = "0.25", default-features = false, features = ["png","jpeg","webp","bmp","gif"] }` — `crates/manifold-renderer/Cargo.toml:26` | `exr` feature exists in image 0.25 but is not enabled; no HDR file source primitive exists (verified: `rg -l "exr" crates/` → no runtime hits) |
 | Headless import-render harness | **Scratchpad only** — the 2026-07-15 probe (`envprobe`, session scratch): renders `assemble_import_graph` output through `PresetRuntime::from_def_with_device`, convergence-polls background decodes, writes PNG | Proven diagnostic value (found/killed 6 hypotheses in one session) but **dies with the session**. Port target precedent: `crates/manifold-renderer/src/bin/render_generator_preset.rs` |
 | Display transform | The probe used Reinhard-without-sRGB-encode and rendered systematically darker than the app; `crates/manifold-renderer/src/bin/generate_preset_thumbnails.rs` has the in-repo readback/encode precedent | ⚠ the harness must NOT invent its own transform (D2) |
@@ -123,8 +123,9 @@ manifest format.
   every existing `..Default::default()` and struct-literal site keeps its behavior).
   `render_scene::ensure_sampler` sets `8`. Mip UV-island bleed (the green
   contamination seen 2026-07-15) is NOT addressed in v1 — Deferred #3, trigger
-  stated there — because anisotropy removes most of the visible smear at far lower
-  cost than island-aware mip padding.
+  stated there. (Correction, same day: the dominant 'smear' was the clamp-V wrap
+  bug, fixed at `85b5bb9d` before this doc executes — aniso's remaining job is
+  ordinary glancing-angle sharpness, priced accordingly.)
 - **D8 — The emissive path is certified working; no phase may "fix" it.** Verified
   2026-07-15 value-level at every hop (audit row). What LOOKED broken was strip
   specular ~10× brighter than the emissive term pre-F-P6, plus probe-camera
