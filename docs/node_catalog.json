@@ -1060,9 +1060,113 @@
           ],
           "tooltip": "Master brightness of the whole environment. 1 is the full studio look, higher brightens every reflection, and 0 bakes a black map so objects are lit only by the scene's own lights.",
           "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Gradient",
+            "Softbox"
+          ],
+          "label": "Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "3",
+          "label": "Emitter Count",
+          "name": "emitter_count",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "6",
+          "label": "Emitter Intensity",
+          "name": "emitter_intensity",
+          "range": [
+            "0",
+            "50"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0.15",
+          "label": "Emitter Elevation",
+          "name": "emitter_elevation",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0.05",
+          "label": "Emitter Width",
+          "name": "emitter_width",
+          "range": [
+            "0.001",
+            "0.5"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Sun X",
+          "name": "sun_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Sun Y",
+          "name": "sun_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Sun Z",
+          "name": "sun_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Sun Disc Intensity",
+          "name": "sun_disc_intensity",
+          "range": [
+            "0",
+            "50"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Sun Disc Size",
+          "name": "sun_disc_size",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional directional sun disc at `sun_x/sun_y/sun_z` sized by `sun_disc_size` and `sun_disc_intensity` (0 = no disc). Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
