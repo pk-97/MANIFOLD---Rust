@@ -740,6 +740,25 @@ invisible, per the confessed-only limit shared with mechanical/confessed-stopgap
   anchor/symptom-suppression / coaching/enumerate-levels (intent-conformance vs
   fix-depth — the specimen was correct and complete yet weaker than intended).
 
+## 2k. Priming-tier retiming + Stop-block scope (2026-07-15, Peter's ruling)
+
+Peter: the daemon fires too early, and the Stop hook's blocking behavior
+derails turns. Three changes, no new moves. (1) mechanical/reasoning-primer
+left the observer's priming tier (`_check_primer`, firing on the first live
+tool event) and now delivers once, unconditionally, at SessionStart
+(`.claude/hooks/daemon-session-start.py`) — same frozen `<daemon-advice>`
+wording via `valve.build_block`. mechanical/design-primer is unaffected
+(still path-triggered on a live design-doc write). (2) Stop may only block
+for detections: a pending mailbox flag whose move is advice-kind is now
+skipped there and left for PostToolUse/UserPromptSubmit to deliver instead
+(`_pending_nonadvice_injection`), and the grade-backstop +
+observation-review-prompt housekeeping nags moved out of Stop entirely, into
+`daemon-userpromptsubmit.py` as additionalContext — functions, sentinels,
+and reason wording carried over unchanged. (3) every reason Stop still
+blocks with now ends in one hardened sentence, appended once in `_block`:
+"Address only this note, then end your turn — do not resume or begin other
+work."
+
 ## 3. Payload library (`moves.md`)
 
 Two families, one format. **Coaching moves** fire on phase transitions (hypothesis

@@ -1,7 +1,12 @@
 """Tests for the priming tier (sleep pass 1 + §2e advice tier):
-mechanical/reasoning-primer (first live tool event, re-arming every
+mechanical/design-primer (live write of a design doc, re-arming every
 advice-recur events per target) and mechanical/unread-edit (Edit/MultiEdit
 to a path never Read or Written this session).
+
+mechanical/reasoning-primer moved OUT of this tier 2026-07-15 (Peter's
+ruling — DESIGN.md §2k): it no longer fires from the observer at all; it
+now delivers once at SessionStart (see test_session_start.py). The
+`_check_primer` tests that used to live here were removed with it.
 
 Run: python3 test_priming_tier.py
 """
@@ -57,85 +62,6 @@ def make_daemon():
 def read_flag(d):
     with open(d.verdict_path, encoding="utf-8") as f:
         return json.load(f).get("flag")
-
-
-# ---- reasoning-primer ----
-
-
-def test_primer_first_fire_then_recur_gate():
-    def run(td):
-        d = make_daemon()
-        logf = io.StringIO()
-        d._check_primer(1, logf)
-        flag = read_flag(d)
-        check("primer fired on first event", flag and flag["move_id"] == "mechanical/reasoning-primer", flag)
-        seq1 = flag["seq"]
-        # Deliver it, then verify the advice-recur gate holds inside the
-        # window and re-arms past it (§2e).
-        with open(d.consumed_path, "w", encoding="utf-8") as f:
-            f.write(str(seq1))
-        d._check_primer(2, logf)
-        d._check_primer(250, logf)
-        check("primer gated within advice-recur window", read_flag(d)["seq"] == seq1)
-        d._check_primer(301, logf)
-        check("primer re-fired after advice-recur gap", read_flag(d)["seq"] != seq1)
-        check("fire_count is 2", d.fire_count.get("mechanical/reasoning-primer") == 2)
-
-    with_temp_dirs(run)
-
-
-def test_advice_recurs_and_never_escalates():
-    def run(td):
-        d = make_daemon()
-        logf = io.StringIO()
-        seqs = []
-        # Three fires would escalate any alert move (ESCALATE_AFTER=2);
-        # advice-kind moves recur by design and must never checkpoint.
-        for ev in (1, 301, 601):
-            d._check_primer(ev, logf)
-            flag = read_flag(d)
-            check(f"primer fired at event {ev}", flag and flag["move_id"] == "mechanical/reasoning-primer", flag)
-            seqs.append(flag["seq"])
-            with open(d.consumed_path, "w", encoding="utf-8") as f:
-                f.write(str(flag["seq"]))
-        check("three distinct fires", len(set(seqs)) == 3, seqs)
-        check("no escalation on 3rd advice fire", not d.escalated)
-
-    with_temp_dirs(run)
-
-
-def test_primer_retries_while_another_flag_pending():
-    def run(td):
-        d = make_daemon()
-        logf = io.StringIO()
-        # A pending, undelivered flag occupies the one-whisper slot.
-        d._check_stopgap("Edit", {"file_path": "a.rs", "old_string": "x", "new_string": "x // HACK"}, 1, logf)
-        pending = read_flag(d)
-        check("stopgap occupies the slot", pending["move_id"] == "mechanical/confessed-stopgap")
-        d._check_primer(2, logf)
-        check("primer suppressed while slot busy", read_flag(d)["seq"] == pending["seq"])
-        check("primer cooldown not consumed", not d.fire_count.get("mechanical/reasoning-primer"))
-        # Deliver the pending flag; primer succeeds on the next event.
-        with open(d.consumed_path, "w", encoding="utf-8") as f:
-            f.write(str(pending["seq"]))
-        d._check_primer(3, logf)
-        check("primer fired after slot freed", read_flag(d)["move_id"] == "mechanical/reasoning-primer")
-
-    with_temp_dirs(run)
-
-
-def test_primer_fires_per_worker_mailbox():
-    def run(td):
-        d = make_daemon()
-        w = observer.AgentWorker("test-session", "agentx", "/dev/null")
-        logf = io.StringIO()
-        d._check_primer(1, logf, mailbox=w)
-        with open(w.verdict_path, encoding="utf-8") as f:
-            flag = json.load(f)["flag"]
-        check("worker primer fired into worker mailbox", flag["move_id"] == "mechanical/reasoning-primer")
-        check("main-session state untouched", not os.path.exists(d.verdict_path))
-
-    with_temp_dirs(run)
 
 
 # ---- unread-edit ----
@@ -241,6 +167,14 @@ def test_moves_catalog_has_all_payloads():
     check("primer kind is advice", (moves.get("mechanical/reasoning-primer") or {}).get("kind") == "advice")
     check("design-primer kind is advice", (moves.get("mechanical/design-primer") or {}).get("kind") == "advice")
     check("anchor kind defaults to alert", (moves.get("anchor/verify-claim") or {}).get("kind") == "alert")
+
+
+def test_check_primer_removed_from_observer():
+    """2026-07-15: mechanical/reasoning-primer's observer-side fire
+    (`_check_primer`) was deleted outright, not just disarmed — it delivers
+    solely via SessionStart now (test_session_start.py). This guards against
+    a re-add that quietly restores the too-early firing Peter ruled out."""
+    check("Daemon has no _check_primer method", not hasattr(observer.Daemon, "_check_primer"))
 
 
 def test_build_block_advice_wrapper():
