@@ -2694,6 +2694,215 @@ mod tests {
             .join("../../tests/fixtures/gltf/DamagedHelmet.glb")
     }
 
+    /// Build a minimal in-memory glb: one XZ quad whose UVs live ENTIRELY
+    /// outside [0,1] (V in [1.25, 1.75]) textured by an embedded 2×2 PNG —
+    /// top row BLUE, bottom row RED. Under the glTF default sampler
+    /// (REPEAT) V wraps to [0.25, 0.75] and samples the TOP (blue) row;
+    /// under ClampToEdge every sample pins to the BOTTOM (red) row. The
+    /// out-of-range-UV regression fixture for
+    /// `material_maps_repeat_out_of_range_uvs`.
+    #[cfg(feature = "gpu-proofs")]
+    fn build_out_of_range_uv_glb() -> Vec<u8> {
+        let positions: [[f32; 3]; 4] =
+            [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]];
+        let normals: [[f32; 3]; 4] = [[0.0, 1.0, 0.0]; 4];
+        // V spans [1.05, 1.45]: REPEAT wraps to [0.05, 0.45] — entirely
+        // inside the TOP (blue) row of the 2×2 texture. Clamp pins to
+        // V = 1.0, the BOTTOM (red) edge row. (First cut used [1.25, 1.75],
+        // which wraps across BOTH rows and reads mixed — a fixture bug,
+        // not a sampler bug.)
+        let uvs: [[f32; 2]; 4] = [[0.25, 1.05], [0.75, 1.05], [0.75, 1.45], [0.25, 1.45]];
+        let indices: [u16; 6] = [0, 2, 1, 0, 3, 2];
+
+        // 2×2 PNG: row 0 (top) blue, row 1 red.
+        let mut png = Vec::new();
+        {
+            use image::ImageEncoder;
+            let pixels: [u8; 16] =
+                [0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&pixels, 2, 2, image::ExtendedColorType::Rgba8)
+                .expect("encode fixture png");
+        }
+
+        let mut bin: Vec<u8> = Vec::new();
+        let pos_off = bin.len();
+        bin.extend(positions.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let norm_off = bin.len();
+        bin.extend(normals.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let uv_off = bin.len();
+        bin.extend(uvs.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let idx_off = bin.len();
+        bin.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let png_off = bin.len();
+        bin.extend_from_slice(&png);
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                "indices": 3,
+                "material": 0
+            }]}],
+            "materials": [{"pbrMetallicRoughness": {
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0
+            }}],
+            "textures": [{"source": 0, "sampler": 0}],
+            "samplers": [{}],
+            "images": [{"bufferView": 4, "mimeType": "image/png"}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+                 "min": [-1.0, 0.0, -1.0], "max": [1.0, 0.0, 1.0]},
+                {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
+                {"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"}
+            ],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": pos_off, "byteLength": 48},
+                {"buffer": 0, "byteOffset": norm_off, "byteLength": 48},
+                {"buffer": 0, "byteOffset": uv_off, "byteLength": 32},
+                {"buffer": 0, "byteOffset": idx_off, "byteLength": 12},
+                {"buffer": 0, "byteOffset": png_off, "byteLength": png.len()}
+            ],
+            "buffers": [{"byteLength": bin.len()}]
+        });
+        let mut json_bytes = serde_json::to_vec(&json).expect("fixture json");
+        while json_bytes.len() % 4 != 0 {
+            json_bytes.push(b' ');
+        }
+
+        let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+        let mut glb = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_bytes);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    /// Regression gate for the 2026-07-15 striped-helmet bug: material maps
+    /// must sample with REPEAT wrapping (the glTF default sampler), not the
+    /// envmap's clamp-V. The fixture quad's V coords are entirely in
+    /// [1.25, 1.75]: REPEAT reads the texture's blue top row; the broken
+    /// clamp pinned every sample to the red bottom edge row. Asserts the
+    /// rendered quad is blue-dominant. Run deliberately (gpu-proofs).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn material_maps_repeat_out_of_range_uvs() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let glb = build_out_of_range_uv_glb();
+        let path = std::env::temp_dir().join("manifold_uv_wrap_regression.glb");
+        std::fs::write(&path, &glb).expect("write temp fixture");
+
+        let (def, _report) = assemble_import_graph(&path).expect("assemble uv-wrap fixture");
+
+        let (w, h) = (128u32, 128u32);
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator = PresetRuntime::from_def_with_device(
+            def,
+            &registry,
+            device.arc(),
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("uv-wrap fixture builds through PresetRuntime");
+        let target = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "uv-wrap");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        // Poll until the background mesh+texture decodes land (byte-stable,
+        // non-black — the BUG-100 double condition).
+        let mut rgb_sum = [0.0f32; 3];
+        let mut prev: Option<Vec<u8>> = None;
+        let mut stable = 0u32;
+        let mut converged = false;
+        for _ in 0..200 {
+            {
+                let mut enc = device.create_encoder("uv-wrap-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut renc = device.create_encoder("uv-wrap-readback");
+            renc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
+            renc.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgb_sum = [0.0; 3];
+            let mut raw = Vec::with_capacity(halves.len() * 2);
+            for px in halves.chunks_exact(4) {
+                rgb_sum[0] += half_to_f32(px[0]).max(0.0);
+                rgb_sum[1] += half_to_f32(px[1]).max(0.0);
+                rgb_sum[2] += half_to_f32(px[2]).max(0.0);
+                raw.extend(px.iter().flat_map(|v| v.to_le_bytes()));
+            }
+            let non_black = rgb_sum.iter().sum::<f32>() > 1.0;
+            if non_black && prev.as_deref() == Some(raw.as_slice()) {
+                stable += 1;
+            } else {
+                stable = 0;
+            }
+            prev = Some(raw);
+            if stable >= 3 {
+                converged = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(converged, "uv-wrap fixture render never stabilized non-black");
+        assert!(
+            rgb_sum[2] > rgb_sum[0] * 2.0,
+            "out-of-range V must WRAP to the blue top row, not clamp to the red \
+             bottom edge: sum RGB = {rgb_sum:?}"
+        );
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn amg_gt3_fixture_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
