@@ -1,6 +1,26 @@
 # Param Two-Way Binding — node-face edits on bound params write back through the inverse mapping
 
-**Status:** IN PROGRESS · P1 SHIPPED 2026-07-14 (Sonnet 5, `bc2f2c0b`) · P2 not started · authored 2026-07-14 · Fable 5
+**Status:** SHIPPED — P1 SHIPPED 2026-07-14 (Sonnet 5, `bc2f2c0b`) · P2 SHIPPED 2026-07-15 (Fable 5 orchestrating 2 Sonnet agents, `bug/158-two-way-p2`) · authored 2026-07-14 · Fable 5
+
+**P2 execution note (2026-07-15):** the input-layer scrub prevention and its
+unit test turned out to already exist in-tree (`interaction.rs:873`,
+`wire_driven_row_is_read_only_no_scrub` — landed earlier with the wire-driven
+read-only pass), so P2's built scope was: (a) the real data gap — D5's live
+fill was impossible because `live_node_params` read the param map, which a
+wire never writes; a new executor `live_scalar_inputs` capture now feeds
+wire-resolved values to the tap, param-map fallback when unwired; (b) the
+visual treatment — whole-slider dim (not just text), tinted jack halo behind
+the input socket, hover tooltip "driven by <node>.<port>", click highlights
+the feeding wire via the existing wire-focus render path, and D6's dual
+attribution (`← wired (↳ outer)`) replacing the old wire-hides-binding label.
+L2 PNG gate: graph scene, Tesseract — wired and bound rows visibly differ on
+one node. **Unverified edge:** per-node live values inside a FUSED region rest
+on FREEZE_COMPILER_MAP cut rule 10 (control producers survive the rewrite) by
+doc-level reasoning only, not an empirical fused run; if a fused region ever
+collapses a wired node's step, the tap soft-fails to the stale param map —
+degraded display, never a crash. Group-face mirror rows get the dim/jack
+treatment but not the `driven by` source label (needs inner-level node list;
+scoped out, noted in `apply_driven_state`'s doc comment).
 **Prerequisites:** none (BUG-158's investigation + Fable design consult are folded in; all code anchors re-verified 2026-07-14)
 
 **P1 execution note (2026-07-14, Sonnet):** shipped the inverse machinery
