@@ -1,6 +1,6 @@
 # GLB Conformance — drop in any glb and it renders accurately
 
-**Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) + G-P3 (anisotropic filtering) + G-P4 (KHR_texture_transform all five map families + specular/ior F0) + G-P5 (clearcoat lobe, factor-only) SHIPPED. G-P6 (hdri_source) + G-P7 (burn-down) not yet executed.**
+**Status: IN PROGRESS · 2026-07-15 · Fable 5 (authored) + Sonnet 5 (G-P1+G-P2 executed and landed same day, `909976d2`; G-P3+G-P4+G-P5 executed and landed same day, session 2; G-P6 executed and landed same day, session 3, `017e1e41`). G-P1 (conformance harness) + G-P2 (cap deleted, import is 1:1, BUG-163 fixed as a side effect) + G-P3 (anisotropic filtering) + G-P4 (KHR_texture_transform all five map families + specular/ior F0) + G-P5 (clearcoat lobe, factor-only) + G-P6 (node.hdri_source, env_mode card switch, Softbox stays default) SHIPPED. G-P7 (burn-down) not yet executed.**
 **Prerequisites: IMPORT_FIDELITY F-P1–F-P7 (all SHIPPED 2026-07-15, `44b921cf`). Nothing else.**
 **Execution contract: read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase. Executed as a Sonnet→Sonnet orchestration; every phase brief is written to be run with nobody in the room.**
 
@@ -387,7 +387,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   touching the Blend/glass pass; "improving" the base BRDF while in the file.
 - **Test scope:** focused + gpu suite; workspace sweep at landing.
 
-### G-P6 — `node.hdri_source`
+### G-P6 — `node.hdri_source` — SHIPPED 2026-07-15 (session 3, `017e1e41`)
 
 - **Entry state:** G-P1 landed. `kloppenheim_07_puresky_4k.exr` present locally
   (skip-demo-if-absent, same pattern) — fetch line added to the conformance
