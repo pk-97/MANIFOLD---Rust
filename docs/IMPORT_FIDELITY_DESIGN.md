@@ -1,6 +1,6 @@
 # Import Fidelity — imported PBR assets read like their authoring-tool previews
 
-**Status: PROPOSED · 2026-07-15 · Fable 5 (authored at Peter's direction; needs his read before execution — the two product calls he owns are quoted in D6 and Deferred #1).**
+**Status: PROPOSED · 2026-07-15 · Fable 5 (authored at Peter's direction; needs his read before execution — his three product calls are quoted in the intro, D7, and D8; glass/F-P5 added same day at his request).**
 **Prerequisites: none — MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, SCENE_BUILD P1–P5 and the shipped glTF assembler are all in-tree. IMPORT_DESIGN P1-remaining (lights/cameras/report surface) is independent and this doc outranks it in build order (Peter, 2026-07-15: "really critical infra").**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -153,6 +153,34 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
   (mode defaults to `gradient`, intensity semantics unchanged), but freshly imported
   cards look different from pre-design imports, and — as with BUG-149's fog scaling —
   **already-imported projects need a re-import to pick up the new defaults.**
+- **D8 (added 2026-07-15, Peter: "I think it makes sense to add it") — Transparency
+  v1 is a sorted per-object blend pass in `render_scene`, not order-independent
+  transparency.** `AlphaMode` (MATERIAL M6-D2's enum, `material.rs`) gains a `Blend`
+  variant — the §7 "new fields/variants, defaulted, no version-break" seam; all four
+  material atoms expose it in their existing `alpha_mode` param. `render_scene`
+  splits its object list: `Blend`-material objects skip the opaque pass and every
+  shadow-caster pass (a window must not throw an opaque shadow), then draw in a
+  second pass after all opaque objects, **sorted back-to-front by view-space depth
+  of the transformed bounding-box centroid, depth test ON / depth write OFF**,
+  classic straight-alpha over blending (`src_alpha / one_minus_src_alpha`; the
+  scene target is straight-alpha per the P3 fog precedent and the
+  alpha-standardisation contract — never premultiply in the shader). Lighting,
+  IBL, and fog run identically in both passes — glass is mostly reflection, which
+  is why this phase orders after the IBL upgrade. Importer mapping changes:
+  glTF `BLEND` materials and `KHR_materials_transmission` materials become `Blend`
+  (transmission: `alpha = base_color.a × (1 − transmission_factor)`), replacing
+  the F-P4 Mask-plus-report-line stopgap and superseding MATERIAL M6-D3's import
+  mapping (its revival trigger — "a hero asset that genuinely reads wrong as
+  cutout" — fired on the AMG's windows). *Consequences, stated honestly:* two
+  transparent surfaces inside ONE object can blend in the wrong order from some
+  angles (per-object sorting can't see triangles), instanced transparent objects
+  sort as one object, and there is no refraction or frosted blur — glass tints
+  and reflects, it doesn't bend light. Perf: no new geometry work — the same
+  draws split across two passes plus a CPU sort of a few dozen objects; blend
+  fill costs only over glass pixels. Rejected: OIT (weighted-blended or
+  per-pixel lists) — a real design of its own, not smuggled in; per-triangle
+  sorting — CPU cost scales with mesh density for an artifact class stage
+  content rarely hits.
 
 ## 3. What it buys on stage
 
@@ -162,8 +190,10 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 - `emitter_elevation`/`emitter_intensity` are performable: the studio lighting rig
   itself rides a macro. Sweep the emitters while the camera orbits and the
   reflections travel across the body.
-- Every skipped feature (clearcoat paint, glass transmission) is a report line, so
-  what the asset can't yet do is known at import time, not discovered on stage.
+- Windows are windows: glass tints and reflects the softbox streaks, you see the
+  cockpit through it, and its opacity is a fader (solid → ghost mid-set).
+- Every skipped feature (clearcoat paint, refraction) is a report line, so what
+  the asset can't yet do is known at import time, not discovered on stage.
 
 ## 4. Invariants & enforcement
 
@@ -173,8 +203,10 @@ split-sum IBL and the softbox bake mode are *genuinely new*; everything else is
 | IBL responds to roughness: rough ≠ mirror | gpu-proof numeric case (F-P1 gate) — reflection gradient width ratio, no eyeballing |
 | Prefilter cache invalidates on envmap change | gpu-proof: re-bake with different params → readback changes; same params → cached (no re-convolve, asserted via dispatch counter) |
 | Colour space per map type never regresses | unit test on the importer's `color_space` assignments per map kind |
-| No unmapped feature is silently dropped | importer unit test: over-featured fixture → report enumerates clearcoat/transmission/etc. |
+| No unmapped feature is silently dropped | importer unit test: over-featured fixture → report enumerates clearcoat etc. (transmission until F-P5 lands, then it maps instead) |
 | `mode = gradient` is byte-identical legacy | gpu-proof: bake with explicit `gradient` vs build-of-record readback |
+| Zero-`Blend` scenes never pay for the glass pass | gpu-proof (F-P5): byte-identical output + dispatch-count assert (no second pass) |
+| Transparent objects cast no shadows, write no depth | gpu-proof (F-P5): glass pane between sun and ground → ground asserts lit; pipeline state pinned in test |
 
 ## 5. Phasing (Sonnet-executable, one session each)
 
@@ -193,7 +225,9 @@ instead of reading it (`feedback_synthesis_drift`).
   roughness 0 → 1 sweep widens monotonically (gradient-width ratio ≥3×, PCSS-gate
   pattern); irradiance — uniform white env, zero lights → lit result ≈ albedo
   within tolerance (value-level); cache — re-convolve only on version change
-  (dispatch-count assert). Gate (negative): no-envmap presets byte-identical;
+  (dispatch-count assert); prefilter cost measured once and reported as a number
+  (the D2 animated-envmap consequence gets a price, not an argument). Gate
+  (negative): no-envmap presets byte-identical;
   `rg 'ibl_strength'` → zero hits; existing `render_scene_*` proofs green
   unmodified. Demo: L2 headless PNG — mirror sphere + rough sphere under the
   gradient studio, read by the landing session. Test scope: focused +
@@ -219,7 +253,8 @@ instead of reading it (`feedback_synthesis_drift`).
   a chrome sphere under softbox — streak reflections on black. Test scope: focused.
 - **F-P4 — Loader + importer + defaults.** D5 parse fields + Cargo features, D6
   colour spaces, importer wiring of all four map ports, report lines
-  (clearcoat/transmission/BLEND-as-Mask), import defaults flip to
+  (clearcoat/transmission/BLEND-as-Mask — the transmission and BLEND lines are
+  the stopgap F-P5 replaces), import defaults flip to
   `softbox @ 1.0` (D7), Environment card default 1.0. Read-back: D5–D7;
   `gltf_load.rs` + `gltf_import.rs` end-to-end; IMPORT_DESIGN D9/§8. Gate
   (positive): unit tests — a synthetic summary with all texture kinds wires all
@@ -234,8 +269,34 @@ instead of reading it (`feedback_synthesis_drift`).
   project, reload, maps still bound (BUG-036 rule). Demo: the ≤2-minute
   click-script for Peter — import the AMG, confirm chrome + void + glow.
 
-Full workspace sweep gates F-P1 and F-P2 at landing (shader ABI + port surface =
-infra); F-P3/F-P4 focused per the scope rule.
+- **F-P5 — Glass (sorted blend pass).** D8 whole: `AlphaMode::Blend` variant +
+  atom param arm; opaque/transparent object split; back-to-front centroid sort;
+  blend pipelines (per MaterialKind, depth write OFF) alongside the existing
+  opaque set; `Blend` objects skipped in every shadow-caster pass; importer flips
+  `BLEND`/transmission materials from Mask-plus-report to `Blend` and drops those
+  report lines. Entry state: F-P1 + F-P4 landed (glass reads via IBL; the importer
+  flags transmission). Read-back: D8; both draw loops in `render_scene.rs`; the
+  alpha-standardisation memory; MATERIAL M6-D2/D3. Gate (positive, gpu-proofs):
+  see-through — a glass quad over a textured plane blends to the computed value
+  (value-level); sort — two stacked glass panes show the far pane through the
+  near one, and swapping their positions swaps the blend order; occlusion — glass
+  fully behind an opaque object contributes nothing; shadow — a glass pane
+  between sun and ground leaves the ground UNshadowed (assert lit). Gate
+  (negative): a scene with zero `Blend` materials renders byte-identical to
+  pre-F-P5 (no second pass runs — dispatch-count assert); existing
+  `render_scene_*` proofs green unmodified; `rg -i 'oit|per_triangle_sort'` on
+  touched files → zero hits. Round-trip: `Blend` alpha_mode survives
+  save/reload with modulation live after reload. Demo: L2 PNG — the two-pane
+  scene; the AMG's windows are Peter's L4 check. Performer gesture: a glass
+  object's opacity (material alpha) on a fader — solid to ghost mid-set without
+  the object popping wrongly through geometry. Test scope: focused +
+  `--features gpu-proofs render_scene`; workspace sweep at landing (blend
+  pipeline set + Material enum growth = infra). Forbidden: OIT or per-triangle
+  sorting "while at it" (D8 rejected them) · depth write in the blend pass ·
+  premultiplying in the shader · touching the Mask/cutout path.
+
+Full workspace sweep gates F-P1, F-P2, and F-P5 at landing (shader ABI + port
+surface + Material enum = infra); F-P3/F-P4 focused per the scope rule.
 
 ## 6. Decided — do not reopen
 
@@ -248,9 +309,11 @@ infra); F-P3/F-P4 focused per the scope rule.
 4. No MeshVertex tangents — cotangent frame in the fragment shader (D4).
 5. Default import look = softbox black studio at intensity 1.0; `gradient` mode
    stays byte-identical for existing presets (D7, Peter's quoted call).
-6. Clearcoat and transmission are report lines in v1, not shading features
-   (Deferred #1/#2).
+6. Clearcoat stays a report line in v1 (Deferred #1). Glass ships as F-P5's
+   sorted per-object blend pass (D8, Peter's call 2026-07-15); OIT and
+   per-triangle sorting stay out.
 7. HDRI file loading belongs to IMPORT_DESIGN P4, not here.
+8. Transparent objects cast no shadows and never write depth (D8).
 
 ## 7. Deferred (with triggers)
 
@@ -259,9 +322,11 @@ infra); F-P3/F-P4 focused per the scope rule.
    trigger: a hero asset whose painted surfaces read flat after F-P1–F-P4 land.
    Peter's AMG may fire this immediately — the report line makes it visible.
    Needs typed parse (gltf crate bump or manual JSON), priced then.
-2. **Transmission/glass** — real refraction needs OIT/draw-order design;
-   imports as Mask per M6-D3 with a report line. Trigger: a hero asset that
-   genuinely reads wrong (car glass is the likely first case).
+2. **~~Transmission/glass~~ — PROMOTED 2026-07-15 → D8 + F-P5** (Peter: "I think
+   it makes sense to add it"; the predicted trigger — car glass — fired on day
+   one). What REMAINS deferred: OIT / per-triangle sorting (trigger: a hero
+   asset whose intra-object glass visibly mis-sorts) and refraction/frosted
+   transmission (trigger: a look that needs light-bending, not tint+reflection).
 3. **`render_mesh`/`render_copies` IBL upgrade + MetallicGlass re-tune** —
    trigger: the next look-pass on a `render_mesh` preset; mechanical once the
    `pbr_brdf.wgsl` IBL helpers exist.

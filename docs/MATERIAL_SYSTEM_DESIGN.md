@@ -502,7 +502,10 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   draw-order/OIT design; Mask covers foliage, decals, and cutout UI. glTF `BLEND`
   materials import as Mask (cutoff 0.5) with an import-report warning
   (IMPORT_DESIGN D9). Trigger to revive: a hero asset that genuinely reads wrong as
-  cutout.
+  cutout. **[TRIGGER FIRED 2026-07-15 (car windows) → `docs/IMPORT_FIDELITY_DESIGN.md`
+  D8/F-P5 adds `AlphaMode::Blend` + a sorted per-object blend pass in `render_scene`
+  and flips the import mapping there. `render_mesh`/`render_copies` keep Mask-only —
+  this deferral stays live for them; OIT stays deferred everywhere.]**
 - **M6-D4 — Double-sided stays the only mode; back-face lighting gets fixed.** No
   cull-mode API is added (nothing needs single-sided today; revisit only if the perf
   HUD ever shows overdraw pain). The lit entry points take `@builtin(front_facing)`
