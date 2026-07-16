@@ -55,7 +55,9 @@ struct LineRenderUniforms {
     num_edges: u32,
     beat: f32,
     beat_flash_amount: f32,
-    _pad: f32,
+    /// 1 when the optional `widths` input is wired (per-point taper);
+    /// 0 when the dummy buffer is bound and every point renders at 1.0.
+    has_widths: u32,
 }
 
 /// Per-instance edge data uploaded to the GPU. `a` and `b` are
@@ -80,7 +82,7 @@ pub struct EdgeInstance {
 crate::primitive! {
     name: RenderLines,
     type_id: "node.draw_lines",
-    purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.combine_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
+    purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. Wire the optional `widths` Array<f32> (parallel to `points`) and each segment renders as a tapered capsule interpolating its endpoints' thickness multipliers — trunk-to-tip width decay for bolts, strokes, and plant stems. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.combine_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
     inputs: {
         points: Array(CurvePoint) required,
         // Optional explicit edge topology. When wired, each non-sentinel
@@ -94,6 +96,13 @@ crate::primitive! {
         // Duocylinder, all of which left projected_z at zero so the
         // legacy depth-sort collapsed to identity).
         edges: Array(EdgePair) optional,
+        // Optional per-point thickness multipliers, parallel to
+        // `points` (index i scales the capsule radius at points[i]).
+        // Wired: each segment renders as a tapered capsule
+        // interpolating its endpoints' widths — the lightning-bolt
+        // trunk-to-tip taper. Unwired: every point is 1.0 and the
+        // geometry is bit-identical to the pre-taper renderer.
+        widths: Array(f32) optional,
     },
     outputs: {
         color: Texture2D,
@@ -219,6 +228,11 @@ crate::primitive! {
         // to the producer's edge count on each `build_instances_from_edges`
         // call to keep the animation walk's modular arithmetic stable.
         valid_edges: Vec<EdgePair> = Vec::new(),
+        // 4-byte placeholder bound at the widths slot when the
+        // `widths` port is unwired — Metal requires a valid buffer
+        // at every declared binding; `has_widths = 0` means the
+        // shader never reads it.
+        dummy_widths: Option<manifold_gpu::GpuBuffer> = None,
     },
 }
 
@@ -625,6 +639,8 @@ impl Primitive for RenderLines {
         let edge_half_px = edge_thickness * (height as f32);
         let dot_half_px = DEFAULT_DOT_RADIUS * (height as f32) * vert_size;
 
+        let widths_input = ctx.inputs.array("widths");
+
         let uniforms = LineRenderUniforms {
             rt_width: width as f32,
             rt_height: height as f32,
@@ -634,7 +650,7 @@ impl Primitive for RenderLines {
             num_edges,
             beat,
             beat_flash_amount,
-            _pad: 0.0,
+            has_widths: u32::from(widths_input.is_some()),
         };
 
         // ── GPU setup: pipeline + MSAA + instance buffer ──
@@ -660,6 +676,9 @@ impl Primitive for RenderLines {
         }
         self.ensure_msaa_texture(gpu.device, width, height);
         self.ensure_instances_buf(gpu.device, total_instances as u64);
+        if widths_input.is_none() && self.dummy_widths.is_none() {
+            self.dummy_widths = Some(gpu.device.create_buffer_shared(4));
+        }
 
         // Upload the CPU instance list into the shared GPU buffer.
         let inst_bytes: &[u8] = bytemuck::cast_slice(&self.cpu_instances);
@@ -673,6 +692,11 @@ impl Primitive for RenderLines {
 
         let pipeline = self.render_pipeline.as_ref().expect("just inserted");
         let msaa_tex = self.msaa_texture.as_ref().expect("just inserted");
+        // Metal requires a valid buffer at every declared binding, so
+        // the unwired case binds the 4-byte dummy; `has_widths = 0`
+        // guarantees the shader never reads it.
+        let widths_buf = widths_input
+            .unwrap_or_else(|| self.dummy_widths.as_ref().expect("just ensured"));
 
         gpu.native_enc.draw_instanced_msaa(
             pipeline,
@@ -691,6 +715,11 @@ impl Primitive for RenderLines {
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: inst_buf,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: widths_buf,
                     offset: 0,
                 },
             ],
@@ -713,15 +742,19 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let points_layout = ArrayType::of_known::<CurvePoint>();
         let edges_layout = ArrayType::of_known::<EdgePair>();
+        let widths_layout = ArrayType::of_known::<f32>();
 
         assert_eq!(RenderLines::TYPE_ID, "node.draw_lines");
-        assert_eq!(RenderLines::INPUTS.len(), 2);
+        assert_eq!(RenderLines::INPUTS.len(), 3);
         assert_eq!(RenderLines::INPUTS[0].name, "points");
         assert!(RenderLines::INPUTS[0].required);
         assert_eq!(RenderLines::INPUTS[0].ty, PortType::Array(points_layout));
         assert_eq!(RenderLines::INPUTS[1].name, "edges");
         assert!(!RenderLines::INPUTS[1].required);
         assert_eq!(RenderLines::INPUTS[1].ty, PortType::Array(edges_layout));
+        assert_eq!(RenderLines::INPUTS[2].name, "widths");
+        assert!(!RenderLines::INPUTS[2].required);
+        assert_eq!(RenderLines::INPUTS[2].ty, PortType::Array(widths_layout));
         assert_eq!(RenderLines::OUTPUTS.len(), 1);
         assert_eq!(RenderLines::OUTPUTS[0].name, "color");
         assert_eq!(RenderLines::OUTPUTS[0].ty, PortType::Texture2D);

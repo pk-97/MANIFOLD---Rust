@@ -1,21 +1,19 @@
 //! MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN P4 round-trip gate (BUG-036
-//! rule, DESIGN_DOC_STANDARD.md §5): save a project using the bundled
-//! `Garden` generator preset with EDITED outer params -> reload -> the
+//! rule, DESIGN_DOC_STANDARD.md §5): save a project using a bundled
+//! STOCK generator preset with EDITED outer params -> reload -> the
 //! params must survive intact AND a driver must still resolve and be
 //! able to modulate them after reload, not only right after creation.
 //!
-//! Unlike `project_local_preset_reload.rs`'s BUG-036 repro, `Garden` is a
-//! bundled STOCK preset (ships in `assets/generator-presets/Garden.json`),
-//! not a project-local/imported one — so there's no "install the file's
-//! own embedded presets before deserialize" step to prove here. What this
-//! test proves instead: `node.scatter_on_mesh`'s outer cards (count /
-//! scale / align) and `node.gltf_mesh_source`'s new `fit`/`recenter`
-//! params (exercised transitively — Garden's flower chain doesn't use
-//! gltf, but the outer-card param manifest mechanics are identical
-//! regardless of which primitive backs a card) round-trip through the
-//! SAME `Project` (de)serialize path BUG-036 broke, and that a
-//! `ParameterDriver` attached to one of P4's new cards still resolves
-//! and evaluates post-reload.
+//! Unlike `project_local_preset_reload.rs`'s BUG-036 repro, the fixture
+//! is a bundled STOCK preset, not a project-local/imported one — so
+//! there's no "install the file's own embedded presets before
+//! deserialize" step to prove here; it exercises the outer-card param
+//! manifest mechanics through the SAME `Project` (de)serialize path
+//! BUG-036 broke, plus a `ParameterDriver` surviving reload. The fixture
+//! preset was originally `Garden` (the P4 piece under test); Garden moved
+//! to `assets/reference-presets/` (unbundled 2026-07-16), so the fixture
+//! is now `Caustics` (`depth` / `scale` cards) — the mechanics under test
+//! are identical regardless of which primitive backs a card.
 //!
 //! `manifold_renderer::preset_loader::clear_project_presets()` still
 //! triggers `apply_reload()` even with an empty overlay (see
@@ -23,7 +21,7 @@
 //! dir (dev workspace root, baked via `CARGO_MANIFEST_DIR` at
 //! manifold-renderer's own compile time) and rebuilds
 //! `manifold_core::preset_definition_registry` from it — that's what
-//! makes "Garden" resolvable as a template at all, mirroring what the
+//! makes the stock preset resolvable as a template at all, mirroring what the
 //! app does once at startup before any project-local overlay exists.
 
 use manifold_core::effects::ParamId;
@@ -33,42 +31,42 @@ use manifold_core::PresetTypeId;
 use manifold_renderer::preset_loader::clear_project_presets;
 
 #[test]
-fn garden_outer_params_and_driver_survive_project_reload() {
-    // Populate the core registry from the STOCK scan (Garden.json ships
+fn stock_preset_outer_params_and_driver_survive_project_reload() {
+    // Populate the core registry from the STOCK scan (Caustics.json ships
     // in assets/generator-presets). No project-local overlay involved.
     clear_project_presets();
 
-    let preset_id = PresetTypeId::from_string("Garden".to_string());
+    let preset_id = PresetTypeId::from_string("Caustics".to_string());
     let mut project = Project::default();
     project
         .timeline
         .add_layer("Field", LayerType::Generator, preset_id.clone());
 
-    // The instance seeded its outer-card params from Garden's template
-    // (count / scale / align, per Garden.json's presetMetadata.params).
+    // The instance seeded its outer-card params from Caustics' template
+    // (depth / scale / speed / shine, per Caustics.json's presetMetadata.params).
     let (count_id, scale_id, written_count, written_scale, template_len) = {
         let gp = project.timeline.layers[0]
             .gen_params_mut()
             .expect("generator instance");
-        assert!(!gp.params.is_empty(), "Garden's template must seed outer-card params");
+        assert!(!gp.params.is_empty(), "the stock template must seed outer-card params");
 
         let count_id = gp
             .params
             .iter()
-            .find(|p| p.id() == "count")
-            .expect("Garden exposes a `count` outer card")
+            .find(|p| p.id() == "depth")
+            .expect("Caustics exposes a `depth` outer card")
             .id()
             .to_string();
         let scale_id = gp
             .params
             .iter()
             .find(|p| p.id() == "scale")
-            .expect("Garden exposes a `scale` outer card")
+            .expect("Caustics exposes a `scale` outer card")
             .id()
             .to_string();
 
         // Edit both outer params away from their template defaults.
-        gp.set_base_param(&count_id, 77.0);
+        gp.set_base_param(&count_id, 0.061);
         gp.set_base_param(&scale_id, 0.42);
 
         // Attach a driver (LFO) to `scale` — the modulation-after-reload
@@ -137,7 +135,7 @@ fn garden_outer_params_and_driver_survive_project_reload() {
         .find(|p| p.id() == scale_id)
         .expect("scale param entry present")
         .spec;
-    assert_eq!(spec.id, scale_id, "resolved against the real Garden template spec");
+    assert_eq!(spec.id, scale_id, "resolved against the real stock template spec");
 
     let evaluated = manifold_core::effects::ParameterDriver::evaluate(
         manifold_core::Beats(0.0),

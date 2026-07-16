@@ -1,11 +1,14 @@
 // node.reinhard_tone_map — Reinhard tone mapping on an HDR Texture2D.
 //
-// Two curves selected by `curve`:
+// Three curves selected by `curve`:
 //   0 Extended (default): x * (1 + x/W²) / (1 + x) with W = 3.0
 //     (matches FluidSim display bit-for-bit; preserves highlights).
 //   1 Simple: x / (x + 1) — textbook Reinhard (matches the legacy
 //     MetallicGlass render terminal bit-for-bit; crushes highlights
 //     more aggressively).
+//   2 Log: log2(1 + x) / log2(1 + 64) — flame-fractal response for
+//     density pipelines; reveals faint structure Reinhard compresses.
+//     White point fixed at 64.0; ride `intensity` as the exposure.
 //
 // Operates per-channel on RGB; alpha passes through unchanged.
 //
@@ -36,7 +39,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let x = src.rgb * u.intensity * u.contrast;
     var mapped: vec3<f32>;
-    if u.curve == 1u {
+    if u.curve == 2u {
+        mapped = log2(vec3<f32>(1.0) + x) / log2(65.0);
+    } else if u.curve == 1u {
         mapped = x / (x + vec3<f32>(1.0));
     } else {
         mapped = x * (1.0 + x / vec3<f32>(9.0)) / (1.0 + x);
