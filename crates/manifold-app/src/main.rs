@@ -75,6 +75,10 @@ mod perform_mode;
 // (native Metal `ContentThread`, same constraint as `journey-proofs`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod perf_soak;
+// Sibling frame loop for bare-glb/gltf input — PERF_BUDGET_GATE_DESIGN.md D7 /
+// P2b. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod perf_soak_import;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;

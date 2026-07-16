@@ -17,6 +17,13 @@
 //!
 //! Exit codes: 0 = pass, 1 = threshold failure (I1/I2), 2 = usage error,
 //! 3 = run failure (load/tick error).
+//!
+//! D7 / P2b: a bare `.glb`/`.gltf` input dispatches to `perf_soak_import.rs`
+//! instead — a sibling frame loop over the production import graph
+//! (`assemble_import_graph`), never a wrapper project. That mode is
+//! report-only: exit codes there are 0 = pass, 2 = usage error (this file's
+//! dispatcher, see `run()`), 3 = run failure (import/convergence); it never
+//! returns exit code 1 (I3/I4 don't apply to it).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -33,8 +40,40 @@ use crate::headless_harness::headless_content_thread;
 pub fn run(args: &[String]) -> ! {
     let project_path = match args.get(1) {
         Some(p) if !p.starts_with("--") => p.clone(),
-        _ => usage_exit("missing <project> argument"),
+        _ => usage_exit("missing <project|glb> argument"),
     };
+
+    // D7 extension dispatch: `.glb`/`.gltf` route to the import-graph sibling
+    // loop (never a wrapper project, never through the loader/content
+    // thread); everything else stays on this file's P1 project soak.
+    if crate::perf_soak_import::is_glb_path(&project_path) {
+        // D7 flag matrix: `--seconds`/`--start`/`--update-baseline` are
+        // project-mode-only — reject rather than silently ignore
+        // (no-silent-fallbacks).
+        for flag in ["--seconds", "--start", "--update-baseline"] {
+            if args.iter().any(|a| a == flag) {
+                usage_exit(&format!(
+                    "{flag} is only valid for a .manifold project input (D7); import-graph mode \
+                     measures a fixed frame count via --frames instead"
+                ));
+            }
+        }
+        match crate::perf_soak_import::run_import(&project_path, args) {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("perf-soak: {e}");
+                std::process::exit(3);
+            }
+        }
+    }
+    // `--size` is import-mode-only (D7) — reject on a `.manifold` input
+    // rather than silently ignoring it.
+    if arg_value(args, "--size").is_some() {
+        usage_exit(
+            "--size is only valid for a .glb/.gltf input (D7); .manifold projects size from \
+             project.settings.output_width/output_height",
+        );
+    }
 
     let seconds = match arg_value(args, "--seconds") {
         Some(s) => match s.parse::<f64>() {
@@ -84,6 +123,10 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!(
         "usage: cargo xtask perf-soak <project.manifold> --seconds N \
          [--start <beats>] [--update-baseline] [--profile]"
+    );
+    eprintln!(
+        "   or: cargo xtask perf-soak <file.glb|.gltf> [--size WxH] [--frames N] [--profile] \
+         (D7 import-graph mode, report-only)"
     );
     std::process::exit(2);
 }
