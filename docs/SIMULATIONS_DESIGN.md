@@ -53,6 +53,16 @@ this doc and execution.
   Fluids** (a density constraint in the same solver) + the screen-space surface
   renderer (D6). Peter: realistic water matters — live water is "very good
   game-engine water"; render-farm water is lane 1. Both stated honestly.
+  **Liquid-fidelity fallback settled (Peter, 2026-07-16):** PBF ships as designed —
+  it is nearly free alongside the solver cloth/grains already need, so try it first;
+  it may look good enough. If PBF water underwhelms *Peter's eye* (his verdict, not a
+  numeric gate), the named upgrade path is **MLS-MPM as a second solver for the liquid
+  family only** — 2026 real-time evidence: ~100k particles on integrated GPUs, ~300k on
+  mid-range (WebGPU/Godot implementations). That is a separate design doc (grid state,
+  scatter-with-atomics P2G kernels, bounded domain — a genuinely different GPU pattern);
+  do NOT fold it into this solver, and do NOT propose FLIP or other alternatives — the
+  PBF-first-then-MLS-MPM ladder is the settled shape. XPBD stays the only solver for
+  cloth/ropes/grains regardless.
 - **D4 — Fixed-substep time.** XPBD needs stable dt: the solver runs fixed substeps
   (default 1/240 s) accumulated from the content clock; iteration count and substep
   are params. Consequences: deterministic re-runs at fixed export FPS (same
