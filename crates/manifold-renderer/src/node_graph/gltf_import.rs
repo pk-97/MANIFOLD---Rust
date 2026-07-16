@@ -208,6 +208,9 @@ fn int(v: i32) -> SerializedParamValue {
 fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
+fn table(rows: Vec<Vec<f32>>) -> SerializedParamValue {
+    SerializedParamValue::Table { rows }
+}
 
 /// Degrees→radians factor for the camera card sliders. The camera node's
 /// `orbit`/`tilt`/`fov_y` params are radians (matching `node.orbit_camera`),
@@ -1018,6 +1021,56 @@ fn build_import_graph(
         transform_node.params.insert("pos_z".to_string(), float(-center[2]));
         group_nodes.push(transform_node);
         group_wires.push(wire(transform_id, "transform", out_id, "transform"));
+
+        // GLTF_ANIMATION_DESIGN.md A1 (D1): "animating a rigid node is
+        // animating params" — when this object's animation resolved
+        // (see gltf_load::resolve_object_animation), insert one
+        // node.gltf_animation_source per object and wire its nine
+        // scalar outputs into this SAME transform_3d's nine
+        // port-shadowed inputs, additive to the static recenter above
+        // (the recenter stays as transform_3d's own pos_x/y/z param
+        // default; the animation source's wired output overrides it at
+        // runtime, same as any port-shadow).
+        if let Some(anim) = &m.animation {
+            let anim_node_id = format!("anim_{k}");
+            let anim_id = fresh_id();
+            let mut anim_node =
+                plain_node(anim_id, &anim_node_id, "node.gltf_animation_source", &anim_node_id);
+            anim_node.params.insert("duration_s".to_string(), float(anim.duration_s.max(1e-6)));
+            if let Some(t) = &anim.translation {
+                let rows: Vec<Vec<f32>> = t
+                    .times
+                    .iter()
+                    .zip(t.values.iter())
+                    .map(|(time, v)| vec![*time, v[0], v[1], v[2]])
+                    .collect();
+                anim_node.params.insert("translation_track".to_string(), table(rows));
+            }
+            if let Some(r) = &anim.rotation {
+                let rows: Vec<Vec<f32>> = r
+                    .times
+                    .iter()
+                    .zip(r.values.iter())
+                    .map(|(time, v)| vec![*time, v[0], v[1], v[2], v[3]])
+                    .collect();
+                anim_node.params.insert("rotation_track".to_string(), table(rows));
+            }
+            if let Some(s) = &anim.scale {
+                let rows: Vec<Vec<f32>> = s
+                    .times
+                    .iter()
+                    .zip(s.values.iter())
+                    .map(|(time, v)| vec![*time, v[0], v[1], v[2]])
+                    .collect();
+                anim_node.params.insert("scale_track".to_string(), table(rows));
+            }
+            group_nodes.push(anim_node);
+            for port in
+                ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"]
+            {
+                group_wires.push(wire(anim_id, port, transform_id, port));
+            }
+        }
 
         string_bindings.push(StringBindingDef {
             id: MODEL_FILE_PARAM_ID.to_string(),
@@ -1887,6 +1940,12 @@ fn build_import_graph(
     .with_description(format!("Imported from {}", path.display()))
     .with_preset_metadata(metadata);
 
+    // GLTF_ANIMATION_DESIGN.md A1: fold the parse-time animation findings
+    // (non-LINEAR channels, morph-weight channels, multi-node-per-material
+    // conflicts) into the same never-silent report doctrine as every
+    // other D9 line above.
+    report_lines.extend(summary.animation_report_lines.iter().cloned());
+
     let report = ImportReport {
         material_count: summary.materials.len(),
         object_count: n,
@@ -2229,6 +2288,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -2602,6 +2663,7 @@ mod tests {
             mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            animation: None,
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -2610,6 +2672,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_model.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -2818,6 +2882,7 @@ mod tests {
             mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            animation: None,
         }
     }
 
@@ -2836,6 +2901,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -2917,6 +2984,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_orm.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -2973,6 +3042,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -3044,6 +3115,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_sun.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3131,6 +3204,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3160,6 +3235,145 @@ mod tests {
             .expect("reloaded import graph must build through PresetRuntime::from_def");
     }
 
+    /// GLTF_ANIMATION_DESIGN.md A1 deliverable 3: a material whose
+    /// `GltfMaterialInfo::animation` resolved gets one
+    /// `node.gltf_animation_source` inserted into its group, wired into
+    /// its OWN `node.transform_3d`'s nine port-shadowed inputs — additive
+    /// to the static recenter (which stays on `transform_3d`'s own
+    /// pos_x/y/z param default). A material with no resolved animation
+    /// gets no such node (never fabricated).
+    #[test]
+    fn animated_material_wires_animation_source_into_its_own_transform_3d() {
+        use super::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
+
+        let mut animated = full_material(0, "Inner", 1000);
+        animated.animation = Some(GltfObjectAnimation {
+            duration_s: 2.0,
+            translation: Some(Vec3Track {
+                times: vec![0.0, 1.0],
+                values: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],
+            }),
+            rotation: Some(QuatTrack {
+                times: vec![0.0, 1.0],
+                values: vec![[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.7071, 0.7071]],
+            }),
+            scale: None,
+        });
+        let mut static_obj = full_material(1, "Outer", 500);
+        static_obj.animation = None;
+
+        let summary = GltfImportSummary {
+            materials: vec![animated, static_obj],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+
+        let anim_nodes: Vec<_> =
+            flat.nodes.iter().filter(|n| n.type_id == "node.gltf_animation_source").collect();
+        assert_eq!(anim_nodes.len(), 1, "only the animated object gets a source node");
+        let anim = anim_nodes[0];
+
+        // Table params carry the parsed tracks (translation/rotation
+        // present, scale absent per the synthetic summary above).
+        assert!(matches!(
+            anim.params.get("translation_track"),
+            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
+        ));
+        assert!(matches!(
+            anim.params.get("rotation_track"),
+            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
+        ));
+        assert!(
+            anim.params.get("scale_track").is_none(),
+            "absent scale channel must not be fabricated as a Table"
+        );
+        assert_eq!(anim.params.get("duration_s"), Some(&float(2.0)));
+
+        let transform =
+            flat.nodes.iter().find(|n| n.type_id == "node.transform_3d" && n.node_id.as_str().contains("transform_0")).expect("transform_0 present");
+        for port in
+            ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"]
+        {
+            assert!(
+                flat.wires
+                    .iter()
+                    .any(|w| w.from_node == anim.id && w.from_port == port && w.to_node == transform.id && w.to_port == port),
+                "animation source must wire `{port}` into transform_0"
+            );
+        }
+
+        // The registry-facing build path must accept the Table params
+        // (proves node.gltf_animation_source is actually registered and
+        // its Table param declarations match SerializedParamValue's
+        // conversion, not just that JSON round-trips syntactically).
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry, None)
+            .expect("import graph with an animated object must build through PresetRuntime::from_def");
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 (Table params + the new
+    /// node type survive V1 JSON save→reload — the STANDARD §5 gate must
+    /// PROVE this, not assume it, per the phase brief).
+    #[test]
+    fn animation_tables_survive_json_round_trip() {
+        use super::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
+
+        let mut animated = full_material(0, "Inner", 1000);
+        animated.animation = Some(GltfObjectAnimation {
+            duration_s: 3.708_329_9,
+            translation: Some(Vec3Track {
+                times: vec![0.0, 1.25, 2.5, 3.708_329_9],
+                values: vec![[0.0, 0.0, 0.0], [0.0, 2.52, 0.0], [0.0, 2.52, 0.0], [0.0, 0.0, 0.0]],
+            }),
+            rotation: Some(QuatTrack {
+                times: vec![1.25, 2.5],
+                values: vec![[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0]],
+            }),
+            scale: None,
+        });
+        let summary = GltfImportSummary {
+            materials: vec![animated],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        let flat = manifold_core::flatten::flatten_groups(&reloaded).expect("flatten reloaded def");
+        let anim = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.gltf_animation_source")
+            .expect("animation source survives reload");
+        assert!(matches!(
+            anim.params.get("translation_track"),
+            Some(SerializedParamValue::Table { rows }) if rows.len() == 4
+        ));
+        assert!(matches!(
+            anim.params.get("rotation_track"),
+            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
+        ));
+
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(reloaded, &registry, None)
+            .expect("reloaded import graph with animation Tables must build through PresetRuntime::from_def");
+    }
+
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5 round-trip gate: a `Blend` alpha_mode
     /// (from a transmission material) and its performer-facing Opacity card
     /// binding must survive save → reload, and stay live (modulatable) after
@@ -3176,6 +3390,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -3283,6 +3499,7 @@ mod tests {
             mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            animation: None,
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
@@ -3290,6 +3507,8 @@ mod tests {
             bbox_max: [1.0, 1.0, 1.0],
             camera_count: 0,
             default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_model.glb");
         let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");

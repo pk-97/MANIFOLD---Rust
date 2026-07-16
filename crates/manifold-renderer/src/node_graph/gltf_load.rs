@@ -1049,6 +1049,15 @@ pub(crate) struct GltfMaterialInfo {
     pub mr_sampler: GltfSamplerInfo,
     pub occlusion_sampler: GltfSamplerInfo,
     pub emissive_sampler: GltfSamplerInfo,
+    /// GLTF_ANIMATION_DESIGN.md A1: this object's resolved TRS animation,
+    /// when its geometry is contributed by exactly one mesh-owning node
+    /// (see [`resolve_object_animation`]) whose ancestor chain carries a
+    /// translation/rotation/scale keyframe track in animation clip `[0]`.
+    /// `None` for a static object, for the synthetic default-material
+    /// entry (never resolved), or when more than one node contributes
+    /// this material's geometry (the documented multi-node-per-material
+    /// scope boundary — never partially or incorrectly animated).
+    pub animation: Option<GltfObjectAnimation>,
 }
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
@@ -1184,6 +1193,256 @@ pub(crate) struct GltfImportSummary {
     /// (glTF default material). v1 does not import these — reported so the
     /// caller can warn rather than silently drop them.
     pub default_material_vertex_count: u32,
+    /// GLTF_ANIMATION_DESIGN.md A1: every `document.animations()` entry,
+    /// parsed as a per-node list of TRS keyframe tracks — raw, unresolved
+    /// against any particular material/object. `gltf_import.rs` doesn't
+    /// consume this directly; it consumes [`GltfMaterialInfo::animation`]
+    /// (the per-object RESOLVED animation, computed below from clip 0 of
+    /// this list). Kept on the summary so a parse-only smoke test can
+    /// assert the parser sees the right channels on an asset it was never
+    /// wired against, independent of the per-material resolution step.
+    pub animations: Vec<GltfAnimationInfo>,
+    /// Non-fatal animation parse findings — a non-LINEAR interpolation
+    /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
+    /// channel (A3 scope), an unreadable channel (e.g. a target that
+    /// couldn't be resolved), or a same-object TRS-channel conflict
+    /// (§"resolve_object_animation") — one line per occurrence, never a
+    /// silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
+    pub animation_report_lines: Vec<String>,
+}
+
+/// One LINEAR-sampled `[f32; 3]` keyframe track (glTF `translation` or
+/// `scale` channel) — GLTF_ANIMATION_DESIGN.md A1. `times` are seconds,
+/// non-decreasing per spec (`input` accessor); `values[i]` is the pose at
+/// `times[i]`. Non-LINEAR samplers are not represented here — see
+/// [`GltfAnimationInfo::skipped_channels`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Vec3Track {
+    pub times: Vec<f32>,
+    pub values: Vec<[f32; 3]>,
+}
+
+/// One LINEAR-sampled quaternion (`[x, y, z, w]`) keyframe track (glTF
+/// `rotation` channel). Sampling slerps between keyframes — see
+/// `node.gltf_animation_source`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct QuatTrack {
+    pub times: Vec<f32>,
+    pub values: Vec<[f32; 4]>,
+}
+
+/// One glTF node's animated TRS channels within a single animation clip.
+/// Any of the three may be absent (that channel isn't animated on this
+/// node in this clip) — never fabricated.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct GltfNodeAnimation {
+    pub node_index: usize,
+    pub translation: Option<Vec3Track>,
+    pub rotation: Option<QuatTrack>,
+    pub scale: Option<Vec3Track>,
+}
+
+/// One `document.animations()` entry (a glTF "clip"), parsed into its
+/// per-node TRS tracks. glTF's `animations[]` is a list (`Fox` ships
+/// three) — A1 always resolves against entry `[0]` (multi-clip selection
+/// is D4, deferred to A4); later entries are still parsed (so the smoke
+/// test can see them) but not wired.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct GltfAnimationInfo {
+    pub name: Option<String>,
+    pub nodes: Vec<GltfNodeAnimation>,
+    /// One line per channel this parse saw but didn't turn into a track:
+    /// non-LINEAR interpolation, morph-weight targets, or an unreadable
+    /// target (e.g. `KHR_animation_pointer`, which the pinned `gltf-json`
+    /// 1.4.1 can't even deserialize when the extension omits
+    /// `target.node` — see BUG_BACKLOG.md). Never silent.
+    pub skipped_channels: Vec<String>,
+}
+
+/// One object's (= one material's) RESOLVED animation — the merge of
+/// whichever ancestor-chain node carries each TRS channel. See
+/// [`resolve_object_animation`] for why a chain walk is necessary:
+/// `BoxAnimated.glb` itself splits its single animated object's
+/// translation onto an ANCESTOR node and rotation onto the mesh's own
+/// node, so "the node that owns this material's mesh" is not enough.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GltfObjectAnimation {
+    /// Clip duration in SECONDS (glTF's own unit) — the last keyframe
+    /// time across whichever channels are present. Never converted to
+    /// beats here (D3: seconds→beats happens at RUNTIME, live against the
+    /// current tempo, never baked at import).
+    pub duration_s: f32,
+    pub translation: Option<Vec3Track>,
+    pub rotation: Option<QuatTrack>,
+    pub scale: Option<Vec3Track>,
+}
+
+/// Parse every `document.animations()` entry into its per-node TRS
+/// tracks. LINEAR interpolation only (A1 scope) — STEP/CUBICSPLINE
+/// channels are recorded in `skipped_channels`, never silently dropped
+/// and never approximated as LINEAR. Morph-weight channels (`path ==
+/// "weights"`) are A3 scope — also recorded, not sampled.
+fn parse_animations(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<GltfAnimationInfo> {
+    document
+        .animations()
+        .map(|anim| {
+            let mut nodes: std::collections::BTreeMap<usize, GltfNodeAnimation> =
+                std::collections::BTreeMap::new();
+            let mut skipped_channels = Vec::new();
+            for channel in anim.channels() {
+                let sampler = channel.sampler();
+                let target = channel.target();
+                let node_index = target.node().index();
+                let interpolation = sampler.interpolation();
+                if interpolation != gltf::animation::Interpolation::Linear {
+                    skipped_channels.push(format!(
+                        "node {node_index}: {interpolation:?} interpolation not supported \
+                         (GLTF_ANIMATION_DESIGN.md A1 is LINEAR-only; STEP/CUBICSPLINE Deferred)"
+                    ));
+                    continue;
+                }
+                let reader = channel.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+                let Some(times) = reader.read_inputs().map(|it| it.collect::<Vec<f32>>()) else {
+                    skipped_channels.push(format!(
+                        "node {node_index}: channel sampler input accessor unreadable"
+                    ));
+                    continue;
+                };
+                let Some(outputs) = reader.read_outputs() else {
+                    skipped_channels
+                        .push(format!("node {node_index}: channel sampler output unreadable"));
+                    continue;
+                };
+                let entry = nodes.entry(node_index).or_insert_with(|| GltfNodeAnimation {
+                    node_index,
+                    ..Default::default()
+                });
+                match outputs {
+                    gltf::animation::util::ReadOutputs::Translations(it) => {
+                        entry.translation =
+                            Some(Vec3Track { times, values: it.collect() });
+                    }
+                    gltf::animation::util::ReadOutputs::Scales(it) => {
+                        entry.scale = Some(Vec3Track { times, values: it.collect() });
+                    }
+                    gltf::animation::util::ReadOutputs::Rotations(it) => {
+                        entry.rotation =
+                            Some(QuatTrack { times, values: it.into_f32().collect() });
+                    }
+                    gltf::animation::util::ReadOutputs::MorphTargetWeights(_) => {
+                        skipped_channels.push(format!(
+                            "node {node_index}: morph-target weight animation not supported \
+                             in A1 (GLTF_ANIMATION_DESIGN.md A3 scope)"
+                        ));
+                    }
+                }
+            }
+            GltfAnimationInfo {
+                name: anim.name().map(str::to_string),
+                nodes: nodes.into_values().collect(),
+                skipped_channels,
+            }
+        })
+        .collect()
+}
+
+/// For every mesh-owning node in the scene, its ancestor chain (root
+/// node first, the mesh-owning node itself last) — GLTF_ANIMATION_DESIGN.md
+/// A1: a material's animated object can have its TRS channels split
+/// across MULTIPLE nodes on the path from the scene root down to the
+/// node that actually carries the mesh (verified against
+/// `BoxAnimated.glb`: its single animated object's translation lives on
+/// an ancestor node, rotation on the mesh's own node — neither alone).
+/// Resolving a material's animation therefore requires the whole chain,
+/// not just the leaf.
+fn collect_mesh_node_chains(document: &gltf::Document) -> Vec<(usize, Vec<usize>)> {
+    fn walk(node: &gltf::Node, chain: &mut Vec<usize>, out: &mut Vec<(usize, Vec<usize>)>) {
+        chain.push(node.index());
+        if node.mesh().is_some() {
+            out.push((node.index(), chain.clone()));
+        }
+        for child in node.children() {
+            walk(&child, chain, out);
+        }
+        chain.pop();
+    }
+    let mut out = Vec::new();
+    for node in resolve_import_nodes(document) {
+        let mut chain = Vec::new();
+        walk(&node, &mut chain, &mut out);
+    }
+    out
+}
+
+/// Merge whichever node(s) along `chain` carry each TRS channel (within
+/// ONE animation clip's per-node map, `node_anims`) into a single
+/// resolved [`GltfObjectAnimation`] for the material this chain's leaf
+/// mesh belongs to. `None` when no chain node carries any TRS channel
+/// (the object is static). A channel duplicated across more than one
+/// chain node — composing two independently-animated ancestors into one
+/// TRS is genuinely out of A1's scope, never attempted — is reported via
+/// `report` and the object is left un-animated for that channel rather
+/// than silently combined or guessed at.
+fn resolve_object_animation(
+    chain: &[usize],
+    node_anims: &std::collections::BTreeMap<usize, GltfNodeAnimation>,
+    report: &mut Vec<String>,
+) -> Option<GltfObjectAnimation> {
+    let mut translation: Option<Vec3Track> = None;
+    let mut rotation: Option<QuatTrack> = None;
+    let mut scale: Option<Vec3Track> = None;
+    for &node_index in chain {
+        let Some(na) = node_anims.get(&node_index) else { continue };
+        if let Some(t) = &na.translation {
+            if translation.is_some() {
+                report.push(format!(
+                    "node {node_index}: translation animated on more than one ancestor in this \
+                     object's chain — composing multiple animated ancestors is out of A1 scope, \
+                     this channel is left static"
+                ));
+            } else {
+                translation = Some(t.clone());
+            }
+        }
+        if let Some(r) = &na.rotation {
+            if rotation.is_some() {
+                report.push(format!(
+                    "node {node_index}: rotation animated on more than one ancestor in this \
+                     object's chain — composing multiple animated ancestors is out of A1 scope, \
+                     this channel is left static"
+                ));
+            } else {
+                rotation = Some(r.clone());
+            }
+        }
+        if let Some(s) = &na.scale {
+            if scale.is_some() {
+                report.push(format!(
+                    "node {node_index}: scale animated on more than one ancestor in this \
+                     object's chain — composing multiple animated ancestors is out of A1 scope, \
+                     this channel is left static"
+                ));
+            } else {
+                scale = Some(s.clone());
+            }
+        }
+    }
+    if translation.is_none() && rotation.is_none() && scale.is_none() {
+        return None;
+    }
+    let last_time = |t: &[f32]| t.last().copied().unwrap_or(0.0);
+    let duration_s = [
+        translation.as_ref().map(|t| last_time(&t.times)),
+        rotation.as_ref().map(|t| last_time(&t.times)),
+        scale.as_ref().map(|t| last_time(&t.times)),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(0.0f32, f32::max);
+    Some(GltfObjectAnimation { duration_s, translation, rotation, scale })
 }
 
 /// Recursively accumulate per-material world-combined vertex counts and a
@@ -1274,6 +1533,44 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         return Err(format!("{}: parsed no geometry", path.display()));
     }
 
+    // GLTF_ANIMATION_DESIGN.md A1: parse every animation clip, then
+    // resolve clip `[0]` (multi-clip selection is D4/A4) against each
+    // material's mesh-owning node's full ancestor chain — see
+    // `resolve_object_animation` for why the chain (not just the leaf
+    // node) is required.
+    let animations = parse_animations(&document, &buffers);
+    let mut animation_report_lines: Vec<String> = Vec::new();
+    for anim in &animations {
+        for line in &anim.skipped_channels {
+            animation_report_lines.push(format!(
+                "animation {:?}: {line}",
+                anim.name.as_deref().unwrap_or("<unnamed>")
+            ));
+        }
+    }
+    let node_anims_clip0: std::collections::BTreeMap<usize, GltfNodeAnimation> = animations
+        .first()
+        .map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect())
+        .unwrap_or_default();
+    let mesh_node_chains = collect_mesh_node_chains(&document);
+    let mut chain_by_node: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    let mut nodes_by_material: std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>> =
+        std::collections::BTreeMap::new();
+    for (node_index, chain) in &mesh_node_chains {
+        chain_by_node.insert(*node_index, chain.clone());
+        if let Some(node) = document.nodes().nth(*node_index) {
+            if let Some(mesh) = node.mesh() {
+                for primitive in mesh.primitives() {
+                    nodes_by_material
+                        .entry(primitive.material().index())
+                        .or_default()
+                        .insert(*node_index);
+                }
+            }
+        }
+    }
+
     let materials: Vec<GltfMaterialInfo> = document
         .materials()
         .filter_map(|m| {
@@ -1286,6 +1583,27 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 // Declared but unused by any geometry — nothing to draw.
                 return None;
             }
+            // A1: resolve this material's animation only when exactly one
+            // mesh-owning node contributes its geometry — the documented
+            // multi-node-per-material scope boundary (never partially or
+            // ambiguously animated).
+            let animation = match nodes_by_material.get(&Some(material_index as usize)) {
+                Some(nodes) if nodes.len() == 1 => {
+                    let node_index = *nodes.iter().next().unwrap();
+                    let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
+                    resolve_object_animation(&chain, &node_anims_clip0, &mut animation_report_lines)
+                }
+                Some(nodes) if nodes.len() > 1 && node_anims_clip0.keys().any(|n| nodes.contains(n)) => {
+                    animation_report_lines.push(format!(
+                        "material {material_index}: geometry contributed by {} nodes, at least \
+                         one of which is animated — multi-node-per-material animation is out of \
+                         A1 scope, this object is left static",
+                        nodes.len()
+                    ));
+                    None
+                }
+                _ => None,
+            };
             let pbr = m.pbr_metallic_roughness();
             // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
             // `Blend` material (see `gltf_import.rs`), never Mask cutout —
@@ -1615,6 +1933,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 mr_sampler,
                 occlusion_sampler,
                 emissive_sampler,
+                animation,
             })
         })
         .collect();
@@ -1690,6 +2009,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             mr_sampler: GltfSamplerInfo::default(),
             occlusion_sampler: GltfSamplerInfo::default(),
             emissive_sampler: GltfSamplerInfo::default(),
+            // The synthetic default-material entry has no real glTF
+            // material index to resolve animation against — never
+            // animated.
+            animation: None,
         });
     }
 
@@ -1699,7 +2022,118 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         bbox_max,
         camera_count: document.cameras().count(),
         default_material_vertex_count,
+        animations,
+        animation_report_lines,
     })
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+
+    fn khronos_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos")
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A1 gate fixture. Re-derived inventory
+    /// finding (this session): `BoxAnimated.glb` is NOT the "one node,
+    /// one mesh, one material" asset the phase brief assumed — it has
+    /// TWO materials ("inner"/"outer") and its single animated object
+    /// splits translation onto an ANCESTOR node (node 0) from rotation
+    /// on the mesh's own node (node 2), via an intermediate no-op node
+    /// 1. `resolve_object_animation`'s ancestor-chain walk exists
+    /// specifically because of this asset.
+    #[test]
+    fn box_animated_resolves_split_translation_and_rotation_onto_one_object() {
+        let path = khronos_dir().join("BoxAnimated.glb");
+        if !path.exists() {
+            println!(
+                "box_animated_resolves_split_translation_and_rotation_onto_one_object: \
+                 fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let summary = gltf_import_summary(&path).expect("parse BoxAnimated.glb");
+        assert_eq!(summary.materials.len(), 2, "inner + outer");
+        assert_eq!(summary.animations.len(), 1, "one animation clip");
+        assert!(
+            summary.animations[0].skipped_channels.is_empty(),
+            "BoxAnimated's two channels are both LINEAR — nothing should be skipped: {:?}",
+            summary.animations[0].skipped_channels
+        );
+
+        let inner = summary
+            .materials
+            .iter()
+            .find(|m| m.name.as_deref() == Some("inner"))
+            .expect("inner material present");
+        let anim = inner.animation.as_ref().expect("inner material resolves an animation");
+        assert!(anim.translation.is_some(), "translation lives on inner's ancestor node");
+        assert!(anim.rotation.is_some(), "rotation lives on inner's own mesh node");
+        assert!(anim.scale.is_none(), "BoxAnimated has no scale channel");
+        assert!(
+            (anim.duration_s - 3.708_329_9).abs() < 1e-3,
+            "duration should be the translation track's last keyframe time, got {}",
+            anim.duration_s
+        );
+
+        let outer = summary
+            .materials
+            .iter()
+            .find(|m| m.name.as_deref() == Some("outer"))
+            .expect("outer material present");
+        assert!(outer.animation.is_none(), "outer_box is static in this fixture");
+    }
+
+    /// Held-out parse-only smoke test (A1 deliverable 1): proves the
+    /// parser isn't shaped around `BoxAnimated` alone. `InterpolationTest.glb`
+    /// substitutes for the brief's originally-named
+    /// `AnimatedColorsCube.glb`: that asset uses `KHR_animation_pointer`
+    /// channels which OMIT `target.node` per that extension's own spec,
+    /// and the pinned `gltf-json` 1.4.1's `Target` struct has no
+    /// `#[serde(default)]` on its `node` field — so the file fails to
+    /// even DESERIALIZE (`missing field \`node\``), before any
+    /// validation or animation parsing runs. Logged as BUG-187 (see
+    /// docs/BUG_BACKLOG.md) — a pre-existing crate-parsing gap, not a
+    /// regression from this phase. `InterpolationTest.glb` instead
+    /// exercises translation/rotation/scale channels across MULTIPLE
+    /// nodes and BOTH the supported (LINEAR) and unsupported (STEP/
+    /// CUBICSPLINE) interpolation modes in one asset — a strictly
+    /// broader generality proof than the brief's original ask.
+    #[test]
+    fn interpolation_test_parses_linear_channels_and_reports_unsupported_ones() {
+        let path = khronos_dir().join("InterpolationTest.glb");
+        if !path.exists() {
+            println!(
+                "interpolation_test_parses_linear_channels_and_reports_unsupported_ones: \
+                 fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (document, buffers, _images) = import_glb(&path).expect("parse InterpolationTest.glb");
+        let animations = parse_animations(&document, &buffers);
+        assert_eq!(animations.len(), 9, "one animation clip per channel in this fixture");
+
+        // Exactly 3 of the 9 clips (nodes 1, 5, 8 per the fixture's own
+        // authoring) use LINEAR interpolation and must produce a track;
+        // the other 6 (STEP/CUBICSPLINE) must be reported, never
+        // silently dropped, and never sampled as if they were LINEAR.
+        let linear_tracks: usize = animations.iter().map(|a| a.nodes.len()).sum();
+        let skipped: usize = animations.iter().map(|a| a.skipped_channels.len()).sum();
+        assert_eq!(linear_tracks, 3, "LINEAR channels: Scale/Rotation/Translation, one each");
+        assert_eq!(skipped, 6, "STEP + CUBICSPLINE channels must be reported, not dropped");
+        for a in &animations {
+            for line in &a.skipped_channels {
+                assert!(
+                    line.contains("interpolation not supported"),
+                    "unexpected skip reason: {line}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1863,3 +2297,4 @@ mod tests {
         assert_eq!(DEFAULT_MATERIAL_MESH_PARAM, -2);
     }
 }
+
