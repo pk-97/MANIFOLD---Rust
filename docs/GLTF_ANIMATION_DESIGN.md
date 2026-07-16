@@ -1,6 +1,6 @@
 # glTF Animation — imported clips as performable motion (node TRS, skinning, morphs)
 
-**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 IN PROGRESS
+**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-187 logged, blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case)
 **Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (owns the BUG-170 crate-bump verdict; its D8 may hand this doc three pointer-animation assets). No dependency on GLTF_MATERIAL_EXTENSIONS_DESIGN.md — the two can execute in either order.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
