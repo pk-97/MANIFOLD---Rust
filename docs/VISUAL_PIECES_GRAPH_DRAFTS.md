@@ -460,7 +460,7 @@ through the Log tonemap — never saturated purple, never slow cartoon animation
 
 **Verify.** CPU test: fixed seed → identical polyline twice (determinism); PNG triptych strike/+3 frames/+10 frames — core gone, afterglow decaying, no accumulation blowout.
 
-**As built (2026-07-16) — BUILT, Peter's look pass owed.** Deviations from the sketch above, each with a reason:
+**As built (2026-07-16) — BUILT; Peter's first look 2026-07-16: "a bit cartoony still but good for now" — shipped, realism pass owed later.** Deviations from the sketch above, each with a reason:
 
 - **Outputs are one `points` + one `widths` + two `EdgePair` topologies (`core_edges`, `branch_edges`)**, not two `CurvePoint` arrays. Variable-length polylines inside fixed-capacity Array buffers are only expressible on `draw_lines`' sentinel-skipping edges path (the sequential path draws the whole buffer capacity), and branches are *disjoint* polylines, which a bare point array can't encode at all. `CurvePoint` stays its frozen 8-byte layout; the width taper rides the parallel `widths: Array(f32)` — which is also the shape of the `draw_lines` extension that landed with the piece (optional `widths` input, tapered-capsule SDF, geometry bit-identical when unwired).
 - **Extra outputs `strike_pulse` (1.0 on the strike frame) + `age`.** The flash envelope is `strike_pulse → envelope_follower_ar` (activated from the registered-but-unused list) `→ scale_offset_value(scale = Flash card) → flash.amount` — no new envelope logic anywhere.
