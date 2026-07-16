@@ -14989,6 +14989,31 @@
           "type": "Texture2D"
         },
         {
+          "name": "sheen_color_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "sheen_roughness_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_thickness_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "anisotropy_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
           "name": "transform_0",
           "required": false,
           "type": "Transform"
@@ -15030,6 +15055,31 @@
         },
         {
           "name": "emissive_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "sheen_color_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "sheen_roughness_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_thickness_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "anisotropy_map_1",
           "required": false,
           "type": "Texture2D"
         },
