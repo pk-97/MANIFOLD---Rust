@@ -1112,13 +1112,19 @@ impl RenderScene {
         self.shaft_depth_internal_height = height;
     }
 
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: (re)allocate the opaque-scene
-    /// color snapshot when size or format changed. `SHADER_READ` only — it
-    /// is populated by a blit (`copy_texture_to_texture`), never a render
-    /// pass, so it needs no `RENDER_TARGET` bit. `format` mirrors whatever
-    /// the graph's own `color` output texture is using this frame (read
-    /// live from `target.format` at the call site) so the blit's mandatory
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a/E2b: (re)allocate the opaque-
+    /// scene color snapshot when size or format changed. `SHADER_READ` only
+    /// — it is populated by a blit (`copy_texture_to_texture`, level 0 only)
+    /// then mip-generated (`GpuEncoder::generate_mipmaps`, the same hardware
+    /// blit-encoder path `node.gltf_texture_source` uses for its material
+    /// maps, F-P6 precedent) — never a render pass, so it needs no
+    /// `RENDER_TARGET` bit. `format` mirrors whatever the graph's own
+    /// `color` output texture is using this frame (read live from
+    /// `target.format` at the call site) so the blit's mandatory
     /// same-format assert can never trip on a future output-format change.
+    /// E2b: full mip chain (`max_mip_levels`) so `fs_pbr`'s roughness-driven
+    /// refraction blur has levels to sample — level 0 alone (E2a) only
+    /// proved the pass seam, not the blur.
     fn ensure_opaque_scene_color(
         &mut self,
         device: &manifold_gpu::GpuDevice,
@@ -1140,8 +1146,8 @@ impl RenderScene {
             format,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
-            label: "node.render_scene opaque scene color (E2a snapshot)",
-            mip_levels: 1,
+            label: "node.render_scene opaque scene color (E2b transmission snapshot)",
+            mip_levels: manifold_gpu::GpuTextureDesc::max_mip_levels(width, height),
         }));
         self.opaque_scene_color_width = width;
         self.opaque_scene_color_height = height;
@@ -2949,6 +2955,16 @@ impl EffectNode for RenderScene {
             let gpu = ctx.gpu_encoder();
             gpu.native_enc
                 .copy_texture_to_texture(target, opaque_scene_color, width, height, 1);
+            // E2b: level 0 is fresh from the blit above; levels 1.. are
+            // stale until regenerated (same "regen on every write" rule
+            // `node.gltf_texture_source` step 8 follows) — `fs_pbr`'s
+            // roughness-driven refraction blur samples this chain, so it
+            // must be current EVERY frame the snapshot is retaken (unlike a
+            // static imported texture, this content changes every frame the
+            // camera or scene moves).
+            if opaque_scene_color.mip_level_count() > 1 {
+                gpu.native_enc.generate_mipmaps(opaque_scene_color);
+            }
             if !blend_draw_calls.is_empty() {
                 gpu.native_enc.draw_instanced_depth_batch(
                     target,

@@ -113,6 +113,22 @@ enum CheckSpec {
     /// reference_region`'s max luminance.
     #[serde(rename = "region_max_luminance_above")]
     RegionMaxLuminanceAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: "the transmissive region is
+    /// NOT simply base_color.a-blended-flat" (D3's rejected-approximation
+    /// criterion), expressed as luminance variance rather than mean/max —
+    /// neither existing kind fits: a mean/max comparison can't tell a
+    /// uniformly-tinted flat wash from a region carrying real image detail
+    /// (rim + decal + a genuinely refracted background). Chosen because the
+    /// OLD alpha-blend approximation (D8/F-P5) darkened a fully-transmissive
+    /// object's alpha toward 0 — i.e. toward "blends smoothly into the
+    /// background," which has exactly the *reference_region*'s own std dev,
+    /// no more. `region`'s luminance std dev must exceed `value *
+    /// reference_region`'s std dev — verified empirically this session
+    /// (CompareTransmission.glb's glass-bowl region measures ~59 vs a
+    /// plain-background patch's ~27, a >2x ratio) before picking the
+    /// threshold, same discipline as every other kind here.
+    #[serde(rename = "region_stddev_above")]
+    RegionStdDevAbove { region: [f64; 4], reference_region: [f64; 4], value: f64 },
 }
 
 /// Mean luminance over a normalized `[x0,y0,x1,y1]` rect of a tonemapped
@@ -159,6 +175,35 @@ fn region_max_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
         }
     }
     max_lum
+}
+
+/// Population std dev of luminance over a normalized `[x0,y0,x1,y1]` rect —
+/// same rect convention/weights as [`region_mean_luminance`].
+/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: measures "how much real detail is
+/// in this region" — see `CheckSpec::RegionStdDevAbove`'s doc comment.
+fn region_stddev_luminance(rgba: &[u8], region: [f64; 4]) -> f64 {
+    let x0 = ((region[0] * WIDTH as f64) as u32).min(WIDTH - 1);
+    let y0 = ((region[1] * HEIGHT as f64) as u32).min(HEIGHT - 1);
+    let x1 = ((region[2] * WIDTH as f64) as u32).clamp(x0 + 1, WIDTH);
+    let y1 = ((region[3] * HEIGHT as f64) as u32).clamp(y0 + 1, HEIGHT);
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut n = 0u64;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            let r = rgba[i] as f64;
+            let g = rgba[i + 1] as f64;
+            let b = rgba[i + 2] as f64;
+            let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            sum += lum;
+            sum_sq += lum * lum;
+            n += 1;
+        }
+    }
+    let n = n.max(1) as f64;
+    let mean = sum / n;
+    (sum_sq / n - mean * mean).max(0.0).sqrt()
 }
 
 /// Mean `(r, g, b)` over a normalized `[x0,y0,x1,y1]` rect — same rect
@@ -433,6 +478,25 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
                     "region_max_luminance {region_max:.2} <= {value} * reference_max {reference_max:.2} \
                      ({:.2}) — the coated region's specular peak isn't brighter than the base",
                     value * reference_max
+                ))
+            }
+        }
+        CheckSpec::RegionStdDevAbove { region, reference_region, value } => {
+            let rgba = render_asset(path, &[], 0.02)?;
+            let region_std = region_stddev_luminance(&rgba, *region);
+            let reference_std = region_stddev_luminance(&rgba, *reference_region);
+            println!(
+                "  {asset}: region_stddev = {region_std:.2}, reference_stddev = {reference_std:.2} \
+                 (region must be > {value} * reference = {:.2})",
+                value * reference_std
+            );
+            if !assert || region_std > value * reference_std {
+                Ok(())
+            } else {
+                Err(format!(
+                    "region_stddev {region_std:.2} <= {value} * reference_stddev {reference_std:.2} \
+                     ({:.2}) — the region doesn't carry more image detail than a flat/plain reference",
+                    value * reference_std
                 ))
             }
         }

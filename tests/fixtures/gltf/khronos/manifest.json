@@ -874,295 +874,357 @@
     "asset": "ABeautifulGame.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AnimationPointerUVs.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AnisotropyBarnLamp.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AnisotropyDiscTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AnisotropyRotationTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AnisotropyStrengthTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "AttenuationTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "region_mean_luminance_below",
+        "region": [
+          0.547,
+          0.375,
+          0.602,
+          0.458
+        ],
+        "reference_region": [
+          0.457,
+          0.382,
+          0.473,
+          0.417
+        ],
+        "value": 0.8
+      }
+    ],
+    "status": "expect_pass",
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: thicker glass along the Thickness Factor row attenuates more (Beer-Lambert distance-dependent darkening) -- a per-instance thickness gradient the old material-level alpha formula (thickness-independent) could not produce"
   },
   {
     "asset": "CarConcept.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CarbonFibre.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "ChairDamaskPurplegold.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "ChronographWatch.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CommercialRefrigerator.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareAnisotropy.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareDispersion.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareIor.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareIridescence.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareSheen.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "CompareTransmission.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "region_stddev_above",
+        "region": [
+          0.46,
+          0.44,
+          0.62,
+          0.69
+        ],
+        "reference_region": [
+          0.7,
+          0.3,
+          0.75,
+          0.6
+        ],
+        "value": 1.5
+      }
+    ],
+    "status": "expect_pass",
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: real screen-space refraction (D3) -- the glass-bowl region carries measurably more image detail (rim + decal + refracted checkerboard) than a plain-background patch, which the old alpha-blend approximation (near-zero alpha for fully transmissive glass) could not produce"
   },
   {
     "asset": "CompareVolume.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "region_green_minus_red_above",
+        "region": [
+          0.502,
+          0.458,
+          0.555,
+          0.49
+        ],
+        "value": 8.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce"
   },
   {
     "asset": "DiffuseTransmissionPlant.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "DiffuseTransmissionTeacup.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "DiffuseTransmissionTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "DispersionTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "DragonAttenuation.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "DragonDispersion.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "GlamVelvetSofa.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "GlassBrokenWindow.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "GlassHurricaneCandleHolder.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "GlassVaseFlowers.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to the 4 Compare/synthetic assets above, not this showcase) -- real transmission math IS active on this asset (not unsupported), left xfail pending Peter's visual read"
   },
   {
     "asset": "IORTestGrid.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "IridescenceAbalone.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "IridescenceLamp.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "IridescenceSuzanne.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "IridescentDishWithOlives.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "LightsPunctualLamp.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "MosquitoInAmber.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "PotOfCoalsAnimationPointer.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "ScatteringSkull.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "SheenChair.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "SheenTestGrid.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "SheenWoodLeatherSofa.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "SpecularSilkPouf.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "SunglassesKhronos.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "ToyCar.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "TransmissionOrderTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "TransmissionRoughnessTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "region_mean_luminance_below",
+        "region": [
+          0.615,
+          0.444,
+          0.651,
+          0.514
+        ],
+        "reference_region": [
+          0.482,
+          0.444,
+          0.521,
+          0.514
+        ],
+        "value": 0.75
+      }
+    ],
+    "status": "expect_pass",
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: rough transmissive tiles sample a coarser mip of opaque_scene_color than smooth tiles (roughness-driven refraction blur), reading darker/flatter -- the old approximation had no mip-blur mechanism at all"
   },
   {
     "asset": "TransmissionTest.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "TransmissionThinwallTestGrid.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "USDShaderBallForGltf.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
   },
   {
     "asset": "BoomBox.glb",
@@ -1178,13 +1240,13 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-165 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): root cause was node.orbit_camera's fixed near=0.05 clip plane clipping this real-world-scale (radius 0.017) object entirely, not a texture-decode race — see gltf_import.rs's near_clip computation"
+    "note": "BUG-165 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): root cause was node.orbit_camera's fixed near=0.05 clip plane clipping this real-world-scale (radius 0.017) object entirely, not a texture-decode race \u2014 see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "VirtualCity.glb",
     "checks": [],
     "status": "xfail:BUG-165",
-    "note": "re-diagnosed 2026-07-16 (P1): NOT the same root cause as BoomBox — BoomBox's fix (near-clip scaling) does not converge VirtualCity, which has 167 materials/147 textures still not converging after 60 frames with io_pending false (a genuine, separate throughput/decode issue). Needs its own diagnosis; do not assume BUG-165's fix covers it."
+    "note": "re-diagnosed 2026-07-16 (P1): NOT the same root cause as BoomBox \u2014 BoomBox's fix (near-clip scaling) does not converge VirtualCity, which has 167 materials/147 textures still not converging after 60 frames with io_pending false (a genuine, separate throughput/decode issue). Needs its own diagnosis; do not assume BUG-165's fix covers it."
   },
   {
     "asset": "ClearCoatCarPaint.glb",
@@ -1216,7 +1278,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb()'s own extensionsRequired allowlist (includes KHR_materials_unlit) replaces the crate's feature-flag veto, so this now imports and renders. KHR_materials_unlit itself is not yet wired to the UnlitMaterial primitive (tracked separately as BUG-174) — this asset renders via the default lit path, not true unlit shading."
+    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb()'s own extensionsRequired allowlist (includes KHR_materials_unlit) replaces the crate's feature-flag veto, so this now imports and renders. KHR_materials_unlit itself is not yet wired to the UnlitMaterial primitive (tracked separately as BUG-174) \u2014 this asset renders via the default lit path, not true unlit shading."
   },
   {
     "asset": "SpecGlossVsMetalRough.glb",
@@ -1232,7 +1294,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-167 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D2): KHR_materials_pbrSpecularGlossiness converts to metal-rough at import (diffuseFactor/diffuseTexture->base color, glossinessFactor->roughness, specularFactor(mean)->specular_factor). KNOWN LIMITATION (not a regression, a named Deferred item, doc section 8): the specularGlossinessTexture's RGB specular TINT is not sampled (deferred — needs a shader change) — on THIS asset the spec-gloss bottle half is visibly darker/less saturated than its metal-rough twin because the tint carries the gold color the deferred map would supply. The two halves no longer look broken (both render, both are lit, both show the logo/geometry) but are not yet pixel-alike. Revival trigger named in the doc is now empirically met by this exact asset."
+    "note": "BUG-167 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D2): KHR_materials_pbrSpecularGlossiness converts to metal-rough at import (diffuseFactor/diffuseTexture->base color, glossinessFactor->roughness, specularFactor(mean)->specular_factor). KNOWN LIMITATION (not a regression, a named Deferred item, doc section 8): the specularGlossinessTexture's RGB specular TINT is not sampled (deferred \u2014 needs a shader change) \u2014 on THIS asset the spec-gloss bottle half is visibly darker/less saturated than its metal-rough twin because the tint carries the gold color the deferred map would supply. The two halves no longer look broken (both render, both are lit, both show the logo/geometry) but are not yet pixel-alike. Revival trigger named in the doc is now empirically met by this exact asset."
   },
   {
     "asset": "SimpleInstancing.glb",
@@ -1264,7 +1326,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-169 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): NOT a texture-less-material/lighting bug — same root cause as BUG-165, node.orbit_camera's fixed near=0.05 clip plane clipping this small-scale (radius 0.0056) object entirely — see gltf_import.rs's near_clip computation"
+    "note": "BUG-169 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): NOT a texture-less-material/lighting bug \u2014 same root cause as BUG-165, node.orbit_camera's fixed near=0.05 clip plane clipping this small-scale (radius 0.0056) object entirely \u2014 see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "AnimatedColorsCube.glb",
@@ -1320,10 +1382,10 @@
     "asset": "NodePerformanceTest.glb",
     "checks": [],
     "status": "xfail:BUG-173",
-    "note": "10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) — not a defect"
+    "note": "10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) \u2014 not a defect"
   },
   {
-    "asset": "Unicode❤♻Test.glb",
+    "asset": "Unicode\u2764\u267bTest.glb",
     "checks": [
       {
         "kind": "non_black_fraction_min",
@@ -1341,174 +1403,174 @@
     "asset": "AnimatedCube (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "AnimatedTriangle (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "BoomBoxWithAxes (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Box With Spaces (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Cameras (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Cube (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "EnvironmentTest (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "FlightHelmet (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "IridescenceDielectricSpheres (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "IridescenceMetallicSpheres (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "MandarinOrange (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "MeshPrimitiveModes (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "MeshoptCubeTest (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "MultipleScenes (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "PrimitiveModeNormalsTest (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SciFiHelmet (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SheenCloth (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleMaterial (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleMeshes (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleMorph (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleSkin (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleSparseAccessor (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "SimpleTexture (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Sponza (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "StainedGlassLamp (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Suzanne (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "Triangle (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "TriangleWithoutIndices (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   },
   {
     "asset": "TwoSidedPlane (no glTF-Binary variant at pin)",
     "checks": [],
     "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
   }
 ]

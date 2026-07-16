@@ -691,12 +691,22 @@ fn build_import_graph(
         }
         // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
         // KHR_materials_transmission both become a real `Blend` material.
-        // One formula covers both — `transmission_factor == 0.0` (plain
-        // BLEND, no transmission extension) reduces to the material's own
-        // base_color.a unchanged.
+        //
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: `effective_alpha` used
+        // to darken base_color.a by `(1 - transmission_factor)` — that WAS
+        // the D8/F-P5 alpha-blend approximation for transmission (fake
+        // see-through via low opacity). Real screen-space refraction ships
+        // in `fs_pbr` (render_scene.wgsl's `transmission_diffuse`) as of
+        // E2b, and D3 explicitly rejects keeping the approximation active
+        // once the real thing exists — the two must never both apply (that
+        // would double-darken: alpha-composited over the background AND
+        // shader-mixed with it). So `effective_alpha` is now just the
+        // material's own authored base_color.a — Blend/glass alpha keeps
+        // its normal meaning (author/performer-controlled fade via the
+        // Opacity card below), while transmission's see-through is carried
+        // entirely by the shader's diffuse substitution, not by alpha.
         let is_glass = m.was_blend || m.transmission_factor > 0.0;
-        let effective_alpha =
-            (m.base_color_factor[3] * (1.0 - m.transmission_factor)).clamp(0.0, 1.0);
+        let effective_alpha = m.base_color_factor[3].clamp(0.0, 1.0);
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -742,9 +752,9 @@ fn build_import_graph(
         mat_node
             .params
             .insert("color_b".to_string(), float(m.base_color_factor[2]));
-        // IMPORT_FIDELITY_DESIGN.md D8: `effective_alpha` folds the
-        // transmission formula in; for a plain opaque/mask material
-        // (transmission_factor == 0.0) this is exactly base_color.a.
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
+        // exactly `base_color.a` (see its definition above for why the old
+        // transmission-darkening formula was removed).
         mat_node
             .params
             .insert("color_a".to_string(), float(effective_alpha));
@@ -2670,12 +2680,15 @@ mod tests {
             Some(&enum_val(2)),
             "transmission/BLEND material must map to alpha_mode Blend (2)"
         );
-        // base_color.a (1.0) * (1 - transmission_factor 0.9) = 0.1
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: color_a is base_color.a
+        // alone now (1.0) — transmission's see-through is carried by
+        // fs_pbr's shader-side diffuse substitution, not by darkened alpha
+        // (the old D8/F-P5 approximation this phase removes).
         let color_a = mat.params.get("color_a").expect("color_a set");
         match color_a {
             SerializedParamValue::Float { value } => assert!(
-                (value - 0.1).abs() < 1e-4,
-                "color_a must fold the transmission formula, got {value}"
+                (value - 1.0).abs() < 1e-4,
+                "color_a must equal base_color.a unchanged, got {value}"
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
