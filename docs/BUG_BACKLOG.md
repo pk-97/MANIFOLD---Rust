@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-191 | **perf-soak-start-seek-first-frame-spike** | `cargo xtask perf-soak <project> --start <beats>` shows a ~34-37ms content-thread frame right after the transport seeks to `--start`, tripping I1's 20ms hard-fail line on that one frame — confirmed pre-existing on unmodified `origin/main` (not a PERF_BUDGET_GATE_DESIGN P2 regression), root cause not investigated. MED (the gate can't yet soak a targeted mid-set passage via `--start` without a spurious I1 failure; `--seconds`-from-top runs are unaffected). |
 | BUG-190 | **brainstem-24-skinned-objects-370ms-per-frame** | `BrainStem.glb` (24 skinned objects, 78 materials) renders a flat ~370ms/frame from frame 0 — 18x over the 20ms hot-path budget. NOT blocking A2 (never a named gate fixture; the real gate fixtures CesiumMan/Fox measure 5-7ms/frame). Root cause unknown — likely a pre-existing many-object render_scene scaling cost (BUG-189's territory) rather than skinning-specific. MED (blocks a real multi-skinned-character asset from being performable; not the A1/A2 gate fixtures). |
 | BUG-189 | **import-graph-10ms-resolution-independent-gpu-floor** | The glb import graph costs ~10 ms of true GPU time per frame regardless of resolution (9.8 ms @1080p vs 13.5 ms @4K on the 302k-tri AMG GT3, M4 Max) — the floor, not per-pixel shading, is what breaks the 16.7 ms budget at 4K (p95 22.7 ms). Root cause unknown; suspects: per-frame shadow-map re-render, per-pass overhead across the import graph's many small passes, mip/dome regeneration. MED (release-content: 4K60 export/preview headroom). |
 | BUG-188 | **meshprimitivemodes-non-triangle-primitive-blanks-whole-object** | `MeshPrimitiveModes.gltf`'s mesh mixes non-Triangles primitives (POINTS/LINES/etc) with one TRIANGLES primitive on the same material; the first non-Triangles primitive's error aborts the WHOLE object's geometry via `?`, so it renders fully black instead of drawing at least the TRIANGLES part. Found during G-P7 sidecar-fetch sweep. LOW-MED. |
@@ -133,6 +134,16 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-191 (perf-soak-start-seek-first-frame-spike) — `cargo xtask perf-soak --start <beats>` produces a ~34-37ms content-thread frame right after the transport seeks, tripping I1 on that one frame — found 2026-07-16 during PERF_BUDGET_GATE_DESIGN.md P2, confirmed pre-existing
+
+**Status:** OPEN — confirmed pre-existing, not investigated further this session.
+
+**Symptom:** `cargo xtask perf-soak "Liveschool Live Show V6 LEDS.manifold" --start 400 --profile` (and the unprofiled equivalent) shows a single ~34-37ms content-thread frame immediately after the transport seeks to the `--start` beat, before settling to the steady-state numbers P1's own gate run reported (that run soaked from the top, at `--start 0` implicitly, and never exercised a seek mid-soak). This trips I1's 20ms hard-fail line on exactly that one frame.
+
+**Root cause:** unknown. The P2 executor confirmed it's not a regression from P2's scoped-tag/forced-serial-compositing work — stashing those changes and reproducing on the unmodified tree shows the same spike. Likely candidates, not verified: first-use pipeline/resource costs at the layers/clips that become active at beat 400 specifically (the sibling case CLAUDE.md's hot-path discipline already names — BUG-037's "first use of any resource on a per-frame path" class), or `sync_clips_to_time`'s seek path doing more work on a large jump than a normal per-frame advance.
+
+**Fix shape:** profile first — `cargo xtask perf-soak <project> --start <beats> --profile` (this session's own P2 deliverable) against the exact repro above should attribute the spike frame directly. If it's a first-use resource cost, the fix is prewarming at seek time (same shape as BUG-037's fix, applied to seeks instead of load). If it's `sync_clips_to_time` seek-path cost, that's CORE_ENGINE_MAP.md territory. Until fixed, `--start`-targeted soaks should be read with this known artifact in mind (the spike is the seek transition, not the passage under test) — don't attribute an I1 failure on the first post-seek frame to the passage itself without checking whether it's this bug.
 
 ### BUG-190 (brainstem-24-skinned-objects-370ms-per-frame) — `BrainStem.glb` (24 separate skinned objects, 78 materials total) renders a flat ~370ms/frame from frame 0 — 18x over the 20ms hot-path budget — found 2026-07-16 during GLTF_ANIMATION_DESIGN.md A2's hot-path gate
 **Status:** OPEN — measurement session only, not diagnosed; NOT blocking A2 (BrainStem was the design doc's joint-count re-derivation note, never a named gate fixture — the actual A2 gate fixtures, `CesiumMan.glb` and `Fox.glb`, measure 5–7ms/frame, comfortably inside budget).
