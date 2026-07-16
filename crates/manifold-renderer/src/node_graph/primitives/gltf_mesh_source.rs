@@ -568,7 +568,7 @@ mod gpu_tests {
         let mut transform_ws = Vec::new();
         let mut atmosphere_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
-        let inputs = NodeInputs::new(&[], backend_ref);
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
         let outputs = NodeOutputs::new(
             output_scratch,
             backend_ref,

@@ -256,7 +256,7 @@ mod tests {
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
         let wire_slots: Vec<(&'static str, Slot)> = Vec::new();
-        let inputs = NodeInputs::new(&wire_slots, &backend);
+        let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,
@@ -343,7 +343,7 @@ mod tests {
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
         let wire_slots: Vec<(&'static str, Slot)> = Vec::new();
-        let inputs = NodeInputs::new(&wire_slots, &backend);
+        let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,

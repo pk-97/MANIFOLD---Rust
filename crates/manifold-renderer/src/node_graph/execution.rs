@@ -221,6 +221,32 @@ pub struct Executor {
     /// step's `evaluate` returns; READ BY NOTHING yet (P1 stub only — P2
     /// consumes this to gate dirty-caching decisions elsewhere).
     node_declared_unchanged: Vec<bool>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// generation, indexed by `Slot.0`. Bumped at the single choke point
+    /// where a step's outputs are committed (the same site `resource_epoch`
+    /// bumps, immediately below it), UNLESS `node_declared_unchanged[idx]`
+    /// is `true` for this step. Grows on demand as new physical slots are
+    /// allocated (same pattern as `live_steps`'s per-frame resize). Read
+    /// side: [`crate::node_graph::bindings::NodeInputs::slot_generation`].
+    /// Never reset within an executor's lifetime — only ever grows or
+    /// increments, so two frames of the SAME executor comparing generation
+    /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
+    /// lifetime hazard this alone does not cover.
+    slot_generations: Vec<u64>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — this executor
+    /// instance's rebuild epoch, assigned once at construction from
+    /// [`NEXT_REBUILD_EPOCH`] (a process-global monotonic counter; precedent:
+    /// `chain_dispatch.rs`'s `CHAIN_REBUILD_COUNT`, `bundled_presets.rs`'s
+    /// `generation: AtomicU64`). `PresetRuntime::harvest_state_from`
+    /// (preset_runtime.rs) can swap a matching node's own `Box<dyn
+    /// EffectNode>` across a topology rebuild into a BRAND NEW `Executor`
+    /// (fresh `resource_epoch`/`slot_generations`, both starting over) — so
+    /// a harvested node's cached dirty-check key, computed under the PRIOR
+    /// executor's generation numbers, could otherwise coincidentally collide
+    /// with the new executor's low counts. Folding this epoch into any such
+    /// key guarantees a stale key can never match: every `Executor::new()`
+    /// call gets a strictly higher epoch than the last one issued.
+    rebuild_epoch: u64,
     /// Per-step HOISTABLE bit: the step's node is pure AND every input is
     /// produced by a hoistable step. The closure itself is classified at
     /// plan compile time ([`ExecutionPlan::step_hoistable`] /
@@ -273,6 +299,12 @@ pub struct Executor {
     /// (wire first, param second). Cleared and rebuilt every frame.
     live_scalar_inputs: Vec<(NodeInstanceId, &'static str, f32)>,
 }
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — process-global source for
+/// [`Executor::rebuild_epoch`]. Starts at 1 (0 is never issued, left free
+/// as an obviously-invalid sentinel for any future test/default construction
+/// that doesn't go through `Executor::new`).
+static NEXT_REBUILD_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Epoch snapshot a pure step last executed with — see [`Executor::step_memo`].
 struct StepMemo {
@@ -341,6 +373,8 @@ impl Executor {
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
+            slot_generations: Vec::new(),
+            rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
             empty_resources_prev: ahash::AHashSet::default(),
@@ -368,6 +402,13 @@ impl Executor {
     /// Drain the per-step CPU profiles recorded on the last profiled frame.
     pub fn take_step_profiles(&mut self) -> Vec<StepProfile> {
         std::mem::take(&mut self.step_profiles)
+    }
+
+    /// This executor's rebuild epoch — see [`Self::rebuild_epoch`]'s field
+    /// doc. Stable for the executor's whole lifetime; a fresh `Executor`
+    /// always gets a strictly higher value than any issued before it.
+    pub fn rebuild_epoch(&self) -> u64 {
+        self.rebuild_epoch
     }
 
     /// Profiling-only: when on, [`compute_live_steps`] marks every step live
@@ -1128,7 +1169,7 @@ impl Executor {
                     self.error_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
-                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                        let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -1158,6 +1199,7 @@ impl Executor {
                             state.as_deref_mut(),
                             step.node,
                             owner_key,
+                            self.rebuild_epoch,
                         )
                         .with_errors(&mut self.error_scratch);
                         let has_gpu_binding = ctx.gpu.is_some();
@@ -1247,6 +1289,31 @@ impl Executor {
                         for &(_, res) in &step.outputs {
                             self.empty_resources.insert(res);
                         }
+                    }
+                }
+            }
+
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5: bump every output
+            // slot's write generation — the SINGLE choke point for this
+            // signal (same site `resource_epoch` bumps at, immediately
+            // below) — UNLESS this step declared its outputs unchanged this
+            // frame. A step that never calls `mark_outputs_unchanged` (every
+            // node today except R1's gated sources) always lands in this
+            // branch, so its consumers' cached generations always change —
+            // provably never-stale by construction (I3's contract is the
+            // node's side of this; a false declaration is the only way this
+            // could go wrong, and that's per-node-tested, not this site's
+            // job). Alias-skip steps (performed_alias) never set
+            // `node_declared_unchanged[idx]` either (it stays reset-false),
+            // so a data-driven passthrough also conservatively bumps.
+            if !self.node_declared_unchanged[idx] {
+                for &(_, res) in &step.outputs {
+                    if let Some(slot) = self.backend.slot_for(res) {
+                        let slot_idx = slot.0 as usize;
+                        if self.slot_generations.len() <= slot_idx {
+                            self.slot_generations.resize(slot_idx + 1, 0);
+                        }
+                        self.slot_generations[slot_idx] += 1;
                     }
                 }
             }
@@ -1457,7 +1524,7 @@ impl Executor {
                 self.atmosphere_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
-                let inputs = NodeInputs::new(&self.input_scratch, backend_ref);
+                let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,
@@ -1477,6 +1544,7 @@ impl Executor {
                     state.as_deref_mut(),
                     step.node,
                     owner_key,
+                    self.rebuild_epoch,
                 )
                 .with_errors(&mut self.error_scratch);
                 inst.node.late_capture(&mut ctx);

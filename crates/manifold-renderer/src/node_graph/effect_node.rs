@@ -217,6 +217,19 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// API is always treated as having produced fresh output this frame,
     /// which is the safe (never-stale) direction.
     pub outputs_unchanged: bool,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — the evaluating
+    /// [`Executor`](crate::node_graph::execution::Executor)'s rebuild epoch:
+    /// a process-global monotonic counter assigned once at `Executor::new()`
+    /// (never changes for that executor's lifetime). Exists so a node that
+    /// caches a dirty-check key derived from [`NodeInputs::slot_generation`]
+    /// (e.g. `render_scene`'s shadow-map cache) can fold in "which executor
+    /// lifetime this key was computed under" — a topology rebuild
+    /// (`PresetRuntime::harvest_state_from`) can carry the node's own Rust
+    /// state across into a BRAND NEW executor whose generation counters
+    /// reset to 0, so a stale cached key must never coincidentally match the
+    /// new executor's low generation numbers. `0` on the legacy [`Self::new`]
+    /// constructor (no executor lifetime concept — test/standalone paths).
+    pub rebuild_epoch: u64,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -240,6 +253,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            rebuild_epoch: 0,
         }
     }
 
@@ -255,6 +269,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         state: Option<&'ctx mut StateStore>,
         node_id: NodeInstanceId,
         owner_key: OwnerKey,
+        rebuild_epoch: u64,
     ) -> Self {
         Self {
             time,
@@ -269,6 +284,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             errors: None,
             texture_swap_request: None,
             outputs_unchanged: false,
+            rebuild_epoch,
         }
     }
 

@@ -477,6 +477,16 @@ pub struct RenderScene {
     /// recreated when a caster's `shadow_resolution` changes. Created
     /// `RENDER_TARGET | SHADER_READ` (AGX 0x78 guard).
     shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_SHADOW_CASTING_LIGHTS],
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
+    /// dirty-check key (a 64-bit hash of everything the shadow pass reads
+    /// for that caster this frame — see the shadow loop below for the exact
+    /// component list). `Some(key) == this frame's freshly computed key`
+    /// means the persisted `shadow_maps[slot]` texture already holds this
+    /// content, so the depth-only draw batch is skipped entirely (I1: ANY
+    /// mismatch — including a `None` on the first frame — falls through to
+    /// a real render and stores the new key; never served on a partial
+    /// match).
+    shadow_cache_keys: [Option<u64>; MAX_SHADOW_CASTING_LIGHTS],
     /// PCF comparison sampler (`compare = Less`).
     shadow_sampler: Option<manifold_gpu::GpuSampler>,
     /// 1×1 `Depth32Float` (`SHADER_READ`) bound to unused/non-caster
@@ -639,6 +649,7 @@ impl RenderScene {
             shadow_pipeline: None,
             shadow_depth_stencil: None,
             shadow_maps: std::array::from_fn(|_| None),
+            shadow_cache_keys: std::array::from_fn(|_| None),
             shadow_sampler: None,
             dummy_depth: None,
             identity_instance_stub: None,
@@ -2228,6 +2239,22 @@ impl EffectNode for RenderScene {
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
             /// `buffer_size / 32` when wired, else 1 (identity stub).
             instance_count: u32,
+            /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            /// `mesh_n` input slot's write generation this frame
+            /// (`ctx.inputs.slot_generation`) — a component of the shadow
+            /// cache key below. `None` only if the (required) mesh port
+            /// somehow resolved to an unbound slot — can't happen on the
+            /// live path (the `vertices` field above already required a
+            /// resolved array), kept `Option` to mirror `slot_generation`'s
+            /// signature exactly rather than unwrap a should-never-fail case.
+            vertices_generation: Option<u64>,
+            /// Same for `instances_n` — `None` both when the port is
+            /// genuinely unwired AND (indistinguishably, which is fine: an
+            /// unwired port never contributes model-specific staleness) if
+            /// somehow unresolved. D6 folds this `Option` into the key
+            /// as-is so "unwired" and "wired-then-unwired" both correctly
+            /// invalidate any cached key computed under the other state.
+            instances_generation: Option<u64>,
             /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
             /// model — `Blend` routes into the sorted transparent group and
             /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
@@ -2276,6 +2303,10 @@ impl EffectNode for RenderScene {
                 }
                 return;
             };
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: captured before
+            // `mesh_name` is consumed further below, feeds the shadow cache
+            // key for this object.
+            let vertices_generation = ctx.inputs.slot_generation(&mesh_name);
             let Some(material) = ctx.inputs.material(&material_name) else {
                 ctx.error(format!(
                     "missing required `{material_name}` input; renderer fell back to magenta clear"
@@ -2450,7 +2481,9 @@ impl EffectNode for RenderScene {
             // copies (0 → that object's draw becomes a legal instance-count-0
             // no-op); unwired draws once via the identity stub (bound at
             // Pass 2 — this object carries no self-owned buffer reference).
-            let instances = ctx.inputs.array(&format!("instances_{n}"));
+            let instances_name = format!("instances_{n}");
+            let instances = ctx.inputs.array(&instances_name);
+            let instances_generation = ctx.inputs.slot_generation(&instances_name);
             let instance_count = match instances {
                 Some(buf) => (buf.size / instance_size) as u32,
                 None => 1,
@@ -2487,6 +2520,8 @@ impl EffectNode for RenderScene {
                 sampler_descs,
                 instances,
                 instance_count,
+                vertices_generation,
+                instances_generation,
                 alpha_mode,
                 sort_depth,
                 is_transmissive,
@@ -2656,6 +2691,51 @@ impl EffectNode for RenderScene {
                     continue;
                 };
                 let vp = l.shadow_view_proj();
+
+                // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
+                // dirty-check key — everything the depth-only batch below
+                // reads. `shadow_view_proj()` is a pure function of the
+                // light alone (light.rs), so a static light reproduces the
+                // exact same `vp` bytes every frame; the per-draw component
+                // list catches every other input (geometry, transforms,
+                // instancing). Hashed into a fixed hasher — zero per-frame
+                // allocation (CLAUDE.md hot-path discipline); `AHasher` is
+                // already this crate's fast-hash workhorse (`ahash::AHashMap`
+                // throughout `execution.rs`).
+                use std::hash::{Hash, Hasher};
+                let mut hasher = ahash::AHasher::default();
+                hasher.write(bytemuck::bytes_of(&vp));
+                hasher.write_u32(l.shadow_resolution);
+                hasher.write_usize(shadow_caster_draws.len());
+                for d in &shadow_caster_draws {
+                    hasher.write(bytemuck::bytes_of(&d.uniforms.model));
+                    d.vertices_generation.hash(&mut hasher);
+                    d.instances_generation.hash(&mut hasher);
+                    hasher.write_u32(vcount(d.vertices));
+                    hasher.write_u32(d.instance_count);
+                }
+                // D6: the rebuild-epoch term — guards against a topology
+                // rebuild carrying this primitive's own Rust state (this
+                // struct, including `shadow_cache_keys`) into a BRAND NEW
+                // executor whose slot generations reset to 0 (see
+                // `Executor::rebuild_epoch`'s doc comment for the full
+                // hazard). Folding it in means a key computed under a prior
+                // executor lifetime can never coincidentally match this one.
+                hasher.write_u64(ctx.rebuild_epoch);
+                let shadow_key = hasher.finish();
+
+                // I1: never serve on ANY mismatch — including the `None` a
+                // fresh primitive (or a resolution/topology change that
+                // reset `shadow_cache_keys`) starts with. A full match means
+                // `shadow_maps[slot]`'s PERSISTED texture (never cleared
+                // except on resolution change — see `ensure_shadow_map`)
+                // already holds exactly this content, so the depth-only
+                // batch this caster would otherwise issue is redundant.
+                if self.shadow_cache_keys[slot] == Some(shadow_key) {
+                    continue;
+                }
+                self.shadow_cache_keys[slot] = Some(shadow_key);
+
                 let shadow_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
                     .iter()
                     .map(|d| ShadowUniforms {

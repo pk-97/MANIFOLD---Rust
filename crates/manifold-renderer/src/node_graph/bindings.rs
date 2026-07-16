@@ -36,11 +36,39 @@ pub struct Slot(pub u32);
 pub struct NodeInputs<'a> {
     bindings: &'a [(&'static str, Slot)],
     backend: &'a dyn Backend,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
+    /// (see `Executor::slot_generations`). Threaded through so
+    /// [`Self::slot_generation`] can resolve a port name to its current
+    /// generation without the executor itself being reachable from a node's
+    /// `evaluate`.
+    ///
+    /// [`Executor`]: crate::node_graph::execution::Executor
+    generations: &'a [u64],
 }
 
 impl<'a> NodeInputs<'a> {
-    pub(crate) fn new(bindings: &'a [(&'static str, Slot)], backend: &'a dyn Backend) -> Self {
-        Self { bindings, backend }
+    pub(crate) fn new(
+        bindings: &'a [(&'static str, Slot)],
+        backend: &'a dyn Backend,
+        generations: &'a [u64],
+    ) -> Self {
+        Self { bindings, backend, generations }
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — write generation of the
+    /// physical slot currently bound to `port`, or `None` if the port is
+    /// unwired. The counter bumps every frame the producing step's output
+    /// slot is committed, UNLESS that step declared its outputs unchanged
+    /// this frame (`ctx.mark_outputs_unchanged()`) — so an unchanging
+    /// generation number across frames is a reliable "this slot's content
+    /// has not changed since the last time a consumer observed this exact
+    /// number" signal, usable as a cache-key component (D6). Never compare
+    /// this alone across executor lifetimes without also folding in the
+    /// executor's `rebuild_epoch` — see D6's rationale.
+    pub fn slot_generation(&self, port: &str) -> Option<u64> {
+        let slot = self.slot(port)?;
+        self.generations.get(slot.0 as usize).copied()
     }
 
     /// Slot bound to the named input port, or `None` if the port is optional
@@ -327,7 +355,7 @@ mod array_accessor_tests {
 
         let slot = backend.pre_bind_array(ResourceId(0), buffer);
         let bindings: &[(&'static str, Slot)] = &[("particles", slot)];
-        let inputs = NodeInputs::new(bindings, &backend);
+        let inputs = NodeInputs::new(bindings, &backend, &[]);
 
         let got = inputs.array("particles").expect("should resolve");
         assert_eq!(got.size, expected_size);
