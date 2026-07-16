@@ -13,8 +13,8 @@
 | # | Piece | Kind | Tier | New atoms | Size | Register |
 |---|---|---|---|---|---|---|
 | L1 | Log curve on `reinhard_tone_map` | extension | A | 0 (one enum arm) | XS | — |
-| L2 | `node.palette` — curated identity LUTs | atom | A | 1 | S | — |
-| A1 | Murmuration | generator | A | 2 | M | both |
+| L2 | ~~`node.palette`~~ KILLED 2026-07-16 — pieces use `node.gradient`; see section | — | — | — | — | — |
+| A1 | Murmuration | generator | A | 2 (+1 pending audit: bird-mesh heading) | M | both |
 | A2 | Cymatics | generator | A | 0 | S | quiet |
 | A3 | Reaction–Diffusion | generator | A | 0 (wgsl_compute) | S | quiet |
 | A4 | Caustics | generator | A | 1 (tiny) | S | quiet |
@@ -66,26 +66,22 @@
 
 **Verify.** `gpu_tests` value-level: Log at known (x, exposure, white) triples; Extended/Simple regression rows unchanged bit-for-bit.
 
-## L2. `node.palette` — curated identity LUTs (lever)
+## L2. ~~`node.palette` — curated identity LUTs~~ (KILLED 2026-07-16)
 
-**Intent.** Kill the rainbow failure mode everywhere at once: a curated, Peter-authored set of 2–3 colour high-saturation identity palettes behind one enum, emitted as a 1D LUT texture. Every piece in this doc ends `… → node.color_lut(palette)`.
+**Killed by Peter, two strikes.** (1) The original compiled-enum shape locks palette
+authoring behind the Rust compiler — users must be able to make their own colours.
+(2) The data-file revision (palette JSONs in a scanned dir) solves nothing that isn't
+the *general* reusable-component problem, which the component-library direction
+(post-release board) already owns: a saved `node.gradient` with curated stops becomes
+a library component like any other, alongside film-grain blocks and force chains.
+A palette-specific mechanism is a point solution — don't re-propose.
 
-**Audit.** `gradient_ramp` (N-stop custom LUT) and `color_lut`/`lut1d` (appliers) ship. What's missing is the *curated closed family* (§6.3: named variants the user thinks of as one knob). New atom, sibling of `gradient_ramp` (which remains the custom path).
-
-**New atom.**
-
-| | |
-|---|---|
-| type_id | `node.palette` |
-| class | pure generator, one dispatch (writes W×1 LUT texture) |
-| inputs | — |
-| outputs | `out: Texture2D` (256×1, f16) |
-| params | `palette: Enum` (~12 slots, Peter-authored: e.g. Signal, Acid, Sodium, Ice, Ember, Ultraviolet, Bone, Phosphor, Newsprint, Blood, Chrome, Dawn) · `contrast: Float` (port-shadowed, remaps t before lookup) · `invert: Bool` |
-| state | none |
-
-Stops live as const tables in the atom (closed family = compiled enum per §5.6). Authoring the twelve palettes is Peter's pass — the atom ships with placeholder-good defaults, high saturation per `prefer-high-saturation-identity-colors`.
-
-**Verify.** Headless strip render of all palettes to one PNG; look at it.
+**What pieces do instead:** every "→ `color_lut(palette)`" in this doc reads as
+"→ `color_lut(node.gradient)`" with curated stops authored per preset (Table param,
+editable in the graph editor today — `EditGraphNodeTableCell`). A "Palette" card =
+whatever binding the piece wants on the gradient/grade path. Re-tuning a colour
+across many presets is a find-and-replace until the component library lands; that
+pain arriving is the signal to prioritise the component library, not a palette node.
 
 ---
 
@@ -109,7 +105,22 @@ Inputs → Spawn Birds → [Flock State: array_feedback] → Neighbors → Force
 - **Integrate** — `move_particles` (speed card).
 - **Render Density** — `draw_particles` → `resolve_scatter` → slight `gaussian_blur`.
 - **Trails** — `feedback` × decay `gain` → `compose(Max)` with fresh density (ink persists, never blows out).
-- **Grade** — `reinhard_tone_map(Log)` → `color_lut(node.palette)`.
+- **Grade** — `reinhard_tone_map(Log)` → `color_lut(node.gradient)`.
+
+**Bird-mesh render mode (added 2026-07-16, Peter's differentiation pass).** The
+density/ink render is one costume among three particle pieces (A1/A2/A4); to keep
+Murmuration from reading as "same dots, different physics," the preset ships a second
+render group: a low-poly bird glTF (**CC0 source only** — Kenney/Quaternius class,
+never a ripped game asset; licensing matters at release) through `gltf_mesh_source` →
+`render_instanced_3d_mesh`, one instance per particle. The missing wire is
+particles→instance-transforms **with heading**: a bird must point along its velocity
+and bank into turns or the flock reads as confetti. That is one small stateless atom
+(orientation basis from velocity + position → instance transform array) — **§2.5
+audit at build time before committing to it**; the instancing vocabulary
+(`generate_instance_transforms`, `lerp_instance_fields`, per-copy noise) may already
+carry a usable piece. Density mode stays for distance/ink looks; a Look enum on the
+card selects the render group (both wired, `mux_texture` at the end — no fused
+monolith, it's graph routing).
 
 **New atoms.**
 
@@ -187,6 +198,13 @@ Inputs → Seed → [Field Memory: temporal] → React ×4 → Field Memory ↩
 | params | `amount: Float` (port-shadowed) |
 
 Reusable anywhere a rest shape takes a per-frame displacement without velocity state (cymatics variant, dust-on-glass, Glossolalia jitter).
+
+**Water-surface realism (added 2026-07-16).** Single-octave simplex reads as blobby,
+isotropic ripples and the caustic network inherits whatever the surface is — real
+water has directional wave character and the network gets its fine cellular structure
+from it. Build the height field from 2–3 octaves of animated noise (or noise +
+a slow directional sine component) — stays in JSON, no new atoms; the octave mix is
+an authoring decision judged on the PNG.
 
 **Graph:** **Water** (`simplex_field_2d(z=time)` → `edge_slope`) → **Photons** (`seed_particles` grid → `sample_image_at_particles(gradient)` → `offset_particles(amount = Depth)`) → **Focus** (`draw_particles` → `resolve_scatter` → small `gaussian_blur` → `reinhard_tone_map(Log)`) → **Grade** (`colorize` water tint or `color_lut`) → `compose` over `linear_gradient` deep-water ramp. **Dispersion** (optional group): three `offset_particles` at amount ×0.98/1.0/1.02 → three resolves → `pack_channels` → chromatic fringing on the fold lines.
 
@@ -336,6 +354,15 @@ Inputs → Grow → Turn (rotate_3d ← lfo yaw) → Flatten (project_3d) → Dr
 | params | `jag: Float` · `branch_count: Int` · `branch_decay: Float` · `detail: Int` (subdivision depth) · `seed_mode: Enum` (Reroll \| Fixed) · `max_capacity` |
 | state | current bolt polylines (pre-allocated), strike age |
 
+**Width taper (added 2026-07-16, Peter's realism pass).** Uniform line width is the
+single biggest cheesy-lightning tell. The bolt carries per-vertex thickness — thick
+at the trunk, hairline at branch tips, decaying with branch generation — emitted in
+the `CurvePoint` stream so `render_lines` draws the taper (verify `render_lines`
+honours per-point width at build time; if it doesn't, that extension lands with this
+piece). The other anti-cheese defenses are already in the graph: near-white HDR core
+(branches at 0.3), single-frame strike with only the afterglow decaying, wide bloom
+through the Log tonemap — never saturated purple, never slow cartoon animation.
+
 **Graph:** **Strike** (`trigger_gate` — card trigger or clip trigger) → **Bolt** (`lightning_bolt`, endpoints default top→bottom, portrait-native) → **Draw** (`render_lines` core at full intensity + `render_lines` branches at 0.3, `compose(Add)`) → **Afterglow** (`feedback` × decay, `compose(Max)`) → **Air** (`gaussian_blur` wide → `compose(Screen)` — the bloom) → **Flash** (`node.flash` ← `envelope_follower_ar(strike)`, fast decay — the whole frame kicks) → Log tonemap → palette (electric blue-white default).
 
 **Card** (7): **Strike (mod: snare/onset — the instrument)** · Jaggedness · Branches · Afterglow · Flash · Reach (endpoint spread) · Palette.
@@ -346,7 +373,7 @@ Inputs → Grow → Turn (rotate_3d ← lfo yaw) → Flatten (project_3d) → Dr
 
 **Intent.** Re-describe a frame through the instrument's own perception nodes and redraw it from only the description, feeding the redraw back in. Loss is constitutive; the image converges to the machine's prior. One fader: let reality back in, or let it drift. (Ancestor: Lucier, *I Am Sitting in a Room*.)
 
-**Audit.** **Zero new atoms for v0.** `temporal` (the memory), `edge_detect`, `depth_map`, `person_mask` (describers — all lag-tolerant/async by design; between inferences the last maps persist, which *adds* to the drift character rather than fighting it), `gradient_ramp`/`node.palette` + `color_lut` (palette fill), `posterize` (flat confident fields), `masked_mix`, `compose`, `wet_dry`. v1 option: `node.palette_from_image` (k-means sampled palette, CPU, ~S-size) makes the palette genuinely *sampled* instead of authored — deferred until the piece proves itself.
+**Audit.** **Zero new atoms for v0.** `temporal` (the memory), `edge_detect`, `depth_map`, `person_mask` (describers — all lag-tolerant/async by design; between inferences the last maps persist, which *adds* to the drift character rather than fighting it), `node.gradient` (L2 killed) + `color_lut` (palette fill), `posterize` (flat confident fields), `masked_mix`, `compose`, `wet_dry`. v1 option: `node.palette_from_image` (k-means sampled palette, CPU, ~S-size) makes the palette genuinely *sampled* instead of authored — deferred until the piece proves itself.
 
 **Graph:**
 
@@ -515,7 +542,7 @@ Standard card names and behaviours every physics piece adopts, so the performer 
 
 **Audit.** `cel_material` **ships today**, as do `platonic_solid_points/edges`, `gltf_mesh_source`, `render_mesh`, `light`, `camera_orbit`. The only gate is A6.
 
-**Graph:** generator side — `gltf_mesh_source` (or platonic) → `rotate_3d`(slow) → `render_mesh(cel_material(bands=3), light(Sun), camera_orbit)`; effect side — A6 misregistration → `node.palette` (Newsprint/Signal). Beat move: cel `bands` stepped by `clip_trigger_index` (3 → 2 → 5 on triggers — the poster re-inks itself).
+**Graph:** generator side — `gltf_mesh_source` (or platonic) → `rotate_3d`(slow) → `render_mesh(cel_material(bands=3), light(Sun), camera_orbit)`; effect side — A6 misregistration → `node.gradient` (newsprint/signal-style stops; L2 killed). Beat move: cel `bands` stepped by `clip_trigger_index` (3 → 2 → 5 on triggers — the poster re-inks itself).
 
 ---
 
