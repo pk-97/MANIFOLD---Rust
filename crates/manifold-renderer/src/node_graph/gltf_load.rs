@@ -895,10 +895,13 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_sheen`'s `sheenRoughnessFactor` (default `0.0`).
     pub sheen_roughness_factor: f32,
     /// `true` when `KHR_materials_sheen` carries a `sheenColorTexture`
-    /// and/or `sheenRoughnessTexture` — v1 maps the FACTORS only (E1);
-    /// a textured sheen is unmapped and reported rather than silently
-    /// dropped, same doctrine as `clearcoat_has_texture`.
-    pub sheen_has_texture: bool,
+    /// and/or `sheenRoughnessTexture`.
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3 (D1 revised — full spec
+    /// surface per family): index into `document.textures()` for
+    /// `sheenColorTexture`, if any.
+    pub sheen_color_texture: Option<u32>,
+    /// `sheenRoughnessTexture`'s texture index, if any.
+    pub sheen_roughness_texture: Option<u32>,
     /// `KHR_materials_iridescence`'s `iridescenceFactor` (default `0.0`,
     /// inert). Raw-JSON sniff — no typed accessor at 1.4.1.
     pub iridescence_factor: f32,
@@ -912,9 +915,14 @@ pub(crate) struct GltfMaterialInfo {
     /// (default `400.0`, nanometres).
     pub iridescence_thickness_maximum: f32,
     /// `true` when `KHR_materials_iridescence` carries an
-    /// `iridescenceTexture` and/or `iridescenceThicknessTexture` —
-    /// factor-only v1, same doctrine as `sheen_has_texture`.
-    pub iridescence_has_texture: bool,
+    /// `iridescenceTexture` and/or `iridescenceThicknessTexture`.
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4 (D1 revised — full spec
+    /// surface per family): index into `document.textures()` for
+    /// `iridescenceTexture`, if any (R channel = iridescenceFactor scale).
+    pub iridescence_texture: Option<u32>,
+    /// `iridescenceThicknessTexture`'s texture index, if any (G channel =
+    /// lerp between thickness min/max).
+    pub iridescence_thickness_texture: Option<u32>,
     /// `KHR_materials_anisotropy`'s `anisotropyStrength` (default `0.0`,
     /// inert). Raw-JSON sniff — no typed accessor at 1.4.1.
     pub anisotropy_strength: f32,
@@ -922,9 +930,12 @@ pub(crate) struct GltfMaterialInfo {
     /// radians).
     pub anisotropy_rotation: f32,
     /// `true` when `KHR_materials_anisotropy` carries an
-    /// `anisotropyTexture` — factor-only v1, same doctrine as
-    /// `sheen_has_texture`.
-    pub anisotropy_has_texture: bool,
+    /// `anisotropyTexture`.
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5 (D1 revised — full spec
+    /// surface per family): index into `document.textures()` for
+    /// `anisotropyTexture`, if any (RG = rotation cos/sin, B = strength,
+    /// per the spec's tangent-space encoding).
+    pub anisotropy_texture: Option<u32>,
     /// `KHR_materials_dispersion`'s single `dispersion` factor (default
     /// `0.0`, inert). Raw-JSON sniff — no typed accessor at 1.4.1. The
     /// extension defines no texture, so there is no `*_has_texture`
@@ -947,7 +958,7 @@ pub(crate) struct GltfMaterialInfo {
     /// neutral, no tint).
     pub volume_attenuation_color: [f32; 3],
     /// `true` when `KHR_materials_volume` carries a `thicknessTexture` —
-    /// factor-only v1, same doctrine as `sheen_has_texture`.
+    /// factor-only v1 (E2's family; textured volume is out of scope here).
     pub volume_has_texture: bool,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
     /// these to `alpha_mask` cutout (the F-P5 stopgap — `alpha_mask` above
@@ -1416,9 +1427,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .unwrap_or([0.0, 0.0, 0.0]);
             let sheen_roughness_factor =
                 sheen_ext.map(|v| f1(v, "sheenRoughnessFactor", 0.0)).unwrap_or(0.0);
-            let sheen_has_texture = sheen_ext.is_some_and(|v| {
-                v.get("sheenColorTexture").is_some() || v.get("sheenRoughnessTexture").is_some()
-            });
+            let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+                v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
+            };
+            let sheen_color_texture = sheen_ext.and_then(|v| tex_idx(v, "sheenColorTexture"));
+            let sheen_roughness_texture =
+                sheen_ext.and_then(|v| tex_idx(v, "sheenRoughnessTexture"));
 
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_iridescence.
             // Raw-JSON sniff — no typed accessor at 1.4.1.
@@ -1433,10 +1447,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             let iridescence_thickness_maximum = iridescence_ext
                 .map(|v| f1(v, "iridescenceThicknessMaximum", 400.0))
                 .unwrap_or(400.0);
-            let iridescence_has_texture = iridescence_ext.is_some_and(|v| {
-                v.get("iridescenceTexture").is_some()
-                    || v.get("iridescenceThicknessTexture").is_some()
-            });
+            let iridescence_texture =
+                iridescence_ext.and_then(|v| tex_idx(v, "iridescenceTexture"));
+            let iridescence_thickness_texture =
+                iridescence_ext.and_then(|v| tex_idx(v, "iridescenceThicknessTexture"));
 
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_anisotropy.
             // Raw-JSON sniff — no typed accessor at 1.4.1.
@@ -1445,8 +1459,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 anisotropy_ext.map(|v| f1(v, "anisotropyStrength", 0.0)).unwrap_or(0.0);
             let anisotropy_rotation =
                 anisotropy_ext.map(|v| f1(v, "anisotropyRotation", 0.0)).unwrap_or(0.0);
-            let anisotropy_has_texture =
-                anisotropy_ext.is_some_and(|v| v.get("anisotropyTexture").is_some());
+            let anisotropy_texture = anisotropy_ext.and_then(|v| tex_idx(v, "anisotropyTexture"));
 
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_dispersion.
             // Raw-JSON sniff — no typed accessor at 1.4.1. Single-field
@@ -1534,15 +1547,17 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 clearcoat_has_texture,
                 sheen_color_factor,
                 sheen_roughness_factor,
-                sheen_has_texture,
+                sheen_color_texture,
+                sheen_roughness_texture,
                 iridescence_factor,
                 iridescence_ior,
                 iridescence_thickness_minimum,
                 iridescence_thickness_maximum,
-                iridescence_has_texture,
+                iridescence_texture,
+                iridescence_thickness_texture,
                 anisotropy_strength,
                 anisotropy_rotation,
-                anisotropy_has_texture,
+                anisotropy_texture,
                 dispersion,
                 volume_thickness_factor,
                 volume_attenuation_distance,
@@ -1593,15 +1608,17 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             clearcoat_has_texture: false,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
-            sheen_has_texture: false,
+            sheen_color_texture: None,
+            sheen_roughness_texture: None,
             iridescence_factor: 0.0,
             iridescence_ior: 1.3,
             iridescence_thickness_minimum: 100.0,
             iridescence_thickness_maximum: 400.0,
-            iridescence_has_texture: false,
+            iridescence_texture: None,
+            iridescence_thickness_texture: None,
             anisotropy_strength: 0.0,
             anisotropy_rotation: 0.0,
-            anisotropy_has_texture: false,
+            anisotropy_texture: None,
             dispersion: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
