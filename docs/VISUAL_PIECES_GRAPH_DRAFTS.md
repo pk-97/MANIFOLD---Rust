@@ -93,6 +93,18 @@ copy wrong:
    500k+ default, 1M cap (64 B/particle → 64 MB, fine). Fan the count card to
    every node's `active_count` param AND the energy `scale_offset_value`.
 
+8. **`spawn_particles`' Wang-hash placement is NOT visually uniform** — it reads
+   as diagonal stripes when drawn directly (which is why FluidSim/ParticleText
+   seed via wgsl kernels). For fresh-per-frame emission, a full-strength
+   `anti_clump_particles` (strength 1.0, no modulator) right after spawn
+   decorrelates it — its hash includes the frame index, so emission is truly
+   random per frame (A4 Caustics, 2026-07-16).
+9. **`edge_slope` defaults to texel-space** — gradients ~1e-3 that do nothing at
+   UV scale. Any force/displacement read in UV coordinates needs `scale_mode:
+   UV` (enum 1), and then the effective magnitudes are ~20× the texel-space
+   intuition — sweep-render to find the physical regime before trusting a
+   drafted card range (A4's Depth: drafted 0–0.25, real focus regime 0.002–0.04).
+
 **Stateful-loop precision (from the shelved A3 — applies to ANY wgsl_compute
 feedback loop):** small per-frame increments (reaction terms, decay, integration)
 UNDERFLOW f16 storage — increments ~1e-4 quantize to zero at field values ~0.3
