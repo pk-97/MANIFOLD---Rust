@@ -2346,6 +2346,7 @@
       ],
       "category": "Control",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -21284,10 +21285,10 @@
           "name": "Symmetry"
         },
         {
-          "default": "250000",
+          "default": "500000",
           "id": "sand",
-          "max": "400000",
-          "min": "10000",
+          "max": "1000000",
+          "min": "50000",
           "name": "Sand"
         },
         {
