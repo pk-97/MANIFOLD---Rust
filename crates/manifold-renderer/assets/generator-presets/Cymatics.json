@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Cymatics",
-  "description": "Chladni plate simulation: sand settles onto the nodal lines of a standing wave, and changing the mode numbers physically rearranges it. The plate field is the closed-form Chladni pattern sin(n\u03c0x)sin(m\u03c0y) \u00b1 sin(m\u03c0x)sin(n\u03c0y), built from four projected sine terms multiplied and combined in both symmetry families. Sand particles feel a force toward the nodal lines (the gradient of the negated absolute field) and a Brownian jiggle whose strength is modulated by the field itself \u2014 sand vibrates violently on loud regions of the plate and freezes on the quiet lines, which is the physical tell of the real experiment. Density accumulates through draw/resolve on a pure black void, and grades through the Log tone curve into a warm sand gradient over a near-black plate. Mode X / Mode Y are prime modulation targets (bind pitch or bands); Cycle Modes walks a curated (n,m) table on clip triggers.",
+  "description": "Chladni plate simulation: sand settles onto the nodal lines of a standing wave, and changing the mode numbers physically rearranges it. The plate field is the closed-form Chladni pattern sin(n\u03c0x)sin(m\u03c0y) \u00b1 sin(m\u03c0x)sin(n\u03c0y), built from four projected sine terms multiplied and combined in both symmetry families. Sand particles feel a force toward the nodal lines (the gradient of the negated absolute field) and a Brownian jiggle whose strength is modulated by the field itself \u2014 sand vibrates violently on loud regions of the plate and freezes on the quiet lines, which is the physical tell of the real experiment. Density accumulates through draw/resolve on a pure black void, and draws white-hot through the FluidSim display tone chain (Extended Reinhard 3/3) on a pure black void \u2014 no blur, no LUT, crisp grains. Mode X / Mode Y are prime modulation targets (bind pitch or bands); Cycle Modes walks a curated (n,m) table on clip triggers.",
   "presetMetadata": {
     "id": "Cymatics",
     "displayName": "Cymatics",
@@ -787,48 +787,6 @@
       "title": "Sand Density"
     },
     {
-      "id": 31,
-      "nodeId": "grain_blur",
-      "typeId": "node.gaussian_blur",
-      "handle": "grain_blur",
-      "title": "Grain Soften H",
-      "params": {
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "radius": {
-          "type": "Float",
-          "value": 1.5
-        },
-        "radius_mode": {
-          "type": "Enum",
-          "value": 0
-        }
-      }
-    },
-    {
-      "id": 32,
-      "nodeId": "grain_blur_v",
-      "typeId": "node.gaussian_blur",
-      "handle": "grain_blur_v",
-      "title": "Grain Soften V",
-      "params": {
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "radius": {
-          "type": "Float",
-          "value": 1.5
-        },
-        "radius_mode": {
-          "type": "Enum",
-          "value": 0
-        }
-      }
-    },
-    {
       "id": 36,
       "nodeId": "tone",
       "typeId": "node.reinhard_tone_map",
@@ -837,62 +795,15 @@
       "params": {
         "curve": {
           "type": "Enum",
-          "value": 2
+          "value": 0
         },
         "intensity": {
           "type": "Float",
-          "value": 24.0
-        }
-      }
-    },
-    {
-      "id": 37,
-      "nodeId": "sand_ramp",
-      "typeId": "node.gradient",
-      "handle": "sand_ramp",
-      "title": "Sand Colors",
-      "params": {
-        "stops": {
-          "type": "Table",
-          "rows": [
-            [
-              0.0,
-              0.02,
-              0.015,
-              0.02
-            ],
-            [
-              0.35,
-              0.55,
-              0.33,
-              0.1
-            ],
-            [
-              0.75,
-              0.95,
-              0.78,
-              0.42
-            ],
-            [
-              1.0,
-              1.0,
-              0.98,
-              0.9
-            ]
-          ]
-        }
-      }
-    },
-    {
-      "id": 38,
-      "nodeId": "colored",
-      "typeId": "node.color_lut",
-      "handle": "colored",
-      "title": "Apply Sand Colors",
-      "params": {
-        "amount": {
+          "value": 8.0
+        },
+        "contrast": {
           "type": "Float",
-          "value": 1.0
+          "value": 3.0
         }
       }
     },
@@ -909,11 +820,28 @@
         },
         "scale": {
           "type": "Float",
-          "value": 0.001024
+          "value": 0.008192
         },
         "offset": {
           "type": "Float",
           "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 42,
+      "nodeId": "jiggle_floor",
+      "typeId": "node.scale_offset_image",
+      "handle": "jiggle_floor",
+      "title": "Vibration Floor",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.12
         }
       }
     }
@@ -1120,6 +1048,12 @@
     {
       "fromNode": 13,
       "fromPort": "out",
+      "toNode": 42,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 42,
+      "fromPort": "out",
       "toNode": 26,
       "toPort": "strength_modulator"
     },
@@ -1172,46 +1106,22 @@
       "toPort": "accum"
     },
     {
-      "fromNode": 30,
-      "fromPort": "density",
-      "toNode": 31,
-      "toPort": "in"
+      "fromNode": 41,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "scaled_energy"
     },
     {
-      "fromNode": 31,
-      "fromPort": "out",
-      "toNode": 32,
+      "fromNode": 30,
+      "fromPort": "density",
+      "toNode": 36,
       "toPort": "in"
     },
     {
       "fromNode": 36,
       "fromPort": "out",
-      "toNode": 38,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 37,
-      "fromPort": "out",
-      "toNode": 38,
-      "toPort": "lut"
-    },
-    {
-      "fromNode": 32,
-      "fromPort": "out",
-      "toNode": 36,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 38,
-      "fromPort": "out",
       "toNode": 1,
       "toPort": "in"
-    },
-    {
-      "fromNode": 41,
-      "fromPort": "out",
-      "toNode": 29,
-      "toPort": "scaled_energy"
     }
   ]
 }

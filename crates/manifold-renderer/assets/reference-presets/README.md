@@ -18,3 +18,9 @@ manifold-renderer --lib fused_wgsl_snapshot`).
 Note: `CinematicScene.json` here is still compile-time-included by the
 CINEMATIC_POST I5 gate test (`preset_runtime.rs::bundled_cinematic_scene_loads_and_compiles`)
 — don't delete it without updating that test.
+
+`ReactionDiffusion.json` — built 2026-07-16 (VISUAL_PIECES A3), shelved same day
+on Peter's look-pass: "shows a circle and then fades out to black, not a great
+visual." The graph is correct (Sims Gray-Scott, fp32 loop, verified against
+NumPy ground truth) and the kernel headers carry the hard-won precision/
+formulation notes — worth mining for any future RD-flavoured piece.

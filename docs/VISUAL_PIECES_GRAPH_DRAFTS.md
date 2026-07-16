@@ -169,7 +169,13 @@ Inputs → Plate Field → Sand Forces → [Sand State: array_feedback] → Inte
 
 **Verify.** Computable oracle: nodal lines of the rendered field must match the analytic zeros of `sin(nπx)sin(mπy) ± sin(mπx)sin(nπy)` — three (n,m) pairs, script-checked on the PNG. Then look: sand must *settle*, not orbit.
 
-## A3. Reaction–Diffusion (generator)
+## A3. Reaction–Diffusion (generator) — BUILT then SHELVED 2026-07-16
+
+**Peter's verdict on the built preset:** grows a ring and settles — "not a great
+visual." Removed from the bundled library; the working graph is parked in
+`assets/reference-presets/ReactionDiffusion.json` (fp32 loop + Sims 9-point
+formulation notes in the kernel headers — the f16/5-point version dies, verified
+against NumPy ground truth). Don't rebuild from this section without those notes.
 
 **Intent.** Gray-Scott growth — coral, fingerprints, labyrinths — seeded by kicks, morphing between regimes as a performable move. The organic-growth texture family.
 

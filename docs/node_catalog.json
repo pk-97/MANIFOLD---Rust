@@ -2765,7 +2765,6 @@
       "category": "Color & Tone",
       "examples": [
         "ParticleText",
-        "ReactionDiffusion",
         "StarField",
         "StrangeAttractor"
       ],
@@ -2965,8 +2964,7 @@
       ],
       "category": "Mask",
       "examples": [
-        "DepthOfField",
-        "ReactionDiffusion"
+        "DepthOfField"
       ],
       "fusion": "source",
       "inputs": [
@@ -3350,9 +3348,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
-        "Cymatics",
-        "Infrared",
-        "ReactionDiffusion"
+        "Infrared"
       ],
       "fusion": "multi_input_coincident",
       "inputs": [
@@ -6131,9 +6127,7 @@
         "ar"
       ],
       "category": "Control",
-      "examples": [
-        "ReactionDiffusion"
-      ],
+      "examples": [],
       "fusion": "boundary:non_gpu",
       "inputs": [
         {
@@ -6600,7 +6594,6 @@
       "examples": [
         "MetallicGlass",
         "OilyFluid",
-        "ReactionDiffusion",
         "StylizedFeedback",
         "Watercolor",
         "WireframeDepth"
@@ -7595,7 +7588,6 @@
       "examples": [
         "BlackHole",
         "Bloom",
-        "Cymatics",
         "FilmGrain",
         "FluidSim2D",
         "MetallicGlass",
@@ -7904,9 +7896,7 @@
       ],
       "category": "Generate",
       "examples": [
-        "Cymatics",
-        "Infrared",
-        "ReactionDiffusion"
+        "Infrared"
       ],
       "fusion": "source",
       "inputs": [
@@ -9090,8 +9080,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
-        "MetallicGlass",
-        "ReactionDiffusion"
+        "MetallicGlass"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -10110,7 +10099,6 @@
         "NestedCubes",
         "OilyFluid",
         "ParticleText",
-        "ReactionDiffusion",
         "StarField",
         "StrangeAttractor",
         "Strobe",
@@ -10471,7 +10459,6 @@
         "OilyFluid",
         "ParticleText",
         "QuadMirror",
-        "ReactionDiffusion",
         "SoftFocus",
         "StarField",
         "StylizedFeedback",
@@ -18928,7 +18915,6 @@
         "FluidSim3D",
         "NestedCubes",
         "ParticleText",
-        "ReactionDiffusion",
         "Strobe"
       ],
       "fusion": "boundary:non_gpu",
@@ -19603,7 +19589,6 @@
       "category": "Fields & Coordinates",
       "examples": [
         "Cymatics",
-        "ReactionDiffusion",
         "TrivialPassthrough"
       ],
       "fusion": "source",
@@ -19639,7 +19624,6 @@
         "Glitch",
         "MriVolume",
         "ParticleText",
-        "ReactionDiffusion",
         "Watercolor",
         "Wireframe",
         "WireframeDepth"
@@ -20297,7 +20281,6 @@
         "FluidSim3D",
         "ParticleText",
         "Plasma",
-        "ReactionDiffusion",
         "StrangeAttractor",
         "WireframeDepth"
       ],
@@ -20471,7 +20454,6 @@
         "ParticleText",
         "Plasma",
         "QuadMirror",
-        "ReactionDiffusion",
         "SoftFocus",
         "StarField",
         "StrangeAttractor",
@@ -20530,7 +20512,6 @@
         "OilyFluid",
         "ParticleText",
         "Plasma",
-        "ReactionDiffusion",
         "StarField",
         "StrangeAttractor",
         "Strobe",
@@ -20683,7 +20664,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 50,
+  "preset_count": 49,
   "presets": [
     {
       "category": "Geometry",
@@ -22765,71 +22746,6 @@
           "max": "1",
           "min": "0",
           "name": "Amount"
-        }
-      ]
-    },
-    {
-      "category": "Pattern",
-      "id": "ReactionDiffusion",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Reaction Diffusion",
-      "params": [
-        {
-          "default": "0.055",
-          "id": "feed",
-          "max": "0.09",
-          "min": "0.01",
-          "name": "Feed"
-        },
-        {
-          "default": "0.062",
-          "id": "kill",
-          "max": "0.075",
-          "min": "0.04",
-          "name": "Kill"
-        },
-        {
-          "default": "1",
-          "id": "diffusion",
-          "max": "1.4",
-          "min": "0.5",
-          "name": "Diffusion"
-        },
-        {
-          "default": "1",
-          "id": "speed",
-          "max": "1.6",
-          "min": "0",
-          "name": "Speed"
-        },
-        {
-          "default": "0.5",
-          "id": "inject_x",
-          "max": "1",
-          "min": "0",
-          "name": "Inject X"
-        },
-        {
-          "default": "0.5",
-          "id": "inject_y",
-          "max": "1",
-          "min": "0",
-          "name": "Inject Y"
-        },
-        {
-          "default": "0.7",
-          "id": "inject",
-          "max": "1",
-          "min": "0",
-          "name": "Inject"
-        },
-        {
-          "default": "1.2",
-          "id": "contrast",
-          "max": "3",
-          "min": "0.5",
-          "name": "Contrast"
         }
       ]
     },
