@@ -11,6 +11,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Cymatics",
         "DepthOfField",
         "OilyFluid",
         "QuadMirror"
@@ -276,6 +277,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "ParticleText"
       ],
@@ -497,6 +499,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText"
@@ -3155,6 +3158,7 @@
       ],
       "category": "Control",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -3344,6 +3348,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
+        "Cymatics",
         "Infrared"
       ],
       "fusion": "multi_input_coincident",
@@ -5211,6 +5216,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "ParticleText",
         "StrangeAttractor"
@@ -5882,6 +5888,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "OilyFluid",
         "ParticleText"
@@ -6586,6 +6593,7 @@
       ],
       "category": "Composite",
       "examples": [
+        "Cymatics",
         "MetallicGlass",
         "OilyFluid",
         "StylizedFeedback",
@@ -7582,6 +7590,7 @@
       "examples": [
         "BlackHole",
         "Bloom",
+        "Cymatics",
         "FilmGrain",
         "FluidSim2D",
         "MetallicGlass",
@@ -7890,6 +7899,7 @@
       ],
       "category": "Generate",
       "examples": [
+        "Cymatics",
         "Infrared"
       ],
       "fusion": "source",
@@ -10440,6 +10450,7 @@
         "Bloom",
         "ChromaticAberration",
         "ColorGrade",
+        "Cymatics",
         "DigitalDrift",
         "EdgeStretch",
         "FilmGrain",
@@ -10642,6 +10653,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "ParticleText"
       ],
@@ -13736,6 +13748,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -14565,6 +14578,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -15253,6 +15267,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "ParticleText"
       ],
@@ -15416,6 +15431,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Cymatics",
         "DepthOfField",
         "DigitalDrift",
         "FluidSim2D",
@@ -16445,7 +16461,9 @@
         "wave"
       ],
       "category": "Fields & Coordinates",
-      "examples": [],
+      "examples": [
+        "Cymatics"
+      ],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -17047,6 +17065,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim3D",
         "ParticleText",
         "StrangeAttractor"
@@ -17738,6 +17757,7 @@
       "category": "Routing",
       "examples": [
         "BasicShapes",
+        "Cymatics",
         "DepthOfField",
         "Infrared",
         "MriVolume",
@@ -17850,6 +17870,7 @@
       "examples": [
         "BasicShapes",
         "ConcentricTunnel",
+        "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
         "Lissajous",
@@ -19570,6 +19591,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "Cymatics",
         "TrivialPassthrough"
       ],
       "fusion": "source",
@@ -19598,6 +19620,7 @@
       "examples": [
         "ApricotWeather",
         "ColorCompass",
+        "Cymatics",
         "DigitalDrift",
         "FluidSim2D",
         "FluidSim3D",
@@ -20347,6 +20370,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Cymatics",
         "FluidSim2D",
         "ParticleText"
       ],
@@ -20407,6 +20431,7 @@
         "ColorCompass",
         "ColorGrade",
         "ConcentricTunnel",
+        "Cymatics",
         "DepthOfField",
         "DigitalDrift",
         "DigitalPlants",
@@ -20476,6 +20501,7 @@
         "BlackHole",
         "BlossomWire",
         "ConcentricTunnel",
+        "Cymatics",
         "DigitalDrift",
         "DigitalPlants",
         "Duocylinder",
@@ -20641,7 +20667,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 48,
+  "preset_count": 49,
   "presets": [
     {
       "category": "Geometry",
@@ -21229,6 +21255,78 @@
           "max": "2",
           "min": "0",
           "name": "Trigger Mode"
+        }
+      ]
+    },
+    {
+      "category": "Pattern",
+      "id": "Cymatics",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Cymatics",
+      "params": [
+        {
+          "default": "3",
+          "id": "mode_x",
+          "max": "12",
+          "min": "1",
+          "name": "Mode X"
+        },
+        {
+          "default": "2",
+          "id": "mode_y",
+          "max": "12",
+          "min": "1",
+          "name": "Mode Y"
+        },
+        {
+          "default": "0",
+          "id": "symmetry",
+          "max": "1",
+          "min": "0",
+          "name": "Symmetry"
+        },
+        {
+          "default": "120000",
+          "id": "sand",
+          "max": "400000",
+          "min": "10000",
+          "name": "Sand"
+        },
+        {
+          "default": "1.5",
+          "id": "settle",
+          "max": "4",
+          "min": "0",
+          "name": "Settle"
+        },
+        {
+          "default": "0.015",
+          "id": "jiggle",
+          "max": "0.08",
+          "min": "0",
+          "name": "Jiggle"
+        },
+        {
+          "default": "0.6",
+          "id": "trail",
+          "max": "0.98",
+          "min": "0",
+          "name": "Trail"
+        },
+        {
+          "default": "1",
+          "id": "color",
+          "max": "1",
+          "min": "0",
+          "name": "Color"
+        },
+        {
+          "default": "0",
+          "id": "cycle_modes",
+          "max": "1",
+          "min": "0",
+          "name": "Cycle Modes"
         }
       ]
     },
