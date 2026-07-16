@@ -2494,6 +2494,14 @@ when one is fixed).
 
 **Fix shape:** get one failing .exr from Peter and run it through `render_import --param env_mode=1 --param hdri_file=<file>` to capture the actual decode error; then (1) surface decode failures to the UI (a card-level error state instead of silent black — this half is owed regardless of the decoder outcome, per the no-silent-fallbacks rule), and (2) if the `image` crate's EXR decoder is the gap, decode via the `exr` crate directly (it reads the full OpenEXR spec incl. multi-part and DWAA) and convert to the same `Rgba16Float` upload. A native file picker on `hdri_file` (filter `.exr`) is the third, smallest piece.
 
+### BUG-184 (automation-clear-lane-not-wired-to-ui) — no UI affordance clears a lane's automation once it's set
+
+**Status:** OPEN — found 2026-07-16, Peter asked "how do I clear automation once it's set" and there's no answer.
+
+**Symptom:** `ClearLaneCommand` and `RemoveLaneCommand` exist in `manifold-editing` (`crates/manifold-editing/src/commands/automation.rs:306`, `:197`) but neither is referenced anywhere in `manifold-ui` or `manifold-app` — confirmed via `rg -n "ClearLaneCommand|RemoveLaneCommand" crates/manifold-ui crates/manifold-app` returning zero hits. The only shipped point-level edits are the AUTOMATION_LANES_DESIGN.md §7 vocabulary: double-click a dot deletes it, marquee-select + Delete removes a selection. There's no one-click "clear this lane" or "remove this lane" button/menu item/keybinding.
+
+**Fix shape:** wire `ClearLaneCommand` (clear all points, keep the lane) and `RemoveLaneCommand` (delete the lane entirely) to a UI trigger — most likely a right-click/context-menu item on the lane header, per the lane-header re-enable click precedent already in the design doc (§7 "State affordances"). Design doc `docs/AUTOMATION_LANES_DESIGN.md` is otherwise implemented per its status board entry; this is a gap in that landing, not a new design.
+
 ### BUG-183 (fusion-coverage-baseline-slipped) — `fusion_coverage_baseline` fails on main: 32 bundled presets fuse, floor asserts ≥33
 **Status:** OPEN — found 2026-07-16 during the BUG-181 gate (Sonnet agent, worktree at `02c5fbd5`).
 
