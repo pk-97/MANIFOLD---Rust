@@ -513,8 +513,11 @@ finds itself adding content-thread work, that is a brief violation — stop and 
 - **Multi-scene picker** for graphs holding two live `render_scene` nodes (v1 shows the
   first + a chip). Trigger: a real project hits it.
 - **Animation section** (imported clips list, play/loop/speed in beats). Owner:
-  GLTF_ANIMATION_DESIGN (A3 SHIPPED, A4 in flight); the panel gains the section when that doc says
-  the vocabulary is stable.
+  GLTF_ANIMATION_DESIGN — SHIPPED 2026-07-17 (all phases A1–A4; A4 stamps Rate/Clip/Loop
+  Mode/Retrigger card knobs per animated object directly via `gltf_import.rs`'s existing
+  D5/D9 curated-card mechanism, not a dedicated panel section). Vocabulary is stable; this
+  panel item is now a real "build the curated section" trigger rather than a "wait for the
+  vocabulary" one — re-derive scope against A4's actual card knobs before picking it up.
 - **Video/layer textures into scene materials** via a panel picker (`base_color_map_k`
   accepts any Texture2D wire in the graph today — the capability exists; the curated picker
   is what's deferred). Trigger: VIDEO_IO or the first "video on a screen mesh" ask.

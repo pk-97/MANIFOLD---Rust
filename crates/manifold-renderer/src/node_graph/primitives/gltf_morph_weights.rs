@@ -22,7 +22,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
+use super::gltf_anim_shared::{
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, row_range_for_compound_key,
+    sample_scalar_range,
+};
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
 
@@ -38,6 +42,8 @@ crate::primitive! {
     purpose: "Samples a parsed glTF object's per-target morph-weight keyframe tracks (or static authored weight, for an unanimated target) at a live `progress` (0..1) and emits the current per-target weight vector as Array(f32), one weight per target in target order. Wire the output straight into node.morph_targets_blend's `weights` input. LINEAR interpolation only (A1/A2/A3 scope). `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source/node.gltf_skeleton_pose: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping.",
     inputs: {
         progress: ScalarF32 optional,
+        clip_index: ScalarF32 optional,
+        trigger_count: ScalarF32 optional,
     },
     outputs: {
         weights: Array(f32),
@@ -60,6 +66,42 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("clip_index"),
+            label: "Clip",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 31.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("loop_mode"),
+            label: "Loop Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (LOOP_MODES.len() - 1) as f32)),
+            enum_values: LOOP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("clip_durations"),
+            label: "Clip Durations",
+            ty: ParamType::Table,
+            // Rows: [clip_index, duration_s]; sentinel means "use the
+            // static duration_s param for every clip".
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("trigger_count"),
+            label: "Retrigger",
+            ty: ParamType::Int,
+            // Port-shadowed by the same-named input; unwired, an outer-card
+            // `is_trigger` button writes here directly.
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("target_count"),
             label: "Target Count",
             ty: ParamType::Int,
@@ -71,9 +113,11 @@ crate::primitive! {
             name: Cow::Borrowed("weight_tracks"),
             label: "Weight Tracks",
             ty: ParamType::Table,
-            // Rows: [target_index, time_s, weight], grouped ascending by
-            // target_index, ascending time within a target. An unanimated
-            // target gets a single static row (time_s = 0.0).
+            // Rows: [clip_index, target_index, time_s, weight] (A4:
+            // clip_index prepended for D4 multi-clip selection), grouped
+            // ascending by (clip_index, target_index), ascending time within
+            // a (clip, target) block. An unanimated target gets a single
+            // static row (time_s = 0.0) per clip.
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -87,19 +131,9 @@ crate::primitive! {
     role: Source,
     aliases: ["morph weights", "blend shape weights", "morph target weights"],
     boundary_reason: NonGpu,
-}
-
-/// Same default-beat-drive formula as `gltf_animation_source::default_progress`
-/// / `gltf_skeleton_pose::default_progress` (D3) — duplicated rather than
-/// shared across small CPU primitives with no other coupling; each is
-/// independently gate-tested against the identical formula.
-fn default_progress(time: FrameTime, duration_s: f32, rate: f32) -> f32 {
-    let beats = time.beats.0 as f32;
-    let seconds = time.seconds.0 as f32;
-    let beats_per_second = if seconds.abs() > 1e-6 { beats / seconds } else { 2.0 };
-    let clip_beats = (duration_s * beats_per_second).max(1e-6);
-    let raw = beats * rate / clip_beats;
-    raw.rem_euclid(1.0)
+    extra_fields: {
+        trigger_latch: TriggerLatch = TriggerLatch::new(),
+    },
 }
 
 fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
@@ -107,71 +141,6 @@ fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
         Some(ParamValue::Table(t)) => Some(t.as_ref()),
         _ => None,
     }
-}
-
-/// Row range `[start, end)` within `table` whose leading `target_index`
-/// column equals `target`, assuming rows are grouped ascending by that
-/// column — identical shape to `gltf_skeleton_pose::joint_row_range`.
-fn target_row_range(table: Option<&TableData>, target: usize) -> (usize, usize) {
-    let Some(table) = table else { return (0, 0) };
-    let n = table.row_count();
-    let mut start = None;
-    let mut end = n;
-    for i in 0..n {
-        let row = table.row(i).unwrap();
-        let idx = row[0].round() as i64;
-        if idx == target as i64 {
-            if start.is_none() {
-                start = Some(i);
-            }
-        } else if start.is_some() {
-            end = i;
-            break;
-        }
-    }
-    match start {
-        Some(s) => (s, end),
-        None => (0, 0),
-    }
-}
-
-/// Sample a `[target_index, time_s, weight]` row range (column 2) at `t`,
-/// lerping between bracketing keyframes and holding boundary values
-/// outside the range — same clamp semantics as
-/// `gltf_skeleton_pose::sample_vec3_range`, scalar instead of vec3.
-fn sample_scalar_range(table: Option<&TableData>, range: (usize, usize), t: f32, default: f32) -> f32 {
-    let (start, end) = range;
-    let Some(table) = table else { return default };
-    let n = end.saturating_sub(start);
-    if n == 0 {
-        return default;
-    }
-    let value = |i: usize| -> f32 { table.row(start + i).unwrap()[2] };
-    let time = |i: usize| -> f32 { table.row(start + i).unwrap()[1] };
-    if n == 1 {
-        return value(0);
-    }
-    let (first_t, last_t) = (time(0), time(n - 1));
-    if t <= first_t {
-        return value(0);
-    }
-    if t >= last_t {
-        return value(n - 1);
-    }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if time(mid) <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (time(lo), time(hi));
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    let (a, b) = (value(lo), value(hi));
-    a + (b - a) * f
 }
 
 impl Primitive for GltfMorphWeights {
@@ -199,11 +168,38 @@ impl Primitive for GltfMorphWeights {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let progress = match ctx.inputs.scalar("progress") {
-            Some(ParamValue::Float(f)) => f,
-            _ => default_progress(ctx.time, duration_s, rate),
-        };
-        let t = progress.rem_euclid(1.0) * duration_s;
+        let loop_mode = LoopMode::from_enum_index(
+            ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+        );
+        let clip_index = ctx
+            .inputs
+            .scalar("clip_index")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("clip_index").and_then(ParamValue::as_scalar))
+            .unwrap_or(0.0)
+            .round()
+            .max(0.0) as usize;
+
+        let trigger_count = ctx
+            .inputs
+            .scalar("trigger_count")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
+        self.trigger_latch.update(trigger_count, ctx.time.beats.0);
+
+        let clip_durations = table_or_empty(ctx.params.get("clip_durations"));
+        let duration_s = clip_duration(clip_durations, clip_index, duration_s);
+
+        let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
+        let progress = resolve_progress(
+            ctx.time,
+            wired_progress,
+            duration_s,
+            rate,
+            loop_mode,
+            self.trigger_latch.origin_beats(),
+        );
+        let t = progress * duration_s;
 
         let target_count = match ctx.params.get("target_count") {
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MAX_TARGETS),
@@ -217,8 +213,8 @@ impl Primitive for GltfMorphWeights {
 
         let mut weights = Vec::with_capacity(target_count);
         for i in 0..target_count {
-            let range = target_row_range(weight_tracks, i);
-            weights.push(sample_scalar_range(weight_tracks, range, t, 0.0));
+            let range = row_range_for_compound_key(weight_tracks, clip_index, i);
+            weights.push(sample_scalar_range(weight_tracks, range, 2, 3, t, 0.0));
         }
 
         let Some(out_buf) = ctx.outputs.array("weights") else {
@@ -236,6 +232,14 @@ impl Primitive for GltfMorphWeights {
             out_buf.write(0, bytemuck::cast_slice(&weights[..n]));
         }
     }
+
+    fn clear_state(&mut self) {
+        self.trigger_latch.clear();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -248,7 +252,7 @@ mod tests {
     fn declares_progress_input_and_f32_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         assert_eq!(GltfMorphWeights::TYPE_ID, "node.gltf_morph_weights");
-        assert_eq!(GltfMorphWeights::INPUTS.len(), 1);
+        assert_eq!(GltfMorphWeights::INPUTS.len(), 3);
         assert_eq!(GltfMorphWeights::INPUTS[0].name, "progress");
         assert!(!GltfMorphWeights::INPUTS[0].required);
         assert_eq!(GltfMorphWeights::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
@@ -268,10 +272,16 @@ mod tests {
         TableData::new(rows).unwrap()
     }
 
+    /// Prepends `clip_index = 0` to each `[target_index, time_s, weight]`
+    /// row (pre-A4 test shape).
+    fn clip0_track_table(rows: Vec<Vec<f32>>) -> TableData {
+        track_table(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
+    }
+
     #[test]
     fn target_row_range_finds_a_grouped_slice() {
-        // Rows for targets 0, 0, 1, 1, 1, 3 (target 2 has no rows).
-        let table = track_table(vec![
+        // Rows for targets 0, 0, 1, 1, 1, 3 (target 2 has no rows), clip 0.
+        let table = clip0_track_table(vec![
             vec![0.0, 0.0, 0.0],
             vec![0.0, 1.0, 1.0],
             vec![1.0, 0.0, 2.0],
@@ -279,21 +289,21 @@ mod tests {
             vec![1.0, 1.0, 4.0],
             vec![3.0, 0.0, 5.0],
         ]);
-        assert_eq!(target_row_range(Some(&table), 0), (0, 2));
-        assert_eq!(target_row_range(Some(&table), 1), (2, 5));
-        assert_eq!(target_row_range(Some(&table), 2), (0, 0), "no rows for target 2");
-        assert_eq!(target_row_range(Some(&table), 3), (5, 6));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 0), (0, 2));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 1), (2, 5));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 2), (0, 0), "no rows for target 2");
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 3), (5, 6));
     }
 
     #[test]
     fn sample_scalar_range_lerps_and_holds_boundaries() {
-        let table = track_table(vec![vec![0.0, 0.0, 0.0], vec![0.0, 1.0, 10.0]]);
-        let range = target_row_range(Some(&table), 0);
-        let mid = sample_scalar_range(Some(&table), range, 0.5, 0.0);
+        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.0], vec![0.0, 1.0, 10.0]]);
+        let range = row_range_for_compound_key(Some(&table), 0, 0);
+        let mid = sample_scalar_range(Some(&table), range, 2, 3, 0.5, 0.0);
         assert!((mid - 5.0).abs() < 1e-4, "halfway lerp, got {mid}");
-        let before = sample_scalar_range(Some(&table), range, -1.0, 0.0);
+        let before = sample_scalar_range(Some(&table), range, 2, 3, -1.0, 0.0);
         assert!((before - 0.0).abs() < 1e-4, "holds first keyframe before range");
-        let after = sample_scalar_range(Some(&table), range, 5.0, 0.0);
+        let after = sample_scalar_range(Some(&table), range, 2, 3, 5.0, 0.0);
         assert!((after - 10.0).abs() < 1e-4, "holds last keyframe after range");
     }
 
@@ -302,15 +312,22 @@ mod tests {
     /// at any `t`, never defaulting to 0.0.
     #[test]
     fn single_row_static_weight_is_held_at_any_t() {
-        let table = track_table(vec![vec![0.0, 0.0, 0.5]]);
-        let range = target_row_range(Some(&table), 0);
-        let w = sample_scalar_range(Some(&table), range, 0.73, 0.0);
+        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.5]]);
+        let range = row_range_for_compound_key(Some(&table), 0, 0);
+        let w = sample_scalar_range(Some(&table), range, 2, 3, 0.73, 0.0);
         assert_eq!(w, 0.5, "single-row table returns the static value at any t");
     }
 
     #[test]
     fn sample_scalar_range_falls_back_to_default_when_target_has_no_rows() {
-        let out = sample_scalar_range(None, (0, 0), 0.5, 0.25);
+        let out = sample_scalar_range(None, (0, 0), 2, 3, 0.5, 0.25);
         assert_eq!(out, 0.25);
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let prim = GltfMorphWeights::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
     }
 }

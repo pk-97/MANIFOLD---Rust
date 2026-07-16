@@ -44,6 +44,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "selectionclips" => Some(selection_clips_scene()),
         "audiosends" => Some(audio_sends_scene()),
         "gltfscene" => Some(gltf_scene()),
+        "gltfanimscene" => Some(gltf_anim_scene()),
         "empty" => Some(empty_scene()),
         _ => None,
     }
@@ -124,6 +125,49 @@ pub(super) fn gltf_scene() -> SceneData {
     // Same post-install step the real loader/import path runs after
     // registering an embedded preset: resolve the tracking layer's manifest
     // against it (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1).
+    project.reconcile_param_manifests();
+
+    let lid = cmd.inserted_layer_id().expect("layer inserted");
+    let mut selection = UIState::default();
+    selection.select_layer(lid);
+
+    SceneData { project, content: ContentState::default(), active: Some(0), selection }
+}
+
+/// `gltfanimscene`: GLTF_ANIMATION_DESIGN.md A4's L3 fixture — imports
+/// `BoxAnimated.glb` (A1's own gate fixture, already proven to animate
+/// through this exact import path) through the SAME real production path
+/// [`gltf_scene`] uses, so the resulting card carries the A4 Rate/Clip/Loop
+/// Mode/Retrigger knobs `gltf_import.rs::animation_card_controls` actually
+/// stamps — not a hand-built stand-in.
+pub(super) fn gltf_anim_scene() -> SceneData {
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::layer::ImportModelLayerCommand;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/khronos/BoxAnimated.glb");
+    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+        .unwrap_or_else(|e| panic!("ui-snap gltfanimscene: assemble_import_graph({}) failed: {e}", path.display()));
+    eprintln!("ui-snap gltfanimscene: import report: {report:?}");
+
+    let display_name = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| m.display_name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "BoxAnimated".to_string());
+    let embedded = EmbeddedPreset {
+        kind: manifold_core::preset_def::PresetKind::Generator,
+        def,
+        origin: EmbeddedOrigin::Saved,
+    };
+
+    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
+
+    let mut project = Project::default();
+    let mut cmd = ImportModelLayerCommand::new(display_name, embedded, 0, None);
+    cmd.execute(&mut project);
     project.reconcile_param_manifests();
 
     let lid = cmd.inserted_layer_id().expect("layer inserted");

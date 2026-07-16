@@ -295,6 +295,7 @@ fn render_ui_scene(
         || scene == "bug060"
         || scene == "paramsteps"
         || scene == "gltfscene"
+        || scene == "gltfanimscene"
         || scene == "bug047"
     {
         // The inspector IS the subject: keep it at a generous width and give the
