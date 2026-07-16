@@ -1085,7 +1085,7 @@ impl ContentPipeline {
     /// correction) and fans profiling out to every effect chain + generator
     /// via `Compositor::set_profiling` / `GeneratorRenderer::set_profiling`.
     /// Turning this off drops the sampler and un-forces serial compositing.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn set_profiling(&mut self, on: bool, max_spans: usize) {
         self.profiling_enabled = on;
         self.compositor.set_profiling(on);
@@ -1103,7 +1103,7 @@ impl ContentPipeline {
     /// created — `false` means the device didn't support counter sampling at
     /// all (never silently downgrades to unprofiled; the caller must report
     /// this, not proceed as if profiling were on).
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn profiling_sampler_ready(&self) -> bool {
         self.profiling_sampler.is_some()
     }
@@ -1111,7 +1111,7 @@ impl ContentPipeline {
     /// This run's sampler capacity in spans (two samples per span) — the D6
     /// capacity check compares this against the fixture's actual per-frame
     /// span count. `None` if profiling isn't on / the sampler wasn't created.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn profiling_sampler_capacity(&self) -> Option<usize> {
         self.profiling_sampler.as_ref().map(|s| s.max_spans())
     }
@@ -1119,7 +1119,7 @@ impl ContentPipeline {
     /// Drain the last profiled frame's resolved GPU command-buffer profiles
     /// (`"Generators"`, `"Compositor"`) — empty when profiling is off or no
     /// frame has run yet.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn take_gpu_profiles(&mut self) -> Vec<(&'static str, manifold_gpu::GpuFrameProfile)> {
         std::mem::take(&mut self.last_gpu_profiles)
     }
@@ -1131,6 +1131,7 @@ impl ContentPipeline {
     /// (the `--profile` xtask) drains those directly via
     /// `engine.renderers_mut()` + `as_any_mut().downcast_mut::<GeneratorRenderer>()`
     /// and combines both lists.
+    #[cfg(feature = "perf-soak")]
     pub fn take_step_profiles(&mut self) -> Vec<manifold_renderer::node_graph::StepProfile> {
         self.compositor.take_step_profiles()
     }
