@@ -1,0 +1,81 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Lights"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.intensity_value",
+          "text": "3.50"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.light.intensity_value"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1020.0,
+              "y": 684.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.intensity_value",
+          "text": "3.50"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  "Snapshot"
+]

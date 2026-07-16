@@ -99,6 +99,90 @@ const fn object_numeric_row_automation_name(base_offset: u64) -> Option<&'static
     }
 }
 
+/// Per-light dynamic keys (P3), same convention as `obj_key`: Lights is a
+/// variable-length list, so every light gets a private key range.
+const LIGHT_KEY_BASE: u64 = 84_000;
+const LIGHT_KEY_STRIDE: u64 = 32;
+const LIGHT_OFF_EXPAND: u64 = 0;
+const LIGHT_OFF_MODE_MINUS: u64 = 1;
+const LIGHT_OFF_COLOR_R: u64 = 4;
+const LIGHT_OFF_INTENSITY_MINUS: u64 = 7;
+const LIGHT_OFF_POS_X: u64 = 10;
+const LIGHT_OFF_AIM_X: u64 = 13;
+const LIGHT_OFF_CAST_SHADOWS_MINUS: u64 = 16;
+const LIGHT_OFF_SHADOW_SOFTNESS_MINUS: u64 = 19;
+const LIGHT_OFF_LIGHT_SIZE_MINUS: u64 = 22;
+
+const fn light_key(index: usize, offset: u64) -> u64 {
+    LIGHT_KEY_BASE + index as u64 * LIGHT_KEY_STRIDE + offset
+}
+
+/// Stable automation name for a light row's numeric-stepper value cell —
+/// `nth` (per-light) disambiguates which light a flow means, same convention
+/// as `object_numeric_row_automation_name`.
+const fn light_numeric_row_automation_name(base_offset: u64) -> Option<&'static str> {
+    match base_offset {
+        LIGHT_OFF_INTENSITY_MINUS => Some("scene_setup.light.intensity_value"),
+        LIGHT_OFF_MODE_MINUS => Some("scene_setup.light.mode_value"),
+        LIGHT_OFF_CAST_SHADOWS_MINUS => Some("scene_setup.light.cast_shadows_value"),
+        LIGHT_OFF_SHADOW_SOFTNESS_MINUS => Some("scene_setup.light.shadow_softness_value"),
+        LIGHT_OFF_LIGHT_SIZE_MINUS => Some("scene_setup.light.light_size_value"),
+        _ => None,
+    }
+}
+
+const fn light_triplet_cell_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
+    match (base_offset, axis) {
+        (LIGHT_OFF_COLOR_R, 0) => Some("scene_setup.light.color_r"),
+        (LIGHT_OFF_COLOR_R, 1) => Some("scene_setup.light.color_g"),
+        (LIGHT_OFF_COLOR_R, 2) => Some("scene_setup.light.color_b"),
+        (LIGHT_OFF_POS_X, 0) => Some("scene_setup.light.pos_x"),
+        (LIGHT_OFF_POS_X, 1) => Some("scene_setup.light.pos_y"),
+        (LIGHT_OFF_POS_X, 2) => Some("scene_setup.light.pos_z"),
+        (LIGHT_OFF_AIM_X, 0) => Some("scene_setup.light.aim_x"),
+        (LIGHT_OFF_AIM_X, 1) => Some("scene_setup.light.aim_y"),
+        (LIGHT_OFF_AIM_X, 2) => Some("scene_setup.light.aim_z"),
+        _ => None,
+    }
+}
+
+/// Camera-section dynamic keys (P3). The Camera section holds exactly one
+/// row set per scene (unlike Objects/Lights), so — unlike `obj_key`/
+/// `light_key` — no per-index stride is needed; each possible field across
+/// all three camera-atom shapes gets its own fixed offset (only the ones the
+/// current `CameraRowVm` variant populates are ever built in a given frame).
+const CAMERA_KEY_BASE: u64 = 86_000;
+const CAMERA_OFF_ORBIT_MINUS: u64 = 0;
+const CAMERA_OFF_TILT_MINUS: u64 = 3;
+const CAMERA_OFF_DISTANCE_MINUS: u64 = 6;
+const CAMERA_OFF_FOV_MINUS: u64 = 9;
+const CAMERA_OFF_POS_X: u64 = 12;
+const CAMERA_OFF_YAW_MINUS: u64 = 15;
+const CAMERA_OFF_PITCH_MINUS: u64 = 18;
+const CAMERA_OFF_ROLL_MINUS: u64 = 21;
+const CAMERA_OFF_TARGET_X: u64 = 24;
+const CAMERA_OFF_LENS_FOCUS_MINUS: u64 = 27;
+const CAMERA_OFF_LENS_FSTOP_MINUS: u64 = 30;
+const CAMERA_OFF_LENS_SHUTTER_MINUS: u64 = 33;
+const CAMERA_OFF_LENS_EXPOSURE_MINUS: u64 = 36;
+
+const fn camera_numeric_row_automation_name(offset: u64) -> Option<&'static str> {
+    match offset {
+        CAMERA_OFF_ORBIT_MINUS => Some("scene_setup.camera.orbit_value"),
+        CAMERA_OFF_TILT_MINUS => Some("scene_setup.camera.tilt_value"),
+        CAMERA_OFF_DISTANCE_MINUS => Some("scene_setup.camera.distance_value"),
+        CAMERA_OFF_FOV_MINUS => Some("scene_setup.camera.fov_y_value"),
+        CAMERA_OFF_YAW_MINUS => Some("scene_setup.camera.yaw_value"),
+        CAMERA_OFF_PITCH_MINUS => Some("scene_setup.camera.pitch_value"),
+        CAMERA_OFF_ROLL_MINUS => Some("scene_setup.camera.roll_value"),
+        CAMERA_OFF_LENS_FOCUS_MINUS => Some("scene_setup.camera.lens_focus_distance_value"),
+        CAMERA_OFF_LENS_FSTOP_MINUS => Some("scene_setup.camera.lens_f_stop_value"),
+        CAMERA_OFF_LENS_SHUTTER_MINUS => Some("scene_setup.camera.lens_shutter_angle_value"),
+        CAMERA_OFF_LENS_EXPOSURE_MINUS => Some("scene_setup.camera.lens_exposure_ev_value"),
+        _ => None,
+    }
+}
+
 /// Per-row stepper/drag control keys — stride leaves headroom for a handful
 /// of controls per row (value drag zone + minus + plus).
 const KEY_ROW_BASE: u64 = 81_000;
@@ -236,6 +320,101 @@ pub enum ObjectRowVm {
     Custom { index: usize, transform: Option<Box<TransformRowVm>> },
 }
 
+/// A stepper row whose value is an enum index rather than a raw float — the
+/// same `[label] [−] value [+]` shape as [`RowValue`]'s numeric steppers, but
+/// the value cell shows `labels[value.round() as usize]` instead of a
+/// decimal (D4: `shadow_softness` "as the same stepper the importer card
+/// uses"). `row.min`/`row.max` are `0.0`/`labels.len() - 1` and the stepper
+/// delta is always `1.0` (round to the next label) — never the 0.05 numeric
+/// nudge. This crate can't depend on `manifold-renderer`'s `LIGHT_MODES`/
+/// `SHADOW_SOFTNESS_LABELS` constants, so `labels` is transcribed by
+/// `state_sync` (the same DTO-boundary convention as
+/// `EnvironmentRowVm::mode_is_hdri`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnumRowValue {
+    pub row: RowValue,
+    pub labels: Vec<&'static str>,
+}
+
+/// One light row's full editable surface (D3/D4): mode, color, intensity,
+/// pos/aim, cast_shadows, shadow_softness, and light_size — the last shown
+/// as a sub-row beneath shadow_softness but ALWAYS present and editable
+/// (parameter dependency, not conditional UI — `feedback_no_conditionally_visible_ui`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightKnownRow {
+    pub index: usize,
+    pub node_doc_id: u32,
+    pub mode: EnumRowValue,
+    pub color: (RowValue, RowValue, RowValue),
+    pub intensity: RowValue,
+    pub pos: (RowValue, RowValue, RowValue),
+    pub aim: (RowValue, RowValue, RowValue),
+    /// A 2-label (`Off`/`On`) enum stepper over the raw [0,1] threshold —
+    /// same shape as `mode`/`shadow_softness`, not a bespoke toggle widget.
+    pub cast_shadows: EnumRowValue,
+    pub shadow_softness: EnumRowValue,
+    pub light_size: RowValue,
+}
+
+/// One Lights-section row.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LightRowVm {
+    Known(Box<LightKnownRow>),
+    /// Producer wasn't `node.light` — honest custom row (D3).
+    Custom { index: usize },
+}
+
+/// `node.camera_lens`'s four params (D3: "the lens node's own row beneath").
+#[derive(Clone, Debug, PartialEq)]
+pub struct LensRowVm {
+    pub focus_distance: RowValue,
+    pub f_stop: RowValue,
+    pub shutter_angle: RowValue,
+    pub exposure_ev: RowValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrbitCameraRowVm {
+    pub orbit: RowValue,
+    pub tilt: RowValue,
+    pub distance: RowValue,
+    pub fov_y: RowValue,
+    pub lens: Option<LensRowVm>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FreeCameraRowVm {
+    pub pos: (RowValue, RowValue, RowValue),
+    pub yaw: RowValue,
+    pub pitch: RowValue,
+    pub roll: RowValue,
+    pub fov_y: RowValue,
+    pub lens: Option<LensRowVm>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LookAtCameraRowVm {
+    pub pos: (RowValue, RowValue, RowValue),
+    pub target: (RowValue, RowValue, RowValue),
+    pub fov_y: RowValue,
+    pub lens: Option<LensRowVm>,
+}
+
+/// The Camera section (D3/D4): exactly one of these per live scene (`None`
+/// when `camera` is unwired — D3 has no "add camera" action in v1, unlike
+/// Environment/Fog, since `render_scene`'s `camera` port is REQUIRED —
+/// SCENE_BUILD's starter preset and every importer path always wire one).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CameraRowVm {
+    None,
+    Orbit(Box<OrbitCameraRowVm>),
+    Free(Box<FreeCameraRowVm>),
+    LookAt(Box<LookAtCameraRowVm>),
+    /// Producer resolved but isn't one of the three curated atoms — honest
+    /// custom row (D3).
+    Custom,
+}
+
 /// Full live-panel view model for one selected generator layer's scene —
 /// translated 1:1 from `manifold_renderer::node_graph::scene_vm::SceneVm`'s
 /// Header/Environment/Atmosphere sections by `state_sync` (this crate can't
@@ -256,6 +435,13 @@ pub struct SceneSetupVm {
     pub atmosphere: AtmosphereRowVm,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
+    /// P3: the Lights section's rows, in `light_k` order. Never capped —
+    /// REALTIME_3D D4's shadow-caster limit (K=4) is the renderer's job; the
+    /// panel reports the true count and renders every row regardless.
+    pub lights: Vec<LightRowVm>,
+    /// P3: the Camera section (D3's single-camera trace, lens pass-through
+    /// included).
+    pub camera: CameraRowVm,
 }
 
 /// D7's four empty/live states for the selected layer.
@@ -341,6 +527,24 @@ pub struct ScenePanel {
     object_name_ids: Vec<(u32, NodeId, String)>,
     /// `(index, expand_toggle_node_id)` for every object row this frame.
     object_expand_ids: Vec<(usize, NodeId)>,
+    /// P3 Lights section fold state — same convention as `object_expanded`.
+    light_expanded: std::collections::HashMap<usize, bool>,
+    /// P3 Lights-row drag-armable value cells (color/pos/aim triplets) —
+    /// same convention as `object_value_cells`.
+    light_value_cells: Vec<(NodeId, RowValue)>,
+    /// P3 Lights-row steppers (+/-): both plain numeric (intensity,
+    /// light_size) and enum (mode, cast_shadows, shadow_softness — delta
+    /// `1.0`, value clamped to the label range) share this one vector, same
+    /// as `object_steppers`.
+    light_steppers: Vec<(NodeId, RowValue, f32)>,
+    /// `(index, expand_toggle_node_id)` for every light row this frame.
+    light_expand_ids: Vec<(usize, NodeId)>,
+    /// P3 Camera-row drag-armable value cells — same convention as
+    /// `object_value_cells`, but the Camera section holds exactly one row
+    /// set (no per-index list).
+    camera_value_cells: Vec<(NodeId, RowValue)>,
+    /// P3 Camera-row steppers (+/-) — same convention as `object_steppers`.
+    camera_steppers: Vec<(NodeId, RowValue, f32)>,
     panel_rect: Rect,
     drag: DragController<ValueDrag>,
     /// The layer_id a drag targets — captured at PointerDown so `on_event`
@@ -373,6 +577,12 @@ impl Default for ScenePanel {
             object_steppers: Vec::new(),
             object_name_ids: Vec::new(),
             object_expand_ids: Vec::new(),
+            light_expanded: std::collections::HashMap::new(),
+            light_value_cells: Vec::new(),
+            light_steppers: Vec::new(),
+            light_expand_ids: Vec::new(),
+            camera_value_cells: Vec::new(),
+            camera_steppers: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             drag: DragController::new(),
             drag_layer_id: None,
@@ -476,6 +686,11 @@ impl ScenePanel {
         self.object_steppers.clear();
         self.object_name_ids.clear();
         self.object_expand_ids.clear();
+        self.light_value_cells.clear();
+        self.light_steppers.clear();
+        self.light_expand_ids.clear();
+        self.camera_value_cells.clear();
+        self.camera_steppers.clear();
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -591,6 +806,10 @@ impl ScenePanel {
         cy = self.build_objects_section(tree, inner_x, inner_w, cy, vm);
         cy += ROW_GAP;
 
+        // ── Lights ──
+        cy = self.build_lights_section(tree, inner_x, inner_w, cy, vm);
+        cy += ROW_GAP;
+
         // ── Environment ──
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment", section_label_style());
         cy += ROW_H;
@@ -687,7 +906,10 @@ impl ScenePanel {
                 cy += ROW_H;
             }
         }
-        cy + ROW_GAP
+        cy += ROW_GAP * 2.0;
+
+        // ── Camera ──
+        self.build_camera_section(tree, inner_x, inner_w, cy, vm)
     }
 
     /// One `[label]  [−] value [＋]` numeric row. Driven rows (D4) render
@@ -790,27 +1012,469 @@ impl ScenePanel {
             cy = self.build_object_row(tree, inner_x, inner_w, cy, obj);
         }
         cy += ROW_GAP;
-        let half_w = (inner_w - ROW_GAP) / 2.0;
         self.add_object_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
             cy,
-            half_w,
+            inner_w,
             ROW_H,
             btn_style(),
             "+ Object",
             KEY_ADD_OBJECT,
         ));
+        cy + ROW_H
+    }
+
+    /// The Lights section (P3, D3/D4): per-light collapsible rows, then
+    /// "+ Light" (moved here from the Objects section — D4's own table
+    /// places it under Lights; P2 built both buttons together before this
+    /// section existed).
+    fn build_lights_section(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        vm: &SceneSetupVm,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lights", section_label_style());
+        cy += ROW_H;
+        for light in &vm.lights {
+            cy = self.build_light_row(tree, inner_x, inner_w, cy, light);
+        }
+        cy += ROW_GAP;
         self.add_light_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x + half_w + ROW_GAP,
+            inner_x,
             cy,
-            half_w,
+            inner_w,
             ROW_H,
             btn_style(),
             "+ Light",
             KEY_ADD_LIGHT,
         ));
+        cy + ROW_H
+    }
+
+    fn is_light_expanded(&self, index: usize) -> bool {
+        *self.light_expanded.get(&index).unwrap_or(&true)
+    }
+
+    /// One Lights-section row (D3/D4): expand toggle + label — then, when
+    /// expanded, mode/color/intensity/pos/aim/cast_shadows/shadow_softness,
+    /// and light_size as an always-present sub-row beneath shadow_softness
+    /// (parameter dependency, not conditional UI — D4).
+    fn build_light_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        light: &LightRowVm,
+    ) -> f32 {
+        let index = match light {
+            LightRowVm::Known(row) => row.index,
+            LightRowVm::Custom { index } => *index,
+        };
+        let expanded = self.is_light_expanded(index);
+        let expand_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            if expanded { "\u{25BE}" } else { "\u{25B8}" },
+            light_key(index, LIGHT_OFF_EXPAND),
+        );
+        self.light_expand_ids.push((index, expand_id));
+
+        let label_x = inner_x + STEP_W + 4.0;
+        let label_w = inner_w - STEP_W - 4.0;
+        let title = match light {
+            LightRowVm::Known(_) => format!("Light {index}"),
+            LightRowVm::Custom { .. } => format!("Light {index} — custom (edit in graph)"),
+        };
+        tree.add_label(Some(self.content_parent), label_x, cy, label_w, ROW_H, &title, label_style());
+        cy += ROW_H;
+
+        if !expanded {
+            return cy + ROW_GAP;
+        }
+
+        let LightRowVm::Known(row) = light else {
+            return cy + ROW_GAP;
+        };
+        let body_x = inner_x + PAD;
+        let body_w = inner_w - PAD;
+        cy = self.build_light_enum_row(tree, body_x, body_w, cy, "Mode", &row.mode, index, LIGHT_OFF_MODE_MINUS);
+        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Color", &row.color, index, LIGHT_OFF_COLOR_R);
+        cy = self.build_light_numeric_row(
+            tree, body_x, body_w, cy, "Intensity", &row.intensity, index, LIGHT_OFF_INTENSITY_MINUS,
+        );
+        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Position", &row.pos, index, LIGHT_OFF_POS_X);
+        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Aim", &row.aim, index, LIGHT_OFF_AIM_X);
+        cy = self.build_light_enum_row(
+            tree, body_x, body_w, cy, "Cast Shadows", &row.cast_shadows, index, LIGHT_OFF_CAST_SHADOWS_MINUS,
+        );
+        cy = self.build_light_enum_row(
+            tree, body_x, body_w, cy, "Shadow Softness", &row.shadow_softness, index, LIGHT_OFF_SHADOW_SOFTNESS_MINUS,
+        );
+        // Light Size: a REAL, always-editable row (D4 "parameter dependency,
+        // not conditional UI") — indented one level further to read as a
+        // sub-row of Shadow Softness, since it only visibly matters in
+        // Contact mode. Never hidden, never disabled.
+        cy = self.build_light_numeric_row(
+            tree,
+            body_x + PAD,
+            body_w - PAD,
+            cy,
+            "Light Size",
+            &row.light_size,
+            index,
+            LIGHT_OFF_LIGHT_SIZE_MINUS,
+        );
+        cy + ROW_GAP
+    }
+
+    /// A light-row `[label] [−] value [+]` numeric row — same shape as
+    /// `build_object_numeric_row`, keyed into the light's own range.
+    fn build_light_numeric_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        row: &RowValue,
+        index: usize,
+        base_offset: u64,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        if row.driven {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                inner_w - LABEL_W,
+                ROW_H,
+                &format!("{:.2} (driven)", row.value),
+                driven_label_style(),
+            );
+            return cy + ROW_H;
+        }
+        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
+        let minus_id = tree.add_button_keyed(
+            Some(self.content_parent), step_x, cy, STEP_W, ROW_H, btn_style(), "\u{2212}", light_key(index, base_offset),
+        );
+        let value_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W,
+            cy,
+            VALUE_W,
+            ROW_H,
+            drag_value_style(),
+            &format!("{:.2}", row.value),
+            light_key(index, base_offset + 1),
+        );
+        if let Some(name) = light_numeric_row_automation_name(base_offset) {
+            tree.set_name(value_id, name);
+        }
+        let plus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W + VALUE_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{002B}",
+            light_key(index, base_offset + 2),
+        );
+        self.light_steppers.push((minus_id, row.clone(), -0.05));
+        self.light_value_cells.push((value_id, row.clone()));
+        self.light_steppers.push((plus_id, row.clone(), 0.05));
+        cy + ROW_H
+    }
+
+    /// A light-row `[label] X/Y/Z` drag-value triplet — same shape as
+    /// `build_triplet_row`, keyed into the light's own range.
+    fn build_light_triplet_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        triplet: &(RowValue, RowValue, RowValue),
+        index: usize,
+        base_offset: u64,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        let cell_x = inner_x + LABEL_W;
+        let cell_w = ((inner_w - LABEL_W) / 3.0 - 2.0).max(20.0);
+        for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
+            let x = cell_x + i as f32 * (cell_w + 2.0);
+            if row.driven {
+                tree.add_label(
+                    Some(self.content_parent),
+                    x,
+                    cy,
+                    cell_w,
+                    ROW_H,
+                    &format!("{:.2}\u{2022}", row.value),
+                    driven_label_style(),
+                );
+                continue;
+            }
+            let cell_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                x,
+                cy,
+                cell_w,
+                ROW_H,
+                drag_value_style(),
+                &format!("{:.2}", row.value),
+                light_key(index, base_offset + i as u64),
+            );
+            if let Some(name) = light_triplet_cell_automation_name(base_offset, i) {
+                tree.set_name(cell_id, name);
+            }
+            self.light_value_cells.push((cell_id, row.clone()));
+        }
+        cy + ROW_H
+    }
+
+    /// A light-row enum stepper (mode / cast_shadows / shadow_softness):
+    /// same `[label] [−] value [+]` shape as `build_light_numeric_row`, but
+    /// the value cell shows `labels[value.round() as usize]` and the
+    /// stepper delta is always `1.0` (round to the next label). Not
+    /// drag-armable — a label index isn't a continuous quantity to scrub,
+    /// so unlike numeric/triplet cells this value cell isn't pushed into
+    /// `light_value_cells`.
+    fn build_light_enum_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        enum_row: &EnumRowValue,
+        index: usize,
+        base_offset: u64,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        let row = &enum_row.row;
+        let label_text = enum_row
+            .labels
+            .get(row.value.round().clamp(0.0, (enum_row.labels.len().max(1) - 1) as f32) as usize)
+            .copied()
+            .unwrap_or("?");
+        if row.driven {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                inner_w - LABEL_W,
+                ROW_H,
+                &format!("{label_text} (driven)"),
+                driven_label_style(),
+            );
+            return cy + ROW_H;
+        }
+        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
+        let minus_id = tree.add_button_keyed(
+            Some(self.content_parent), step_x, cy, STEP_W, ROW_H, btn_style(), "\u{2212}", light_key(index, base_offset),
+        );
+        let value_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W,
+            cy,
+            VALUE_W,
+            ROW_H,
+            drag_value_style(),
+            label_text,
+            light_key(index, base_offset + 1),
+        );
+        if let Some(name) = light_numeric_row_automation_name(base_offset) {
+            tree.set_name(value_id, name);
+        }
+        let plus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W + VALUE_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{002B}",
+            light_key(index, base_offset + 2),
+        );
+        self.light_steppers.push((minus_id, row.clone(), -1.0));
+        self.light_steppers.push((plus_id, row.clone(), 1.0));
+        cy + ROW_H
+    }
+
+    /// The Camera section (P3, D3/D4): exactly one row set, shape depending
+    /// on which camera atom the trace resolved, plus the lens pass-through
+    /// row when present.
+    fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Camera", section_label_style());
+        cy += ROW_H;
+        match &vm.camera {
+            CameraRowVm::Orbit(row) => {
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Orbit", &row.orbit, CAMERA_OFF_ORBIT_MINUS);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Tilt", &row.tilt, CAMERA_OFF_TILT_MINUS);
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Distance", &row.distance, CAMERA_OFF_DISTANCE_MINUS,
+                );
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
+            }
+            CameraRowVm::Free(row) => {
+                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Yaw", &row.yaw, CAMERA_OFF_YAW_MINUS);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Pitch", &row.pitch, CAMERA_OFF_PITCH_MINUS);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Roll", &row.roll, CAMERA_OFF_ROLL_MINUS);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
+            }
+            CameraRowVm::LookAt(row) => {
+                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X);
+                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Target", &row.target, CAMERA_OFF_TARGET_X);
+                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
+            }
+            CameraRowVm::Custom => {
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Custom (edit in graph)", label_style());
+                cy += ROW_H;
+            }
+            CameraRowVm::None => {
+                // `render_scene`'s `camera` port is REQUIRED (unlike
+                // envmap/atmosphere) — every shipped path (importer,
+                // Scene Starter) always wires one, so there is no "Add
+                // camera" action in v1 (D3).
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No camera wired", label_style());
+                cy += ROW_H;
+            }
+        }
+        cy + ROW_GAP
+    }
+
+    fn build_camera_lens(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, lens: &Option<LensRowVm>) -> f32 {
+        let Some(lens) = lens else { return cy };
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lens", label_style());
+        cy += ROW_H;
+        let body_x = inner_x + PAD;
+        let body_w = inner_w - PAD;
+        cy = self.build_camera_numeric_row(
+            tree, body_x, body_w, cy, "Focus Distance", &lens.focus_distance, CAMERA_OFF_LENS_FOCUS_MINUS,
+        );
+        cy = self.build_camera_numeric_row(tree, body_x, body_w, cy, "F-Stop", &lens.f_stop, CAMERA_OFF_LENS_FSTOP_MINUS);
+        cy = self.build_camera_numeric_row(
+            tree, body_x, body_w, cy, "Shutter Angle", &lens.shutter_angle, CAMERA_OFF_LENS_SHUTTER_MINUS,
+        );
+        self.build_camera_numeric_row(tree, body_x, body_w, cy, "Exposure (EV)", &lens.exposure_ev, CAMERA_OFF_LENS_EXPOSURE_MINUS)
+    }
+
+    /// A camera-row `[label] [−] value [+]` numeric row — same shape as
+    /// `build_light_numeric_row`, keyed into the fixed camera-section range
+    /// (no per-index stride: exactly one Camera row set exists per frame).
+    fn build_camera_numeric_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        row: &RowValue,
+        base_offset: u64,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        if row.driven {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                inner_w - LABEL_W,
+                ROW_H,
+                &format!("{:.2} (driven)", row.value),
+                driven_label_style(),
+            );
+            return cy + ROW_H;
+        }
+        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
+        let minus_id = tree.add_button_keyed(
+            Some(self.content_parent), step_x, cy, STEP_W, ROW_H, btn_style(), "\u{2212}", CAMERA_KEY_BASE + base_offset,
+        );
+        let value_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W,
+            cy,
+            VALUE_W,
+            ROW_H,
+            drag_value_style(),
+            &format!("{:.2}", row.value),
+            CAMERA_KEY_BASE + base_offset + 1,
+        );
+        if let Some(name) = camera_numeric_row_automation_name(base_offset) {
+            tree.set_name(value_id, name);
+        }
+        let plus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W + VALUE_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{002B}",
+            CAMERA_KEY_BASE + base_offset + 2,
+        );
+        self.camera_steppers.push((minus_id, row.clone(), -0.05));
+        self.camera_value_cells.push((value_id, row.clone()));
+        self.camera_steppers.push((plus_id, row.clone(), 0.05));
+        cy + ROW_H
+    }
+
+    /// A camera-row `[label] X/Y/Z` drag-value triplet — same shape as
+    /// `build_light_triplet_row`, keyed into the fixed camera-section range.
+    fn build_camera_triplet_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        triplet: &(RowValue, RowValue, RowValue),
+        base_offset: u64,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        let cell_x = inner_x + LABEL_W;
+        let cell_w = ((inner_w - LABEL_W) / 3.0 - 2.0).max(20.0);
+        for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
+            let x = cell_x + i as f32 * (cell_w + 2.0);
+            if row.driven {
+                tree.add_label(
+                    Some(self.content_parent),
+                    x,
+                    cy,
+                    cell_w,
+                    ROW_H,
+                    &format!("{:.2}\u{2022}", row.value),
+                    driven_label_style(),
+                );
+                continue;
+            }
+            let cell_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                x,
+                cy,
+                cell_w,
+                ROW_H,
+                drag_value_style(),
+                &format!("{:.2}", row.value),
+                CAMERA_KEY_BASE + base_offset + i as u64,
+            );
+            self.camera_value_cells.push((cell_id, row.clone()));
+        }
         cy + ROW_H
     }
 
@@ -1065,6 +1729,11 @@ impl ScenePanel {
                     self.object_expanded.insert(*index, !cur);
                     return (true, Vec::new());
                 }
+                if let Some((index, _)) = self.light_expand_ids.iter().find(|(_, id)| *id == *node_id) {
+                    let cur = self.is_light_expanded(*index);
+                    self.light_expanded.insert(*index, !cur);
+                    return (true, Vec::new());
+                }
                 let mut actions = Vec::new();
                 if let SceneSetupState::Live(vm) = &self.state {
                     if self.add_environment_id == Some(*node_id) {
@@ -1094,7 +1763,10 @@ impl ScenePanel {
                             *group_node_id,
                             current_name.clone(),
                         ));
-                    } else if let Some((row_value, delta)) = self.object_stepper_hit(*node_id) {
+                    } else if let Some((row_value, delta)) = stepper_hit_in(&self.object_steppers, *node_id)
+                        .or_else(|| stepper_hit_in(&self.light_steppers, *node_id))
+                        .or_else(|| stepper_hit_in(&self.camera_steppers, *node_id))
+                    {
                         let new_value = (row_value.value + delta).clamp(row_value.min, row_value.max);
                         actions.push(PanelAction::SceneSetupParamChanged(
                             vm.layer_id.clone(),
@@ -1146,8 +1818,12 @@ impl ScenePanel {
                         );
                         return (true, Vec::new());
                     }
-                    if let Some((_, row_value)) =
-                        self.object_value_cells.iter().find(|(id, _)| *id == *node_id)
+                    if let Some((_, row_value)) = self
+                        .object_value_cells
+                        .iter()
+                        .chain(self.light_value_cells.iter())
+                        .chain(self.camera_value_cells.iter())
+                        .find(|(id, _)| *id == *node_id)
                         && !row_value.driven
                     {
                         self.drag_layer_id = Some(vm.layer_id.clone());
@@ -1242,17 +1918,6 @@ impl ScenePanel {
         }
     }
 
-    /// Objects-row stepper hit test — mirrors `stepper_hit` for the fixed
-    /// rows, but the `RowValue` (and its clamp delta) is captured directly at
-    /// build time instead of looked up from a fixed index (Objects is a
-    /// variable-length list).
-    fn object_stepper_hit(&self, node_id: NodeId) -> Option<(RowValue, f32)> {
-        self.object_steppers
-            .iter()
-            .find(|(id, _, _)| *id == node_id)
-            .map(|(_, row, delta)| (row.clone(), *delta))
-    }
-
     /// The name label's rect for `group_node_id`, if a row for it was built
     /// this frame — the app's text-input anchor lookup (mirrors
     /// `AudioSetupPanel::send_label_rect`).
@@ -1260,6 +1925,14 @@ impl ScenePanel {
         let (_, node_id, _) = self.object_name_ids.iter().find(|(gid, _, _)| *gid == group_node_id)?;
         Some(tree.get_bounds(*node_id))
     }
+}
+
+/// Generic stepper hit test over a variable-length list built this frame —
+/// the shared shape `object_stepper_hit` used before Lights/Camera needed
+/// the identical lookup (Objects/Lights are variable-length; Camera is a
+/// fixed single row set, but its `+`/`-` buttons are captured the same way).
+fn stepper_hit_in(steppers: &[(NodeId, RowValue, f32)], node_id: NodeId) -> Option<(RowValue, f32)> {
+    steppers.iter().find(|(id, _, _)| *id == node_id).map(|(_, row, delta)| (row.clone(), *delta))
 }
 
 fn scrollbar_style() -> ScrollbarStyle {
@@ -1385,6 +2058,8 @@ mod tests {
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
             objects: Vec::new(),
+            lights: Vec::new(),
+            camera: CameraRowVm::None,
         })));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
@@ -1411,6 +2086,8 @@ mod tests {
             environment: EnvironmentRowVm::Bare { intensity, fill: env_row(0.0) },
             atmosphere: AtmosphereRowVm::None,
             objects: Vec::new(),
+            lights: Vec::new(),
+            camera: CameraRowVm::None,
         })));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
@@ -1453,6 +2130,42 @@ mod tests {
                 })),
                 ObjectRowVm::Custom { index: 1, transform: None },
             ],
+            lights: vec![
+                LightRowVm::Known(Box::new(LightKnownRow {
+                    index: 0,
+                    node_doc_id: 60,
+                    mode: EnumRowValue {
+                        row: RowValue { addr: RowAddr::root(60, "mode"), value: 0.0, min: 0.0, max: 1.0, driven: false },
+                        labels: vec!["Sun", "Point"],
+                    },
+                    color: triplet(60, 1.0, 1.0, 1.0, 0.0, 1.0),
+                    intensity: RowValue { addr: RowAddr::root(60, "intensity"), value: 2.5, min: 0.0, max: 10.0, driven: false },
+                    pos: triplet(60, 5.0, 2.0, 3.0, -100.0, 100.0),
+                    aim: triplet(60, 0.0, 0.0, 0.0, -100.0, 100.0),
+                    cast_shadows: EnumRowValue {
+                        row: RowValue { addr: RowAddr::root(60, "cast_shadows"), value: 1.0, min: 0.0, max: 1.0, driven: false },
+                        labels: vec!["Off", "On"],
+                    },
+                    shadow_softness: EnumRowValue {
+                        row: RowValue { addr: RowAddr::root(60, "shadow_softness"), value: 3.0, min: 0.0, max: 3.0, driven: false },
+                        labels: vec!["Hard", "Soft", "VerySoft", "Contact"],
+                    },
+                    light_size: RowValue { addr: RowAddr::root(60, "light_size"), value: 4.0, min: 0.0, max: 20.0, driven: false },
+                })),
+                LightRowVm::Custom { index: 1 },
+            ],
+            camera: CameraRowVm::Orbit(Box::new(OrbitCameraRowVm {
+                orbit: RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -6.28, max: 6.28, driven: false },
+                tilt: RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -6.28, max: 6.28, driven: false },
+                distance: RowValue { addr: RowAddr::root(70, "distance"), value: 4.0, min: 0.01, max: 100.0, driven: false },
+                fov_y: RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false },
+                lens: Some(LensRowVm {
+                    focus_distance: RowValue { addr: RowAddr::root(71, "focus_distance"), value: 0.0, min: 0.0, max: 1000.0, driven: false },
+                    f_stop: RowValue { addr: RowAddr::root(71, "f_stop"), value: 1000.0, min: 0.5, max: 1000.0, driven: false },
+                    shutter_angle: RowValue { addr: RowAddr::root(71, "shutter_angle"), value: 0.0, min: 0.0, max: 360.0, driven: false },
+                    exposure_ev: RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false },
+                }),
+            })),
         }
     }
 
@@ -1555,5 +2268,183 @@ mod tests {
         let mut tree2 = UITree::new();
         panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.object_value_cells.is_empty(), "collapsed row 0 builds no body controls");
+    }
+
+    // ── P3: Lights + Camera sections ──
+
+    #[test]
+    fn lights_section_renders_known_and_custom_rows() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.light_expand_ids.len(), 2, "both lights get an expand toggle");
+        // The Known light's expanded body: mode(1) + color triplet(3) +
+        // intensity(1) + pos triplet(3) + aim triplet(3) + light_size(1) = 12
+        // value cells (cast_shadows/shadow_softness are enum steppers, not
+        // drag-armable value cells).
+        assert_eq!(panel.light_value_cells.len(), 11, "color+pos+aim triplets (9) + intensity + light_size");
+        assert!(panel.add_light_id.is_some());
+    }
+
+    #[test]
+    fn light_cast_shadows_and_shadow_softness_steppers_use_delta_one() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let enum_steppers: Vec<_> = panel.light_steppers.iter().filter(|(_, _, delta)| delta.abs() == 1.0).collect();
+        // cast_shadows (minus/plus) + shadow_softness (minus/plus) + mode
+        // (minus/plus) = 6 enum-stepper buttons.
+        assert_eq!(enum_steppers.len(), 6, "mode/cast_shadows/shadow_softness steppers all use delta 1.0");
+    }
+
+    #[test]
+    fn light_size_row_always_renders_even_when_softness_isnt_contact() {
+        // D4: light_size is a parameter DEPENDENCY, not conditional UI — the
+        // stepper must exist regardless of the current shadow_softness value.
+        let mut vm = azalea_shaped_vm();
+        if let LightRowVm::Known(row) = &mut vm.lights[0] {
+            row.shadow_softness.row.value = 0.0; // Hard, not Contact
+        }
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(
+            panel.light_steppers.iter().any(|(_, row, _)| row.addr.param_id == "light_size"),
+            "light_size stepper exists regardless of shadow_softness mode"
+        );
+    }
+
+    #[test]
+    fn more_than_four_lights_all_render_rows_no_panel_side_cap() {
+        let mut vm = azalea_shaped_vm();
+        vm.lights = (0..5)
+            .map(|i| LightRowVm::Custom { index: i })
+            .collect();
+        vm.light_count = 5;
+        vm.shadow_caster_count = 5;
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.light_expand_ids.len(), 5, "all 5 light rows render — no panel-side cap");
+    }
+
+    #[test]
+    fn dragging_light_intensity_value_cell_starts_a_drag_with_the_right_address() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (intensity_id, intensity_row) = panel
+            .light_value_cells
+            .iter()
+            .find(|(_, row)| row.addr.param_id == "intensity")
+            .cloned()
+            .expect("intensity value cell built for the Known light row");
+        assert_eq!(intensity_row.addr, RowAddr::root(60, "intensity"));
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::PointerDown {
+            node_id: intensity_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(actions.is_empty(), "PointerDown arms the drag, doesn't dispatch yet");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Drag {
+            node_id: Some(intensity_id),
+            pos: crate::node::Vec2::new(50.0, 0.0),
+            delta: crate::node::Vec2::new(50.0, 0.0),
+        });
+        assert!(consumed);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::SceneSetupParamChanged(layer_id, scope, node_doc_id, param_id, value) => {
+                assert_eq!(*layer_id, LayerId::new("layer-1"));
+                assert!(scope.is_empty(), "lights live at root scope, never inside a group");
+                assert_eq!(*node_doc_id, 60);
+                assert_eq!(param_id, "intensity");
+                assert!(*value > 2.5, "dragging right increases intensity from its 2.5 start");
+            }
+            other => panic!("expected SceneSetupParamChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn camera_section_renders_orbit_rows_and_lens_sub_section() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // Orbit/Tilt/Distance/FOV (4) + Lens's 4 fields = 8 camera value cells.
+        assert_eq!(panel.camera_value_cells.len(), 8, "4 orbit rows + 4 lens rows");
+        assert!(
+            panel.camera_value_cells.iter().any(|(_, row)| row.addr.node_doc_id == 70 && row.addr.param_id == "orbit"),
+            "orbit atom's own param resolves"
+        );
+        assert!(
+            panel.camera_value_cells.iter().any(|(_, row)| row.addr.node_doc_id == 71 && row.addr.param_id == "f_stop"),
+            "lens pass-through param resolves beneath the camera atom's own rows"
+        );
+    }
+
+    #[test]
+    fn camera_none_and_custom_shapes_render_without_panicking() {
+        for camera in [CameraRowVm::None, CameraRowVm::Custom] {
+            let mut vm = azalea_shaped_vm();
+            vm.camera = camera;
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(vm)));
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+            assert!(tree.count() > 0);
+        }
+    }
+
+    #[test]
+    fn free_and_look_at_camera_shapes_render_their_own_rows() {
+        let free_cam = CameraRowVm::Free(Box::new(FreeCameraRowVm {
+            pos: triplet(70, 1.0, 2.0, 3.0, -1000.0, 1000.0),
+            yaw: RowValue { addr: RowAddr::root(70, "yaw"), value: 0.0, min: -6.28, max: 6.28, driven: false },
+            pitch: RowValue { addr: RowAddr::root(70, "pitch"), value: 0.0, min: -1.5, max: 1.5, driven: false },
+            roll: RowValue { addr: RowAddr::root(70, "roll"), value: 0.0, min: -6.28, max: 6.28, driven: false },
+            fov_y: RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false },
+            lens: None,
+        }));
+        let mut vm = azalea_shaped_vm();
+        vm.camera = free_cam;
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // Position triplet (3) + yaw + pitch + roll + fov = 7 value cells, no lens.
+        assert_eq!(panel.camera_value_cells.len(), 7);
+
+        let look_at_cam = CameraRowVm::LookAt(Box::new(LookAtCameraRowVm {
+            pos: triplet(70, 1.0, 2.0, 3.0, -1000.0, 1000.0),
+            target: triplet(70, 0.0, 0.0, 0.0, -1000.0, 1000.0),
+            fov_y: RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false },
+            lens: None,
+        }));
+        let mut vm2 = azalea_shaped_vm();
+        vm2.camera = look_at_cam;
+        let mut panel2 = ScenePanel::new();
+        panel2.open();
+        panel2.configure(SceneSetupState::Live(Box::new(vm2)));
+        let mut tree2 = UITree::new();
+        panel2.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // Position triplet (3) + Target triplet (3) + fov = 7 value cells.
+        assert_eq!(panel2.camera_value_cells.len(), 7);
     }
 }

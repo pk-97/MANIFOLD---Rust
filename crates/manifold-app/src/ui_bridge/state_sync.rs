@@ -1636,6 +1636,172 @@ pub fn sync_inspector_data(
                                     },
                                 })
                                 .collect();
+                            // P3: Lights + Camera. Enum-label arrays
+                            // transcribed from `node.light`'s own
+                            // `LIGHT_MODES`/`SHADOW_SOFTNESS_LABELS`
+                            // constants (`light.rs`) — this crate can't
+                            // depend on them directly through the UI DTO
+                            // boundary (`manifold-ui` doesn't depend on
+                            // `manifold-renderer`), same convention as
+                            // `EnvironmentRowVm::mode_is_hdri`.
+                            const LIGHT_MODE_LABELS: &[&str] = &["Sun", "Point"];
+                            const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];
+                            const CAST_SHADOWS_LABELS: &[&str] = &["Off", "On"];
+                            let enum_row = |node_doc_id: u32,
+                                            param_id: &str,
+                                            value: u32,
+                                            driven: bool,
+                                            labels: &'static [&'static str]| {
+                                manifold_ui::panels::scene_setup_panel::EnumRowValue {
+                                    row: row(node_doc_id, param_id, value as f32, driven, 0.0, (labels.len() - 1) as f32),
+                                    labels: labels.to_vec(),
+                                }
+                            };
+                            let lights: Vec<manifold_ui::panels::scene_setup_panel::LightRowVm> = vm
+                                .lights
+                                .iter()
+                                .map(|l| match l {
+                                    manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => {
+                                        manifold_ui::panels::scene_setup_panel::LightRowVm::Known(Box::new(
+                                            manifold_ui::panels::scene_setup_panel::LightKnownRow {
+                                                index: r.index,
+                                                node_doc_id: r.node_doc_id,
+                                                mode: enum_row(r.node_doc_id, "mode", r.mode_value, r.mode_driven, LIGHT_MODE_LABELS),
+                                                color: (
+                                                    row(r.node_doc_id, "color_r", r.color_value.0, r.color_driven.0, 0.0, 1.0),
+                                                    row(r.node_doc_id, "color_g", r.color_value.1, r.color_driven.1, 0.0, 1.0),
+                                                    row(r.node_doc_id, "color_b", r.color_value.2, r.color_driven.2, 0.0, 1.0),
+                                                ),
+                                                intensity: row(
+                                                    r.node_doc_id,
+                                                    "intensity",
+                                                    r.intensity_value,
+                                                    r.intensity_driven,
+                                                    0.0,
+                                                    10.0,
+                                                ),
+                                                pos: (
+                                                    row(r.node_doc_id, "pos_x", r.pos_value.0, r.pos_driven.0, -100.0, 100.0),
+                                                    row(r.node_doc_id, "pos_y", r.pos_value.1, r.pos_driven.1, -100.0, 100.0),
+                                                    row(r.node_doc_id, "pos_z", r.pos_value.2, r.pos_driven.2, -100.0, 100.0),
+                                                ),
+                                                aim: (
+                                                    row(r.node_doc_id, "aim_x", r.aim_value.0, r.aim_driven.0, -100.0, 100.0),
+                                                    row(r.node_doc_id, "aim_y", r.aim_value.1, r.aim_driven.1, -100.0, 100.0),
+                                                    row(r.node_doc_id, "aim_z", r.aim_value.2, r.aim_driven.2, -100.0, 100.0),
+                                                ),
+                                                cast_shadows: enum_row(
+                                                    r.node_doc_id,
+                                                    "cast_shadows",
+                                                    r.cast_shadows_value as u32,
+                                                    r.cast_shadows_driven,
+                                                    CAST_SHADOWS_LABELS,
+                                                ),
+                                                shadow_softness: enum_row(
+                                                    r.node_doc_id,
+                                                    "shadow_softness",
+                                                    r.shadow_softness_value,
+                                                    r.shadow_softness_driven,
+                                                    SHADOW_SOFTNESS_LABELS,
+                                                ),
+                                                light_size: row(
+                                                    r.node_doc_id,
+                                                    "light_size",
+                                                    r.light_size_value,
+                                                    r.light_size_driven,
+                                                    0.0,
+                                                    20.0,
+                                                ),
+                                            },
+                                        ))
+                                    }
+                                    manifold_renderer::node_graph::scene_vm::SceneLightVm::Custom { index } => {
+                                        manifold_ui::panels::scene_setup_panel::LightRowVm::Custom { index: *index }
+                                    }
+                                })
+                                .collect();
+                            let lens_row = |l: &manifold_renderer::node_graph::scene_vm::LensRow| {
+                                manifold_ui::panels::scene_setup_panel::LensRowVm {
+                                    focus_distance: row(
+                                        l.node_doc_id,
+                                        "focus_distance",
+                                        l.focus_distance_value,
+                                        l.focus_distance_driven,
+                                        0.0,
+                                        1000.0,
+                                    ),
+                                    f_stop: row(l.node_doc_id, "f_stop", l.f_stop_value, l.f_stop_driven, 0.5, 1000.0),
+                                    shutter_angle: row(
+                                        l.node_doc_id,
+                                        "shutter_angle",
+                                        l.shutter_angle_value,
+                                        l.shutter_angle_driven,
+                                        0.0,
+                                        360.0,
+                                    ),
+                                    exposure_ev: row(
+                                        l.node_doc_id,
+                                        "exposure_ev",
+                                        l.exposure_ev_value,
+                                        l.exposure_ev_driven,
+                                        -8.0,
+                                        8.0,
+                                    ),
+                                }
+                            };
+                            let camera = match &vm.camera {
+                                manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::Orbit(Box::new(
+                                        manifold_ui::panels::scene_setup_panel::OrbitCameraRowVm {
+                                            orbit: row(c.node_doc_id, "orbit", c.orbit_value, c.orbit_driven, -std::f32::consts::TAU, std::f32::consts::TAU),
+                                            tilt: row(c.node_doc_id, "tilt", c.tilt_value, c.tilt_driven, -std::f32::consts::TAU, std::f32::consts::TAU),
+                                            distance: row(c.node_doc_id, "distance", c.distance_value, c.distance_driven, 0.01, 100.0),
+                                            fov_y: row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5),
+                                            lens: c.lens.as_ref().map(lens_row),
+                                        },
+                                    ))
+                                }
+                                manifold_renderer::node_graph::scene_vm::CameraVm::Free(c) => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::Free(Box::new(
+                                        manifold_ui::panels::scene_setup_panel::FreeCameraRowVm {
+                                            pos: (
+                                                row(c.node_doc_id, "pos_x", c.pos_value.0, c.pos_driven.0, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "pos_y", c.pos_value.1, c.pos_driven.1, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "pos_z", c.pos_value.2, c.pos_driven.2, -1000.0, 1000.0),
+                                            ),
+                                            yaw: row(c.node_doc_id, "yaw", c.yaw_value, c.yaw_driven, -std::f32::consts::TAU, std::f32::consts::TAU),
+                                            pitch: row(c.node_doc_id, "pitch", c.pitch_value, c.pitch_driven, -1.5, 1.5),
+                                            roll: row(c.node_doc_id, "roll", c.roll_value, c.roll_driven, -std::f32::consts::TAU, std::f32::consts::TAU),
+                                            fov_y: row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5),
+                                            lens: c.lens.as_ref().map(lens_row),
+                                        },
+                                    ))
+                                }
+                                manifold_renderer::node_graph::scene_vm::CameraVm::LookAt(c) => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::LookAt(Box::new(
+                                        manifold_ui::panels::scene_setup_panel::LookAtCameraRowVm {
+                                            pos: (
+                                                row(c.node_doc_id, "pos_x", c.pos_value.0, c.pos_driven.0, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "pos_y", c.pos_value.1, c.pos_driven.1, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "pos_z", c.pos_value.2, c.pos_driven.2, -1000.0, 1000.0),
+                                            ),
+                                            target: (
+                                                row(c.node_doc_id, "target_x", c.target_value.0, c.target_driven.0, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "target_y", c.target_value.1, c.target_driven.1, -1000.0, 1000.0),
+                                                row(c.node_doc_id, "target_z", c.target_value.2, c.target_driven.2, -1000.0, 1000.0),
+                                            ),
+                                            fov_y: row(c.node_doc_id, "fov_y", c.fov_y_value, c.fov_y_driven, 0.05, 2.5),
+                                            lens: c.lens.as_ref().map(lens_row),
+                                        },
+                                    ))
+                                }
+                                manifold_renderer::node_graph::scene_vm::CameraVm::Custom { .. } => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::Custom
+                                }
+                                manifold_renderer::node_graph::scene_vm::CameraVm::None => {
+                                    manifold_ui::panels::scene_setup_panel::CameraRowVm::None
+                                }
+                            };
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -1722,6 +1888,8 @@ pub fn sync_inspector_data(
                                 environment,
                                 atmosphere,
                                 objects,
+                                lights,
+                                camera,
                             }))
                         }
                     }
