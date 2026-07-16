@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 245 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 248 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -155,7 +155,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (46)
+### 3D Geometry (48)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -174,6 +174,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | glTF Mesh | `node.gltf_mesh_source` | Source | Loads a glTF/.glb model file from disk as mesh geometry, so imported 3D assets flow into the render pipeline like any other shape primitive. |
+| glTF Morph Deltas | `node.gltf_morph_deltas_source` | Source | Loads an imported glTF asset's morph-target position/normal deltas, ready to be blended onto its base mesh by a Morph Targets Blend node. |
 | glTF Skinned Mesh | `node.gltf_skinned_mesh_source` | Source | Loads an imported glTF character's bind-pose geometry and its per-vertex joint weights, ready to be deformed by a Skin Mesh node. |
 | Grid Edges | `node.grid_edges` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
 | Grid Mesh | `node.grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
@@ -185,6 +186,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | Mesh Edges | `node.mesh_edges` | Filter | Outputs the wireframe edges of a triangle mesh, so any imported model can be drawn as lines. The mesh counterpart of Grid Edges. |
 | Mesh Ramp | `node.mesh_ramp` | Source | Turns a mesh's own positions into a growth mask — a value from 0 to 1 per vertex that sweeps across the mesh along an axis. Feeds any deformer's weight input t… |
 | Morph Mesh | `node.morph_mesh` | Filter | Blends smoothly between two meshes vertex-by-vertex, so one shape dissolves into another. Works best when both meshes share the same vertex count and layout. |
+| Morph Targets Blend | `node.morph_targets_blend` | Filter | Blends an imported mesh's morph targets by their live animated weights — the GPU counterpart to a Morph Weights node's sampled weight vector. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
@@ -261,7 +263,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 
-### Control (22)
+### Control (23)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -276,6 +278,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | Envelope Follower (A/R) | `node.envelope_follower_ar` | Control | Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth. |
 | Frequency Ratio | `node.frequency_ratio` | Control | Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form. |
 | glTF Animation Source | `node.gltf_animation_source` | Source | Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loo… |
+| glTF Morph Weights | `node.gltf_morph_weights` | Source | Samples an imported glTF asset's morph-target weight animation and outputs the per-target weight vector a Morph Targets Blend node needs. Wire progress to a be… |
 | glTF Skeleton Pose | `node.gltf_skeleton_pose` | Source | Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the p… |
 | Inject Burst | `node.inject_burst` | Control | On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new materi… |
 | LFO | `node.lfo` | Control | A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free. |

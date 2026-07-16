@@ -315,6 +315,53 @@ fn build_skeleton_pose_tables(
     )
 }
 
+/// GLTF_ANIMATION_DESIGN.md A3: build `node.gltf_morph_weights`'
+/// `weight_tracks` Table rows from `morph`'s static topology plus the
+/// SAME `node_anims_clip0` lookup `build_skeleton_pose_tables` uses for
+/// skinning — a `weights` channel targets the mesh-owning node directly
+/// (no ancestor-chain composition, unlike TRS), so this is a single
+/// lookup by `morph.mesh_node_index`, not a chain walk. An unanimated
+/// target (the node carries no `weights` channel, or the channel exists
+/// but doesn't cover the whole target range) falls back to its authored
+/// `static_weights[i]` — never a silent 0.0 (`MorphPrimitivesTest.glb`'s
+/// `mesh.weights = [0.5]` is the documented case this guards). Returns
+/// `(weight_track_rows, duration_s)`.
+fn build_morph_weight_table(
+    morph: &gltf_load::GltfObjectMorph,
+    node_anims: &std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>,
+) -> (Vec<Vec<f32>>, f32) {
+    let n = morph.target_count as usize;
+    let mut rows = Vec::new();
+    let mut duration_s: f32 = 0.0;
+
+    // Rows must be grouped ascending by target_index (leading column),
+    // ascending time WITHIN a target — the SAME emission contract
+    // `build_skeleton_pose_tables` uses for its per-joint tracks, and
+    // `node.gltf_morph_weights::target_row_range` assumes when scanning
+    // for a contiguous same-target slice. glTF's keyframe `input`
+    // accessor is spec-required to be non-decreasing, so iterating
+    // `t.times` in accessor order is already time-ascending.
+    let track = node_anims.get(&morph.mesh_node_index).and_then(|a| a.weights.as_ref());
+    match track {
+        Some(t) if !t.times.is_empty() && t.values.iter().all(|v| v.len() == n) => {
+            for i in 0..n {
+                for (time, values) in t.times.iter().zip(t.values.iter()) {
+                    rows.push(vec![i as f32, *time, values[i]]);
+                }
+            }
+            duration_s = t.times.last().copied().unwrap_or(0.0);
+        }
+        _ => {
+            for i in 0..n {
+                let w = morph.static_weights.get(i).copied().unwrap_or(0.0);
+                rows.push(vec![i as f32, 0.0, w]);
+            }
+        }
+    }
+
+    (rows, duration_s.max(1e-3))
+}
+
 /// Degrees→radians factor for the camera card sliders. The camera node's
 /// `orbit`/`tilt`/`fov_y` params are radians (matching `node.orbit_camera`),
 /// but a performer wants degrees on the card, so each angle slider carries a
@@ -921,6 +968,80 @@ fn build_import_graph(
             None
         };
 
+        // GLTF_ANIMATION_DESIGN.md A3: a morphed object's base geometry
+        // comes from the EXISTING `node.gltf_mesh_source` built just above
+        // (the `mesh_id`/`mesh_node_id` slot) — unlike skinning, ordinary
+        // node transforms DO position a morphed mesh, so there is no
+        // separate "morph mesh source" analogous to
+        // `node.gltf_skinned_mesh_source`. A skin+morph COMBINATION on the
+        // same object is out of scope (neither gate fixture is also
+        // skinned; `skinned_vertices_source.is_some()` means `mesh_id`
+        // above was claimed by `node.gltf_skinned_mesh_source` instead, so
+        // morph wiring is skipped rather than double-purposing that node
+        // id — re-derive if a future asset needs both).
+        let morphed_vertices_source: Option<u32> = if skinned_vertices_source.is_none()
+            && let Some(morph) = &m.morph
+        {
+            let weights_node_id = format!("morphweights_{k}");
+            let weights_id = fresh_id();
+            let (weight_rows, weights_duration_s) = build_morph_weight_table(morph, &node_anims_clip0);
+            let mut weights_node =
+                plain_node(weights_id, &weights_node_id, "node.gltf_morph_weights", &weights_node_id);
+            weights_node
+                .params
+                .insert("target_count".to_string(), int(morph.target_count as i32));
+            weights_node
+                .params
+                .insert("duration_s".to_string(), float(weights_duration_s));
+            weights_node
+                .params
+                .insert("weight_tracks".to_string(), table(weight_rows));
+            group_nodes.push(weights_node);
+
+            let deltas_node_id = format!("morphdeltas_{k}");
+            let deltas_id = fresh_id();
+            let mut deltas_node =
+                plain_node(deltas_id, &deltas_node_id, "node.gltf_morph_deltas_source", &deltas_node_id);
+            deltas_node
+                .params
+                .insert("material_index".to_string(), int(m.material_index as i32));
+            deltas_node.params.insert(
+                "max_capacity".to_string(),
+                int((morph.target_count.max(1) * m.vertex_count.max(1)) as i32),
+            );
+            group_nodes.push(deltas_node);
+            string_bindings.push(StringBindingDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                label: "Model File".to_string(),
+                default_value: path_str.clone(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new(&deltas_node_id),
+                    param: "path".to_string(),
+                },
+            });
+
+            let blend_node_id = format!("morphblend_{k}");
+            let blend_id = fresh_id();
+            let mut blend_node =
+                plain_node(blend_id, &blend_node_id, "node.morph_targets_blend", &blend_node_id);
+            blend_node
+                .params
+                .insert("target_count".to_string(), int(morph.target_count as i32));
+            group_nodes.push(blend_node);
+
+            group_wires.push(wire(mesh_id, "vertices", blend_id, "in"));
+            group_wires.push(wire(deltas_id, "deltas", blend_id, "deltas"));
+            group_wires.push(wire(weights_id, "weights", blend_id, "weights"));
+            report_lines.push(format!(
+                "{group_name}: morphed ({} targets) — node.gltf_mesh_source + \
+                 node.gltf_morph_deltas_source + node.gltf_morph_weights + node.morph_targets_blend",
+                morph.target_count
+            ));
+            Some(blend_id)
+        } else {
+            None
+        };
+
         let mat_id = fresh_id();
         let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
         // Author the glTF material's own name as the node's display title
@@ -1182,10 +1303,16 @@ fn build_import_graph(
         ];
         // A2: a skinned object's group-output vertices come from
         // node.skin_mesh's `out`, not directly from the mesh source (which
-        // for a skinned object outputs UNDEFORMED bind-pose geometry).
-        match skinned_vertices_source {
-            Some(skinmesh_id) => group_wires.push(wire(skinmesh_id, "out", out_id, "vertices")),
-            None => group_wires.push(wire(mesh_id, "vertices", out_id, "vertices")),
+        // for a skinned object outputs UNDEFORMED bind-pose geometry). A3:
+        // likewise a morphed object's vertices come from
+        // node.morph_targets_blend's `out`, not the base mesh source
+        // directly (which outputs the UNBLENDED bind/rest geometry) — a
+        // morphed object's base geometry alone is never what should
+        // render once targets are non-static.
+        match (skinned_vertices_source, morphed_vertices_source) {
+            (Some(skinmesh_id), _) => group_wires.push(wire(skinmesh_id, "out", out_id, "vertices")),
+            (None, Some(blend_id)) => group_wires.push(wire(blend_id, "out", out_id, "vertices")),
+            (None, None) => group_wires.push(wire(mesh_id, "vertices", out_id, "vertices")),
         }
         group_wires.push(wire(mat_id, "out", out_id, "material"));
 
@@ -2863,6 +2990,7 @@ mod tests {
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
             skin: None,
+            morph: None,
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -3083,6 +3211,7 @@ mod tests {
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
             skin: None,
+            morph: None,
         }
     }
 
@@ -3704,6 +3833,7 @@ mod tests {
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
             skin: None,
+            morph: None,
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
@@ -4760,6 +4890,253 @@ mod tests {
                 "{asset}: a frame took {max_ms:.2}ms (> 20ms budget) — skinning dropped a frame"
             );
         }
+    }
+
+    // ─── GLTF_ANIMATION_DESIGN.md A3 gate (AnimatedMorphCube/MorphStressTest) ─
+
+    /// Read `duration_s` straight off the assembled graph's
+    /// `node.gltf_morph_weights` node — same "read the built graph's own
+    /// param" convention `skeleton_pose_duration_s` uses for A2. Panics if
+    /// the asset didn't resolve morph targets onto any object (a real bug
+    /// this test wants to catch loudly, not skip past).
+    #[cfg(feature = "gpu-proofs")]
+    fn morph_weights_duration_s(def: &manifold_core::effect_graph_def::EffectGraphDef) -> f32 {
+        fn find(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> Option<f32> {
+            for node in nodes {
+                if node.type_id.as_str() == "node.gltf_morph_weights"
+                    && let Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) =
+                        node.params.get("duration_s")
+                {
+                    return Some(*value);
+                }
+                if let Some(group) = &node.group
+                    && let Some(v) = find(&group.nodes)
+                {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        find(&def.nodes).expect("assembled graph has no node.gltf_morph_weights with a duration_s param")
+    }
+
+    /// Render an assembled morphed-import `def` at a chosen `progress` (via
+    /// `node.gltf_morph_weights`' default beat-drive) — identical
+    /// formula/convergence-polling as `render_skinned_import_at_progress`,
+    /// just against the morph weights node's own `duration_s` instead of
+    /// the skeleton pose's.
+    #[cfg(feature = "gpu-proofs")]
+    fn render_morph_import_at_progress(
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        w: u32,
+        h: u32,
+        progress: f32,
+        duration_s: f32,
+    ) -> Vec<u8> {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let beats = progress * duration_s * 2.0;
+        let seconds = (beats * 0.5) as f64;
+
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("morphed import graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "morph-import");
+        let ctx = PresetContext {
+            time: seconds,
+            beat: beats as f64,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        const STABLE_STREAK: u32 = 3;
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        for _attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("morph-import-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut readback_enc = device.create_encoder("morph-import-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            let fraction = non_black as f64 / (w * h) as f64;
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+            if stable_count >= STABLE_STREAK {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        rgba
+    }
+
+    /// A3 gate (positive): `AnimatedMorphCube.glb` and `MorphStressTest.glb`
+    /// — imported and rendered headless at four chosen progress values —
+    /// must each produce four visibly distinct frames, proving the morph
+    /// targets actually blend (the cube's face genuinely bulges/deforms)
+    /// rather than producing noise or a frozen base mesh. Written to
+    /// `tests/fixtures/gltf/goldens/` alongside the A1/A2 goldens.
+    ///
+    /// Deviation from the phase brief's literal "progress 0/0.25/0.5/0.75"
+    /// (same "re-derive against the real asset" doctrine the brief's own
+    /// morph_mesh-shape deviation used): re-derived this session by
+    /// decoding `MorphStressTest.glb`'s `weight_tracks` output accessor —
+    /// its "Individuals" clip (`animations[0]`, the only clip A3 samples)
+    /// is eight SEQUENTIAL narrow pulses, one per target, each ramping
+    /// 0→1→0 within roughly one keyframe interval and sitting in a
+    /// near-zero valley the rest of the ~9.37s clip (peaks measured at
+    /// progress ≈0.057/0.181/0.306/0.431/0.555/0.680/0.804/0.929). The
+    /// evenly-spaced 0/0.25/0.5/0.75 sample points all land in valleys
+    /// between pulses — a real content property, not a bug (confirmed:
+    /// `node.gltf_morph_weights` correctly samples ~0 there). `AnimatedMorphCube`
+    /// keeps the brief's literal four phases (its 2-target animation is a
+    /// continuous ramp, not a pulse train, so they land on genuinely
+    /// different weights). For `MorphStressTest`, four phases are chosen at
+    /// alternating pulse PEAKS (targets 0/2/4/6) instead, preserving the
+    /// gate's actual intent — proving the blend genuinely differs across
+    /// the clip — rather than the literal fraction values, which would
+    /// prove nothing about this asset's blending.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn morph_targets_render_four_visibly_distinct_poses() {
+        let (w, h) = (256u32, 256u32);
+        let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/goldens");
+        std::fs::create_dir_all(&out_dir).expect("create goldens dir");
+
+        let assets: [(&str, [f32; 4]); 2] = [
+            ("AnimatedMorphCube.glb", [0.0, 0.25, 0.5, 0.75]),
+            // Target 0/2/4/6 peak weight-1.0 progress values (see doc
+            // comment above) — spreads across the clip landing ON pulses
+            // instead of between them.
+            ("MorphStressTest.glb", [0.057, 0.306, 0.555, 0.804]),
+        ];
+
+        for (asset, phases) in assets {
+            let path = khronos_fixture_path(asset);
+            if !path.exists() {
+                eprintln!(
+                    "morph_targets_render_four_visibly_distinct_poses: fixture not found at {}, \
+                     skipping {asset}",
+                    path.display()
+                );
+                continue;
+            }
+            let (def, _report) = assemble_import_graph(&path).expect("assemble morphed import");
+            let duration_s = morph_weights_duration_s(&def);
+
+            let mut frames = Vec::new();
+            for &p in &phases {
+                let (def, _report) = assemble_import_graph(&path).expect("assemble morphed import");
+                frames.push(render_morph_import_at_progress(def, w, h, p, duration_s));
+            }
+
+            let stem = asset.trim_end_matches(".glb").to_lowercase();
+            for (p, rgba) in phases.iter().zip(frames.iter()) {
+                let out_path =
+                    out_dir.join(format!("{stem}_morph_p{:03}.png", (p * 100.0).round() as u32));
+                image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
+                    .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
+            }
+
+            for i in 0..frames.len() {
+                for j in (i + 1)..frames.len() {
+                    assert_ne!(
+                        frames[i], frames[j],
+                        "{asset}: progress {} and progress {} rendered byte-identical frames — \
+                         the morph targets aren't blending",
+                        phases[i], phases[j]
+                    );
+                }
+            }
+        }
+    }
+
+    /// A3 gate (round-trip): build the morphed import graph, serialize it
+    /// through the V1 JSON path, reload, re-render at progress 0.5, and
+    /// confirm a pixel match against the pre-reload progress-0.5 render —
+    /// proves the `weight_tracks` Table plus the three new node types
+    /// (`node.gltf_morph_weights`, `node.gltf_morph_deltas_source`,
+    /// `node.morph_targets_blend`) survive save→reload AND stay live, same
+    /// doctrine as `box_animated_round_trip_preserves_animation_and_renders_identically`.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn morph_targets_round_trip_preserves_weights_and_renders_identically() {
+        let path = khronos_fixture_path("AnimatedMorphCube.glb");
+        if !path.exists() {
+            eprintln!(
+                "morph_targets_round_trip_preserves_weights_and_renders_identically: fixture not \
+                 found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (w, h) = (256u32, 256u32);
+
+        let (def, _report) = assemble_import_graph(&path).expect("assemble morphed import");
+        let duration_s = morph_weights_duration_s(&def);
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef =
+            serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        let before = render_morph_import_at_progress(def, w, h, 0.5, duration_s);
+        let after = render_morph_import_at_progress(reloaded, w, h, 0.5, duration_s);
+        assert_eq!(
+            before, after,
+            "progress-0.5 render must pixel-match before and after a save/reload round trip"
+        );
     }
 
     // Only used by the `#[cfg(feature = "gpu-proofs")]` render gates below —
