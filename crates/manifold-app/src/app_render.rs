@@ -4713,19 +4713,6 @@ impl Application {
         if !self.clip_rect_scratch.is_empty()
             && !self.content_state.clip_atlas_layout.is_empty()
         {
-            crate::content_pipeline::flicker_probe::ui_tick();
-            if crate::content_pipeline::flicker_probe::on() {
-                if self.ui_clip_atlas_texture.is_none() {
-                    crate::content_pipeline::flicker_probe::bump(
-                        &crate::content_pipeline::flicker_probe::UI_THUMBPASS_SKIPS,
-                    );
-                }
-                if self.content_state.clip_atlas_layout.is_empty() {
-                    crate::content_pipeline::flicker_probe::bump(
-                        &crate::content_pipeline::flicker_probe::UI_EMPTY_LAYOUT,
-                    );
-                }
-            }
             // Single shared surface (BUG-119) — no front-buffer index to resolve;
             // the imported texture always reflects the content thread's latest
             // cell blits directly (no clear after init, so at worst a cell mid-blit
@@ -4755,9 +4742,6 @@ impl Application {
                         continue;
                     }
                     let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {
-                        crate::content_pipeline::flicker_probe::bump(
-                            &crate::content_pipeline::flicker_probe::UI_STRIP_MISSES,
-                        );
                         continue;
                     };
                     // Reserve the bottom name-strip band: the thumbnail tiles only
