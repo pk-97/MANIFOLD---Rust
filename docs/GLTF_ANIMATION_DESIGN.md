@@ -1,6 +1,6 @@
 # glTF Animation — imported clips as performable motion (node TRS, skinning, morphs)
 
-**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-187 logged, blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case) · A2 SHIPPED 2026-07-16 (skinning vertical slice: `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test, CesiumMan/Fox deform correctly, hot-path 5-7ms/frame — BUG-190 logged, `BrainStem.glb`'s 24-skinned-object case measures ~370ms/frame, NOT a named gate fixture, does not block)
+**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-187 logged, blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case) · A2 SHIPPED 2026-07-16 (skinning vertical slice: `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test, CesiumMan/Fox deform correctly, hot-path 5-7ms/frame — BUG-190 logged, `BrainStem.glb`'s 24-skinned-object case measures ~370ms/frame, NOT a named gate fixture, does not block) · A3 IN PROGRESS 2026-07-16 (morph-target animation: `node.gltf_morph_weights` + `node.morph_targets_blend`, `node.morph_mesh` untouched per its header's boundary — see A3 brief; §3's "through the morph_mesh shape" wording is superseded by the brief's re-derived N-ary additive-blend finding)
 **Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (owns the BUG-170 crate-bump verdict; its D8 may hand this doc three pointer-animation assets). No dependency on GLTF_MATERIAL_EXTENSIONS_DESIGN.md — the two can execute in either order.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -224,6 +224,127 @@ per-frame GPU floor" finding from the same day) since they may share a root caus
 codegen-path, no plain-WGSL fusion boundary); a fused single-effect/generator monolith
 (the three primitives stay single-dispatch/single-CPU-op each, composed in the graph);
 scope-creep into A3 (morph targets) or A4 (clip selector, performance surface, retrigger).
+
+## A3 Phase Brief (written 2026-07-16, orchestrating session, re-derived inventory)
+
+**Entry state:** `origin/main` HEAD `6fb1714d` (A2 SHIPPED). Test fixtures present:
+`tests/fixtures/gltf/khronos/{AnimatedMorphCube,MorphStressTest,MorphPrimitivesTest}.glb`.
+`AnimatedMorphCube`/`MorphStressTest` are the doc's named A3 gate fixtures (§3).
+
+**Re-derived inventory (this phase's finding overrides §3's A3 line — verified live, not
+assumed):**
+- `AnimatedMorphCube.glb`: 2 morph targets, 1 animation, channel path `weights`.
+- `MorphStressTest.glb`: 8 morph targets, 3 animations, all channel path `weights`.
+- `MorphPrimitivesTest.glb`: 1 morph target, static `mesh.weights = [0.5]`, no animation —
+  useful as a held-out static-weight smoke case.
+- §3's phrasing ("through the `morph_mesh` shape") does not fit what's actually on disk.
+  `node.morph_mesh` (`primitives/morph_mesh.rs:1-11`) is architecturally a **two-mesh**
+  lerp (`pos = mix(a, b, t*w)`), and its own header already warns: *"this is the static
+  two-mesh lerp only; glTF morph-target playback is a separate future design (D9), do not
+  grow this atom toward it."* glTF morph semantics are additive over N targets:
+  `final = base + Σ_i weight_i * target_delta_i`, N=2..8 in these fixtures, each target
+  independently weighted and live-sampled — not a pairwise lerp. Same shape of surprise as
+  A2's node-transform deviation (see A2 brief above): the doc's assumption doesn't survive
+  contact with the real assets.
+- §2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
+  `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/` — no existing
+  primitive does N-ary weighted delta-sum blending. `node.morph_mesh` and
+  `node.blend_copies` are the nearest relatives, both strictly 2-ary. Genuinely new,
+  confirmed.
+- **Fable advisory review held at this fork (Peter's standing authorization for one
+  critical/blocking review per session, advisor only, no code):** recommendation is two
+  new primitives, the identical shape A2 already proved for skinning —
+  1. `node.gltf_morph_weights` (CPU-only, `boundary_reason: NonGpu`) — sibling of
+     `node.gltf_skeleton_pose`: inputs a live `progress` (same D3 beat-drive default) plus
+     `Table` weight-keyframe tracks (one per target) built at import; reuses the IDENTICAL
+     binary-search+lerp sampler A1/A2 already prove; outputs `Array(f32)` length N (one
+     weight per target, current frame).
+  2. `node.morph_targets_blend` (GPU, codegen-path, `fusion_kind: Pointwise`) — inputs:
+     `in: Array(MeshVertex)` (coincident, the base mesh), `deltas: Array(MeshVertex)`
+     (`InputAccess::BufferGather`, flattened `target_index * vertex_count + vertex_index`
+     layout — same gather pattern `node.skin_mesh`'s joint-matrix palette already proved),
+     `weights: Array(f32)` (`BufferGather`, indexed by target); derived uniform
+     `target_count: u32`. Body: accumulate `out.pos += w[i] * delta[i].pos` (and normal)
+     over a uniform-bounded loop, base pass-through when `target_count == 0`.
+  - `node.morph_mesh` gets ZERO changes — its header's "do not grow this atom toward it"
+    is honored, not overridden.
+  - Rejected (per Fable's reasoning, adopted): N chained single-target apply passes (one
+    node per morph target). Each pass is individually fusable and the freeze compiler
+    would fuse the chain into one dispatch — same runtime cost as the N-ary node — but it
+    makes graph topology a function of asset content (an 8-target asset imports as 8
+    nodes wired in series, re-importing with a different target count rewrites the graph
+    shape), which breaks preset stability and produces an ugly weight wire-fanout. One
+    N-ary node with a bounded uniform loop keeps topology content-independent at the same
+    fused cost.
+  - Buffer-length hazard (Fable-flagged, same class as A2's out-of-range joint clamp):
+    `deltas.len()` must equal `target_count * vertex_count` and `weights.len()` must be
+    `>= target_count`, and neither is type-enforced. Defend in-kernel by deriving the
+    effective loop bound as `min(target_count, weights_len, deltas_len / dispatch_count)`
+    from codegen-injected buffer lengths — a short/mismatched buffer truncates (skips the
+    missing targets) rather than reading out of bounds or shearing the mesh. Import-time
+    validation should fail loudly if the parsed counts don't match; runtime stays
+    silent-safe per the truncation contract.
+
+**Deliverables:**
+1. `gltf_load.rs`: parse `mesh.primitives[].targets` (POSITION/NORMAL deltas per target,
+   TANGENT deferred unless a gate fixture needs it — re-derive if so) and the `weights`
+   animation channel path (currently unparsed — confirm zero hits before starting, matching
+   A1/A2's audit doctrine) into per-object morph-target data: base-relative position/normal
+   deltas per target (flattened target-major buffer, matching `morph_targets_blend`'s
+   `deltas` layout) plus per-target weight keyframe `Table`s (reusing the `[time_s, value]`
+   row shape, one Table per animated weight channel; a target with no channel gets a single
+   static row from `mesh.weights[i]`, mirroring A2's "unanimated joint gets its bind-pose
+   static row" convention — do NOT default an unanimated target's weight to 0, use its
+   authored static weight per `MorphPrimitivesTest`'s `mesh.weights=[0.5]` case).
+2. `node.gltf_morph_weights` (`primitives/gltf_morph_weights.rs`) — per Fable's shape above.
+3. `node.morph_targets_blend` (`primitives/morph_targets_blend.rs`) — per Fable's shape
+   above; codegen path mandatory (`standalone_for_spec::<Self>()`, no hand `include_str!`
+   runtime kernel); generated-vs-hand parity test (independent Rust reference formula, per
+   DECOMPOSING_GENERATORS.md §9's "brand-new primitive, no legacy predecessor" convention —
+   same pattern A2's `skin_mesh` parity test already used).
+4. `gltf_import.rs::build_import_graph`: when an object's mesh carries morph targets, wire
+   `node.gltf_mesh_source` (base mesh) → `node.morph_targets_blend.in`, `node.gltf_morph_weights.weights`
+   → `node.morph_targets_blend.weights`, imported target-delta buffer → `.deltas`; the
+   group's `vertices` output interface wires from `morph_targets_blend.out` instead of the
+   mesh source directly (additive to the static path, same "replaces for that object" shape
+   A2 used for skinning — a morphed object's base geometry alone is never what should
+   render once targets are non-static).
+5. Four-phase PNG goldens: `AnimatedMorphCube.glb` rendered headless at progress
+   0/0.25/0.5/0.75 — four visibly distinct PNGs (goldens dir already has a placeholder
+   `animated_morph_cube.png`; confirm at execution whether it needs regenerating or is
+   reusable). `MorphStressTest.glb` gets the same four-phase treatment (8-target stress
+   case) — reuse the existing `morph_stress_test.png` slot's naming convention.
+
+**Gate:**
+- Positive: `node_graph::gltf_import::tests::morph_targets_render_four_visibly_distinct_poses`
+  (`--features gpu-proofs`) — `AnimatedMorphCube.glb` and `MorphStressTest.glb` each render
+  four progress-swept frames, pairwise byte-distinct, visually inspected (not just green) to
+  confirm the cube's face genuinely blends/bulges rather than producing noise or a frozen
+  base mesh. `node_graph::primitives::morph_targets_blend::gpu_tests` parity: generated
+  kernel vs. independent Rust reference, at minimum single-target-full-weight,
+  multi-target-blend, and zero-weight (base pass-through) cases — mirroring `skin_mesh`'s
+  3-case convention.
+- Round-trip: `Table` weight tracks + the two new node types survive V1 JSON save→reload
+  (existing param-serialization path, prove not assume, per A1's gate doctrine).
+- Negative: `node.morph_mesh` diff is empty in this phase — zero lines changed in
+  `morph_mesh.rs` (its header's warning is a hard boundary, not a suggestion).
+- Test scope: `cargo test -p manifold-renderer --lib` (default sweep) +
+  `cargo test -p manifold-renderer --features gpu-proofs --lib` (targeted
+  morph_targets_blend/gltf_morph_weights/gltf_import module runs) +
+  `cargo run -p manifold-renderer --bin gen_node_catalog` (regenerate for the 2 new
+  primitives; `catalog_gen::tests::regenerates_in_sync` requires this) + `cargo clippy -p
+  manifold-renderer -- -D warnings` (worktree-scoped).
+
+**Forbidden moves:** growing `node.morph_mesh` toward N-ary morph playback (its header's
+explicit boundary); a fused single-kernel that parses+samples+blends in one primitive (CPU
+sampling and GPU blending stay separate primitives, per A1/A2 precedent); N chained
+per-target apply nodes (Fable-rejected — content-dependent graph topology); scope-creep into
+A4 (clip selector, loop modes, retrigger, perform-UI).
+
+**Performer-gesture line:** same as A1 — progress driven by an LFO or beat-ramp scrubs the
+blend continuously; the gate's four-phase render is the static proof, a saw-LFO loop-
+continuity check (mirroring A1's wrap-point test) is a should-have if time permits, not a
+hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable scope per phase).
 
 ## 5. Deferred
 - Clip blending/crossfade (D4) · animation-pointer property targets (D5) · IK/retargeting (never in scope for import) · timeline-clip integration (an imported animation as a timeline clip with in/out points — real feature, but it builds ON A1–A4's progress param; trigger: Peter's call after playing with A4).

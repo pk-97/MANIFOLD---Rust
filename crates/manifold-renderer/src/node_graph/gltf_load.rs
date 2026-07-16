@@ -1065,6 +1065,13 @@ pub(crate) struct GltfMaterialInfo {
     /// rigid-animated object, for the synthetic default-material entry,
     /// or when more than one node contributes this material's geometry.
     pub skin: Option<GltfObjectSkin>,
+    /// GLTF_ANIMATION_DESIGN.md A3: this object's resolved morph-target
+    /// topology, when its geometry is contributed by exactly one
+    /// mesh-owning node (the SAME single-node scope boundary `animation`/
+    /// `skin` above use) whose mesh carries `targets` on the primitive(s)
+    /// contributing this material. `None` for an unmorphed object, the
+    /// synthetic default-material entry, or the multi-node case.
+    pub morph: Option<GltfObjectMorph>,
 }
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
@@ -1244,6 +1251,19 @@ pub(crate) struct QuatTrack {
     pub values: Vec<[f32; 4]>,
 }
 
+/// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
+/// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
+/// every target's weight into one flat output accessor per keyframe
+/// (`count = input.count * target_count`); de-interleaved here so
+/// `values[i]` is keyframe `i`'s full per-target weight vector (length
+/// `target_count`), the same "one row per keyframe" shape [`Vec3Track`]
+/// uses for translation/scale, just N-wide instead of 3-wide.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WeightsTrack {
+    pub times: Vec<f32>,
+    pub values: Vec<Vec<f32>>,
+}
+
 /// One glTF node's animated TRS channels within a single animation clip.
 /// Any of the three may be absent (that channel isn't animated on this
 /// node in this clip) — never fabricated.
@@ -1253,6 +1273,14 @@ pub(crate) struct GltfNodeAnimation {
     pub translation: Option<Vec3Track>,
     pub rotation: Option<QuatTrack>,
     pub scale: Option<Vec3Track>,
+    /// GLTF_ANIMATION_DESIGN.md A3: this node's morph-target `weights`
+    /// channel, when present. Populated the same single-node-owns-this-
+    /// channel way TRS channels are — a `weights` channel targets the
+    /// mesh-owning node itself (glTF 2.0 §3.7.2.1: it animates that node's
+    /// morph weights, overriding `mesh.weights`), so unlike TRS there is
+    /// no ancestor-chain composition to resolve — `gltf_import.rs` looks
+    /// this up directly by the contributing node's index.
+    pub weights: Option<WeightsTrack>,
 }
 
 /// One `document.animations()` entry (a glTF "clip"), parsed into its
@@ -1294,7 +1322,10 @@ pub(crate) struct GltfObjectAnimation {
 /// tracks. LINEAR interpolation only (A1 scope) — STEP/CUBICSPLINE
 /// channels are recorded in `skipped_channels`, never silently dropped
 /// and never approximated as LINEAR. Morph-weight channels (`path ==
-/// "weights"`) are A3 scope — also recorded, not sampled.
+/// "weights"`) are decoded into [`GltfNodeAnimation::weights`]
+/// (GLTF_ANIMATION_DESIGN.md A3) — only an unreadable weights accessor
+/// (a length that doesn't divide evenly by the keyframe count) still
+/// lands in `skipped_channels`.
 fn parse_animations(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
@@ -1345,11 +1376,27 @@ fn parse_animations(
                         entry.rotation =
                             Some(QuatTrack { times, values: it.into_f32().collect() });
                     }
-                    gltf::animation::util::ReadOutputs::MorphTargetWeights(_) => {
-                        skipped_channels.push(format!(
-                            "node {node_index}: morph-target weight animation not supported \
-                             in A1 (GLTF_ANIMATION_DESIGN.md A3 scope)"
-                        ));
+                    gltf::animation::util::ReadOutputs::MorphTargetWeights(it) => {
+                        // glTF interleaves every target's weight per
+                        // keyframe into one flat accessor
+                        // (GLTF_ANIMATION_DESIGN.md A3) — de-interleave
+                        // into one `target_count`-wide row per keyframe.
+                        // `it` yields `f32`/normalized-int weights
+                        // regardless of the accessor's storage type.
+                        let flat: Vec<f32> = it.into_f32().collect();
+                        let target_count = if times.is_empty() { 0 } else { flat.len() / times.len() };
+                        if target_count == 0 || flat.len() != times.len() * target_count {
+                            skipped_channels.push(format!(
+                                "node {node_index}: weights channel output length {} doesn't \
+                                 divide evenly by {} keyframes — unreadable",
+                                flat.len(),
+                                times.len()
+                            ));
+                        } else {
+                            let values: Vec<Vec<f32>> =
+                                flat.chunks_exact(target_count).map(|c| c.to_vec()).collect();
+                            entry.weights = Some(WeightsTrack { times, values });
+                        }
                     }
                 }
             }
@@ -1603,6 +1650,33 @@ pub(crate) struct GltfObjectSkin {
     pub info: GltfSkinInfo,
 }
 
+// ─── GLTF_ANIMATION_DESIGN.md A3 — morph targets ───────────────────────
+
+/// This render object's (= one material's) resolved morph-target topology
+/// — how many targets, which node's `weights` animation channel (if any)
+/// drives them, and the static per-target fallback weight for a target
+/// that channel doesn't animate. `gltf_import.rs` reads this (plus the
+/// SAME `node_anims_clip0` lookup `build_skeleton_pose_tables` already
+/// uses for skinning) to build `node.gltf_morph_weights`'s `weight_tracks`
+/// Table; the actual per-vertex delta geometry is loaded separately, at
+/// RUNTIME, by `node.gltf_morph_deltas_source` (mirrors how per-vertex
+/// JOINTS_0/WEIGHTS_0 live outside `GltfObjectSkin` too — vertex-scale
+/// data is never baked into import-time Tables).
+#[derive(Debug, Clone)]
+pub(crate) struct GltfObjectMorph {
+    /// The sole contributing node's index — `node_anims_clip0.get(&this)`
+    /// is where an animated `weights` channel for this object would live.
+    pub mesh_node_index: usize,
+    pub target_count: u32,
+    /// `mesh.weights()[i]` for `i in 0..target_count`, defaulted to `0.0`
+    /// for any target past a short (or absent) `weights` array — glTF 2.0
+    /// §3.7.2.1's spec default for an unauthored target weight. Used as
+    /// the fallback for a target this object's `weights` channel (if any)
+    /// doesn't animate — mirrors `GltfSkinInfo::joint_bind_translation`'s
+    /// "unanimated joint gets its bind-pose static row" convention.
+    pub static_weights: Vec<f32>,
+}
+
 /// (vertices, per-vertex joint indices as f32, per-vertex weights) — the
 /// coincident triple `node.gltf_skinned_mesh_source` uploads as its three
 /// array outputs.
@@ -1726,6 +1800,160 @@ pub(crate) fn load_gltf_skinned_mesh(
     }
     Err(format!(
         "{}: no skinned mesh-owning node found contributing material {material_index}",
+        path.display()
+    ))
+}
+
+// ─── GLTF_ANIMATION_DESIGN.md A3 — morph target deltas (runtime load) ──
+
+/// Find the first mesh-owning node (DFS, default-scene rooted) whose mesh
+/// carries a primitive matching `material_index` — no `skin()` requirement,
+/// unlike [`find_skinned_node_for_material`] (a morphed object need not
+/// also be skinned; these are independent glTF features).
+fn find_mesh_node_for_material<'a>(
+    node: &gltf::Node<'a>,
+    material_index: u32,
+) -> Option<gltf::Node<'a>> {
+    if let Some(mesh) = node.mesh()
+        && mesh.primitives().any(|p| p.material().index() == Some(material_index as usize))
+    {
+        return Some(node.clone());
+    }
+    for child in node.children() {
+        if let Some(found) = find_mesh_node_for_material(&child, material_index) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Flatten one primitive's per-target POSITION/NORMAL morph deltas into
+/// `per_target_out[target_index]`, using the SAME triangle-index expansion
+/// [`flatten_primitive`] uses for the base mesh — deltas[t][k] must line up
+/// 1:1 with `node.gltf_mesh_source`'s base_verts[k] for this same
+/// node/material, so `node.morph_targets_blend` can add them directly.
+/// `world_linear` (the node's world matrix's upper-3x3, NO translation —
+/// a delta is a displacement vector, never a point) transforms position
+/// deltas; `normal_mat` (transpose-inverse, matching [`flatten_primitive`]'s
+/// normal handling) transforms normal deltas. A target missing its
+/// POSITION or NORMAL displacement accessor (both are spec-optional per
+/// target) contributes an all-zero delta for that channel, never an error.
+/// `per_target_out` is resized to the primitive's target count on first
+/// call; a LATER primitive with a different target count is an `Err` (not
+/// exercised by the A3 gate fixtures — each ships one primitive per
+/// morphed material — re-derive if a future asset needs it).
+fn flatten_primitive_morph_deltas(
+    primitive: &gltf::Primitive,
+    buffers: &[gltf::buffer::Data],
+    world_linear: &[[f32; 3]; 3],
+    normal_mat: &[[f32; 3]; 3],
+    per_target_out: &mut Vec<Vec<MeshVertex>>,
+) -> Result<(), String> {
+    if primitive.mode() != gltf::mesh::Mode::Triangles {
+        return Err(format!(
+            "primitive uses non-Triangles mode {:?} — unsupported by node.gltf_morph_deltas_source",
+            primitive.mode()
+        ));
+    }
+    let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+    let base_vertex_count = reader
+        .read_positions()
+        .ok_or_else(|| "morphed primitive missing required POSITION accessor".to_string())?
+        .count();
+    let indices: Vec<u32> = match reader.read_indices() {
+        Some(idx) => idx.into_u32().collect(),
+        None => (0..base_vertex_count as u32).collect(),
+    };
+
+    /// One target's optional POSITION/NORMAL displacement accessors,
+    /// fully read into memory (both spec-optional per target).
+    type TargetDisplacements = (Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>);
+    let targets: Vec<TargetDisplacements> = reader
+        .read_morph_targets()
+        .map(|(pos, norm, _tangent)| {
+            (pos.map(|it| it.collect()), norm.map(|it| it.collect()))
+        })
+        .collect();
+
+    if per_target_out.is_empty() {
+        per_target_out.resize(targets.len(), Vec::new());
+    } else if per_target_out.len() != targets.len() {
+        return Err(format!(
+            "inconsistent morph target count across primitives: {} vs {}",
+            per_target_out.len(),
+            targets.len()
+        ));
+    }
+
+    for (t_idx, (pos_disp, norm_disp)) in targets.iter().enumerate() {
+        for tri in indices.chunks_exact(3) {
+            for &i in tri {
+                let i = i as usize;
+                let dp = pos_disp.as_ref().and_then(|d| d.get(i)).copied().unwrap_or([0.0, 0.0, 0.0]);
+                let dn = norm_disp.as_ref().and_then(|d| d.get(i)).copied().unwrap_or([0.0, 0.0, 0.0]);
+                let wp = mat3_mul_vec3(*world_linear, dp);
+                let wn = mat3_mul_vec3(*normal_mat, dn);
+                per_target_out[t_idx].push(MeshVertex {
+                    position: wp,
+                    _pad0: 0.0,
+                    normal: wn,
+                    _pad1: 0.0,
+                    uv: [0.0, 0.0],
+                    _pad2: [0.0, 0.0],
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Load a `.glb`'s morph-target deltas for `material_index`'s sole
+/// contributing node, flattened target-major
+/// (`deltas[target_index * vertex_count + vertex_index]`) — the layout
+/// `node.morph_targets_blend`'s `deltas` input expects. `gltf_import.rs`
+/// only wires `node.gltf_morph_deltas_source` (which calls this) when
+/// `GltfMaterialInfo::morph` resolved. Returns `(deltas, target_count,
+/// vertex_count)`.
+pub(crate) fn load_gltf_morph_deltas(
+    path: &std::path::Path,
+    material_index: u32,
+) -> Result<(Vec<MeshVertex>, u32, u32), String> {
+    let (document, buffers, _images) = import_glb(path)?;
+    let parent_of = build_parent_map(&document);
+    for node in resolve_import_nodes(&document) {
+        let Some(found) = find_mesh_node_for_material(&node, material_index) else {
+            continue;
+        };
+        // The node's own world transform — SAME matrix `walk_gltf_node`
+        // would compose for this node when node.gltf_mesh_source's
+        // Material selector flattens the base mesh (assuming no
+        // EXT_mesh_gpu_instancing on this node; not exercised by the A3
+        // gate fixtures, which each ship a single non-instanced morphed
+        // object — re-derive if a future asset needs it).
+        let world = static_world_matrix(&document, found.index(), &parent_of);
+        let world_linear = mat3_upper_row_major(&world);
+        let normal_mat = mat3_transpose(mat3_inverse(world_linear));
+        let mesh = found.mesh().ok_or_else(|| "matched node has no mesh".to_string())?;
+        let mut per_target: Vec<Vec<MeshVertex>> = Vec::new();
+        for primitive in mesh.primitives() {
+            if primitive.material().index() != Some(material_index as usize) {
+                continue;
+            }
+            flatten_primitive_morph_deltas(&primitive, &buffers, &world_linear, &normal_mat, &mut per_target)?;
+        }
+        if per_target.is_empty() || per_target[0].is_empty() {
+            return Err(format!(
+                "{}: material {material_index} has no morph targets",
+                path.display()
+            ));
+        }
+        let target_count = per_target.len() as u32;
+        let vertex_count = per_target[0].len() as u32;
+        let deltas: Vec<MeshVertex> = per_target.into_iter().flatten().collect();
+        return Ok((deltas, target_count, vertex_count));
+    }
+    Err(format!(
+        "{}: no mesh-owning node found contributing material {material_index}",
         path.display()
     ))
 }
@@ -1913,6 +2141,53 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                             "material {material_index}: geometry contributed by {} nodes, at \
                              least one of which is skinned — multi-node-per-material skinning is \
                              out of A2 scope, this object is left unskinned",
+                            nodes.len()
+                        ));
+                    }
+                    None
+                }
+                _ => None,
+            };
+            // A3: resolve this material's morph targets the same way —
+            // exactly one contributing node, and that node's mesh carries
+            // `targets` on the primitive(s) contributing this material.
+            // `target_count` comes from the FIRST matching primitive with
+            // targets; a mesh with more than one primitive per material
+            // and an inconsistent target count across them is not
+            // exercised by AnimatedMorphCube/MorphStressTest/
+            // MorphPrimitivesTest (re-derive if a future asset needs it).
+            let morph = match nodes_by_material.get(&Some(material_index as usize)) {
+                Some(nodes) if nodes.len() == 1 => {
+                    let node_index = *nodes.iter().next().unwrap();
+                    document.nodes().nth(node_index).and_then(|node| {
+                        let mesh = node.mesh()?;
+                        let target_count = mesh
+                            .primitives()
+                            .find(|p| {
+                                p.material().index() == Some(material_index as usize)
+                                    && p.morph_targets().len() > 0
+                            })
+                            .map(|p| p.morph_targets().len())?;
+                        let mesh_weights = mesh.weights().unwrap_or(&[]);
+                        let static_weights: Vec<f32> = (0..target_count)
+                            .map(|i| mesh_weights.get(i).copied().unwrap_or(0.0))
+                            .collect();
+                        Some(GltfObjectMorph { mesh_node_index: node_index, target_count: target_count as u32, static_weights })
+                    })
+                }
+                Some(nodes) if nodes.len() > 1 => {
+                    if nodes.iter().any(|n| {
+                        document
+                            .nodes()
+                            .nth(*n)
+                            .and_then(|node| node.mesh())
+                            .map(|mesh| mesh.primitives().any(|p| p.morph_targets().len() > 0))
+                            .unwrap_or(false)
+                    }) {
+                        animation_report_lines.push(format!(
+                            "material {material_index}: geometry contributed by {} nodes, at \
+                             least one of which carries morph targets — multi-node-per-material \
+                             morph targets are out of A3 scope, this object is left unmorphed",
                             nodes.len()
                         ));
                     }
@@ -2251,6 +2526,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 emissive_sampler,
                 animation,
                 skin,
+                morph,
             })
         })
         .collect();
@@ -2331,6 +2607,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // animated.
             animation: None,
             skin: None,
+            morph: None,
         });
     }
 

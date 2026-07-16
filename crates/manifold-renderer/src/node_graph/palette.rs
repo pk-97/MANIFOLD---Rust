@@ -245,6 +245,7 @@ mod tests {
                 // Sorts last: ASCII byte-order puts a lowercase leading
                 // letter after every uppercase-leading label above.
                 "glTF Animation Source",
+                "glTF Morph Weights",
                 "glTF Skeleton Pose",
             ],
         );
