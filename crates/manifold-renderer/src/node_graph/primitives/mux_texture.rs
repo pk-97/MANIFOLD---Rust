@@ -129,6 +129,21 @@ pub struct MuxTexture {
     latched_selector: Option<f32>,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — hash of
+    /// (effective selector index actually rendered, selected source slot's
+    /// write generation, selected source texture identity, output texture
+    /// identity, executor rebuild epoch) from the last frame this node
+    /// actually dispatched (or cleared). A full-key match means every input
+    /// this evaluate reads is provably the same content it read last time,
+    /// so the dispatch (or the clear-fallback) is skipped and
+    /// `mark_outputs_unchanged()` is declared instead — this is what lets
+    /// `render_scene`'s IBL cache key (D7/P3) actually stabilize across a
+    /// real glTF import's `bake_environment -> switch_texture -> render_scene`
+    /// chain, where this node used to re-emit unconditionally every frame.
+    /// The unwired-fallback (`in_0`) and all-unwired (clear-to-black) cases
+    /// fold into the same key (a distinct hash arm for "no source bound")
+    /// rather than special-casing them — same rule as any resolved source.
+    last_gate_key: Option<u64>,
 }
 
 impl MuxTexture {
@@ -138,6 +153,7 @@ impl MuxTexture {
             latched_selector: None,
             pipeline: None,
             sampler: None,
+            last_gate_key: None,
         };
         m.rebuild_ports(DEFAULT_INPUTS);
         m
@@ -340,19 +356,58 @@ impl EffectNode for MuxTexture {
         let idx = resolve_selector_index(selector, self.num_inputs());
 
         // Selected input, falling back to in_0 if the selected slot is unwired.
-        let source = ctx
+        // Kept as (port name, texture) so the gate below can key on the
+        // ACTUAL slot that fed this frame's output, not just `idx` — a
+        // fallback to in_0 uses a different physical slot than a direct
+        // idx==0 selection would, even though both render the same branch.
+        let selected = ctx
             .inputs
             .texture_2d(IN_PORT_NAMES[idx])
-            .or_else(|| ctx.inputs.texture_2d("in_0"));
+            .map(|t| (IN_PORT_NAMES[idx], t))
+            .or_else(|| ctx.inputs.texture_2d("in_0").map(|t| ("in_0", t)));
 
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
         let (w, h) = (out.width, out.height);
+        let out_identity = out.identity_key();
+
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193: gate this
+        // evaluate's dispatch (or clear-fallback) on everything that
+        // determines its output content — the effective selector index,
+        // the selected source's write generation + physical identity (the
+        // `last_mip_identity`/`ibl_cache_key` precedent: identity alone is
+        // a stale-serving trap on an in-place-rewriting producer, so the
+        // generation term is load-bearing, not decorative), the output
+        // texture's own identity (pool recycling), and the executor rebuild
+        // epoch (never compare a generation number alone across executor
+        // lifetimes — `NodeInputs::slot_generation`'s own doc comment). The
+        // all-unwired clear-to-black path participates via its own hash arm
+        // rather than a sentinel value that could collide with a real
+        // (generation, identity) pair.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        idx.hash(&mut hasher);
+        match selected {
+            Some((port, tex)) => {
+                ctx.inputs.slot_generation(port).hash(&mut hasher);
+                hasher.write_usize(tex.identity_key());
+            }
+            None => hasher.write_u8(0xFF),
+        }
+        hasher.write_usize(out_identity);
+        hasher.write_u64(ctx.rebuild_epoch);
+        let gate_key = hasher.finish();
+
+        if self.last_gate_key == Some(gate_key) {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+        self.last_gate_key = Some(gate_key);
 
         // Every in_N unwired: clear the output to opaque black so the gap is
         // visually obvious instead of leaving sticky pool contents behind.
-        let Some(source) = source else {
+        let Some(source) = selected.map(|(_, tex)| tex) else {
             let gpu = ctx.gpu_encoder();
             gpu.clear_texture(out, 0.0, 0.0, 0.0, 1.0);
             return;
@@ -473,5 +528,295 @@ mod tests {
         let m = MuxTexture::new();
         let node: &dyn EffectNode = &m;
         assert_eq!(node.type_id().as_str(), "node.switch_texture");
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 gate: the
+/// evaluate-path dispatch skip, exercised directly (no `Graph`/`Executor`
+/// needed — bindings are constructed by hand, same shape as
+/// `gltf_texture_source`'s and `bake_equirect_envmap`'s own P1/P3
+/// gpu_tests modules).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::render_target::RenderTarget;
+    use half::f16;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn solid_rgba16f(w: u32, h: u32, rgba: [f32; 4]) -> Vec<u8> {
+        let px: [u16; 4] =
+            [f16::from_f32(rgba[0]).to_bits(), f16::from_f32(rgba[1]).to_bits(), f16::from_f32(rgba[2]).to_bits(), f16::from_f32(rgba[3]).to_bits()];
+        let mut bytes = Vec::with_capacity((w * h) as usize * 8);
+        for _ in 0..(w * h) {
+            for v in px {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn upload_solid_texture(device: &GpuDevice, w: u32, h: u32, rgba: [f32; 4], label: &str) -> manifold_gpu::GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
+            label,
+            mip_levels: 1,
+        });
+        device.upload_texture(&tex, &solid_rgba16f(w, h, rgba));
+        tex
+    }
+
+    fn readback(device: &GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+        let tex = backend.texture_2d(slot).expect("texture retained");
+        let bytes_per_row = w * 8; // Rgba16Float
+        let total = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("mux-texture-readback");
+        enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared readback");
+        unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_once(
+        prim: &mut MuxTexture,
+        backend: &MetalBackend,
+        device: &GpuDevice,
+        input_scratch: &[(&'static str, Slot)],
+        output_scratch: &[(&'static str, Slot)],
+        generations: &[u64],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(input_scratch, backend_ref, generations);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("mux-texture-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.evaluate(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn base_params(num_inputs: f32, selector: f32) -> ParamValues {
+        let mut p = ParamValues::default();
+        p.insert(Cow::Borrowed("num_inputs"), ParamValue::Float(num_inputs));
+        p.insert(Cow::Borrowed("selector"), ParamValue::Float(selector));
+        p
+    }
+
+    /// I4 (static inline selector, static source): frame 2's output is
+    /// bit-identical to frame 1's, and the dispatch skip
+    /// (`mark_outputs_unchanged`) fires on frame 2.
+    #[test]
+    fn frame2_matches_frame1_on_static_inline_selector_and_declares_unchanged() {
+        let device = crate::test_device();
+        let (w, h) = (8u32, 8u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+
+        let src = upload_solid_texture(&device, w, h, [1.0, 0.0, 0.0, 1.0], "mux-src");
+        let r_in0 = ResourceId(0);
+        let in0_target = RenderTarget::view_of(src, "view");
+        let in0_slot = backend.pre_bind_texture_2d(r_in0, in0_target);
+        let r_out = ResourceId(1);
+        let out_target = RenderTarget::new(&device, w, h, format, "mux-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, out_target);
+
+        let input_scratch: Vec<(&'static str, Slot)> = vec![("in_0", in0_slot)];
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let params = base_params(8.0, 0.0);
+        let mut prim = MuxTexture::new();
+
+        let unchanged1 =
+            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        assert!(!unchanged1, "first frame must actually dispatch (no prior gate key)");
+        let frame1 = readback(&device, &backend, out_slot, w, h);
+
+        let unchanged2 =
+            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        assert!(unchanged2, "static frame must declare mark_outputs_unchanged");
+        let frame2 = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static source");
+    }
+
+    /// I2-analog (the documented staleness trap this design guards
+    /// against): the SAME physical source texture (identity unchanged)
+    /// silently rewritten in place, with its slot's write generation
+    /// bumped to signal the change — exactly R1's gated-source contract.
+    /// The gate must re-dispatch on the generation bump (not go stale on
+    /// identity alone), then re-declare unchanged once the generation
+    /// holds steady again.
+    #[test]
+    fn source_generation_bump_without_identity_change_forces_refresh() {
+        let device = crate::test_device();
+        let (w, h) = (8u32, 8u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+
+        let src = upload_solid_texture(&device, w, h, [1.0, 0.0, 0.0, 1.0], "mux-src");
+        let r_in0 = ResourceId(0);
+        let in0_slot = backend.pre_bind_texture_2d(r_in0, RenderTarget::view_of(src, "view"));
+        let r_out = ResourceId(1);
+        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+
+        let input_scratch: Vec<(&'static str, Slot)> = vec![("in_0", in0_slot)];
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let params = base_params(8.0, 0.0);
+        let mut prim = MuxTexture::new();
+
+        // Frame 1: generation 1 (index by in0_slot.0).
+        let mut gens = vec![0u64; (in0_slot.0 as usize) + 1];
+        gens[in0_slot.0 as usize] = 1;
+        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
+        let frame1 = readback(&device, &backend, out_slot, w, h);
+
+        // Frame 2: SAME texture object, rewritten in place to green, and the
+        // generation bumps to 2 — the gate must not go stale on identity.
+        let same_tex = backend.texture_2d(in0_slot).expect("bound").clone();
+        device.upload_texture(&same_tex, &solid_rgba16f(w, h, [0.0, 1.0, 0.0, 1.0]));
+        gens[in0_slot.0 as usize] = 2;
+        let unchanged2 =
+            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
+        assert!(!unchanged2, "a generation bump must force a re-dispatch even with unchanged identity");
+        let frame2 = readback(&device, &backend, out_slot, w, h);
+        assert_ne!(frame1, frame2, "the rewritten content must actually reach the output");
+
+        // Frame 3: generation holds at 2 — must settle back to unchanged.
+        let unchanged3 =
+            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &gens, &params, frame_time());
+        assert!(unchanged3, "a held generation must re-declare unchanged");
+        let frame3 = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame2, frame3, "frame 3 must be bit-identical to frame 2 once the generation holds");
+    }
+
+    /// Changing the INLINE selector (unwired) must switch branches and
+    /// must NOT be gated as unchanged — the new branch's content must
+    /// reach the output the same frame the selector changes.
+    #[test]
+    fn inline_selector_change_switches_branch_and_forces_refresh() {
+        let device = crate::test_device();
+        let (w, h) = (8u32, 8u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+
+        let src0 = upload_solid_texture(&device, w, h, [1.0, 0.0, 0.0, 1.0], "mux-src0");
+        let src1 = upload_solid_texture(&device, w, h, [0.0, 0.0, 1.0, 1.0], "mux-src1");
+        let r_in0 = ResourceId(0);
+        let in0_slot = backend.pre_bind_texture_2d(r_in0, RenderTarget::view_of(src0, "view"));
+        let r_in1 = ResourceId(1);
+        let in1_slot = backend.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1, "view"));
+        let r_out = ResourceId(2);
+        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+
+        let input_scratch: Vec<(&'static str, Slot)> = vec![("in_0", in0_slot), ("in_1", in1_slot)];
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let mut prim = MuxTexture::new();
+
+        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &base_params(8.0, 0.0), frame_time());
+        let frame_branch0 = readback(&device, &backend, out_slot, w, h);
+
+        let unchanged =
+            run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &base_params(8.0, 1.0), frame_time());
+        assert!(!unchanged, "a selector flip must NOT be gated as unchanged");
+        let frame_branch1 = readback(&device, &backend, out_slot, w, h);
+        assert_ne!(frame_branch0, frame_branch1, "switching branches must change the output");
+
+        // Must match a FRESH render of branch 1 from scratch.
+        let mut backend_fresh = MetalBackend::new(device.arc(), w, h, format);
+        let src1_fresh = upload_solid_texture(&device, w, h, [0.0, 0.0, 1.0, 1.0], "mux-src1-fresh");
+        let in0_fresh = backend_fresh.pre_bind_texture_2d(r_in0, RenderTarget::new(&device, w, h, format, "unused"));
+        let in1_fresh = backend_fresh.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1_fresh, "view"));
+        let out_fresh = backend_fresh.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out-fresh"));
+        let input_scratch_fresh: Vec<(&'static str, Slot)> = vec![("in_0", in0_fresh), ("in_1", in1_fresh)];
+        let output_scratch_fresh: Vec<(&'static str, Slot)> = vec![("out", out_fresh)];
+        let mut prim_fresh = MuxTexture::new();
+        run_once(&mut prim_fresh, &backend_fresh, &device, &input_scratch_fresh, &output_scratch_fresh, &[], &base_params(8.0, 1.0), frame_time());
+        let fresh = readback(&device, &backend_fresh, out_fresh, w, h);
+        assert_eq!(frame_branch1, fresh, "a live selector flip must match a fresh executor built with that selector");
+    }
+
+    /// Changing a WIRED selector renders with the LATCHED (previous
+    /// frame's) value — existing, designed behavior (the doc comment on
+    /// `latched_selector`) — this test pins that the new evaluate-path gate
+    /// did not break that one-frame lag.
+    #[test]
+    fn wired_selector_change_uses_latched_value_one_frame_lag() {
+        let device = crate::test_device();
+        let (w, h) = (8u32, 8u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+
+        let src0 = upload_solid_texture(&device, w, h, [1.0, 0.0, 0.0, 1.0], "mux-src0");
+        let src1 = upload_solid_texture(&device, w, h, [0.0, 0.0, 1.0, 1.0], "mux-src1");
+        let r_in0 = ResourceId(0);
+        let in0_slot = backend.pre_bind_texture_2d(r_in0, RenderTarget::view_of(src0, "view"));
+        let r_in1 = ResourceId(1);
+        let in1_slot = backend.pre_bind_texture_2d(r_in1, RenderTarget::view_of(src1, "view"));
+        let r_out = ResourceId(2);
+        let out_slot = backend.pre_bind_texture_2d(r_out, RenderTarget::new(&device, w, h, format, "mux-out"));
+        // Selector is WIRED: pick an arbitrary slot number distinct from
+        // the texture slots above and drive it via `set_scalar`.
+        let selector_slot = Slot(1000);
+
+        let input_scratch: Vec<(&'static str, Slot)> =
+            vec![("selector", selector_slot), ("in_0", in0_slot), ("in_1", in1_slot)];
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+        let params = base_params(8.0, 0.0);
+        let mut prim = MuxTexture::new();
+
+        // Frame 1: wire = 0 (branch 0). No latch yet, so `evaluate` reads
+        // the CURRENT wire value this first time.
+        backend.set_scalar(selector_slot, ParamValue::Float(0.0));
+        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        let frame1 = readback(&device, &backend, out_slot, w, h);
+
+        // Frame 2: wire flips to 1 — must still render branch 0 (the
+        // LATCHED value from frame 1), not branch 1 yet.
+        backend.set_scalar(selector_slot, ParamValue::Float(1.0));
+        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        let frame2 = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame1, frame2, "the frame the wire flips must still render the LATCHED (old) branch");
+
+        // Frame 3: wire holds at 1 — the latch has caught up, branch 1 now.
+        backend.set_scalar(selector_slot, ParamValue::Float(1.0));
+        run_once(&mut prim, &backend, &device, &input_scratch, &output_scratch, &[], &params, frame_time());
+        let frame3 = readback(&device, &backend, out_slot, w, h);
+        assert_ne!(frame2, frame3, "one frame after the wire flip, the latch must have caught up to branch 1");
     }
 }

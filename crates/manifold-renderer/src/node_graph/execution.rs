@@ -233,6 +233,40 @@ pub struct Executor {
     /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
     /// lifetime hazard this alone does not cover.
     slot_generations: Vec<u64>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — per-step
+    /// "last frame's param-driven alias" state: `(aliased-from resource,
+    /// destination slot, in-resource's write generation at alias time)`,
+    /// indexed like `node_declared_unchanged`/`step_memo`. Populated ONLY
+    /// on the `performed_alias && !data_skip` path (a node's
+    /// `skip_passthrough` declaration, e.g. `mux_texture`'s
+    /// inline-selector fast path) — `None` for every other step, and reset
+    /// to `None` whenever that step does not take that exact path this
+    /// frame (an alias that fails `compatible()`, a step whose alias
+    /// source flips to the data-skip contract, or a step that stops
+    /// aliasing altogether must not let a stale match fire later). The
+    /// resource (not the physical destination-input slot) is the identity
+    /// term for the ALIASED-FROM side deliberately: the compiled edge a
+    /// `skip_passthrough` declaration selects is stable frame to frame
+    /// unless the node's own param-driven branch choice changes, whereas
+    /// pool recycling can legitimately hand the SAME resource a different
+    /// physical slot between frames (the `last_mip_identity` precedent);
+    /// keying the input side on physical slot would treat that ordinary
+    /// recycling as "a different source" and never stabilize. The
+    /// destination side stays a physical `Slot` on purpose: the generation
+    /// bookkeeping this state guards is itself slot-indexed
+    /// (`slot_generations`), so a destination slot reassignment
+    /// invalidates any generation comparison and must fall through to a
+    /// conservative bump. This is the trust prerequisite for declaring
+    /// `node_declared_unchanged[idx]` on an alias step: same aliased-from
+    /// resource AND same destination slot as last frame AND the resource's
+    /// generation hasn't moved since ⇒ the aliased output is provably the
+    /// same content as last frame's, safe to skip downstream. The empty-
+    /// propagation data-skip alias path is explicitly excluded (never
+    /// populates or reads this) — its identity can flip between different
+    /// pruned producers frame to frame with no generation signal backing
+    /// it, so it keeps the conservative bump. Cleared (all `None`) on
+    /// rebuild alongside `step_memo`/`node_declared_unchanged`.
+    alias_propagation_state: Vec<Option<(ResourceId, Slot, u64)>>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — this executor
     /// instance's rebuild epoch, assigned once at construction from
     /// [`NEXT_REBUILD_EPOCH`] (a process-global monotonic counter; precedent:
@@ -374,6 +408,7 @@ impl Executor {
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
             slot_generations: Vec::new(),
+            alias_propagation_state: Vec::new(),
             rebuild_epoch: NEXT_REBUILD_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
@@ -823,6 +858,8 @@ impl Executor {
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
             self.node_declared_unchanged.resize(plan.steps().len(), false);
+            self.alias_propagation_state.clear();
+            self.alias_propagation_state.resize_with(plan.steps().len(), || None);
         }
         // D5: reset every frame (not sticky like `step_memo`) — a node
         // must re-declare on every frame it wants to skip; the executor
@@ -1155,8 +1192,54 @@ impl Executor {
                             for &(_, res) in &step.outputs {
                                 self.empty_resources.insert(res);
                             }
+                        } else {
+                            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/
+                            // BUG-193: a param-driven (skip_passthrough)
+                            // alias is a per-pixel identity onto a STABLE
+                            // choice of input WIRE — when this frame's
+                            // aliased-from RESOURCE (the compiled edge
+                            // `skip_passthrough` selected — stable across
+                            // frames unless the node's param-driven branch
+                            // choice itself changes, e.g. a mux selector
+                            // flip) matches last frame's, the destination
+                            // SLOT matches last frame's (pool recycling can
+                            // legitimately hand the same resource a
+                            // DIFFERENT physical slot between frames — the
+                            // `last_mip_identity` precedent this file's own
+                            // comments cite elsewhere; the generation
+                            // bookkeeping below is slot-indexed, so a slot
+                            // reassignment invalidates it and must fall
+                            // through to a conservative bump), AND the
+                            // in-resource's write generation hasn't moved
+                            // since, this step's output is provably
+                            // unchanged, so declare it (propagating the
+                            // input's generation through the alias instead
+                            // of conservatively bumping). Fenced to
+                            // `!data_skip` — the data-skip alias above keeps
+                            // its established conservative bump.
+                            let r_in = step
+                                .inputs
+                                .iter()
+                                .find(|&&(n, _)| n == in_port)
+                                .map(|&(_, r)| r);
+                            let in_generation =
+                                self.slot_generations.get(i.0 as usize).copied().unwrap_or(0);
+                            let prev = self.alias_propagation_state[idx];
+                            self.alias_propagation_state[idx] =
+                                r_in.map(|r| (r, o, in_generation));
+                            if let Some(r) = r_in
+                                && prev == Some((r, o, in_generation))
+                            {
+                                self.node_declared_unchanged[idx] = true;
+                            }
                         }
                     }
+                }
+                if !performed_alias || data_skip {
+                    // Any step that didn't take the param-driven alias path
+                    // this frame must not carry a stale prior-frame match
+                    // forward into some future frame that does.
+                    self.alias_propagation_state[idx] = None;
                 }
 
                 if !performed_alias {
@@ -1303,9 +1386,23 @@ impl Executor {
             // provably never-stale by construction (I3's contract is the
             // node's side of this; a false declaration is the only way this
             // could go wrong, and that's per-node-tested, not this site's
-            // job). Alias-skip steps (performed_alias) never set
-            // `node_declared_unchanged[idx]` either (it stays reset-false),
-            // so a data-driven passthrough also conservatively bumps.
+            // job). **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
+            // P3b/BUG-193:** alias-skip steps used to never set
+            // `node_declared_unchanged[idx]` (it always stayed reset-false),
+            // so EVERY passthrough alias — data-driven or param-driven —
+            // conservatively bumped, which is why a real glTF import's
+            // `bake_environment -> switch_texture -> render_scene` chain
+            // never let `render_scene`'s IBL cache key stabilize even after
+            // P3 landed the mechanism. Now a param-driven alias
+            // (`performed_alias && !data_skip`, e.g. `mux_texture`'s
+            // inline-selector fast path) CAN set it — fenced to that exact
+            // case just above, where `alias_propagation_state[idx]` proves
+            // this frame's (in_slot, out_slot) pair and the in_slot's write
+            // generation both match last frame's. The data-driven
+            // (`data_skip`) passthrough alias is unchanged and still always
+            // conservatively bumps — its aliased identity can flip between
+            // different pruned producers frame to frame with no generation
+            // signal to trust.
             if !self.node_declared_unchanged[idx] {
                 for &(_, res) in &step.outputs {
                     if let Some(slot) = self.backend.slot_for(res) {
@@ -3110,5 +3207,187 @@ mod tests {
             2,
             "draw node evaluates again the frame detections return"
         );
+    }
+
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — the alias-path
+/// generation-propagation gate needs a real backend: pool recycling can
+/// legitimately hand the SAME `ResourceId` a DIFFERENT physical `Slot`
+/// across frames whenever a resource is released and reacquired every
+/// frame (see this file's own `alias_propagation_state` doc comment) —
+/// under `MockBackend`/`MetalBackend`'s shared free-list mechanics, a
+/// minimal chain with no other same-shaped resource competing for the pool
+/// bucket can even oscillate between exactly two slots forever, which
+/// would make a raw physical-slot comparison meaningless noise rather
+/// than a signal. Pinning both resources under test via
+/// `MetalBackend::pre_bind_texture_2d` sidesteps that entirely (same
+/// technique the primitive-level P1/P3 gpu_tests use for their own output
+/// slots) so this test observes the propagation LOGIC in isolation from
+/// ordinary pool churn — exactly what a real `render_scene` envmap slot
+/// gets in production (its host pre-binds/reuses long-lived resources,
+/// not a two-texture pool that flips every frame).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod alias_gpu_tests {
+    use super::*;
+    use crate::node_graph::EffectNode;
+    use crate::node_graph::MetalBackend;
+    use crate::node_graph::compile;
+    use crate::node_graph::effect_node::EffectNodeType;
+    use crate::node_graph::parameters::ParamDef;
+    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use crate::render_target::RenderTarget;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+    use std::sync::{Arc, Mutex};
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    /// A Texture2D producer whose declared-unchanged behavior is driven by
+    /// a shared flag the test flips per frame — stands in for a real gated
+    /// source (e.g. `gltf_texture_source`'s R1 gate) feeding a
+    /// `mux_texture`-shaped alias consumer.
+    struct GatedSourceNode {
+        type_id: EffectNodeType,
+        declare_unchanged: Arc<Mutex<bool>>,
+    }
+
+    impl EffectNode for GatedSourceNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if *self.declare_unchanged.lock().unwrap() {
+                ctx.mark_outputs_unchanged();
+            }
+        }
+    }
+
+    /// Records the write generation of its "in" port on every evaluate —
+    /// the probe for the alias-path propagation test below.
+    struct GenObservingNode {
+        type_id: EffectNodeType,
+        log: Arc<Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl EffectNode for GenObservingNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("in"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            }];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &[]
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            self.log.lock().unwrap().push(ctx.inputs.slot_generation("in"));
+        }
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 gate: a
+    /// param-driven (`skip_passthrough`) alias — `mux_texture`'s
+    /// inline-selector fast path is the production case that motivated
+    /// this — propagates its aliased input's write generation through to
+    /// its own output's generation instead of always conservatively
+    /// bumping, so a downstream consumer (standing in for `render_scene`'s
+    /// IBL cache key) sees a STABLE generation across static frames and a
+    /// real bump the frame the source actually re-emits, then
+    /// re-stabilizes — proving this isn't a one-shot fluke.
+    #[test]
+    fn alias_path_propagates_generation_through_mux_fast_path() {
+        let device = crate::test_device();
+        let (w, h) = (16u32, 16u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let declare_unchanged = Arc::new(Mutex::new(false));
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(GatedSourceNode {
+            type_id: EffectNodeType::new("test.gated_source"),
+            declare_unchanged: declare_unchanged.clone(),
+        }));
+        let mux = g.add_node(Box::new(crate::node_graph::primitives::MuxTexture::new()));
+        let observer = g.add_node(Box::new(GenObservingNode {
+            type_id: EffectNodeType::new("test.gen_observer"),
+            log: log.clone(),
+        }));
+        g.connect((src, "out"), (mux, "in_0")).unwrap();
+        g.connect((mux, "out"), (observer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let r_src_out = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == src)
+            .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
+            .map(|&(_, r)| r)
+            .expect("src's out resource is bound (observer reads it transitively)");
+        let r_mux_out = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == mux)
+            .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
+            .map(|&(_, r)| r)
+            .expect("mux's out resource is bound (observer wires it)");
+
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        // Pin BOTH resources to fixed physical slots so the propagation
+        // logic is observed in isolation from ordinary pool recycling —
+        // see this module's doc comment.
+        backend.pre_bind_texture_2d(r_src_out, RenderTarget::new(&device, w, h, format, "p3b-src-out"));
+        backend.pre_bind_texture_2d(r_mux_out, RenderTarget::new(&device, w, h, format, "p3b-mux-out"));
+
+        let mut exec = Executor::new(Box::new(backend));
+
+        // Frame 1: no prior alias state exists either way — the mux's own
+        // generation always bumps on the first frame.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        // Frame 2: source declares unchanged — same alias pair as frame 1,
+        // same source generation ⇒ the mux alias propagates "unchanged".
+        *declare_unchanged.lock().unwrap() = true;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        // Frame 3: source re-emits again — generation must move.
+        *declare_unchanged.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        // Frame 4: source declares unchanged again — proves
+        // re-stabilization, not a one-shot fluke.
+        *declare_unchanged.lock().unwrap() = true;
+        exec.execute_frame(&mut g, &plan, frame_time());
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 4, "observer must evaluate every frame (never pruned)");
+        let (g1, g2, g3, g4) = (log[0], log[1], log[2], log[3]);
+        assert!(g1.is_some(), "aliased input must resolve to a bound slot");
+        assert_eq!(g2, g1, "static input ⇒ mux alias propagates unchanged, generation stable");
+        assert_ne!(g3, g2, "source re-emitting must bump the generation downstream sees");
+        assert_eq!(g4, g3, "re-stabilization after a change must also propagate as unchanged");
     }
 }
