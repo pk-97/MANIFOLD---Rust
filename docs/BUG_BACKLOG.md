@@ -2410,6 +2410,15 @@ when one is fixed).
 
 **Fix shape:** none owed — raising `OBJECT_SAFETY_MAX` to cover 10k-object scenes would reintroduce the exact runaway-port-list risk D4 was written to prevent, for an asset class (renderer stress tests) outside Peter's actual show library (`typical-project-scale`: 53 layers, 2928 clips — not 10k static mesh objects in one glb). Revisit only if a real show asset needs it.
 
+### ~~BUG-175~~ (filmgrain-fused-stencil-absorption-compile-explosion) — FUSED FilmGrain froze the app: stencil-tier chain absorption had no compile-cost gate, inlining ~860 KB of WGSL into one kernel
+**Status:** FIXED 2026-07-16 (Fable, same-day session, `bug/filmgrain-fused-hang`) — `MAX_VIRTUAL_INLINE_BYTES` gate (256 KB) added to `chain_is_absorbable` (`freeze/region.rs`); oversized absorptions are refused and the producer runs as its own dispatch. FilmGrain now renders fully unfused (its only region was the refused absorption); Watercolor's warp-into-blur (~75 KB, largest shipped absorption) still fuses, byte-identical WGSL. Golden snapshot regenerated (FilmGrain entry dropped, nothing else changed). Proof: `filmgrain_noise_absorption_refused_by_inline_budget` + existing `watercolor_inloop_chain_fusion_matches_unfused`.
+
+**Symptom:** adding FilmGrain to a card (first time since its BUG-098 rewrite made it fusable) froze the app on the next chain rebuild — content thread stuck for tens of seconds to minutes, UI thread alive (sliders move). Looked like a hard crash at the rig.
+
+**Root cause:** the stencil tier absorbs a producer chain into the consuming blur's `fetch_in` (recomputed per tap corner). `MAX_VIRTUAL_CHAIN = 1` prices the *runtime* ALU of taps × 4 corners × chain, but nothing priced the *code size*: FilmGrain absorbs the noise atom (~6 KB body, the largest in the library) into `gaussian_blur` (35 fetch sites, the most in the library) → ~860 KB of WGSL after `InlineExhaustive`, ~50 s of synchronous spirv-opt + SPIRV-Cross + Metal compile on the content thread — twice, because static-param specialization (`SPEC_STABLE_FRAMES = 1`) recompiles the specialized variant one frame later. Measured: 110 s for the 8-render proof harness pass, 51 s with `MANIFOLD_WGSL_SPECIALIZE=0`, ~1.5 s unfused.
+
+**For the instrument:** FilmGrain is safe on a card again — it costs its honest 15 small dispatches instead of one giant kernel compile mid-set. Residual (not this bug): fused-kernel compiles still run synchronously on the content thread; any future kernel near the budget still pays its compile there. Moving fused compiles off-thread is a separate, pre-existing gap.
+
 ### BUG-174 (unlit-materials-import-as-lit-not-routed-to-unlitmaterial) — `gltf_import.rs` never reads `KHR_materials_unlit`; every imported glTF material becomes a lit (Phong-ish) material even when the source asset is unlit by design
 **Status:** OPEN — found 2026-07-16 during GLB_XFAIL_BURNDOWN_DESIGN P2, while gating BUG-166's fix.
 
