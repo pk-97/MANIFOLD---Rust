@@ -271,6 +271,92 @@ fn find_node_param_row_mut<'a>(
     None
 }
 
+/// Set the CALLING thread to real-time scheduling via
+/// `THREAD_TIME_CONSTRAINT_POLICY` at `target_fps`. This is the native macOS
+/// real-time API (used by CoreAudio, game engines): it tells the kernel "I'm
+/// a periodic real-time workload with a specific deadline," so the scheduler
+/// reserves time slots and `mach_wait_until` (`FrameTimer::wait_for_deadline`)
+/// wakes with sub-microsecond precision instead of the 1-2ms jitter a
+/// normally-scheduled thread gets. `pub(crate)` (extracted from `run()`,
+/// PERF_BUDGET_GATE_DESIGN.md P1): the headless `perf-soak` xtask drives
+/// frames directly rather than through `run()`'s loop, and without this same
+/// call its `mach_wait_until` calls pace at roughly half the target rate on a
+/// normally-scheduled CLI thread (measured: ~28fps actual against a 60fps
+/// target on the Liveschool fixture) — a fidelity gap the soak's whole point
+/// is to avoid. No behavior change to `run()` itself, same policy values.
+///
+/// SCHED_RR (POSIX) was used previously but macOS doesn't honor it for
+/// real-time — it falls back to normal scheduling with 1-2ms jitter.
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_realtime_thread_policy(target_fps: f64) {
+    #[repr(C)]
+    struct ThreadTimeConstraintPolicy {
+        period: u32,
+        computation: u32,
+        constraint: u32,
+        preemptible: i32,
+    }
+
+    unsafe extern "C" {
+        fn thread_policy_set(
+            thread: u32,
+            flavor: u32,
+            policy_info: *const ThreadTimeConstraintPolicy,
+            count: u32,
+        ) -> i32;
+        fn pthread_mach_thread_np(thread: libc::pthread_t) -> u32;
+    }
+
+    // THREAD_TIME_CONSTRAINT_POLICY = 2
+    const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+    // Count = struct size in natural_t (u32) units
+    const POLICY_COUNT: u32 =
+        (std::mem::size_of::<ThreadTimeConstraintPolicy>() / std::mem::size_of::<u32>()) as u32;
+
+    // Convert frame timing to Mach absolute time units.
+    // On Apple Silicon: timebase 1:1, so 1 tick = 1 nanosecond.
+    let frame_ns = (1_000_000_000.0 / target_fps) as u32;
+    // Computation budget: allow up to 75% of the frame for render work.
+    // The remaining 25% is headroom for the scheduler.
+    let computation_ns = (frame_ns as f64 * 0.75) as u32;
+
+    let policy = ThreadTimeConstraintPolicy {
+        period: frame_ns,            // 16.67ms at 60fps
+        computation: computation_ns, // 12.5ms max render time
+        constraint: frame_ns,        // must complete within one period
+        preemptible: 1,              // can be preempted during computation
+    };
+
+    let mach_thread = unsafe { pthread_mach_thread_np(libc::pthread_self()) };
+    let ret =
+        unsafe { thread_policy_set(mach_thread, THREAD_TIME_CONSTRAINT_POLICY, &policy, POLICY_COUNT) };
+
+    if ret == 0 {
+        log::info!(
+            "[ContentThread] Real-time thread policy set \
+             (THREAD_TIME_CONSTRAINT: period={:.2}ms, \
+             computation={:.2}ms)",
+            frame_ns as f64 / 1_000_000.0,
+            computation_ns as f64 / 1_000_000.0,
+        );
+    } else {
+        log::warn!(
+            "[ContentThread] THREAD_TIME_CONSTRAINT failed (err={}), \
+             falling back to QOS_CLASS_USER_INTERACTIVE",
+            ret,
+        );
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        let qos_ret = unsafe { pthread_set_qos_class_self_np(0x21, 0) };
+        if qos_ret != 0 {
+            log::warn!("[ContentThread] QoS fallback also failed (err={})", qos_ret,);
+        } else {
+            log::info!("[ContentThread] QoS set to USER_INTERACTIVE (fallback)");
+        }
+    }
+}
+
 impl ContentThread {
     /// Run the content loop. Blocks until Shutdown is received.
     pub fn run(
@@ -281,90 +367,7 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
-        // Set content thread to real-time scheduling via THREAD_TIME_CONSTRAINT_POLICY.
-        // This is the native macOS real-time API (used by CoreAudio, game engines).
-        // Tells the kernel: "I'm a periodic real-time workload with a specific
-        // deadline." The scheduler reserves time slots and mach_wait_until wakes
-        // with sub-microsecond precision.
-        //
-        // SCHED_RR (POSIX) was used previously but macOS doesn't honor it for
-        // real-time — it falls back to normal scheduling with 1-2ms jitter.
-        #[cfg(target_os = "macos")]
-        {
-            #[repr(C)]
-            struct ThreadTimeConstraintPolicy {
-                period: u32,
-                computation: u32,
-                constraint: u32,
-                preemptible: i32,
-            }
-
-            unsafe extern "C" {
-                fn thread_policy_set(
-                    thread: u32,
-                    flavor: u32,
-                    policy_info: *const ThreadTimeConstraintPolicy,
-                    count: u32,
-                ) -> i32;
-                fn pthread_mach_thread_np(thread: libc::pthread_t) -> u32;
-            }
-
-            // THREAD_TIME_CONSTRAINT_POLICY = 2
-            const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
-            // Count = struct size in natural_t (u32) units
-            const POLICY_COUNT: u32 = (std::mem::size_of::<ThreadTimeConstraintPolicy>()
-                / std::mem::size_of::<u32>()) as u32;
-
-            // Convert frame timing to Mach absolute time units.
-            // On Apple Silicon: timebase 1:1, so 1 tick = 1 nanosecond.
-            let frame_ns = (1_000_000_000.0 / self.timer.target_fps()) as u32;
-            // Computation budget: allow up to 75% of the frame for render work.
-            // The remaining 25% is headroom for the scheduler.
-            let computation_ns = (frame_ns as f64 * 0.75) as u32;
-
-            let policy = ThreadTimeConstraintPolicy {
-                period: frame_ns,            // 16.67ms at 60fps
-                computation: computation_ns, // 12.5ms max render time
-                constraint: frame_ns,        // must complete within one period
-                preemptible: 1,              // can be preempted during computation
-            };
-
-            let mach_thread = unsafe { pthread_mach_thread_np(libc::pthread_self()) };
-            let ret = unsafe {
-                thread_policy_set(
-                    mach_thread,
-                    THREAD_TIME_CONSTRAINT_POLICY,
-                    &policy,
-                    POLICY_COUNT,
-                )
-            };
-
-            if ret == 0 {
-                log::info!(
-                    "[ContentThread] Real-time thread policy set \
-                     (THREAD_TIME_CONSTRAINT: period={:.2}ms, \
-                     computation={:.2}ms)",
-                    frame_ns as f64 / 1_000_000.0,
-                    computation_ns as f64 / 1_000_000.0,
-                );
-            } else {
-                log::warn!(
-                    "[ContentThread] THREAD_TIME_CONSTRAINT failed (err={}), \
-                     falling back to QOS_CLASS_USER_INTERACTIVE",
-                    ret,
-                );
-                unsafe extern "C" {
-                    fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32)
-                    -> i32;
-                }
-                let qos_ret = unsafe { pthread_set_qos_class_self_np(0x21, 0) };
-                if qos_ret != 0 {
-                    log::warn!("[ContentThread] QoS fallback also failed (err={})", qos_ret,);
-                } else {
-                    log::info!("[ContentThread] QoS set to USER_INTERACTIVE (fallback)");
-                }
-            }
-        }
+        apply_realtime_thread_policy(self.timer.target_fps());
 
         // LED output is NOT auto-initialized. The user enables it via the
         // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
@@ -575,7 +578,12 @@ impl ContentThread {
 
     /// Execute one content frame: tick engine, render, send state to UI.
     /// Separated from the main loop to allow wrapping in autoreleasepool on macOS.
-    fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+    /// `pub(crate)` (not private): PERF_BUDGET_GATE_DESIGN.md P1's headless
+    /// `perf-soak` xtask drives frames directly (real-time paced via
+    /// `self.timer.wait_for_deadline()` between calls, same as `run()`'s own
+    /// loop) instead of going through the command channel — no behavior
+    /// change to this function itself.
+    pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
         let dt = self.timer.consume_tick();
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);

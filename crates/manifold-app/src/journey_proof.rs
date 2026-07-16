@@ -43,7 +43,6 @@
 #![cfg(test)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -55,115 +54,13 @@ use manifold_core::types::LayerType;
 use manifold_core::{AudioBand, AudioFeature, AudioFeatureKind, AudioSend, ParameterAudioMod};
 use manifold_core::{BeatDivision, Beats, Bpm, DriverWaveform, PresetTypeId, Seconds};
 use manifold_media::export_config::ExportConfig;
-use manifold_playback::engine::PlaybackEngine;
 
 use crate::content_command::ContentCommand;
-use crate::content_pipeline::ContentPipeline;
 use crate::content_state::ContentState;
-use crate::content_thread::ContentThread;
-
-// ─── Headless ContentThread construction ───────────────────────────────────
-
-/// Build a minimal but real headless [`ContentThread`] for offline export
-/// only. Mirrors `Application::resumed()`'s content-thread construction
-/// (`app.rs` ~2093-2278): the same `PlaybackEngine` + renderer set + native
-/// Metal `ContentPipeline`, `EditingService`, and every other field the
-/// struct literal requires — but every UI-surface concern is left at its
-/// inert default: no IOSurface preview/node/atlas bridges (export never reads
-/// them), no `midi_input.start()` (device open, not needed offline), no LED
-/// controller, no OSC receiver started (constructing `OscReceiver`/
-/// `MidiInputController` is inert — only `.start()` opens a device/socket,
-/// and this harness never calls it), `audio_layer_playback: None` (a live
-/// monitoring concern `run_export`/`export_one_frame` never touch — verified
-/// by reading `content_export.rs`, which references `content_pipeline` and
-/// `engine` only). Every field is genuinely inert-defaultable; nothing here
-/// required a parallel mini-pipeline (the forbidden move this phase names).
-pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
-    let native_device = Arc::new(manifold_gpu::GpuDevice::new());
-    let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-
-    let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-        Box::new(manifold_media::video_renderer::VideoRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            8,
-        )),
-        Box::new(manifold_media::image_renderer::ImageRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-        )),
-        Box::new(manifold_renderer::generator_renderer::GeneratorRenderer::new(
-            Arc::clone(&native_device),
-            w,
-            h,
-            gen_format,
-            8,
-        )),
-    ];
-    let mut engine = PlaybackEngine::new(renderers);
-    engine.initialize(project);
-    engine.set_live_clip_manager(manifold_playback::live_clip_manager::LiveClipManager::new());
-
-    let mut content_pipeline = ContentPipeline::new(Box::new(
-        manifold_renderer::layer_compositor::LayerCompositor::new(&native_device, w, h),
-    ));
-    content_pipeline.set_native_gpu(native_device);
-
-    // Deliberately NOT `.start()`-ed (that call opens real MIDI devices) —
-    // export never reads MIDI input; the field just needs a value.
-    let midi_input = manifold_playback::midi_input::MidiInputController::new();
-
-    ContentThread {
-        engine,
-        editing_service: manifold_editing::service::EditingService::new(),
-        content_pipeline,
-        audio_layer_playback: None,
-        percussion_orchestrator: manifold_playback::percussion_orchestrator::PercussionImportOrchestrator::new(
-            None,
-            String::new(),
-        ),
-        transport_controller: manifold_playback::transport_controller::TransportController::new(),
-        gpu: manifold_renderer::gpu::GpuContext::new(),
-        frame_count: 0,
-        time_since_start: Seconds::ZERO,
-        last_data_version: 0,
-        midi_input,
-        clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-        rendering_paused: false,
-        timer: crate::frame_timer::FrameTimer::new(60.0),
-        sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
-        osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
-        osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
-        osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
-        osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
-        ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
-        ableton_active_last_frame: false,
-        tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
-        link_beat_offset: f64::NAN,
-        led_controller: None,
-        still_export: None,
-        cached_midi_device_names: Vec::new(),
-        last_midi_device_scan_time: Seconds(-10.0),
-        cached_project_snapshot: None,
-        watched_graph_target: None,
-        preview_graph_node: None,
-        node_preview_normalize: false,
-        cached_graph_snapshot: None,
-        mod_scratch: crate::content_state::ModulationSnapshot::empty(),
-        audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
-        cached_midi_clock_position: Arc::from(""),
-        cached_midi_clock_device: Arc::from(""),
-        cached_perc_message: Arc::from(""),
-        last_sent_midi_device_names: Arc::from([]),
-        embedded_presets_fingerprint: 0,
-        pending_undo_redo_event: None,
-        #[cfg(feature = "profiling")]
-        profiler: None,
-    }
-}
+// Headless `ContentThread` construction now lives in `headless_harness.rs`
+// (PERF_BUDGET_GATE_DESIGN.md P1) — shared with the non-test `perf-soak`
+// binary path, which can't reach a `#[cfg(test)]` item.
+use crate::headless_harness::headless_content_thread;
 
 /// Drive one real export through the production path: build a headless
 /// content thread, call the real `ContentThread::run_export` (never a
