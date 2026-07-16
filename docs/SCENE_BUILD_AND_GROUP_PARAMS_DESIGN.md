@@ -500,9 +500,14 @@ stop).
 5. Exposure stays direct-to-card by nodeId (2026-06-13 decision intact).
 6. `SceneObject` bundle port stays rejected — upgraded to a liveness hazard
    (textures inside CPU struct wires evade prebinding).
-7. Scene-object list panel: killed. The graph's named groups + card sections + the
+7. ~~Scene-object list panel: killed. The graph's named groups + card sections + the
    P5 viewport are the list; a panel would be a second authoring model
-   (REALTIME_3D decided-#1).
+   (REALTIME_3D decided-#1).~~ **SUPERSEDED 2026-07-16 by
+   `SCENE_SETUP_PANEL_DESIGN.md` D1 (Peter's directive).** The panel that shipped
+   that kill's fear — a second authoring *model* — is still dead: the Scene Setup
+   panel is a pure view emitting the identical commands the card/group-face emit
+   (this doc's own D6 "one value, three surfaces" defense, extended to a fourth
+   surface). REALTIME_3D decided-#1 (no scene document) stands.
 8. Add-object spawns a visible placeholder (cube + material + transform in a named
    group); empty-slot-then-magenta rejected as the gesture.
 9. Migration is shape-preserving and binding-re-pointing; old saves render
