@@ -2441,6 +2441,160 @@ impl Command for AddSceneLightCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Add Scene Environment / Add Scene Fog
+// (SCENE_SETUP_PANEL_DESIGN.md D3/D4, P1) — shaped exactly like
+// AddSceneLightCommand above: spawn one new node at the scene's graph level
+// and wire it straight into the render_scene port the Vm found unwired.
+// The panel only ever offers these actions when `EnvironmentVm::None` /
+// `AtmosphereVm::None` (D3), so neither command needs to guard against an
+// already-wired port — same non-guarding posture AddSceneLightCommand takes
+// for `lights`.
+// ---------------------------------------------------------------------------
+
+/// "Add environment" (D3): spawn a `node.bake_environment` at the scene's
+/// graph level and wire its `envmap` output into `render_scene`'s `envmap`
+/// input. One undo unit.
+#[derive(Debug)]
+pub struct AddSceneEnvironmentCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    pos: (f32, f32),
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl AddSceneEnvironmentCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        pos: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self { target, scope_path, render_scene_node_id, pos, catalog_default, prev: None }
+    }
+}
+
+impl Command for AddSceneEnvironmentCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let pos = self.pos;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+            // Primitive defaults (`node.bake_environment`) match the importer's
+            // OWN softbox default (F-P4) so a freshly-added environment reads
+            // as a sane, lit studio rather than a black void — explicit here
+            // anyway so the gesture's contract doesn't silently drift if the
+            // primitive's defaults ever change.
+            let mut params = BTreeMap::new();
+            params.insert("mode".to_string(), SerializedParamValue::Enum { value: 1 }); // Softbox
+            params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
+            params.insert("fill".to_string(), SerializedParamValue::Float { value: 0.0 });
+
+            let mut env_node =
+                scene_build_node(env_id, "node.bake_environment", Some("environment".to_string()), params);
+            env_node.editor_pos = Some(pos);
+            nodes.push(env_node);
+            wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Add Environment"
+    }
+}
+
+/// "Add fog" (D3): spawn a `node.atmosphere` at the scene's graph level and
+/// wire its `atmosphere` output into `render_scene`'s `atmosphere` input.
+/// One undo unit.
+#[derive(Debug)]
+pub struct AddSceneFogCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    pos: (f32, f32),
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl AddSceneFogCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        pos: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self { target, scope_path, render_scene_node_id, pos, catalog_default, prev: None }
+    }
+}
+
+impl Command for AddSceneFogCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let pos = self.pos;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+            // A freshly-added fog node starts at density 0 (the primitive's own
+            // default — "subtle" is authored by hand in the starter preset, not
+            // stamped here) so adding it is never a visible surprise; the
+            // performer dials density up from the panel immediately after.
+            let params = BTreeMap::new();
+
+            let mut fog_node = scene_build_node(fog_id, "node.atmosphere", Some("fog".to_string()), params);
+            fog_node.editor_pos = Some(pos);
+            nodes.push(fog_node);
+            wires.push(scene_build_wire(fog_id, "atmosphere", render_id, "atmosphere"));
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Add Fog"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Rename group (handle = namespace, so structural)
 // ---------------------------------------------------------------------------
 
@@ -5686,6 +5840,71 @@ mod tests {
             .wires
             .iter()
             .any(|w| w.from_node == light.id && w.from_port == "out" && w.to_node == 0 && w.to_port == "light_1"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    // ── SCENE_SETUP_PANEL_DESIGN P1: Add Environment / Add Fog ──
+
+    #[test]
+    fn add_scene_environment_command_spawns_bake_environment_and_wires_envmap() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = AddSceneEnvironmentCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (10.0, 20.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let env = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.bake_environment")
+            .expect("environment node created");
+        assert_eq!(env.editor_pos, Some((10.0, 20.0)));
+        assert_eq!(env.params.get("intensity"), Some(&SerializedParamValue::Float { value: 1.0 }));
+        assert!(def
+            .wires
+            .iter()
+            .any(|w| w.from_node == env.id && w.from_port == "envmap" && w.to_node == 0 && w.to_port == "envmap"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn add_scene_fog_command_spawns_atmosphere_and_wires_atmosphere_port() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = AddSceneFogCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let fog = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.atmosphere")
+            .expect("fog node created");
+        assert_eq!(fog.editor_pos, Some((30.0, 40.0)));
+        assert!(def.wires.iter().any(|w| w.from_node == fog.id
+            && w.from_port == "atmosphere"
+            && w.to_node == 0
+            && w.to_port == "atmosphere"));
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);

@@ -370,7 +370,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (51)
+### Effect & generator presets (52)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -413,6 +413,7 @@ _Generated from the node registry. Do not hand-edit. 245 nodes registered, group
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
+| `SceneStarter` | Scene Starter | generator | Geometry | 0 |
 | `SoftFocus` | Soft Focus | effect | Stylize | 2 |
 | `StarField` | Star Field | generator | Pattern | 8 |
 | `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |

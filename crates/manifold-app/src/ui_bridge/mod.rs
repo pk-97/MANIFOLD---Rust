@@ -562,7 +562,11 @@ pub fn dispatch(
         | PanelAction::SetDisplayResolution(..)
         | PanelAction::SetRenderScale(_)
         | PanelAction::SetTonemapCurve(_)
-        | PanelAction::SetGenType(..) => project::dispatch_project(
+        | PanelAction::SetGenType(..)
+        | PanelAction::SceneSetupParamChanged(..)
+        | PanelAction::SceneSetupAddEnvironment(..)
+        | PanelAction::SceneSetupAddFog(..)
+        | PanelAction::SceneSetupNewScene(..) => project::dispatch_project(
             action,
             project,
             content_tx,
@@ -578,6 +582,12 @@ pub fn dispatch(
         | PanelAction::OpenGraphEditor(_)
         | PanelAction::OpenCardMapping(_)
         | PanelAction::OpenGeneratorGraphEditor
+        // D7 "Open Graph Editor" empty-state action — same watch_generator_graph
+        // + pending_open_graph_editor mechanism as OpenGeneratorGraphEditor
+        // above, just addressed by an explicit layer_id instead of
+        // `active_layer_id`. Only `Application` (app_render.rs) holds those
+        // fields, so this never reaches `dispatch` either.
+        | PanelAction::SceneSetupOpenGraphEditor(_)
         // (Graph-editor mutations are `GraphEditCommand` now — Phase 4.3 —
         // dispatched in app_render's `graph_edits` loop, not here.)
         | PanelAction::EffectMappingRangeSnapshot { .. }
@@ -603,6 +613,13 @@ pub fn dispatch(
         // so the tree must rebuild at the new geometry.
         PanelAction::OpenAudioSetup => {
             ui.toggle_audio_dock();
+            DispatchResult::structural()
+        }
+
+        // Scene Setup dock toggle — mirror of `OpenAudioSetup` above
+        // (SCENE_SETUP_PANEL_DESIGN D2).
+        PanelAction::OpenSceneSetup => {
+            ui.toggle_scene_dock();
             DispatchResult::structural()
         }
     }

@@ -1173,6 +1173,7 @@ impl Application {
                 M::Perform => actions.push(P::EnterPerformMode),
                 M::Monitor => actions.push(P::ToggleMonitor),
                 M::Audio => actions.push(P::OpenAudioSetup),
+                M::Scene => actions.push(P::OpenSceneSetup),
                 M::ImportVideo => self.import_video_clip(),
                 M::Undo => {
                     if let Some(tx) = self.content_tx.as_ref() {
@@ -1548,6 +1549,23 @@ impl Application {
                     // harness reaches the same one via ui_bridge::dispatch.
                     self.ws.ui_root.toggle_audio_dock();
                     needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::OpenSceneSetup => {
+                    // Mirror of `OpenAudioSetup` above (SCENE_SETUP_PANEL_DESIGN
+                    // D2) — same lockstep `open`/`scene_setup_width` toggle,
+                    // same structural rebuild, same dual reachability (live app
+                    // here, headless harness via `ui_bridge::dispatch`).
+                    self.ws.ui_root.toggle_scene_dock();
+                    needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::SceneSetupOpenGraphEditor(layer_id) => {
+                    // D7 "Open Graph Editor" empty state — same mechanism as
+                    // `OpenGeneratorGraphEditor` below, addressed explicitly by
+                    // the panel's own layer instead of `active_layer_id`.
+                    self.watch_generator_graph(layer_id.clone());
+                    self.pending_open_graph_editor = true;
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {

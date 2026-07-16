@@ -1426,6 +1426,154 @@ pub fn sync_inspector_data(
         // authoring (§7.2 item 7, P8, 2026-07-11).
     }
 
+    // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md) ──
+    // Rebuilt from scratch every sync while the dock is open — no cached/
+    // staged copy anywhere (D1: "no rotting, no staleness"). Selection
+    // scoping mirrors the inspector-tab rung derivation just below (§1 VERIFY
+    // marker, resolved): the selection's own layer, falling back to
+    // `active_layer`.
+    if ui.scene_setup_panel.is_open() {
+        use manifold_renderer::node_graph::scene_vm::SceneVm;
+        use manifold_ui::panels::scene_setup_panel::{
+            AtmosphereRowVm, EnvironmentRowVm, RowAddr, RowValue, SceneSetupState, SceneSetupVm,
+        };
+
+        let sel_layer_idx = selection
+            .selected_layer_id_for_clip
+            .as_ref()
+            .or(selection.primary_selected_layer_id.as_ref())
+            .and_then(|id| project.timeline.find_layer_index_by_id(id))
+            .or(active_layer);
+        let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
+
+        let state = match layer {
+            None => SceneSetupState::NoSelection("Select a layer to set up its scene.".to_string()),
+            Some(l) if l.layer_type != LayerType::Generator => SceneSetupState::NoSelection(
+                "Select a generator layer to set up its scene.".to_string(),
+            ),
+            Some(l) => {
+                let layer_id = l.layer_id.clone();
+                let gen_type = l.generator_type().clone();
+                if gen_type.is_none() {
+                    SceneSetupState::NoGenerator { layer_id }
+                } else {
+                    let def = l
+                        .generator_graph()
+                        .cloned()
+                        .or_else(|| manifold_renderer::node_graph::bundled_preset_def(&gen_type).cloned());
+                    match def.as_ref().and_then(SceneVm::from_def) {
+                        None => SceneSetupState::NoScene { layer_id },
+                        Some(vm) => {
+                            // Ranges transcribed from each primitive's own
+                            // `ParamDef::range` (`bake_environment`'s
+                            // intensity [0,4] / fill [0,2]; `atmosphere`'s
+                            // fog_density [0,1] / height_falloff [0,2]).
+                            let row = |node_doc_id: u32,
+                                       param_id: &str,
+                                       value: f32,
+                                       driven: bool,
+                                       min: f32,
+                                       max: f32| RowValue {
+                                addr: RowAddr { node_doc_id, param_id: param_id.to_string() },
+                                value,
+                                min,
+                                max,
+                                driven,
+                            };
+                            let environment = match vm.environment {
+                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
+                                    EnvironmentRowVm::Importer {
+                                        mode_is_hdri: e.mode_value != 0,
+                                        intensity: row(
+                                            e.intensity_addr.node_doc_id,
+                                            &e.intensity_addr.param_id,
+                                            e.intensity_value,
+                                            e.intensity_driven,
+                                            0.0,
+                                            4.0,
+                                        ),
+                                        fill: row(
+                                            e.fill_addr.node_doc_id,
+                                            &e.fill_addr.param_id,
+                                            e.fill_value,
+                                            e.fill_driven,
+                                            0.0,
+                                            2.0,
+                                        ),
+                                        hdri_file: e.hdri_file_value,
+                                    }
+                                }
+                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
+                                    EnvironmentRowVm::Bare {
+                                        intensity: row(
+                                            e.intensity_addr.node_doc_id,
+                                            &e.intensity_addr.param_id,
+                                            e.intensity_value,
+                                            e.intensity_driven,
+                                            0.0,
+                                            4.0,
+                                        ),
+                                        fill: row(
+                                            e.fill_addr.node_doc_id,
+                                            &e.fill_addr.param_id,
+                                            e.fill_value,
+                                            e.fill_driven,
+                                            0.0,
+                                            2.0,
+                                        ),
+                                    }
+                                }
+                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Custom { .. } => {
+                                    EnvironmentRowVm::Custom
+                                }
+                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::None => {
+                                    EnvironmentRowVm::None
+                                }
+                            };
+                            let atmosphere = match vm.atmosphere {
+                                manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
+                                    AtmosphereRowVm::Wired {
+                                        density: row(
+                                            a.density_addr.node_doc_id,
+                                            &a.density_addr.param_id,
+                                            a.density_value,
+                                            a.density_driven,
+                                            0.0,
+                                            1.0,
+                                        ),
+                                        height_falloff: row(
+                                            a.height_falloff_addr.node_doc_id,
+                                            &a.height_falloff_addr.param_id,
+                                            a.height_falloff_value,
+                                            a.height_falloff_driven,
+                                            0.0,
+                                            2.0,
+                                        ),
+                                    }
+                                }
+                                manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
+                                    AtmosphereRowVm::None
+                                }
+                            };
+                            SceneSetupState::Live(Box::new(SceneSetupVm {
+                                layer_id,
+                                scene_name: l.name.clone(),
+                                multiple_scenes: vm.multiple_scenes,
+                                object_count: vm.header.object_count,
+                                light_count: vm.header.light_count,
+                                shadow_caster_count: vm.header.shadow_caster_count,
+                                scene_root_node_id: vm.scene_root_node_id,
+                                environment,
+                                atmosphere,
+                            }))
+                        }
+                    }
+                }
+            }
+        };
+        ui.scene_setup_panel.configure(state);
+    }
+
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
     // The rung set is derived from the SELECTION's own layer (the clip's layer
     // or the selected layer), NOT `active_layer` — which now follows the active

@@ -799,7 +799,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -994,7 +995,8 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:cross_frame_state",
       "inputs": [],
@@ -3869,7 +3871,9 @@
         "Box SOP"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "SceneStarter"
+      ],
       "fusion": "source",
       "inputs": [],
       "label": "Cube Mesh",
@@ -8356,7 +8360,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "source",
       "inputs": [
@@ -9638,7 +9643,8 @@
       "category": "Materials & Lighting",
       "examples": [
         "ApricotWeather",
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -11864,7 +11870,8 @@
         "ApricotWeather",
         "DigitalPlants",
         "FluidSim3D",
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -13668,7 +13675,8 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -15218,7 +15226,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:draw_call",
       "inputs": [
@@ -20006,7 +20015,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -21771,6 +21781,7 @@
         "ParticleText",
         "Plasma",
         "QuadMirror",
+        "SceneStarter",
         "SoftFocus",
         "StarField",
         "StrangeAttractor",
@@ -21831,6 +21842,7 @@
         "OilyFluid",
         "ParticleText",
         "Plasma",
+        "SceneStarter",
         "StarField",
         "StrangeAttractor",
         "Strobe",
@@ -21983,7 +21995,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 51,
+  "preset_count": 52,
   "presets": [
     {
       "category": "Geometry",
@@ -24162,6 +24174,14 @@
           "name": "Amount"
         }
       ]
+    },
+    {
+      "category": "Geometry",
+      "id": "SceneStarter",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Scene Starter",
+      "params": []
     },
     {
       "category": "Stylize",

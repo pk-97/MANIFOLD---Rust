@@ -20,6 +20,7 @@ pub mod param_card;
 pub mod picker_core;
 pub mod param_slider_shared;
 pub mod perf_hud;
+pub mod scene_setup_panel;
 pub mod settings_popup;
 pub mod popup_shell;
 pub mod toast;
@@ -206,6 +207,32 @@ pub enum PanelAction {
     /// Open (toggle) the Audio Setup panel — the central place to route audio
     /// in and define named sends. Header button; also bound to ⌘⇧A.
     OpenAudioSetup,
+    /// Open (toggle) the Scene Setup panel (`SCENE_SETUP_PANEL_DESIGN.md` D2)
+    /// — mutually exclusive with [`Self::OpenAudioSetup`] (the app dispatch
+    /// closes the other dock, same either/or toggle policy as that pair).
+    /// Header button.
+    OpenSceneSetup,
+    /// A Scene Setup panel row write: `(layer_id, node_doc_id, param_name,
+    /// new_value)`. Dispatched through the identical `SetGraphNodeParamCommand`
+    /// the graph editor's node face already uses — the panel's "fourth
+    /// surface" (D3: every editable row carries its `(scope_path,
+    /// node_doc_id, param_id)` write address; scope_path is always empty for
+    /// P1's Environment/Fog rows, which live at the generator graph's root).
+    SceneSetupParamChanged(LayerId, u32, String, f32),
+    /// "Add environment" (D3): spawn `node.bake_environment` wired to the
+    /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupAddEnvironment(LayerId, u32),
+    /// "Add fog" (D3): spawn `node.atmosphere` wired to the scene's
+    /// `atmosphere` port. `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupAddFog(LayerId, u32),
+    /// D7 "New 3D Scene" empty-state action: assign the bundled Scene
+    /// Starter generator preset to the selected layer — the SAME
+    /// generator-assignment path the picker's `SetGenType` already uses
+    /// (§1 VERIFY marker, resolved: `PanelAction::SetGenType`).
+    SceneSetupNewScene(LayerId),
+    /// D7 "Open Graph Editor" empty-state action for a generator layer with
+    /// no `render_scene` — reuses the existing open-editor action.
+    SceneSetupOpenGraphEditor(LayerId),
 
     // Footer
     CycleQuantize,

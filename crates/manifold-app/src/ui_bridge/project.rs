@@ -250,6 +250,115 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
 
+        // ── SCENE_SETUP_PANEL_DESIGN P1: the panel's fourth-surface writes ──
+        // All four resolve `GraphTarget::Generator(layer_id)` + the layer's
+        // bundled-preset catalog default exactly like
+        // `Application::watch_generator_graph` does, then dispatch the SAME
+        // command a card/node-face/group-face write would — no new mutation
+        // path (§4).
+        PanelAction::SceneSetupParamChanged(layer_id, node_doc_id, param_id, value) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                    target,
+                    *node_doc_id,
+                    param_id.clone(),
+                    manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::SceneSetupAddEnvironment(layer_id, render_scene_node_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::AddSceneEnvironmentCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    (0.0, 0.0),
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::AddSceneFogCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    (0.0, 0.0),
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        // D7 "New 3D Scene" empty-state action: assign the bundled Scene
+        // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
+        // browser-popup generator picker's `SetGenType` dispatches (§1 VERIFY
+        // marker, resolved).
+        PanelAction::SceneSetupNewScene(layer_id) => {
+            let new_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
+            if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) {
+                let old_type = layer
+                    .gen_params()
+                    .map(|gp| gp.generator_type().clone())
+                    .unwrap_or(PresetTypeId::NONE);
+                if new_type != old_type {
+                    let old_params: Vec<f32> = layer
+                        .gen_params()
+                        .map(|gp| gp.params.iter().map(|s| s.value).collect())
+                        .unwrap_or_default();
+                    let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
+                    let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
+                    let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                        layer_id.clone(),
+                        old_type,
+                        new_type.clone(),
+                        old_params,
+                        old_drivers,
+                        old_envelopes,
+                    );
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::GeneratorTypeChanged { layer_id: layer_id.clone(), new_type },
+                    );
+                }
+            }
+            DispatchResult::structural()
+        }
+
         _ => DispatchResult::unhandled(),
     }
+}
+
+/// Resolve `layer_id`'s generator-graph target's catalog default — the same
+/// lookup `Application::watch_generator_graph` performs, factored out so the
+/// Scene Setup panel's dispatch arms above don't need the graph editor to be
+/// open (they address the layer directly, not `watched_graph_target`).
+fn generator_catalog_default(
+    project: &Project,
+    layer_id: &LayerId,
+) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+    let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
+    let gt = layer.generator_type().clone();
+    if gt.is_none() {
+        return None;
+    }
+    let json = manifold_renderer::node_graph::bundled_preset_json(&gt)?;
+    serde_json::from_str(&json).ok()
 }
