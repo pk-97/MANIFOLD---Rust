@@ -19,8 +19,12 @@ rustc-wrapper = "/opt/homebrew/bin/sccache"
 
 # `cargo xtask ui-snap <scene> [--dump]` → the headless UI snapshot harness
 # (feature-gated subcommand of manifold-app). See docs/HEADLESS_UI_HARNESS.md.
+# `cargo xtask perf-soak <project> --seconds N [--start <beats>]
+# [--update-baseline]` → the headless frame-budget soak gate. See
+# docs/PERF_BUDGET_GATE_DESIGN.md P1. Both subcommands dispatch off argv[1]
+# in the same `manifold` binary — one dispatcher, two feature-gated modules.
 [alias]
-xtask = "run --quiet -p manifold-app --features ui-snapshot --"
+xtask = "run --quiet -p manifold-app --features ui-snapshot,perf-soak --"
 
 # sccache's default 10G disk cache evicts under this workspace's dep graph ×
 # many worktrees; 30G keeps external-dep objects resident. The sccache server

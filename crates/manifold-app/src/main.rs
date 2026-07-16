@@ -34,6 +34,16 @@ mod frame_timer;
 pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
+// Shared headless `ContentThread` construction (PERF_BUDGET_GATE_DESIGN.md
+// P1) — used by the `journey-proofs` test harness (only compiled in test
+// mode) AND the `perf-soak` xtask binary path (a real, non-test caller), so
+// it lives outside `#[cfg(test)]` itself. Gated so a plain non-test build
+// with only `journey-proofs` on doesn't compile a module with zero callers
+// (dead_code) — `perf-soak` always wants it; `journey-proofs` only wants it
+// under `cfg(test)`, matching where its own callers (`journey_proof.rs`,
+// `bug035_verify.rs`, `bug037_verify.rs`) actually live.
+#[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
+mod headless_harness;
 mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]
@@ -59,6 +69,12 @@ mod bug035_verify;
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug037_verify;
 mod perform_mode;
+// `cargo xtask perf-soak <project> --seconds N [--start <beats>]
+// [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1: headless, real-time
+// paced content-thread soak of a real project + baseline gate. macOS-only
+// (native Metal `ContentThread`, same constraint as `journey-proofs`).
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod perf_soak;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
@@ -94,6 +110,17 @@ fn main() {
         if args.get(1).map(String::as_str) == Some("ui-snap") {
             crate::ui_snapshot::run(&args[1..]);
             return;
+        }
+    }
+
+    // Headless perf-soak subcommand (feature `perf-soak`): headless,
+    // real-time-paced content-thread soak of a real project against the
+    // frame-budget gate (docs/PERF_BUDGET_GATE_DESIGN.md P1).
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("perf-soak") {
+            crate::perf_soak::run(&args[1..]);
         }
     }
 

@@ -51,7 +51,7 @@ use manifold_core::types::LayerType;
 use manifold_core::{Beats, Bpm, PresetTypeId, Seconds};
 use manifold_playback::engine::TickContext;
 
-use crate::journey_proof::headless_content_thread;
+use crate::headless_harness::headless_content_thread;
 
 /// 640×360 — cheap enough to isolate the pipeline-compile stall from
 /// resolution-driven render cost, big enough that `render_scene`'s MSAA
