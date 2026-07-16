@@ -142,7 +142,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 - `NodePerformanceTest.glb`
 
-### `xfail:BUG-184` — 1 asset(s)
+### `xfail:BUG-186` — 1 asset(s)
 
 **Gap:** EXT_texture_webp is extensionsRequired and unsupported (no webp decoder) — correctly rejected, but the crate's raw textures[].source validation error surfaces instead of our own clean extensionsRequired veto message
 

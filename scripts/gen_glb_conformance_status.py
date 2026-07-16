@@ -35,7 +35,7 @@ GAP_TEXT = {
                "to root nodes",
     "BUG-173": "10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) "
                "— not a defect",
-    "BUG-184": "EXT_texture_webp is extensionsRequired and unsupported (no "
+    "BUG-186": "EXT_texture_webp is extensionsRequired and unsupported (no "
                "webp decoder) — correctly rejected, but the crate's raw "
                "textures[].source validation error surfaces instead of our "
                "own clean extensionsRequired veto message",

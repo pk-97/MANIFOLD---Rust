@@ -489,4 +489,32 @@ mod gpu_tests {
             }
         }
     }
+
+    /// BUG-181: non-Lerp blend modes are RGB-only and pass `a`'s alpha
+    /// through untouched, regardless of `amount` — a data texture's filler
+    /// alpha (e.g. an SSAO map's alpha=1) must not overwrite a display
+    /// chain's real alpha. Lerp (mode 0) is the one genuine crossfade and
+    /// still lerps alpha a->b.
+    #[test]
+    fn mix_alpha_passes_through_a_in_non_lerp_modes_but_lerps_in_lerp_mode() {
+        let a = [0.4, 0.6, 0.2, 0.25];
+        let b = [0.3, 0.5, 0.8, 1.0];
+        let tol = 0.01;
+
+        // Multiply, amount=1.0: alpha must be a.a=0.25 regardless of amount.
+        let out_multiply = run_mix_at(a, b, 4, 1.0);
+        assert!(
+            (out_multiply[3] - 0.25).abs() < tol,
+            "Multiply alpha {} != 0.25 (a.a pass-through)",
+            out_multiply[3]
+        );
+
+        // Lerp, amount=0.5: alpha crossfades a->b: 0.25*0.5 + 1.0*0.5 = 0.625.
+        let out_lerp = run_mix_at(a, b, 0, 0.5);
+        assert!(
+            (out_lerp[3] - 0.625).abs() < tol,
+            "Lerp alpha {} != 0.625 (mix(0.25, 1.0, 0.5))",
+            out_lerp[3]
+        );
+    }
 }

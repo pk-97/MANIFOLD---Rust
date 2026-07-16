@@ -1312,8 +1312,8 @@
   {
     "asset": "SheenWoodLeatherSofa.glb",
     "checks": [],
-    "status": "xfail:BUG-184",
-    "note": "EXT_texture_webp is extensionsRequired and MANIFOLD does not decode webp images \u2014 correctly rejected (no webp decoder), but the crate's raw textures[].source-Missing validation errors surface instead of our clean extensionsRequired veto message; see BUG-184 for the message-clarity gap"
+    "status": "xfail:BUG-186",
+    "note": "EXT_texture_webp is extensionsRequired and MANIFOLD does not decode webp images \u2014 correctly rejected (no webp decoder), but the crate's raw textures[].source-Missing validation errors surface instead of our clean extensionsRequired veto message; see BUG-186 for the message-clarity gap"
   },
   {
     "asset": "SpecularSilkPouf.glb",
