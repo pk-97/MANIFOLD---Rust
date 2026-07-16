@@ -34,5 +34,6 @@ mod render_scene_instances;
 mod render_scene_lights;
 mod render_scene_map_set;
 mod render_scene_pcss;
+mod render_scene_shadow_cache;
 mod render_scene_shadows;
 mod smoke;

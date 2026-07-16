@@ -12,6 +12,7 @@
 //!   can bind in shader dispatches. With a mock backend the typed lookups
 //!   return `None`, which is fine for tests that don't dispatch GPU work.
 
+use ahash::AHashMap;
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
@@ -36,11 +37,39 @@ pub struct Slot(pub u32);
 pub struct NodeInputs<'a> {
     bindings: &'a [(&'static str, Slot)],
     backend: &'a dyn Backend,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
+    /// (see `Executor::slot_generations`). Threaded through so
+    /// [`Self::slot_generation`] can resolve a port name to its current
+    /// generation without the executor itself being reachable from a node's
+    /// `evaluate`.
+    ///
+    /// [`Executor`]: crate::node_graph::execution::Executor
+    generations: &'a [u64],
 }
 
 impl<'a> NodeInputs<'a> {
-    pub(crate) fn new(bindings: &'a [(&'static str, Slot)], backend: &'a dyn Backend) -> Self {
-        Self { bindings, backend }
+    pub(crate) fn new(
+        bindings: &'a [(&'static str, Slot)],
+        backend: &'a dyn Backend,
+        generations: &'a [u64],
+    ) -> Self {
+        Self { bindings, backend, generations }
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — write generation of the
+    /// physical slot currently bound to `port`, or `None` if the port is
+    /// unwired. The counter bumps every frame the producing step's output
+    /// slot is committed, UNLESS that step declared its outputs unchanged
+    /// this frame (`ctx.mark_outputs_unchanged()`) — so an unchanging
+    /// generation number across frames is a reliable "this slot's content
+    /// has not changed since the last time a consumer observed this exact
+    /// number" signal, usable as a cache-key component (D6). Never compare
+    /// this alone across executor lifetimes without also folding in the
+    /// executor's `rebuild_epoch` — see D6's rationale.
+    pub fn slot_generation(&self, port: &str) -> Option<u64> {
+        let slot = self.slot(port)?;
+        self.generations.get(slot.0 as usize).copied()
     }
 
     /// Slot bound to the named input port, or `None` if the port is optional
@@ -141,6 +170,55 @@ impl<'a> NodeInputs<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 — build a name→[`Slot`]
+    /// index ONCE, for a node whose `evaluate` looks up MANY ports by name
+    /// per frame (e.g. `render_scene`'s `objects × ~20` mesh/material/map/
+    /// transform ports). `slot`/`texture_2d`/etc. above stay the normal path
+    /// for nodes with a handful of ports — a few `iter().find` calls per
+    /// frame is noise; this exists specifically so a hot caller can turn
+    /// O(lookups × wired_ports) linear scans into one O(wired_ports) build
+    /// plus O(1) hash lookups. Pair with the `*_slot` accessors below, which
+    /// resolve an already-known [`Slot`] with no scan at all.
+    pub fn build_index(&self) -> AHashMap<&'static str, Slot> {
+        self.bindings.iter().copied().collect()
+    }
+
+    /// `&GpuTexture` bound to an already-resolved [`Slot`] (e.g. from
+    /// [`Self::build_index`]) — no name scan, unlike [`Self::texture_2d`].
+    pub fn texture_2d_slot(&self, slot: Slot) -> Option<&'a GpuTexture> {
+        self.backend.texture_2d(slot)
+    }
+
+    /// `&GpuBuffer` bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::array`].
+    pub fn array_slot(&self, slot: Slot) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(slot)
+    }
+
+    /// [`Material`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::material`].
+    pub fn material_slot(&self, slot: Slot) -> Option<Material> {
+        self.backend.material(slot)
+    }
+
+    /// [`Transform`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::transform`].
+    pub fn transform_slot(&self, slot: Slot) -> Option<Transform> {
+        self.backend.transform(slot)
+    }
+
+    /// [`Light`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::light`].
+    pub fn light_slot(&self, slot: Slot) -> Option<Light> {
+        self.backend.light(slot)
+    }
+
+    /// Write generation of an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::slot_generation`].
+    pub fn slot_generation_of(&self, slot: Slot) -> Option<u64> {
+        self.generations.get(slot.0 as usize).copied()
     }
 }
 
@@ -327,7 +405,7 @@ mod array_accessor_tests {
 
         let slot = backend.pre_bind_array(ResourceId(0), buffer);
         let bindings: &[(&'static str, Slot)] = &[("particles", slot)];
-        let inputs = NodeInputs::new(bindings, &backend);
+        let inputs = NodeInputs::new(bindings, &backend, &[]);
 
         let got = inputs.array("particles").expect("should resolve");
         assert_eq!(got.size, expected_size);

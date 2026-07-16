@@ -84,6 +84,19 @@ crate::primitive! {
         staging_len_bytes: u64 = 0,
         pending_load: Option<mpsc::Receiver<Result<(Vec<MeshVertex>, Vec<[f32; 4]>, Vec<[f32; 4]>), String>>> = None,
         uploaded: bool = false,
+        // Bumped every time a background parse lands — see
+        // `gltf_mesh_source`'s identical field for why this (not
+        // `last_key`) is the correct content-change signal. Shared across
+        // all three outputs since they always update together (one parse
+        // produces all three). RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
+        // P1/R1.
+        content_version: u64 = 0,
+        last_copied_content_version: u64 = u64::MAX,
+        // Per-output dst identity — the three outputs are separate
+        // physical buffers and may be recycled independently.
+        last_copied_verts_identity: usize = 0,
+        last_copied_joints_identity: usize = 0,
+        last_copied_weights_identity: usize = 0,
     },
 }
 
@@ -128,6 +141,7 @@ impl Primitive for GltfSkinnedMeshSource {
                     self.cached_joints = joints;
                     self.cached_weights = weights;
                     self.uploaded = false;
+                    self.content_version = self.content_version.wrapping_add(1);
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_skinned_mesh_source: {e}");
@@ -196,25 +210,63 @@ impl Primitive for GltfSkinnedMeshSource {
             self.uploaded = true;
         }
 
+        // Gated (RENDER_SCENE_PERF_OPTIMIZATION P1/R1): skip each output's
+        // copy independently when `content_version` hasn't changed since
+        // its last completed copy AND its dst is the same physical buffer
+        // as last frame (pool recycle can hand back a different physical
+        // buffer per-output, independently of the others). `mark_outputs_
+        // unchanged()` declares ALL THREE outputs unchanged, so it is only
+        // called when every one of the three copies was skipped — I3
+        // forbids declaring unchanged when even one output actually got a
+        // fresh write this frame.
+        let content_unchanged = self.content_version == self.last_copied_content_version;
+        let mut any_copy_ran = false;
+
         if let Some(staging) = &self.staging_verts {
-            let copy_size = self.staging_len_bytes.min(dst_verts.size);
-            if copy_size > 0 {
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_verts, copy_size);
+            let dst_identity = dst_verts.identity_key();
+            if content_unchanged && dst_identity == self.last_copied_verts_identity {
+                // skip
+            } else {
+                let copy_size = self.staging_len_bytes.min(dst_verts.size);
+                if copy_size > 0 {
+                    ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_verts, copy_size);
+                }
+                self.last_copied_verts_identity = dst_identity;
+                any_copy_ran = true;
             }
         }
         if let Some(staging) = &self.staging_joints {
-            let n = self.cached_verts.len().min(capacity as usize);
-            let copy_size = ((n * std::mem::size_of::<Vec4Vertex>()) as u64).min(dst_joints.size);
-            if copy_size > 0 {
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_joints, copy_size);
+            let dst_identity = dst_joints.identity_key();
+            if content_unchanged && dst_identity == self.last_copied_joints_identity {
+                // skip
+            } else {
+                let n = self.cached_verts.len().min(capacity as usize);
+                let copy_size = ((n * std::mem::size_of::<Vec4Vertex>()) as u64).min(dst_joints.size);
+                if copy_size > 0 {
+                    ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_joints, copy_size);
+                }
+                self.last_copied_joints_identity = dst_identity;
+                any_copy_ran = true;
             }
         }
         if let Some(staging) = &self.staging_weights {
-            let n = self.cached_verts.len().min(capacity as usize);
-            let copy_size = ((n * std::mem::size_of::<Vec4Vertex>()) as u64).min(dst_weights.size);
-            if copy_size > 0 {
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_weights, copy_size);
+            let dst_identity = dst_weights.identity_key();
+            if content_unchanged && dst_identity == self.last_copied_weights_identity {
+                // skip
+            } else {
+                let n = self.cached_verts.len().min(capacity as usize);
+                let copy_size = ((n * std::mem::size_of::<Vec4Vertex>()) as u64).min(dst_weights.size);
+                if copy_size > 0 {
+                    ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst_weights, copy_size);
+                }
+                self.last_copied_weights_identity = dst_identity;
+                any_copy_ran = true;
             }
+        }
+
+        self.last_copied_content_version = self.content_version;
+        if !any_copy_ran {
+            ctx.mark_outputs_unchanged();
         }
     }
 }
@@ -246,5 +298,195 @@ mod tests {
         let prim = GltfSkinnedMeshSource::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_skinned_mesh_source");
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// `cargo test -p manifold-renderer --features gpu-proofs
+/// node_graph::primitives::gltf_skinned_mesh_source::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::effect_node::ParamValues;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::TestDevice;
+    use manifold_core::{Beats, Seconds};
+
+    const CAPACITY: u32 = 20_000;
+
+    fn frame_time_at(seconds: f64) -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(seconds),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn cesium_man_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/khronos/CesiumMan.glb")
+    }
+
+    fn params_at(path: &str, material_index: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(Cow::Borrowed("material_index"), ParamValue::Float(material_index));
+        p.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(CAPACITY as f32));
+        p
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_once(
+        prim: &mut GltfSkinnedMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        verts_slot: Slot,
+        joints_slot: Slot,
+        weights_slot: Slot,
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let output_scratch: Vec<(&'static str, Slot)> =
+            vec![("vertices", verts_slot), ("joints", joints_slot), ("weights", weights_slot)];
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            &output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("gltf-skinned-mesh-source-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(backend: &MetalBackend, slot: Slot) -> Vec<u8> {
+        let buf = backend.array_buffer(slot).expect("array buffer retained");
+        let ptr = buf.mapped_ptr().expect("shared buffer");
+        unsafe { std::slice::from_raw_parts(ptr, buf.size() as usize) }.to_vec()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn settle(
+        prim: &mut GltfSkinnedMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        verts_slot: Slot,
+        joints_slot: Slot,
+        weights_slot: Slot,
+        params: &ParamValues,
+    ) {
+        for _ in 0..200 {
+            run_once(prim, backend, device, verts_slot, joints_slot, weights_slot, params, frame_time_at(0.0));
+            if !prim.cached_verts.is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("gltf_skinned_mesh_source: parse never settled");
+    }
+
+    fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, Slot, Slot, Slot) {
+        let mut backend = MetalBackend::new(device.arc(), 64, 64, manifold_gpu::GpuTextureFormat::Rgba8Unorm);
+        let verts_buf =
+            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let joints_buf =
+            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64);
+        let weights_buf =
+            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64);
+        let verts_slot = backend.pre_bind_array(ResourceId(0), verts_buf);
+        let joints_slot = backend.pre_bind_array(ResourceId(1), joints_buf);
+        let weights_slot = backend.pre_bind_array(ResourceId(2), weights_buf);
+        (backend, verts_slot, joints_slot, weights_slot)
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// asset, frame 2's three outputs are bit-identical to frame 1's, and
+    /// the copy skip (`mark_outputs_unchanged`) fires on frame 2.
+    #[test]
+    fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
+        let path = cesium_man_fixture_path();
+        if !path.exists() {
+            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (backend, vs, js, ws) = make_buffer_backend(&device);
+        let params = params_at(path.to_str().unwrap(), 0.0);
+        let mut prim = GltfSkinnedMeshSource::new();
+        settle(&mut prim, &backend, &device, vs, js, ws, &params);
+
+        let f1_verts = readback(&backend, vs);
+        let f1_joints = readback(&backend, js);
+        let f1_weights = readback(&backend, ws);
+
+        let unchanged = run_once(&mut prim, &backend, &device, vs, js, ws, &params, frame_time_at(0.0));
+        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+
+        assert_eq!(f1_verts, readback(&backend, vs), "verts must be bit-identical frame 2 vs frame 1");
+        assert_eq!(f1_joints, readback(&backend, js), "joints must be bit-identical frame 2 vs frame 1");
+        assert_eq!(f1_weights, readback(&backend, ws), "weights must be bit-identical frame 2 vs frame 1");
+    }
+
+    /// D9's "prove it, don't trust the sentence" test: this primitive
+    /// supplies only the LOCAL-space bind-pose geometry + weights — never
+    /// the animated pose (that's `node.gltf_skeleton_pose` / `node.skin_mesh`,
+    /// files this phase never touches). Confirm the P1 gate here is
+    /// correctly time-independent: on an animated skinned fixture, this
+    /// primitive's own output settles once and then correctly stays
+    /// gated (mark_outputs_unchanged) across DIFFERENT playhead positions,
+    /// because its bind-pose output never depends on `ctx.time` — the
+    /// per-frame pose animation itself happens entirely downstream, outside
+    /// this phase's touched files, so it is unaffected by this gate by
+    /// construction (this primitive never reads `ctx.time`).
+    #[test]
+    fn gate_is_unaffected_by_playhead_on_an_animated_fixture() {
+        let path = cesium_man_fixture_path();
+        if !path.exists() {
+            println!("gate_is_unaffected_by_playhead_on_an_animated_fixture: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (backend, vs, js, ws) = make_buffer_backend(&device);
+        let params = params_at(path.to_str().unwrap(), 0.0);
+        let mut prim = GltfSkinnedMeshSource::new();
+        settle(&mut prim, &backend, &device, vs, js, ws, &params);
+        let settled_verts = readback(&backend, vs);
+
+        // Advance the playhead across several different times — this
+        // primitive's bind-pose output must stay gated (unchanged) and
+        // byte-identical at every one of them, since the actual animation
+        // sampling happens in gltf_skeleton_pose/skin_mesh, not here.
+        for t in [0.1, 0.5, 1.0, 2.37] {
+            let unchanged = run_once(&mut prim, &backend, &device, vs, js, ws, &params, frame_time_at(t));
+            assert!(unchanged, "bind-pose source must gate regardless of playhead position (t={t})");
+            assert_eq!(
+                settled_verts,
+                readback(&backend, vs),
+                "bind-pose output must not vary with the playhead (t={t})"
+            );
+        }
     }
 }

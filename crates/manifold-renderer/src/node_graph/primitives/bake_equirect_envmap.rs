@@ -19,8 +19,8 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct EnvmapUniforms {
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct EnvmapUniforms {
     width: u32,
     height: u32,
     horizon_strength: f32,
@@ -212,6 +212,19 @@ crate::primitive! {
     role: Source,
     aliases: ["environment map", "bake equirect envmap", "equirect", "ibl", "reflection map"],
     boundary_reason: CrossFrameState,
+    extra_fields: {
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7): the full
+        // uniform set the shader was last dispatched with, plus the output
+        // texture's physical identity at that time. `run()`'s dispatch is
+        // skipped (and `mark_outputs_unchanged()` declared) only when BOTH
+        // match this frame's freshly computed values — any param change
+        // (including the D7 sun-coherence animated-envmap gesture) or a
+        // pool-recycled/resized output texture forces a real re-bake, so
+        // `render_scene`'s consumption-side gate (which trusts this node's
+        // declaration) can never observe a stale envmap.
+        last_uniforms: Option<EnvmapUniforms> = None,
+        last_output_identity: Option<usize> = None,
+    },
 }
 
 impl Primitive for BakeEquirectEnvmap {
@@ -282,15 +295,6 @@ impl Primitive for BakeEquirectEnvmap {
             return;
         }
 
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/bake_equirect_envmap.wgsl"),
-                "cs_main",
-                "node.bake_environment",
-            )
-        });
-
         let uniforms = EnvmapUniforms {
             width: tex_width.min(width),
             height: tex_height.min(height),
@@ -310,6 +314,31 @@ impl Primitive for BakeEquirectEnvmap {
             fill_intensity,
         };
 
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 (D7's `last_key`
+        // pattern, generalized from R1): skip the dispatch entirely when
+        // neither the full param set nor the output texture's physical
+        // identity changed since the last time we wrote it. Identity is
+        // checked in addition to params — a pool-recycled/resized output
+        // slot must be re-baked even with identical params, the same
+        // precedent `gltf_texture_source`'s `last_mip_identity` established.
+        let output_identity = envmap.identity_key();
+        let unchanged =
+            self.last_uniforms == Some(uniforms) && self.last_output_identity == Some(output_identity);
+
+        if unchanged {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(
+                include_str!("shaders/bake_equirect_envmap.wgsl"),
+                "cs_main",
+                "node.bake_environment",
+            )
+        });
+
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -325,6 +354,9 @@ impl Primitive for BakeEquirectEnvmap {
             [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
             "node.bake_environment",
         );
+
+        self.last_uniforms = Some(uniforms);
+        self.last_output_identity = Some(output_identity);
     }
 }
 
@@ -789,5 +821,150 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (i, (a, b)) in with_direction_zero_intensity.iter().zip(no_direction_zero_intensity.iter()).enumerate() {
             assert_eq!(a, b, "texel {i}: sun_disc_intensity=0 must be byte-identical regardless of direction");
         }
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate: `run()`'s dispatch
+/// skip, exercised through the real `EffectNodeContext`/`Graph`-adjacent
+/// harness (this node has zero inputs, so no full `Graph`/`Executor` is
+/// needed — same shape as `gltf_texture_source`'s P1 gpu_tests module).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gate_gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::render_target::RenderTarget;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn params_at(horizon_strength: f32, w: f32, h: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(w));
+        p.insert(std::borrow::Cow::Borrowed("height"), ParamValue::Float(h));
+        p.insert(std::borrow::Cow::Borrowed("horizon_strength"), ParamValue::Float(horizon_strength));
+        p
+    }
+
+    /// Runs one frame directly against a real GPU backend (no Graph/Executor
+    /// needed — this Source primitive has zero inputs). Returns whether
+    /// `mark_outputs_unchanged` was declared this frame.
+    fn run_once(
+        prim: &mut BakeEquirectEnvmap,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("bake-env-gate-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+        let tex = backend.texture_2d(slot).expect("texture retained");
+        let bytes_per_row = w * 8; // Rgba16Float
+        let total = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("bake-env-gate-readback");
+        enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared readback");
+        unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
+    }
+
+    /// I3's contract for this node: on a static param set, frame 2's output
+    /// is bit-identical to frame 1's and the dispatch skip
+    /// (`mark_outputs_unchanged`) fires on frame 2.
+    #[test]
+    fn frame2_matches_frame1_on_static_params_and_declares_unchanged() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 32u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target = RenderTarget::new(&device, w, h, format, "bake-env-gate-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, target);
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("envmap", out_slot)];
+
+        let params = params_at(1.0, w as f32, h as f32);
+        let mut prim = BakeEquirectEnvmap::new();
+        let unchanged1 = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
+        assert!(!unchanged1, "first frame must actually bake (no prior state)");
+        let frame1 = readback(&device, &backend, out_slot, w, h);
+
+        let unchanged2 = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
+        assert!(unchanged2, "static param frame must declare mark_outputs_unchanged");
+        let frame2 = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on unchanged params");
+    }
+
+    /// D7/I2: a param change (the sun-coherence gesture, stood in here by
+    /// `horizon_strength`) must NOT be skipped, and must produce the same
+    /// output a FRESH executor baked with that param from the start would.
+    #[test]
+    fn param_change_is_not_skipped_and_matches_fresh_bake() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 32u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut backend_a = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target_a = RenderTarget::new(&device, w, h, format, "bake-env-gate-a");
+        let slot_a = backend_a.pre_bind_texture_2d(r_out, target_a);
+        let scratch_a: Vec<(&'static str, Slot)> = vec![("envmap", slot_a)];
+        let params_1 = params_at(1.0, w as f32, h as f32);
+        let mut prim_a = BakeEquirectEnvmap::new();
+        run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_1, frame_time());
+
+        let params_2 = params_at(3.0, w as f32, h as f32);
+        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_2, frame_time());
+        assert!(!unchanged, "a horizon_strength change must NOT be gated as unchanged");
+        let changed_output = readback(&device, &backend_a, slot_a, w, h);
+
+        let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
+        let target_b = RenderTarget::new(&device, w, h, format, "bake-env-gate-b");
+        let slot_b = backend_b.pre_bind_texture_2d(r_out, target_b);
+        let scratch_b: Vec<(&'static str, Slot)> = vec![("envmap", slot_b)];
+        let mut prim_b = BakeEquirectEnvmap::new();
+        run_once(&mut prim_b, &backend_b, &device, &scratch_b, &params_2, frame_time());
+        let fresh_output = readback(&device, &backend_b, slot_b, w, h);
+
+        assert_eq!(
+            changed_output, fresh_output,
+            "a param change on a live gated executor must match a fresh executor built with that param"
+        );
     }
 }
