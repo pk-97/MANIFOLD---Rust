@@ -20,11 +20,19 @@
 use std::borrow::Cow;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
+// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings, same
+// enum-param shape as `alpha_mode` above (no port-shadow scalar — these are
+// discrete glTF sampler enums, not continuous factors). Index 0 is each
+// enum's neutral/default value (Repeat, Linear) — `run()` maps these
+// indices to `manifold_gpu::GpuAddressMode`/`GpuFilterMode` explicitly, so
+// the two enums' own variant order is irrelevant here.
+const WRAP_MODES: &[&str] = &["Repeat", "ClampToEdge", "MirrorRepeat"];
+const FILTER_MODES: &[&str] = &["Linear", "Nearest"];
 
 crate::primitive! {
     name: PbrMaterial,
@@ -497,6 +505,171 @@ crate::primitive! {
             range: Some((-128.0, 128.0)),
             enum_values: &[],
         },
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // Same 5-family fanout as the UV-transform block above; defaults
+        // (Repeat/Repeat/Linear/Linear) reproduce glTF's implicit
+        // no-sampler default AND the pre-D3 hardcoded `material_sampler`
+        // byte-for-byte.
+        ParamDef {
+            name: Cow::Borrowed("wrap_u"),
+            label: "Base Colour Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("wrap_v"),
+            label: "Base Colour Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mag_filter"),
+            label: "Base Colour Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("min_filter"),
+            label: "Base Colour Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_wrap_u"),
+            label: "Normal Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_wrap_v"),
+            label: "Normal Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_mag_filter"),
+            label: "Normal Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_min_filter"),
+            label: "Normal Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_wrap_u"),
+            label: "MR Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_wrap_v"),
+            label: "MR Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_mag_filter"),
+            label: "MR Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_min_filter"),
+            label: "MR Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_wrap_u"),
+            label: "Occlusion Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_wrap_v"),
+            label: "Occlusion Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_mag_filter"),
+            label: "Occlusion Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_min_filter"),
+            label: "Occlusion Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_wrap_u"),
+            label: "Emissive Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_wrap_v"),
+            label: "Emissive Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_mag_filter"),
+            label: "Emissive Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_min_filter"),
+            label: "Emissive Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
     examples: [],
@@ -564,6 +737,45 @@ impl Primitive for PbrMaterial {
         let occlusion_uv_transform = uv_xf("occ_uv_");
         let emissive_uv_transform = uv_xf("em_uv_");
 
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
+        // own dual-read above — a hand-authored graph JSON may carry either
+        // shape); anything out of range falls through to index 0 (Repeat /
+        // Linear), the glTF spec's own implicit no-sampler default.
+        let enum_or = |name: &str| -> u32 {
+            match ctx.params.get(name) {
+                Some(ParamValue::Enum(v)) => *v,
+                Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+                _ => 0,
+            }
+        };
+        let wrap_mode = |v: u32| -> manifold_gpu::GpuAddressMode {
+            match v {
+                1 => manifold_gpu::GpuAddressMode::ClampToEdge,
+                2 => manifold_gpu::GpuAddressMode::MirrorRepeat,
+                _ => manifold_gpu::GpuAddressMode::Repeat,
+            }
+        };
+        let filter_mode = |v: u32| -> manifold_gpu::GpuFilterMode {
+            match v {
+                1 => manifold_gpu::GpuFilterMode::Nearest,
+                _ => manifold_gpu::GpuFilterMode::Linear,
+            }
+        };
+        let map_sampler = |prefix: &str| -> MapSamplerDesc {
+            MapSamplerDesc {
+                wrap_u: wrap_mode(enum_or(&format!("{prefix}wrap_u"))),
+                wrap_v: wrap_mode(enum_or(&format!("{prefix}wrap_v"))),
+                mag_filter: filter_mode(enum_or(&format!("{prefix}mag_filter"))),
+                min_filter: filter_mode(enum_or(&format!("{prefix}min_filter"))),
+            }
+        };
+        let base_color_sampler = map_sampler("");
+        let normal_sampler = map_sampler("nrm_");
+        let mr_sampler = map_sampler("mr_");
+        let occlusion_sampler = map_sampler("occ_");
+        let emissive_sampler = map_sampler("em_");
+
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
             ambient,
@@ -584,6 +796,11 @@ impl Primitive for PbrMaterial {
         material.mr_uv_transform = mr_uv_transform;
         material.occlusion_uv_transform = occlusion_uv_transform;
         material.emissive_uv_transform = emissive_uv_transform;
+        material.base_color_sampler = base_color_sampler;
+        material.normal_sampler = normal_sampler;
+        material.mr_sampler = mr_sampler;
+        material.occlusion_sampler = occlusion_sampler;
+        material.emissive_sampler = emissive_sampler;
         ctx.outputs.set_material("out", material);
     }
 }

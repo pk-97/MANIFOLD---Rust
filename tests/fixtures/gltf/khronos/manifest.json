@@ -136,8 +136,19 @@
   },
   {
     "asset": "TextureSettingsTest.glb",
-    "checks": [],
-    "status": "xfail:BUG-164"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_settings_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-164 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D3): render_scene now binds one sampler per map family (base/normal/mr/occlusion/emissive), each built from that glTF texture's own wrapS/wrapT/filter instead of one scene-wide hardcoded REPEAT sampler. This asset's 10 materials use the SAME source textures under DIFFERENT samplers (clamp/repeat/mirror per S/T axis) -- the per-quadrant divergence in the golden IS the proof; single-sided vs double-sided (unrelated to D3) is expected to differ per the asset's own design."
   },
   {
     "asset": "AnimatedMorphCube.glb",
@@ -1209,15 +1220,35 @@
   },
   {
     "asset": "SpecGlossVsMetalRough.glb",
-    "checks": [],
-    "status": "xfail:BUG-167",
-    "note": "KHR_materials_pbrSpecularGlossiness entirely unhandled"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/spec_gloss_vs_metal_rough.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-167 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D2): KHR_materials_pbrSpecularGlossiness converts to metal-rough at import (diffuseFactor/diffuseTexture->base color, glossinessFactor->roughness, specularFactor(mean)->specular_factor). KNOWN LIMITATION (not a regression, a named Deferred item, doc section 8): the specularGlossinessTexture's RGB specular TINT is not sampled (deferred — needs a shader change) — on THIS asset the spec-gloss bottle half is visibly darker/less saturated than its metal-rough twin because the tint carries the gold color the deferred map would supply. The two halves no longer look broken (both render, both are lit, both show the logo/geometry) but are not yet pixel-alike. Revival trigger named in the doc is now empirically met by this exact asset."
   },
   {
     "asset": "SimpleInstancing.glb",
-    "checks": [],
-    "status": "xfail:BUG-168",
-    "note": "EXT_mesh_gpu_instancing entirely unhandled"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.05
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_instancing.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-168 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D6): EXT_mesh_gpu_instancing parsed via raw-JSON sniff (no typed support in gltf 1.4.1); each instance's TRANSLATION/ROTATION/SCALE composes with the node's own world transform and bakes a separate world-space copy into the SAME per-material combined mesh at flatten time -- zero new code in the render/graph-assembly path (v1 expands to N wired copies, not true GPU instancing, per D6's explicit rejection of render_instanced_3d_mesh). 125 instances render as 125 visibly distinct cubes; object_count stays 1 (one render_scene object, one combined 4500-vertex mesh) since instancing never adds materials -- OBJECT_SAFETY_MAX's trigger condition (deferred) does not apply here."
   },
   {
     "asset": "MetalRoughSpheresNoTextures.glb",
@@ -1255,9 +1286,19 @@
   },
   {
     "asset": "BoxVertexColors.glb",
-    "checks": [],
-    "status": "xfail:BUG-171",
-    "note": "materialless primitive skipped entirely instead of using glTF default material"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_vertex_colors.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-171 PARTIALLY FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D4): the materialless primitive is no longer silently dropped -- it gets the glTF spec default material (base color white, metallic 1.0, roughness 1.0) and imports/renders as one object (previously errored 'no materials with geometry'). KNOWN GAP, ESCALATED (not implemented this phase): COLOR_0 (per-vertex color) is NOT read anywhere in the mesh pipeline -- MeshVertex (crates/manifold-renderer/src/generators/mesh_common.rs) has no color field, and it is the shared GPU vertex format for ~30 node-graph primitives/shaders, not gltf-import-local. Adding a color channel is a structural ABI change (MeshVertex size/layout, MESH_VERTEX_SPECS, every WGSL 'struct Vertex' hand-copy) beyond this phase's scope per DESIGN_DOC_STANDARD.md's escalate-line ('changing a public API shape the doc doesn't specify') -- escalated to BUG-175 rather than improvised. This box currently renders as a flat uniform gray box, NOT with its per-vertex colors."
   },
   {
     "asset": "RecursiveSkeletons.glb",

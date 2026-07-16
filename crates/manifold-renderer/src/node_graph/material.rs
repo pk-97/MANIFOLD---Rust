@@ -27,6 +27,36 @@
 //! in `emission.rgb`. The alpha channel of `emission` is reserved (currently
 //! `1.0`).
 
+/// Per-map-family sampler settings (GLB_XFAIL_BURNDOWN_DESIGN.md D3):
+/// glTF's `wrapS`/`wrapT`/`magFilter`/`minFilter`, read straight off the
+/// texture's own `sampler` object rather than a single scene-wide REPEAT
+/// sampler. Reuses [`manifold_gpu::GpuAddressMode`]/[`manifold_gpu::GpuFilterMode`]
+/// directly — no local re-encoding — since `render_scene`'s consumer needs
+/// exactly this shape to build a `GpuSamplerDesc`.
+///
+/// Default (`Repeat`/`Repeat`/`Linear`/`Linear`) is the glTF spec's own
+/// implicit default when a texture has no `sampler` index, and is
+/// byte-identical to the pre-D3 hardcoded `material_sampler` — so any
+/// material that never sets these fields renders exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapSamplerDesc {
+    pub wrap_u: manifold_gpu::GpuAddressMode,
+    pub wrap_v: manifold_gpu::GpuAddressMode,
+    pub mag_filter: manifold_gpu::GpuFilterMode,
+    pub min_filter: manifold_gpu::GpuFilterMode,
+}
+
+impl Default for MapSamplerDesc {
+    fn default() -> Self {
+        Self {
+            wrap_u: manifold_gpu::GpuAddressMode::Repeat,
+            wrap_v: manifold_gpu::GpuAddressMode::Repeat,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+        }
+    }
+}
+
 /// Discriminator for the material's shading model. Open enum — each added
 /// kind ships with: (a) a new variant here, (b) a new material atom primitive
 /// that emits it, (c) a new arm in each renderer's per-kind pipeline cache
@@ -180,6 +210,18 @@ pub struct Material {
     /// floor as `roughness` wherever it's constructed (a GGX landmine at
     /// exactly zero).
     pub clearcoat_roughness: f32,
+
+    // ---- Per-map-family samplers (GLB_XFAIL_BURNDOWN_DESIGN.md D3).
+    // Replaces `render_scene`'s single hardcoded REPEAT `material_sampler`
+    // (`85b5bb9d`) — each map family samples with its OWN glTF sampler
+    // settings. Default (`MapSamplerDesc::default()`) reproduces the old
+    // hardcoded REPEAT+linear behavior exactly, so a material that never
+    // sets these renders byte-identical to before this field existed. ----
+    pub base_color_sampler: MapSamplerDesc,
+    pub normal_sampler: MapSamplerDesc,
+    pub mr_sampler: MapSamplerDesc,
+    pub occlusion_sampler: MapSamplerDesc,
+    pub emissive_sampler: MapSamplerDesc,
 }
 
 impl Material {
@@ -213,6 +255,11 @@ impl Material {
             emissive_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             clearcoat: 0.0,
             clearcoat_roughness: 0.0,
+            base_color_sampler: MapSamplerDesc::default(),
+            normal_sampler: MapSamplerDesc::default(),
+            mr_sampler: MapSamplerDesc::default(),
+            occlusion_sampler: MapSamplerDesc::default(),
+            emissive_sampler: MapSamplerDesc::default(),
         }
     }
 

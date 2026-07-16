@@ -7781,7 +7781,7 @@
           "label": "Material Index",
           "name": "material_index",
           "range": [
-            "-1",
+            "-2",
             "1024"
           ],
           "type": "int"
@@ -7896,6 +7896,20 @@
             "8192"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "passthrough",
+            "gloss_to_roughness"
+          ],
+          "label": "Repack Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Read one embedded image out of a glTF/.glb file and emit it as a Texture2D wire, so an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. texture_index selects among document.textures(); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
@@ -12408,6 +12422,296 @@
             "128"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Base Colour Wrap U",
+          "name": "wrap_u",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Base Colour Wrap V",
+          "name": "wrap_v",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Base Colour Mag Filter",
+          "name": "mag_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Base Colour Min Filter",
+          "name": "min_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Normal Wrap U",
+          "name": "nrm_wrap_u",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Normal Wrap V",
+          "name": "nrm_wrap_v",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Normal Mag Filter",
+          "name": "nrm_mag_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Normal Min Filter",
+          "name": "nrm_min_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "MR Wrap U",
+          "name": "mr_wrap_u",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "MR Wrap V",
+          "name": "mr_wrap_v",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "MR Mag Filter",
+          "name": "mr_mag_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "MR Min Filter",
+          "name": "mr_min_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Occlusion Wrap U",
+          "name": "occ_wrap_u",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Occlusion Wrap V",
+          "name": "occ_wrap_v",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Occlusion Mag Filter",
+          "name": "occ_mag_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Occlusion Min Filter",
+          "name": "occ_min_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Emissive Wrap U",
+          "name": "em_wrap_u",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Repeat",
+            "ClampToEdge",
+            "MirrorRepeat"
+          ],
+          "label": "Emissive Wrap V",
+          "name": "em_wrap_v",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Emissive Mag Filter",
+          "name": "em_mag_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Linear",
+            "Nearest"
+          ],
+          "label": "Emissive Min Filter",
+          "name": "em_min_filter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Cook-Torrance microfacet PBR (D_GGX × G_Smith × F_Schlick) + IBL reflection material. The workhorse for realistic 3D surfaces. The bundled 3D mesh renderers evaluate the BRDF per fragment, blend with envmap-sampled IBL, and combine with diffuse + emission. `metallic` blends F0 from dielectric (≈4%) to metal (= base_color); `roughness` controls the microfacet spread (sharp 0.01 to fully rough 1.0). `clearcoat` (0..1) layers a second, always-dielectric (F0=0.04) GGX specular lobe on top — a car-paint/lacquer coat — with its own `clearcoat_roughness`; the base layer is energy-compensated by the coat's Fresnel (KHR_materials_clearcoat, factor-only v1). Outputs one Material on `out`. Requires BOTH a `light` input AND an `envmap` Texture2D wired to the renderer (the conditional-requirement table enforces this at preset-load).",

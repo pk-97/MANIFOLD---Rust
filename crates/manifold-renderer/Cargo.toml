@@ -44,6 +44,11 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # crate has a `KHR_materials_clearcoat` feature or any typed accessor at
 # this pinned version, unlike specular/ior in G-P4. No feature added; no
 # new dependency.
+# GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167): KHR_materials_pbrSpecularGlossiness
+# HAS typed support at 1.4.1 (`gltf::Material::pbr_specular_glossiness()`,
+# `gltf::material::PbrSpecularGlossiness`) — VERIFIED this session by
+# reading `gltf-1.4.1/src/material.rs` — unlike clearcoat above. Enabling
+# the feature is the whole fix; no raw-JSON sniff needed for this one.
 gltf = { version = "1", features = [
     "KHR_materials_emissive_strength",
     "KHR_materials_transmission",
@@ -52,6 +57,7 @@ gltf = { version = "1", features = [
     "KHR_texture_transform",
     "KHR_materials_specular",
     "KHR_materials_ior",
+    "KHR_materials_pbrSpecularGlossiness",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
