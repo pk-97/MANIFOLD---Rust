@@ -129,7 +129,7 @@ pub struct MuxTexture {
     latched_selector: Option<f32>,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — hash of
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — hash of
     /// (effective selector index actually rendered, selected source slot's
     /// write generation, selected source texture identity, output texture
     /// identity, executor rebuild epoch) from the last frame this node
@@ -372,7 +372,7 @@ impl EffectNode for MuxTexture {
         let (w, h) = (out.width, out.height);
         let out_identity = out.identity_key();
 
-        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193: gate this
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197: gate this
         // evaluate's dispatch (or clear-fallback) on everything that
         // determines its output content — the effective selector index,
         // the selected source's write generation + physical identity (the
@@ -531,7 +531,7 @@ mod tests {
     }
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 gate: the
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 gate: the
 /// evaluate-path dispatch skip, exercised directly (no `Graph`/`Executor`
 /// needed — bindings are constructed by hand, same shape as
 /// `gltf_texture_source`'s and `bake_equirect_envmap`'s own P1/P3

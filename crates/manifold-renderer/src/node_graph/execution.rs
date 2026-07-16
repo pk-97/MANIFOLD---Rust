@@ -233,7 +233,7 @@ pub struct Executor {
     /// numbers is always sound. See `rebuild_epoch` for the cross-executor-
     /// lifetime hazard this alone does not cover.
     slot_generations: Vec<u64>,
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — per-step
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — per-step
     /// "last frame's param-driven alias" state: `(aliased-from resource,
     /// destination slot, in-resource's write generation at alias time)`,
     /// indexed like `node_declared_unchanged`/`step_memo`. Populated ONLY
@@ -1194,7 +1194,7 @@ impl Executor {
                             }
                         } else {
                             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/
-                            // BUG-193: a param-driven (skip_passthrough)
+                            // BUG-197: a param-driven (skip_passthrough)
                             // alias is a per-pixel identity onto a STABLE
                             // choice of input WIRE — when this frame's
                             // aliased-from RESOURCE (the compiled edge
@@ -1387,7 +1387,7 @@ impl Executor {
             // node's side of this; a false declaration is the only way this
             // could go wrong, and that's per-node-tested, not this site's
             // job). **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md
-            // P3b/BUG-193:** alias-skip steps used to never set
+            // P3b/BUG-197:** alias-skip steps used to never set
             // `node_declared_unchanged[idx]` (it always stayed reset-false),
             // so EVERY passthrough alias — data-driven or param-driven —
             // conservatively bumped, which is why a real glTF import's
@@ -3211,7 +3211,7 @@ mod tests {
 
 }
 
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 — the alias-path
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 — the alias-path
 /// generation-propagation gate needs a real backend: pool recycling can
 /// legitimately hand the SAME `ResourceId` a DIFFERENT physical `Slot`
 /// across frames whenever a resource is released and reacquired every
@@ -3311,7 +3311,7 @@ mod alias_gpu_tests {
         }
     }
 
-    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-193 gate: a
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3b/BUG-197 gate: a
     /// param-driven (`skip_passthrough`) alias — `mux_texture`'s
     /// inline-selector fast path is the production case that motivated
     /// this — propagates its aliased input's write generation through to

@@ -28,11 +28,11 @@ outside this phase's file scope: every glTF import wires
 `node.bake_environment → node.switch_texture (env_mode select) → node.render_scene`, never a direct
 wire, and `node.switch_texture` copies its selected branch into its own output every frame without
 ever declaring `mark_outputs_unchanged` — so `render_scene`'s envmap generation never stabilizes on
-a real import and P3's `ibl_cache_key` misses every frame. Filed as BUG-193 (`docs/BUG_BACKLOG.md`),
+a real import and P3's `ibl_cache_key` misses every frame. Filed as BUG-197 (`docs/BUG_BACKLOG.md`),
 which also updates BUG-189's fix-shape note. P3's code is safe and correct to keep (any DIRECTLY-
-wired envmap — a hand-authored generator preset, or `switch_texture` once BUG-193 lands — gets the
+wired envmap — a hand-authored generator preset, or `switch_texture` once BUG-197 lands — gets the
 full benefit today), but BUG-189's floor is NOT closed by P3 alone; do not treat this phase as having
-delivered its headline number without BUG-193 landing first.
+delivered its headline number without BUG-197 landing first.
 
 BUG-189: the glb import graph burns ~10 ms of true GPU time per frame *regardless of resolution*
 (9.8 ms @1080p, 13.5 ms median / 22.7 ms p95 @4K, AMG GT3, 302k tris / 78 materials, M4 Max).
@@ -393,15 +393,15 @@ Test scope: same as P2 (GPU feature run mandatory — shaders' callers changed).
 P2 only.
 
 **Perf clause discharged by P3b** (2026-07-17, post-P3): the full-chain AMG before/after (bake
-→ switch_texture → render_scene) is owed by P3b, not this phase — BUG-193 found every glTF import
+→ switch_texture → render_scene) is owed by P3b, not this phase — BUG-197 found every glTF import
 routes through `node.switch_texture`, which broke the generation signal this phase's mechanism
 correctly relies on. This phase's own mechanism and correctness gates are unaffected and remain
 landed as-is.
 
-**P3b — BUG-193: pass-through generation gating on `node.switch_texture` (half session, Sonnet).**
+**P3b — BUG-197: pass-through generation gating on `node.switch_texture` (half session, Sonnet).**
 Entry: P3 landed with its perf clause undischarged (P3's own gate note) — the mechanism is correct
 but every glTF import wires `bake_environment → switch_texture → render_scene`, and the mux
-re-emits every frame, so render_scene's IBL cache key never hits on a real import (BUG-193).
+re-emits every frame, so render_scene's IBL cache key never hits on a real import (BUG-197).
 Read-back: this doc D5+D7+I1–I4 and the P3 brief; `mux_texture.rs` WHOLE file — especially the
 `latched_selector` doc (~119–132: wired selectors render with LAST frame's value by design; the
 gate keys on the effective value, so this is already solved, don't re-derive it),
@@ -421,7 +421,7 @@ propagation, fenced: for a `performed_alias` step where `data_skip` is FALSE (pa
 `skip_passthrough` only — the empty-propagation data-skip path keeps its conservative bump
 untouched), set `node_declared_unchanged[idx]` when (same in-slot resource as this step's previous
 frame, same out slot, in-slot generation unchanged); per-step scratch in `Executor`, cleared on
-rebuild. (3) Update the choke-point comment and BUG-193's Status line; note in the commit message
+rebuild. (3) Update the choke-point comment and BUG-197's Status line; note in the commit message
 whether the AMG's mux took the evaluate path or the alias path (expected: evaluate — equirect
 dims ≠ canvas dims, so `compatible()` fails). (4) One recorded observation, no code: with
 `env_mode = HDRI` the chain routes through `node.exposure` (hdri_gain), which never declares
@@ -523,7 +523,7 @@ p50=20.330ms (only ~4-5% better than P0's uncommitted 21.4ms pre-P4 measurement)
 finding that the repaired `format!`/scan pattern was real but not BrainStem's dominant cost; the
 remaining ~20ms is a named, unattributed follow-up in `docs/BUG_BACKLOG.md`'s BUG-190 entry, not
 re-opened as a fix attempt here (D3/D3b scope). Supersession sweep: `rg` for "BUG-189", "BUG-190",
-"BUG-193", "10ms floor", "import graph floor", "R0"–"R6", "RENDER_SCENE_PERF" across `docs/` found
+"BUG-197", "10ms floor", "import graph floor", "R0"–"R6", "RENDER_SCENE_PERF" across `docs/` found
 no stale assertion of the old unfixed floor — the two other hits (`PERF_BUDGET_GATE_DESIGN.md` D7's
 "first customer is BUG-189's ~10ms floor" and `GLTF_ANIMATION_DESIGN.md`'s BUG-190 cross-reference)
 are both correctly-framed historical record of why those decisions were made, not present-tense
