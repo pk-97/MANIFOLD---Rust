@@ -1582,177 +1582,420 @@
     "status": "expect_pass"
   },
   {
-    "asset": "AnimatedCube (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "AnimatedCube/AnimatedCube.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/animated_cube.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "AnimatedTriangle (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "AnimatedTriangle/AnimatedTriangle.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/animated_triangle.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "BoomBoxWithAxes (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "BoomBoxWithAxes/BoomBoxWithAxes.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/boom_box_with_axes.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Box With Spaces (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Box With Spaces/Box With Spaces.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_with_spaces.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Cameras (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Cameras/Cameras.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/cameras.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Cube (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Cube/Cube.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/cube.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "EnvironmentTest (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "EnvironmentTest/EnvironmentTest.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/environment_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "FlightHelmet (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "FlightHelmet/FlightHelmet.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/flight_helmet.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "IridescenceDielectricSpheres (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "IridescenceDielectricSpheres/IridescenceDielectricSpheres.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/iridescence_dielectric_spheres.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "IridescenceMetallicSpheres (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "IridescenceMetallicSpheres/IridescenceMetallicSpheres.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/iridescence_metallic_spheres.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "MandarinOrange (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "MandarinOrange/MandarinOrange.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/mandarin_orange.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "MeshPrimitiveModes (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "MultipleScenes/MultipleScenes.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/multiple_scenes.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "MeshoptCubeTest (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "PrimitiveModeNormalsTest/PrimitiveModeNormalsTest.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/primitive_mode_normals_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "MultipleScenes (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SciFiHelmet/SciFiHelmet.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/sci_fi_helmet.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "PrimitiveModeNormalsTest (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SheenCloth/SheenCloth.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/sheen_cloth.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SciFiHelmet (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleMaterial/SimpleMaterial.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_material.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SheenCloth (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleMeshes/SimpleMeshes.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_meshes.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleMaterial (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleMorph/SimpleMorph.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_morph.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleMeshes (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleSkin/SimpleSkin.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_skin.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleMorph (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleSparseAccessor/SimpleSparseAccessor.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_sparse_accessor.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleSkin (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "SimpleTexture/SimpleTexture.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_texture.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleSparseAccessor (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Sponza/Sponza.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/sponza.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "SimpleTexture (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "StainedGlassLamp/StainedGlassLamp.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/stained_glass_lamp.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Sponza (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Suzanne/Suzanne.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/suzanne.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "StainedGlassLamp (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "Triangle/Triangle.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/triangle.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Suzanne (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "TriangleWithoutIndices/TriangleWithoutIndices.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/triangle_without_indices.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "Triangle (no glTF-Binary variant at pin)",
-    "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "asset": "TwoSidedPlane/TwoSidedPlane.gltf",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/two_sided_plane.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
-    "asset": "TriangleWithoutIndices (no glTF-Binary variant at pin)",
+    "asset": "MeshoptCubeTest/MeshoptCubeTest.gltf",
     "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "status": "xfail:BUG-187",
+    "note": "extensionsRequired names KHR_mesh_quantization (and the asset also uses EXT_meshopt_compression), neither implemented by MANIFOLD \u2014 correctly rejected before any geometry parse, see BUG-187"
   },
   {
-    "asset": "TwoSidedPlane (no glTF-Binary variant at pin)",
+    "asset": "MeshPrimitiveModes/MeshPrimitiveModes.gltf",
     "checks": [],
-    "status": "xfail:G-P7",
-    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched \u2014 TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+    "status": "xfail:BUG-188",
+    "note": "one mesh mixes POINTS/LINES/LINE_STRIP/LINE_LOOP/TRIANGLE_STRIP/TRIANGLE_FAN primitives with one TRIANGLES primitive on the same material; the first non-Triangles primitive's error aborts load_gltf_mesh for the WHOLE object via `?` in walk_gltf_node, so nothing renders (not even the compliant TRIANGLES primitive) \u2014 see BUG-188"
   }
 ]
