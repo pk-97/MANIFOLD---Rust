@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-189 | **import-graph-10ms-resolution-independent-gpu-floor** | The glb import graph costs ~10 ms of true GPU time per frame regardless of resolution (9.8 ms @1080p vs 13.5 ms @4K on the 302k-tri AMG GT3, M4 Max) — the floor, not per-pixel shading, is what breaks the 16.7 ms budget at 4K (p95 22.7 ms). Root cause unknown; suspects: per-frame shadow-map re-render, per-pass overhead across the import graph's many small passes, mip/dome regeneration. MED (release-content: 4K60 export/preview headroom). |
 | BUG-188 | **meshprimitivemodes-non-triangle-primitive-blanks-whole-object** | `MeshPrimitiveModes.gltf`'s mesh mixes non-Triangles primitives (POINTS/LINES/etc) with one TRIANGLES primitive on the same material; the first non-Triangles primitive's error aborts the WHOLE object's geometry via `?`, so it renders fully black instead of drawing at least the TRIANGLES part. Found during G-P7 sidecar-fetch sweep. LOW-MED. |
 | BUG-187 | **meshoptcubetest-khr-mesh-quantization-unsupported** | `MeshoptCubeTest.gltf` requires `KHR_mesh_quantization` (and `EXT_meshopt_compression`), neither implemented — correctly vetoed, not a misrender. Found during G-P7 sidecar-fetch sweep. LOW. |
 | BUG-175 | **fluidsim2d-dead-black-after-live-resize** | FluidSim2D (and likely FluidSim3D/ParticleText — same aliased in-place particle buffer) renders permanent black after a live project-resolution change; the resize state-clear that fixed Cymatics (`b11e6511`) doesn't rescue it. Ignored gpu-proofs reproducer: `fluidsim2d_survives_live_resize`. MED-HIGH (live-rig: resolution change kills fluid layers). |
@@ -131,6 +132,15 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-189 (import-graph-10ms-resolution-independent-gpu-floor) — glb import graph burns ~10 ms of GPU time per frame independent of resolution; 4K lands at 13.5 ms median / 22.7 ms p95, over the 60 fps budget at p95 — found 2026-07-16 measuring 4K60 feasibility for the AMG GT3 on M4 Max 36GB
+**Status:** OPEN — measurement session only, not diagnosed.
+
+**Symptom:** `render-import` on `mercedes-amg_gt3__www.vecarz.com.glb` (302k tris, 166 primitives, 78 materials), true GPU execution time per frame via `commit_and_wait_completed_timed` (`GPUEndTime − GPUStartTime`), steady-state medians after decode convergence, back-to-back frames (no inter-frame sleep): 9.8 ms @1920×1080, ~9.8 ms @2560×1440, 13.5 ms @3840×2160 (p95 22.7 ms). Only ~3.7 ms scales with pixels across a 4× pixel-count jump; ~10 ms is a fixed per-frame floor. CPU encode is ~4.5 ms/frame on top (overlappable in the pipelined engine, serial in the harness).
+
+**Root cause:** unknown. Suspects, in order: (a) shadow-map pass re-rendering the full 166-draw-call scene every frame at fixed shadow resolution; (b) per-pass/encoder overhead across the import graph's many sequential passes (dome fill, IBL, mips, tonemap) with GPU dead time between them; (c) something regenerating per-frame that should be cached (mips, environment). The 4K p95 spikes (22–37 ms) are a second unknown riding on top.
+
+**Fix shape:** profile first — `freeze-profile`-style per-pass breakdown or `manifold-profiler` on the import graph to attribute the 10 ms before touching anything. If (a): cache the shadow map for static scenes (dirty-flag on light/geometry change). If (b): the freeze/fusion compiler direction already owns this class. Measurement harness: timing patch on `render_import.rs` (frame encode + `commit_and_wait_completed_timed`), throwaway on `feat/frame-timing-probe`, not landed — trivially re-creatable.
 
 ### BUG-188 (meshprimitivemodes-non-triangle-primitive-blanks-whole-object) — a mesh mixing POINTS/LINES/LINE_STRIP/LINE_LOOP/TRIANGLE_STRIP/TRIANGLE_FAN alongside TRIANGLES renders fully black instead of drawing at least the TRIANGLES primitives — found 2026-07-16 during GLB_CONFORMANCE_DESIGN.md G-P7 sidecar-fetch sweep
 **Status:** OPEN — found while wiring `MeshPrimitiveModes` (Khronos glTF-Sample-Assets) into the conformance manifest; xfail'd as `xfail:BUG-188` rather than blocking.
