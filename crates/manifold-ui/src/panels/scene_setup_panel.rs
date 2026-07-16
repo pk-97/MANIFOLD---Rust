@@ -168,6 +168,65 @@ const CAMERA_OFF_LENS_FSTOP_MINUS: u64 = 30;
 const CAMERA_OFF_LENS_SHUTTER_MINUS: u64 = 33;
 const CAMERA_OFF_LENS_EXPOSURE_MINUS: u64 = 36;
 
+/// D6's curated "Add modifier" vocabulary: `(display name, type_id)`, in the
+/// design's own order. Plain string literals — no `manifold-renderer`
+/// dependency needed here; the command that receives the chosen `type_id`
+/// (`InsertMeshModifierCommand`, `manifold-editing`) is what actually knows
+/// it names a real primitive.
+pub const MESH_MODIFIER_CHOICES: &[(&str, &str)] = &[
+    ("Bend", "node.bend_mesh"),
+    ("Twist", "node.twist_mesh"),
+    ("Taper", "node.taper_mesh"),
+    ("Inflate", "node.push_along_normals"),
+    ("Displace by Texture", "node.push_mesh"),
+    ("Morph", "node.morph_mesh"),
+    ("Rotate", "node.rotate_3d"),
+];
+
+/// Modifier-stack dynamic keys (P5) — nested two levels (object index ×
+/// modifier slot within that object), unlike `obj_key`'s single-level
+/// stride: each object gets a generous per-object budget wide enough for
+/// several modifier rows (remove/up/down + up to 4 param cells each) PLUS
+/// the 7-chip "Add modifier" row, reserved in its own sub-range so neither
+/// can collide with the other as the stack grows.
+const MODIFIER_KEY_BASE: u64 = 88_000;
+const MODIFIER_OBJ_STRIDE: u64 = 480;
+const MODIFIER_ROW_STRIDE: u64 = 20;
+const MODIFIER_OFF_UP: u64 = 0;
+const MODIFIER_OFF_DOWN: u64 = 1;
+const MODIFIER_OFF_REMOVE: u64 = 2;
+/// Stride-3 `[−] value [+]` stepper rows follow, up to 4 param slots per
+/// modifier (12 offsets) — well under `MODIFIER_ROW_STRIDE`'s 20.
+const MODIFIER_OFF_PARAM_BASE: u64 = 3;
+/// Reserved sub-range within the per-object budget for the 7 "Add modifier"
+/// chips — `400 / MODIFIER_ROW_STRIDE = 20` modifier rows of headroom before
+/// a real stack (never more than a handful) could reach it.
+const MODIFIER_ADD_CHIP_OFFSET: u64 = 400;
+
+const fn modifier_row_key(object_index: usize, modifier_index: usize, offset: u64) -> u64 {
+    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + modifier_index as u64 * MODIFIER_ROW_STRIDE + offset
+}
+
+const fn modifier_add_chip_key(object_index: usize, choice_index: usize) -> u64 {
+    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_CHIP_OFFSET + choice_index as u64
+}
+
+/// Stable automation name for a modifier param row's value cell, by its slot
+/// within THAT modifier's own param list (0-based — the widest atom,
+/// `push_mesh`, has 4 params). `scripts/ui-flows/` selects the first
+/// modifier's params via `nth` on this name, same "name over raw pixel
+/// coordinate" convention the P4 lesson calls out — a fixed selector survives
+/// a row shifting position when other panel content changes above it.
+const fn modifier_param_row_automation_name(param_slot: usize) -> Option<&'static str> {
+    match param_slot {
+        0 => Some("scene_setup.modifier.param0_value"),
+        1 => Some("scene_setup.modifier.param1_value"),
+        2 => Some("scene_setup.modifier.param2_value"),
+        3 => Some("scene_setup.modifier.param3_value"),
+        _ => None,
+    }
+}
+
 const fn camera_numeric_row_automation_name(offset: u64) -> Option<&'static str> {
     match offset {
         CAMERA_OFF_ORBIT_MINUS => Some("scene_setup.camera.orbit_value"),
@@ -296,6 +355,32 @@ pub enum ObjectMaterialVm {
     None,
 }
 
+/// One editable param row inside a modifier's own param set (D6: "the atom's
+/// own params (amount/axis/center …) as ordinary editable rows"). `label` is
+/// the primitive's own param label, transcribed by `state_sync` (this crate
+/// can't depend on `manifold-renderer`'s `ParamDef`, same DTO-boundary
+/// convention as `EnvironmentRowVm::mode_is_hdri`). `Axis` covers
+/// Bend/Twist/Taper's own X/Y/Z selector — the same `EnumRowValue` stepper
+/// Lights already use, never a new widget kind.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModifierParamRowVm {
+    Numeric { label: &'static str, row: RowValue },
+    Axis { label: &'static str, row: EnumRowValue },
+}
+
+/// One modifier-stack entry (D6/P5): the atom's display name, its own
+/// address, and its curated param rows. `index` is this modifier's 0-based
+/// position in wire order (source → … → output) — the same convention
+/// `InsertMeshModifierCommand::position`/`MoveMeshModifierCommand::new_position`
+/// take, and what the up/down buttons compute against.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModifierKnownRow {
+    pub index: usize,
+    pub node_doc_id: u32,
+    pub display_name: String,
+    pub params: Vec<ModifierParamRowVm>,
+}
+
 /// Payload for [`ObjectRowVm::Known`], boxed so the enum's footprint tracks
 /// the small `Custom` variant instead of this one (clippy
 /// `large_enum_variant` — same convention as `LightRow`/`OrbitCameraRow` in
@@ -307,9 +392,16 @@ pub struct ObjectKnownRow {
     pub name: String,
     pub transform: Option<Box<TransformRowVm>>,
     pub material: ObjectMaterialVm,
-    /// Display names only in P2 (the interactive stack — add/remove/
-    /// reorder — is P5); an empty list still renders "no modifiers".
-    pub modifier_names: Vec<String>,
+    /// The modifier stack, in wire order (D6/P5) — the interactive list the
+    /// panel renders with add/remove/reorder. Not a stored value: rebuilt
+    /// from the Vm's own `modifier_chain` trace every sync (D1).
+    pub modifiers: Vec<ModifierKnownRow>,
+    /// `false` when the trace couldn't parse this object's mesh chain at all
+    /// (D6: "custom chain — edit in graph") — the panel shows that label and
+    /// disables "Add modifier" for THIS object only, never a blind splice
+    /// into unrecognized topology. `true` (even with an empty `modifiers`
+    /// list) means the stack is well-formed and addable.
+    pub modifiers_addable: bool,
 }
 
 /// One Objects-section row (D3/D4).
@@ -533,6 +625,18 @@ pub struct ScenePanel {
     object_name_ids: Vec<(u32, NodeId, String)>,
     /// `(index, expand_toggle_node_id)` for every object row this frame.
     object_expand_ids: Vec<(usize, NodeId)>,
+    /// P5: `(node_id, group_node_id, modifier_node_id)` for every modifier
+    /// row's remove button built this frame.
+    modifier_remove_ids: Vec<(NodeId, u32, u32)>,
+    /// P5: `(node_id, group_node_id, modifier_node_id, new_position)` for
+    /// every up/down reorder button built this frame — only pushed for
+    /// buttons that aren't at a stack boundary (up at index 0 / down at the
+    /// last index are rendered but inert, per
+    /// `feedback_no_conditionally_visible_ui`).
+    modifier_move_ids: Vec<(NodeId, u32, u32, u32)>,
+    /// P5: `(node_id, group_node_id, type_id)` for every "Add modifier" chip
+    /// built this frame.
+    modifier_add_ids: Vec<(NodeId, u32, String)>,
     /// P3 Lights section fold state — same convention as `object_expanded`.
     light_expanded: std::collections::HashMap<usize, bool>,
     /// P3 Lights-row drag-armable value cells (color/pos/aim triplets) —
@@ -584,6 +688,9 @@ impl Default for ScenePanel {
             object_steppers: Vec::new(),
             object_name_ids: Vec::new(),
             object_expand_ids: Vec::new(),
+            modifier_remove_ids: Vec::new(),
+            modifier_move_ids: Vec::new(),
+            modifier_add_ids: Vec::new(),
             light_expanded: std::collections::HashMap::new(),
             light_value_cells: Vec::new(),
             light_steppers: Vec::new(),
@@ -694,6 +801,9 @@ impl ScenePanel {
         self.object_steppers.clear();
         self.object_name_ids.clear();
         self.object_expand_ids.clear();
+        self.modifier_remove_ids.clear();
+        self.modifier_move_ids.clear();
+        self.modifier_add_ids.clear();
         self.light_value_cells.clear();
         self.light_steppers.clear();
         self.light_expand_ids.clear();
@@ -1513,14 +1623,14 @@ impl ScenePanel {
         mut cy: f32,
         obj: &ObjectRowVm,
     ) -> f32 {
-        let (index, group_node_id, name, transform, material, modifier_names) = match obj {
+        let (index, group_node_id, name, transform, material, modifiers) = match obj {
             ObjectRowVm::Known(row) => (
                 row.index,
                 Some(row.group_node_id),
                 row.name.clone(),
                 row.transform.clone(),
                 row.material.clone(),
-                row.modifier_names.clone(),
+                Some((row.modifiers.clone(), row.modifiers_addable)),
             ),
             ObjectRowVm::Custom { index, transform } => (
                 *index,
@@ -1528,7 +1638,7 @@ impl ScenePanel {
                 format!("Object {index} — custom (edit in graph)"),
                 transform.clone(),
                 ObjectMaterialVm::None,
-                Vec::new(),
+                None,
             ),
         };
         let expanded = self.is_expanded(index);
@@ -1593,11 +1703,292 @@ impl ScenePanel {
                 cy += ROW_H;
             }
         }
-        let modifiers_line =
-            if modifier_names.is_empty() { "Modifiers: none".to_string() } else { format!("Modifiers: {}", modifier_names.join(", ")) };
-        tree.add_label(Some(self.content_parent), body_x, cy, body_w, ROW_H, &modifiers_line, label_style());
-        cy += ROW_H + ROW_GAP;
+        // ── Modifier stack (D6/P5): only for Known (grouped) objects — a
+        // Custom row has no group to splice into at all. ──
+        if let (Some((mods, addable)), Some(gid)) = (&modifiers, group_node_id) {
+            tree.add_label(Some(self.content_parent), body_x, cy, body_w, ROW_H, "Modifiers", label_style());
+            cy += ROW_H;
+            if *addable {
+                for m in mods {
+                    cy = self.build_modifier_row(tree, body_x, body_w, cy, index, gid, m, mods.len());
+                }
+                cy = self.build_add_modifier_row(tree, body_x, body_w, cy, index, gid);
+            } else {
+                tree.add_label(
+                    Some(self.content_parent),
+                    body_x,
+                    cy,
+                    body_w,
+                    ROW_H,
+                    "Custom chain — edit in graph",
+                    label_style(),
+                );
+                cy += ROW_H;
+            }
+        }
+        cy += ROW_GAP;
         cy
+    }
+
+    /// One modifier-stack entry (P5/D6): display name + up/down/remove, then
+    /// its own param rows. `mod_count` is the CURRENT stack length — up/down
+    /// are always rendered (never conditionally hidden,
+    /// `feedback_no_conditionally_visible_ui`) but only recorded as live
+    /// targets when they wouldn't push past a stack boundary; clicking an
+    /// inert one at the boundary is simply a no-op.
+    #[allow(clippy::too_many_arguments)]
+    fn build_modifier_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        object_index: usize,
+        group_node_id: u32,
+        m: &ModifierKnownRow,
+        mod_count: usize,
+    ) -> f32 {
+        let name_w = inner_w - STEP_W * 3.0;
+        tree.add_label(Some(self.content_parent), inner_x, cy, name_w, ROW_H, &m.display_name, label_style());
+        let btn_x = inner_x + name_w;
+        let up_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            btn_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2191}",
+            modifier_row_key(object_index, m.index, MODIFIER_OFF_UP),
+        );
+        let down_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            btn_x + STEP_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2193}",
+            modifier_row_key(object_index, m.index, MODIFIER_OFF_DOWN),
+        );
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            btn_x + STEP_W * 2.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{00D7}",
+            modifier_row_key(object_index, m.index, MODIFIER_OFF_REMOVE),
+        );
+        self.modifier_remove_ids.push((remove_id, group_node_id, m.node_doc_id));
+        if m.index > 0 {
+            self.modifier_move_ids.push((up_id, group_node_id, m.node_doc_id, (m.index - 1) as u32));
+        }
+        if m.index + 1 < mod_count {
+            self.modifier_move_ids.push((down_id, group_node_id, m.node_doc_id, (m.index + 1) as u32));
+        }
+        cy += ROW_H;
+
+        let param_x = inner_x + PAD;
+        let param_w = inner_w - PAD;
+        for (slot, p) in m.params.iter().enumerate() {
+            cy = match p {
+                ModifierParamRowVm::Numeric { label, row } => self.build_modifier_numeric_row(
+                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot,
+                ),
+                ModifierParamRowVm::Axis { label, row } => self.build_modifier_enum_row(
+                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot,
+                ),
+            };
+        }
+        cy
+    }
+
+    /// One modifier param's `[label] [−] value [＋]` row — same shape as
+    /// [`Self::build_object_numeric_row`], keyed into the modifier-row range.
+    /// Pushed onto the SAME `object_steppers`/`object_value_cells` vectors
+    /// every other Objects-section numeric row uses (those are already
+    /// generic `(NodeId, RowValue, …)` lookups keyed by write address, not
+    /// object identity — no separate modifier-specific drag plumbing needed).
+    #[allow(clippy::too_many_arguments)]
+    fn build_modifier_numeric_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        row: &RowValue,
+        object_index: usize,
+        modifier_index: usize,
+        param_slot: usize,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        if row.driven {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                inner_w - LABEL_W,
+                ROW_H,
+                &format!("{:.2} (driven)", row.value),
+                driven_label_style(),
+            );
+            return cy + ROW_H;
+        }
+        let base = MODIFIER_OFF_PARAM_BASE + param_slot as u64 * 3;
+        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
+        let minus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2212}",
+            modifier_row_key(object_index, modifier_index, base),
+        );
+        let value_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W,
+            cy,
+            VALUE_W,
+            ROW_H,
+            drag_value_style(),
+            &format!("{:.2}", row.value),
+            modifier_row_key(object_index, modifier_index, base + 1),
+        );
+        if let Some(name) = modifier_param_row_automation_name(param_slot) {
+            tree.set_name(value_id, name);
+        }
+        let plus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W + VALUE_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{002B}",
+            modifier_row_key(object_index, modifier_index, base + 2),
+        );
+        self.object_steppers.push((minus_id, row.clone(), -0.05));
+        self.object_value_cells.push((value_id, row.clone()));
+        self.object_steppers.push((plus_id, row.clone(), 0.05));
+        cy + ROW_H
+    }
+
+    /// One modifier's Axis param row (Bend/Twist/Taper's X/Y/Z selector) —
+    /// same shape as [`Self::build_light_enum_row`], keyed into the
+    /// modifier-row range.
+    #[allow(clippy::too_many_arguments)]
+    fn build_modifier_enum_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        enum_row: &EnumRowValue,
+        object_index: usize,
+        modifier_index: usize,
+        param_slot: usize,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        let row = &enum_row.row;
+        let label_text = enum_row
+            .labels
+            .get(row.value.round().clamp(0.0, (enum_row.labels.len().max(1) - 1) as f32) as usize)
+            .copied()
+            .unwrap_or("?");
+        if row.driven {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                inner_w - LABEL_W,
+                ROW_H,
+                &format!("{label_text} (driven)"),
+                driven_label_style(),
+            );
+            return cy + ROW_H;
+        }
+        let base = MODIFIER_OFF_PARAM_BASE + param_slot as u64 * 3;
+        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
+        let minus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2212}",
+            modifier_row_key(object_index, modifier_index, base),
+        );
+        let value_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W,
+            cy,
+            VALUE_W,
+            ROW_H,
+            drag_value_style(),
+            label_text,
+            modifier_row_key(object_index, modifier_index, base + 1),
+        );
+        if let Some(name) = modifier_param_row_automation_name(param_slot) {
+            tree.set_name(value_id, name);
+        }
+        let plus_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            step_x + STEP_W + VALUE_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{002B}",
+            modifier_row_key(object_index, modifier_index, base + 2),
+        );
+        self.object_steppers.push((minus_id, row.clone(), -1.0));
+        self.object_steppers.push((plus_id, row.clone(), 1.0));
+        cy + ROW_H
+    }
+
+    /// The curated D6 "Add modifier" chip row: up to 7 small buttons, one per
+    /// [`MESH_MODIFIER_CHOICES`] entry, wrapped across rows (no popover
+    /// widget kind needed — plain buttons, D8's "no new widget kinds").
+    fn build_add_modifier_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        object_index: usize,
+        group_node_id: u32,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Add modifier:", label_style());
+        cy += ROW_H;
+        const PER_ROW: usize = 3;
+        let gap = 4.0;
+        let chip_w = ((inner_w - gap * (PER_ROW as f32 - 1.0)) / PER_ROW as f32).max(40.0);
+        for (i, (label, type_id)) in MESH_MODIFIER_CHOICES.iter().enumerate() {
+            let col = i % PER_ROW;
+            let row_i = i / PER_ROW;
+            let x = inner_x + col as f32 * (chip_w + gap);
+            let y = cy + row_i as f32 * (ROW_H + 2.0);
+            let chip_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                x,
+                y,
+                chip_w,
+                ROW_H,
+                btn_style(),
+                label,
+                modifier_add_chip_key(object_index, i),
+            );
+            self.modifier_add_ids.push((chip_id, group_node_id, (*type_id).to_string()));
+        }
+        let rows = MESH_MODIFIER_CHOICES.len().div_ceil(PER_ROW);
+        cy + rows as f32 * (ROW_H + 2.0)
     }
 
     /// A "3 compact triplet" row (D4): label + X/Y/Z drag-value cells, no
@@ -1787,6 +2178,31 @@ impl ScenePanel {
                             vm.layer_id.clone(),
                             *group_node_id,
                             current_name.clone(),
+                        ));
+                    } else if let Some((_, group_node_id, type_id)) =
+                        self.modifier_add_ids.iter().find(|(id, _, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupAddModifier(
+                            vm.layer_id.clone(),
+                            *group_node_id,
+                            type_id.clone(),
+                        ));
+                    } else if let Some((_, group_node_id, modifier_node_id)) =
+                        self.modifier_remove_ids.iter().find(|(id, _, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupRemoveModifier(
+                            vm.layer_id.clone(),
+                            *group_node_id,
+                            *modifier_node_id,
+                        ));
+                    } else if let Some((_, group_node_id, modifier_node_id, new_position)) =
+                        self.modifier_move_ids.iter().find(|(id, _, _, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupMoveModifier(
+                            vm.layer_id.clone(),
+                            *group_node_id,
+                            *modifier_node_id,
+                            *new_position,
                         ));
                     } else if let Some((row_value, delta)) = stepper_hit_in(&self.object_steppers, *node_id)
                         .or_else(|| stepper_hit_in(&self.light_steppers, *node_id))
@@ -2151,7 +2567,25 @@ mod tests {
                         metallic: RowValue { addr: RowAddr::root(51, "metallic"), value: 0.0, min: 0.0, max: 1.0, driven: false },
                         roughness: RowValue { addr: RowAddr::root(51, "roughness"), value: 0.5, min: 0.01, max: 1.0, driven: false },
                     },
-                    modifier_names: vec!["Bend".to_string()],
+                    modifiers: vec![ModifierKnownRow {
+                        index: 0,
+                        node_doc_id: 70,
+                        display_name: "Bend".to_string(),
+                        params: vec![
+                            ModifierParamRowVm::Axis {
+                                label: "Axis",
+                                row: EnumRowValue {
+                                    row: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "axis".to_string() }, value: 1.0, min: 0.0, max: 2.0, driven: false },
+                                    labels: vec!["X", "Y", "Z"],
+                                },
+                            },
+                            ModifierParamRowVm::Numeric {
+                                label: "Angle",
+                                row: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "angle".to_string() }, value: 0.5, min: -6.28, max: 6.28, driven: false },
+                            },
+                        ],
+                    }],
+                    modifiers_addable: true,
                 })),
                 ObjectRowVm::Custom { index: 1, transform: None },
             ],
@@ -2209,10 +2643,153 @@ mod tests {
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // The full expanded body: 3 transform triplets (9 cells) + 1 color
         // triplet (3 cells) for the Known row = 12 drag cells; metallic/
-        // roughness add 2 more value cells (steppers tested separately).
-        assert_eq!(panel.object_value_cells.len(), 14, "9 transform + 3 color + metallic + roughness value cells");
+        // roughness add 2 more value cells; the one Bend modifier's Angle
+        // param (Numeric) adds 1 more (its Axis param is an Enum row — no
+        // drag-value cell, steppers only, tested separately).
+        assert_eq!(
+            panel.object_value_cells.len(),
+            15,
+            "9 transform + 3 color + metallic + roughness + 1 modifier numeric param value cell"
+        );
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+    }
+
+    /// A one-object Vm with TWO modifiers — for exercising up/down boundary
+    /// behavior (P5), which the single-modifier `azalea_shaped_vm` can't.
+    fn two_modifier_object_vm(modifiers_addable: bool) -> SceneSetupVm {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.modifiers = vec![
+            ModifierKnownRow {
+                index: 0,
+                node_doc_id: 70,
+                display_name: "Bend".to_string(),
+                params: vec![],
+            },
+            ModifierKnownRow {
+                index: 1,
+                node_doc_id: 71,
+                display_name: "Twist".to_string(),
+                params: vec![],
+            },
+        ];
+        row.modifiers_addable = modifiers_addable;
+        vm
+    }
+
+    #[test]
+    fn modifier_add_chip_click_emits_add_modifier_action() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.modifier_add_ids.len(), MESH_MODIFIER_CHOICES.len(), "all 7 curated choices render");
+        let (chip_id, group_node_id, type_id) = panel.modifier_add_ids[0].clone();
+        assert_eq!(group_node_id, 42);
+        assert_eq!(type_id, "node.bend_mesh");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: chip_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupAddModifier(l, 42, t) if *l == LayerId::new("layer-1") && t == "node.bend_mesh"
+        ));
+    }
+
+    #[test]
+    fn modifier_remove_click_emits_remove_modifier_action() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.modifier_remove_ids.len(), 1);
+        let (remove_id, group_node_id, modifier_node_id) = panel.modifier_remove_ids[0];
+        assert_eq!(group_node_id, 42);
+        assert_eq!(modifier_node_id, 70);
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: remove_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupRemoveModifier(l, 42, 70) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    #[test]
+    fn modifier_up_down_respect_stack_boundaries() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(true))));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // First modifier (index 0): no "up" target (already first), but a
+        // "down" target to position 1.
+        // Second modifier (index 1): an "up" target to position 0, no
+        // "down" target (already last).
+        assert_eq!(panel.modifier_move_ids.len(), 2, "one live reorder target per modifier, boundary buttons excluded");
+        assert!(
+            panel
+                .modifier_move_ids
+                .iter()
+                .any(|(_, gid, mid, pos)| *gid == 42 && *mid == 70 && *pos == 1),
+            "modifier 0's down button targets position 1"
+        );
+        assert!(
+            panel
+                .modifier_move_ids
+                .iter()
+                .any(|(_, gid, mid, pos)| *gid == 42 && *mid == 71 && *pos == 0),
+            "modifier 1's up button targets position 0"
+        );
+    }
+
+    #[test]
+    fn modifier_move_click_emits_move_modifier_action() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(true))));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (move_id, _, _, _) = panel
+            .modifier_move_ids
+            .iter()
+            .find(|(_, gid, mid, _)| *gid == 42 && *mid == 71)
+            .copied()
+            .unwrap();
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: move_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupMoveModifier(l, 42, 71, 0) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    #[test]
+    fn unparseable_modifier_chain_shows_custom_label_and_disables_add() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(false))));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert!(panel.modifier_add_ids.is_empty(), "Add modifier is disabled for an unparseable chain");
+        assert!(panel.modifier_remove_ids.is_empty(), "no remove buttons for an unparseable chain either");
     }
 
     #[test]

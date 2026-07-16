@@ -1613,6 +1613,7 @@ pub fn sync_inspector_data(
                                         transform,
                                         material,
                                         modifier_chain,
+                                        modifier_chain_parseable,
                                         ..
                                     } => ObjectRowVm::Known(Box::new(
                                         manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
@@ -1621,10 +1622,23 @@ pub fn sync_inspector_data(
                                             name: name.clone(),
                                             transform: transform.as_ref().map(&transform_row),
                                             material: material_row(*group_node_id, material),
-                                            modifier_names: modifier_chain
+                                            modifiers: modifier_chain
                                                 .iter()
-                                                .map(|m| modifier_display_name(&m.type_id))
+                                                .enumerate()
+                                                .map(|(i, m)| manifold_ui::panels::scene_setup_panel::ModifierKnownRow {
+                                                    index: i,
+                                                    node_doc_id: m.node_doc_id,
+                                                    display_name: modifier_display_name(&m.type_id),
+                                                    params: modifier_param_rows(
+                                                        *group_node_id,
+                                                        m.node_doc_id,
+                                                        &m.type_id,
+                                                        &m.params,
+                                                        &m.driven,
+                                                    ),
+                                                })
                                                 .collect(),
+                                            modifiers_addable: *modifier_chain_parseable,
                                         },
                                     )),
                                     manifold_renderer::node_graph::scene_vm::SceneObjectVm::Custom {
@@ -3039,6 +3053,86 @@ fn modifier_display_name(type_id: &str) -> String {
         "node.morph_mesh" => "Morph".to_string(),
         "node.rotate_3d" => "Rotate".to_string(),
         other => other.to_string(),
+    }
+}
+
+/// D6/P5's curated modifier param rows: for each of the 7 mesh-modifier
+/// atoms, the SAME labels/ranges/defaults as the primitive's own `ParamDef`
+/// table (`crates/manifold-renderer/src/node_graph/primitives/*.rs`) —
+/// transcribed here because `manifold-ui` can't depend on `manifold-renderer`
+/// (the DTO-boundary convention `EnvironmentRowVm::mode_is_hdri` already
+/// uses). `params`/`driven` come straight off `ModifierVm`'s generic capture
+/// (`scene_vm.rs`); a value absent from `params` renders at the atom's own
+/// default (mirrors `param_f32`'s fallback), matching what the primitive
+/// itself would use for an unset param. An unrecognized `type_id` (a
+/// hand-edited chain with a non-curated node reached via the trace's
+/// tolerant walk) renders no param rows — the display name alone still
+/// shows, never a panic or a blank crash.
+fn modifier_param_rows(
+    group_node_id: u32,
+    node_doc_id: u32,
+    type_id: &str,
+    params: &std::collections::BTreeMap<String, f32>,
+    driven: &std::collections::HashSet<String>,
+) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
+    use manifold_ui::panels::scene_setup_panel::{EnumRowValue, ModifierParamRowVm, RowAddr, RowValue};
+    const AXIS_LABELS: &[&str] = &["X", "Y", "Z"];
+    let scope = vec![group_node_id];
+    let numeric = |label: &'static str, key: &str, default: f32, min: f32, max: f32| ModifierParamRowVm::Numeric {
+        label,
+        row: RowValue {
+            addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
+            value: params.get(key).copied().unwrap_or(default),
+            min,
+            max,
+            driven: driven.contains(key),
+        },
+    };
+    let axis = |label: &'static str, key: &str, default: f32| ModifierParamRowVm::Axis {
+        label,
+        row: EnumRowValue {
+            row: RowValue {
+                addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
+                value: params.get(key).copied().unwrap_or(default),
+                min: 0.0,
+                max: (AXIS_LABELS.len() - 1) as f32,
+                driven: driven.contains(key),
+            },
+            labels: AXIS_LABELS.to_vec(),
+        },
+    };
+    match type_id {
+        "node.bend_mesh" => vec![
+            axis("Axis", "axis", 1.0),
+            numeric("Angle", "angle", 0.5, -std::f32::consts::TAU, std::f32::consts::TAU),
+            numeric("Center", "center", 0.0, -100.0, 100.0),
+        ],
+        "node.twist_mesh" => vec![
+            axis("Axis", "axis", 1.0),
+            numeric("Angle", "angle", 1.0, -std::f32::consts::TAU, std::f32::consts::TAU),
+            numeric("Center", "center", 0.0, -100.0, 100.0),
+        ],
+        "node.taper_mesh" => vec![
+            axis("Axis", "axis", 1.0),
+            numeric("Taper", "taper", 0.5, 0.0, 1.0),
+            numeric("Center", "center", 0.0, -100.0, 100.0),
+            numeric("Length", "length", 1.0, 0.001, 200.0),
+        ],
+        "node.push_along_normals" => vec![
+            numeric("Amount", "amount", 0.2, -10.0, 10.0),
+            numeric("Field Bias", "field_bias", 0.5, 0.0, 1.0),
+        ],
+        "node.push_mesh" => vec![
+            numeric("Displacement", "displacement", 0.2, -10.0, 10.0),
+            numeric("Height Bias", "height_bias", 0.5, 0.0, 1.0),
+        ],
+        "node.morph_mesh" => vec![numeric("Mix", "t", 0.5, 0.0, 1.0)],
+        "node.rotate_3d" => vec![
+            numeric("Angle X", "angle_x", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
+            numeric("Angle Y", "angle_y", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
+            numeric("Angle Z", "angle_z", 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
+        ],
+        _ => Vec::new(),
     }
 }
 

@@ -410,6 +410,61 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        // ── SCENE_SETUP_PANEL_DESIGN P5: the modifier stack (D6) ──
+        // All three resolve `GraphTarget::Generator(layer_id)` exactly like
+        // the P1/P2 arms above — no new mutation path, just the three named
+        // composites `InsertMeshModifierCommand`/`RemoveMeshModifierCommand`/
+        // `MoveMeshModifierCommand`.
+        PanelAction::SceneSetupAddModifier(layer_id, group_node_id, type_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
+                    target,
+                    Vec::new(),
+                    *group_node_id,
+                    type_id.clone(),
+                    None,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveMeshModifierCommand::new(
+                    target,
+                    Vec::new(),
+                    *group_node_id,
+                    *modifier_node_id,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SceneSetupMoveModifier(layer_id, group_node_id, modifier_node_id, new_position) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::MoveMeshModifierCommand::new(
+                    target,
+                    Vec::new(),
+                    *group_node_id,
+                    *modifier_node_id,
+                    *new_position as usize,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
         // D7 "New 3D Scene" empty-state action: assign the bundled Scene
         // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
         // browser-popup generator picker's `SetGenType` dispatches (§1 VERIFY
@@ -641,5 +696,47 @@ mod tests {
         // render_scene_id untouched by the rename — sanity that the harness
         // resolved the right node.
         assert!(graph.nodes.iter().any(|n| n.id == render_scene_id));
+    }
+
+    /// P5 gate: `InsertMeshModifierCommand` spliced into a REAL
+    /// `SceneStarter`-based def lands the new node inside the object's own
+    /// group body, in the shape `graph_tool validate --kind generator` +
+    /// `graph_tool fusion` accept — proven by hand this session against this
+    /// exact def (dumped via `serde_json::to_string_pretty` and run through
+    /// both CLI commands; see the P5 landing report). `validate_def` itself
+    /// needs a live `GpuDevice` (behind the `gpu-proofs` feature), so this
+    /// `--lib` test asserts the structural shape the CLI run already proved
+    /// valid, rather than re-deriving a GPU-backed validation call here.
+    #[test]
+    fn insert_modifier_on_scene_starter_lands_in_the_object_group_body() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let def = generator_catalog_default(&project, &layer_id).expect("SceneStarter resolves");
+        let group_node_id = def
+            .nodes
+            .iter()
+            .find(|n| n.group.is_some())
+            .expect("SceneStarter has at least one named object group")
+            .id;
+
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let mut cmd = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
+            target,
+            Vec::new(),
+            group_node_id,
+            "node.twist_mesh".to_string(),
+            None,
+            def,
+        );
+        use manifold_editing::command::Command;
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let graph = layer.generator_graph().unwrap();
+        let inserted_group = graph.nodes.iter().find(|n| n.id == group_node_id).unwrap();
+        let body = inserted_group.group.as_deref().unwrap();
+        assert!(
+            body.nodes.iter().any(|n| n.type_id == "node.twist_mesh"),
+            "the twist node lands inside the object's own group body"
+        );
     }
 }
