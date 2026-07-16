@@ -489,7 +489,12 @@ fn n1_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -627,7 +632,12 @@ fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, hue: f32, 
 fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1177,7 +1187,12 @@ fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
 fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1297,7 +1312,12 @@ fn n1_body(in_tex: texture_2d<f32>, samp: sampler, velocity: vec4<f32>, uv: vec2
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1523,7 +1543,12 @@ fn n1_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: v
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1717,7 +1742,12 @@ fn n1_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, block_size: f32, speed: 
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1863,7 +1893,12 @@ fn n3_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec
 fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -1955,7 +1990,12 @@ fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32>
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2072,7 +2112,12 @@ fn n1_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: v
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2189,7 +2234,12 @@ fn n1_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: v
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2317,7 +2367,12 @@ fn n3_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: v
 fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2469,7 +2524,12 @@ fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, shape: u32, size: f32, 
 fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2712,7 +2772,12 @@ fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
 fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2751,14 +2816,24 @@ fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32>
 fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
 fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -2847,7 +2922,12 @@ fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32>
 fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -3522,7 +3602,12 @@ fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32)
 fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -3702,7 +3787,12 @@ fn n2_body(
 fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -3747,14 +3837,24 @@ fn n5_body(
 fn n6_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
 fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -3765,7 +3865,12 @@ fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
 fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -5485,14 +5590,24 @@ fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
 fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -5770,7 +5885,12 @@ fn n0_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f3
 fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -5987,14 +6107,24 @@ fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
 fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -6323,7 +6453,12 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
 fn n0_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -6636,7 +6771,12 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
 fn n0_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -6956,7 +7096,12 @@ fn n1_body(uv: vec2<f32>, dims: vec2<f32>, scale_x: f32, scale_y: f32, offset_x:
 fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -7036,7 +7181,12 @@ fn n9_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
 fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -7058,7 +7208,12 @@ fn n12_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, angle: f32) -> vec4
 fn n13_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -7076,7 +7231,12 @@ fn n15_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32
 fn n16_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -7298,7 +7458,12 @@ fn n2_body(
 fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -7326,7 +7491,12 @@ fn n4_body(
 fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
@@ -8518,14 +8688,24 @@ fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<
 fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 
 fn n10_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    let out_a = mix(a.a, b.a, amount);
+    var out_a: f32;
+    if mode == 0u {
+        out_a = mix(a.a, b.a, amount);
+    } else {
+        out_a = a.a;
+    }
     return vec4<f32>(out_rgb, out_a);
 }
 

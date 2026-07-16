@@ -473,8 +473,10 @@ fn chain_segment_fused_matches_sequential_per_card() {
 }
 
 /// CPU-built gradient with spatially-varying alpha (A ramps in x), so the
-/// faithful per-atom alpha threading (mix lerps a.a→b.a) is observable in the
-/// diff — the §12.4 hardened-fixture alpha axis. R/G/B as in `gradient_input`.
+/// faithful per-atom alpha threading (mix lerps a.a→b.a in Lerp mode, and
+/// passes a.a through untouched in every other mode — BUG-181) is observable
+/// in the diff — the §12.4 hardened-fixture alpha axis. R/G/B as in
+/// `gradient_input`.
 fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     for y in 0..h {
