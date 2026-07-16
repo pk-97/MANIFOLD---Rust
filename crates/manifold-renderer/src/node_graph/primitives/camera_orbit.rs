@@ -26,6 +26,12 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
+/// Single source of truth for `near`'s default (also the `ParamDef` default
+/// below) — `gltf_import.rs` reads this to scale the clip plane for
+/// small-scale imported objects (BUG-165/BUG-169) instead of duplicating
+/// the magic number.
+pub const DEFAULT_NEAR: f32 = 0.05;
+
 crate::primitive! {
     name: CameraOrbit,
     type_id: "node.orbit_camera",
@@ -97,7 +103,7 @@ crate::primitive! {
             name: Cow::Borrowed("near"),
             label: "Near",
             ty: ParamType::Float,
-            default: ParamValue::Float(0.05),
+            default: ParamValue::Float(DEFAULT_NEAR),
             range: Some((0.001, 10.0)),
             enum_values: &[],
         },
@@ -130,7 +136,7 @@ impl Primitive for CameraOrbit {
         let roll = ctx.scalar_or_param("roll", 0.0);
         let near = match ctx.params.get("near") {
             Some(ParamValue::Float(f)) => *f,
-            _ => 0.05,
+            _ => DEFAULT_NEAR,
         };
         let far = match ctx.params.get("far") {
             Some(ParamValue::Float(f)) => *f,

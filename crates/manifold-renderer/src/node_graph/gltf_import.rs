@@ -43,6 +43,7 @@ use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
 use super::gltf_load::GltfImportSummary;
 
+use crate::node_graph::primitives::DEFAULT_NEAR as CAMERA_NEAR_DEFAULT;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 
 /// How many of the largest (by vertex count) objects get a per-object card
@@ -443,6 +444,32 @@ fn build_import_graph(
     let radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
     let distance = 2.2 * radius;
+    // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
+    // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
+    // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
+    // the framed object's own size. `distance = 2.2 * radius` already
+    // scales with the object, so the object's front face sits at
+    // `distance - radius == 1.2 * radius` from the camera — for any object
+    // with `radius` below ~0.042 (BoomBox: 0.0172, MetalRoughSpheresNoTextures:
+    // 0.0056 — both real-world-scale Khronos assets authored in meters),
+    // the fixed near plane sits IN FRONT of the object and the whole frame
+    // clips to black every frame (confirmed via `--trace`: io_pending goes
+    // false almost immediately and the frame stays byte-stable-black from
+    // frame 0/1 — not a decode race, ruling out the BUG-165 (a) hypothesis;
+    // BUG-169's "lighting/material" hypothesis was also wrong — same
+    // mechanism, not a texture-less-material bug).
+    //
+    // Fix: `near` tracks the object's own front-face distance (with a 2x
+    // safety margin so the surface never grazes the plane), capped at the
+    // pre-existing 0.05 default so every currently-passing asset whose
+    // front face already clears 0.05 gets the IDENTICAL near value as
+    // before (front_margin = 1.2 * radius stays >= 0.05 whenever radius >=
+    // ~0.0417 — true for every other passing Khronos asset checked:
+    // WaterBottle radius 0.151, DamagedHelmet 1.64, MetalRoughSpheres 6.99,
+    // TextureSettingsTest 7.21, Duck 1.27, Box 0.87). Only genuinely
+    // sub-threshold objects get a smaller near plane.
+    let front_margin = (distance - radius).max(1e-4);
+    let near_clip = CAMERA_NEAR_DEFAULT.min(front_margin * 0.5);
 
     let path_str = path.to_string_lossy().into_owned();
     let stem = path
@@ -528,6 +555,8 @@ fn build_import_graph(
     cam_node.params.insert("distance".to_string(), float(distance));
     cam_node.params.insert("fov_y".to_string(), float(0.9));
     cam_node.params.insert("look_y".to_string(), float(0.0));
+    // BUG-165/BUG-169 fix — see `near_clip` computation above.
+    cam_node.params.insert("near".to_string(), float(near_clip));
     nodes.push(cam_node);
 
     // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera

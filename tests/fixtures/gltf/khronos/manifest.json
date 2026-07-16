@@ -1155,15 +1155,25 @@
   },
   {
     "asset": "BoomBox.glb",
-    "checks": [],
-    "status": "xfail:BUG-165",
-    "note": "same never-converges class as BoomBox (BUG-165)"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/boombox.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-165 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): root cause was node.orbit_camera's fixed near=0.05 clip plane clipping this real-world-scale (radius 0.017) object entirely, not a texture-decode race — see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "VirtualCity.glb",
     "checks": [],
     "status": "xfail:BUG-165",
-    "note": "same never-converges class as BoomBox (BUG-165)"
+    "note": "re-diagnosed 2026-07-16 (P1): NOT the same root cause as BoomBox — BoomBox's fix (near-clip scaling) does not converge VirtualCity, which has 167 materials/147 textures still not converging after 60 frames with io_pending false (a genuine, separate throughput/decode issue). Needs its own diagnosis; do not assume BUG-165's fix covers it."
   },
   {
     "asset": "ClearCoatCarPaint.glb",
@@ -1191,9 +1201,19 @@
   },
   {
     "asset": "MetalRoughSpheresNoTextures.glb",
-    "checks": [],
-    "status": "xfail:BUG-169",
-    "note": "98 texture-less PBR materials render fully black"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/metal_rough_spheres_no_textures.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-169 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P1): NOT a texture-less-material/lighting bug — same root cause as BUG-165, node.orbit_camera's fixed near=0.05 clip plane clipping this small-scale (radius 0.0056) object entirely — see gltf_import.rs's near_clip computation"
   },
   {
     "asset": "AnimatedColorsCube.glb",
