@@ -1138,6 +1138,37 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let k = (r * r) / 8.0;
     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
+    // tangent-space GGX stretch. Tangent basis RESOLVED (Fable's pre-
+    // execution audit, 2026-07-16): imported meshes carry no `TANGENT`
+    // attribute (`MeshVertex` is a fixed 48-byte ABI, growing it is its
+    // own vertex-layout project — see the design doc's §5 Deferred), so
+    // this reuses `cotangent_frame` — the SAME screen-space-derivative
+    // tangent basis `resolve_normal`'s normal mapping already builds,
+    // just computed here unconditionally (uniform control flow: `dpdx`/
+    // `dpdy` need non-divergent branches, and a fragment shader function
+    // call at file scope is inherently non-divergent — same legality
+    // `resolve_normal`'s own per-draw-call-uniform branch relies on).
+    let tbn = cotangent_frame(N, in.world_pos, in.uv);
+    let anisotropy = resolve_anisotropy(in.uv);
+    let anisotropy_strength = clamp(anisotropy.x, 0.0, 1.0);
+    let anisotropy_rotation = anisotropy.y;
+    // In-plane rotation of an orthonormal 2-frame stays orthonormal
+    // exactly (no renormalization needed) — spec convention: tangent
+    // rotated toward bitangent by `anisotropyRotation` (+ the texture's
+    // per-texel rotation, folded in by `resolve_anisotropy`).
+    let cos_ar = cos(anisotropy_rotation);
+    let sin_ar = sin(anisotropy_rotation);
+    let aniso_t = tbn[0] * cos_ar + tbn[1] * sin_ar;
+    let aniso_b = tbn[1] * cos_ar - tbn[0] * sin_ar;
+    // Burley 2012 ("Physically Based Shading at Disney" eq. 4) anisotropic
+    // alpha split — verified this session to collapse EXACTLY to the
+    // isotropic `a2`/`denom_d` shape above at `anisotropy_strength == 0`
+    // (at = ab = a), so the branch below is a genuine specialization, not
+    // an approximation swap, for every non-anisotropic material.
+    let at = max(a * (1.0 + anisotropy_strength), 0.001);
+    let ab = max(a * (1.0 - anisotropy_strength), 0.001);
+
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
     // second, always-dielectric GGX lobe layered on top of the base BRDF.
     // Reuses the exact D_GGX/G_Smith/F_Schlick shape above with its own
@@ -1187,7 +1218,37 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let G = g_v * g_l;
 
         let F = F0 + (1.0 - F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
-        let specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: swap in the anisotropic
+        // GGX D/V (Burley D, Heitz height-correlated Smith V) ONLY when
+        // `anisotropy_strength > 0.0` — a per-fragment branch (this value
+        // already includes the resolved texture sample, unlike the
+        // uniform-only branches elsewhere in this shader), legal here
+        // because nothing inside touches `dpdx`/`dpdy`. The isotropic
+        // path (`D`/`G` above, Schlick-remapped `k`) is UNTOUCHED in the
+        // `else`, so every non-anisotropic material stays byte-identical
+        // to pre-E5 output — the anisotropic V is a genuinely different
+        // approximation (exact Smith height-correlated vs. this file's
+        // existing Schlick-GGX k-remap), so unlike D they do NOT collapse
+        // bit-for-bit at `at == ab`, hence the explicit branch rather than
+        // relying on the math alone.
+        var specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
+        if anisotropy_strength > 0.0 {
+            let t_dot_h = dot(aniso_t, H);
+            let b_dot_h = dot(aniso_b, H);
+            let a2_aniso = at * ab;
+            let v3 = vec3<f32>(ab * t_dot_h, at * b_dot_h, a2_aniso * n_dot_h);
+            let v2 = max(dot(v3, v3), 0.0000001);
+            let w2 = a2_aniso / v2;
+            let d_aniso = a2_aniso * w2 * w2 / PI;
+            let t_dot_v = dot(aniso_t, V);
+            let b_dot_v = dot(aniso_b, V);
+            let t_dot_l = dot(aniso_t, L);
+            let b_dot_l = dot(aniso_b, L);
+            let lambda_v = n_dot_l * length(vec3<f32>(at * t_dot_v, ab * b_dot_v, n_dot_v));
+            let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
+            let vis_aniso = 0.5 / max(lambda_v + lambda_l, 0.0000001);
+            specular = vec3<f32>(d_aniso * vis_aniso) * F;
+        }
         let kd = (1.0 - F) * (1.0 - metallic);
         let diffuse = kd * albedo.rgb / PI;
 
@@ -1231,7 +1292,32 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let irradiance = textureSampleLevel(irradiance_map, envmap_sampler, n_uv, 0.0).rgb;
 
     let env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, roughness), 0.0).rg;
-    let specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
+    var specular_ibl = prefiltered * (F0 * env_brdf.x + env_brdf.y);
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: anisotropic IBL via the
+    // well-known "bent normal" trick (Filament, Kaplanyan 2016) — bend the
+    // reflection vector toward the anisotropic tangent's cross-normal
+    // before the environment lookup, since a true anisotropic env
+    // convolution isn't in this codebase's IBL precompute. Only clearcoat
+    // sits outside this branch (its own always-isotropic lobe, unaffected
+    // by base-layer anisotropy — the `R`/`r_uv`/`prefiltered` variables
+    // above stay untouched, so `coat_prefiltered` below reads the ORIGINAL
+    // reflection direction). Guarded by the branch (not an unconditional
+    // `mix`) because `mix(N, X, 0.0)` is NOT guaranteed bit-identical to
+    // `N` if `X` ever carries a NaN (a possible `normalize(cross(...))` of
+    // a degenerate grazing-angle triple) — `0.0 * NaN == NaN` in IEEE
+    // float, which would silently break byte-identical output for every
+    // non-anisotropic material at exactly the view angles most likely to
+    // hit it. The branch makes that path unreachable when strength is 0.
+    if anisotropy_strength > 0.0 {
+        let aniso_bend_tangent = cross(aniso_b, V);
+        let aniso_bent_normal = normalize(mix(N, normalize(cross(aniso_bend_tangent, aniso_b)), anisotropy_strength));
+        let r_aniso = reflect(-V, aniso_bent_normal);
+        let r_aniso_azimuth = atan2(r_aniso.z, r_aniso.x);
+        let r_aniso_elevation = asin(clamp(r_aniso.y, -1.0, 1.0));
+        let r_aniso_uv = vec2<f32>(r_aniso_azimuth / (2.0 * PI) + 0.5, r_aniso_elevation / PI + 0.5);
+        let prefiltered_aniso = textureSampleLevel(prefiltered_specular, envmap_sampler, r_aniso_uv, roughness * PREFILTER_MAX_MIP).rgb;
+        specular_ibl = prefiltered_aniso * (F0 * env_brdf.x + env_brdf.y);
+    }
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: coat IBL — same split-sum
     // resample at clearcoat_roughness (Nc = N, same reflection vector R
