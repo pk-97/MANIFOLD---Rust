@@ -277,7 +277,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -5218,7 +5217,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText",
@@ -5891,7 +5889,6 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "OilyFluid",
@@ -10449,7 +10446,6 @@
       "category": "Composite",
       "examples": [
         "Bloom",
-        "Caustics",
         "ChromaticAberration",
         "ColorGrade",
         "Cymatics",
@@ -10655,7 +10651,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -14582,7 +14577,6 @@
       ],
       "category": "Math & Convert",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
@@ -15272,7 +15266,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -15437,7 +15430,6 @@
       ],
       "category": "Math & Convert",
       "examples": [
-        "Caustics",
         "Cymatics",
         "DepthOfField",
         "DigitalDrift",
@@ -16039,7 +16031,6 @@
       ],
       "category": "Noise",
       "examples": [
-        "Caustics",
         "MetallicGlass",
         "OilyFluid"
       ],
@@ -17075,7 +17066,6 @@
       ],
       "category": "Particles 2D",
       "examples": [
-        "Caustics",
         "Cymatics",
         "FluidSim3D",
         "ParticleText",
@@ -20291,6 +20281,7 @@
       "category": "Routing",
       "examples": [
         "BlackHole",
+        "Caustics",
         "FluidSim2D",
         "FluidSim3D",
         "ParticleText",
@@ -21089,32 +21080,32 @@
       "name": "Caustics",
       "params": [
         {
-          "default": "0.01",
+          "default": "0.035",
           "id": "depth",
-          "max": "0.04",
-          "min": "0",
+          "max": "0.08",
+          "min": "0.001",
           "name": "Depth"
         },
         {
           "default": "3",
           "id": "scale",
-          "max": "10",
+          "max": "8",
           "min": "1",
           "name": "Scale"
         },
         {
-          "default": "0.35",
+          "default": "0.8",
           "id": "speed",
-          "max": "1.5",
+          "max": "3",
           "min": "0",
           "name": "Speed"
         },
         {
-          "default": "500000",
-          "id": "photons",
-          "max": "1000000",
-          "min": "100000",
-          "name": "Photons"
+          "default": "0.7",
+          "id": "shine",
+          "max": "2",
+          "min": "0.05",
+          "name": "Shine"
         }
       ]
     },
