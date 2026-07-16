@@ -820,6 +820,92 @@ fn build_import_graph(
             "clearcoat_roughness".to_string(),
             float(m.clearcoat_roughness_factor),
         );
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume factors → uniform
+        // slots on `node.pbr_material` (`render_scene.wgsl` declares the
+        // matching struct fields but reads none of them yet — E2-E6 wire
+        // the shading math). Every default reproduces glTF's own implicit
+        // default, so a material without these extensions wires
+        // byte-identical params to pre-E1.
+        mat_node
+            .params
+            .insert("sheen_color_r".to_string(), float(m.sheen_color_factor[0]));
+        mat_node
+            .params
+            .insert("sheen_color_g".to_string(), float(m.sheen_color_factor[1]));
+        mat_node
+            .params
+            .insert("sheen_color_b".to_string(), float(m.sheen_color_factor[2]));
+        mat_node
+            .params
+            .insert("sheen_roughness".to_string(), float(m.sheen_roughness_factor));
+        mat_node
+            .params
+            .insert("iridescence".to_string(), float(m.iridescence_factor));
+        mat_node
+            .params
+            .insert("iridescence_ior".to_string(), float(m.iridescence_ior));
+        mat_node.params.insert(
+            "iridescence_thickness_min".to_string(),
+            float(m.iridescence_thickness_minimum),
+        );
+        mat_node.params.insert(
+            "iridescence_thickness_max".to_string(),
+            float(m.iridescence_thickness_maximum),
+        );
+        mat_node
+            .params
+            .insert("anisotropy_strength".to_string(), float(m.anisotropy_strength));
+        mat_node
+            .params
+            .insert("anisotropy_rotation".to_string(), float(m.anisotropy_rotation));
+        mat_node
+            .params
+            .insert("dispersion".to_string(), float(m.dispersion));
+        mat_node
+            .params
+            .insert("transmission".to_string(), float(m.transmission_factor));
+        mat_node
+            .params
+            .insert("volume_thickness".to_string(), float(m.volume_thickness_factor));
+        mat_node.params.insert(
+            "volume_attenuation_distance".to_string(),
+            float(m.volume_attenuation_distance),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_r".to_string(),
+            float(m.volume_attenuation_color[0]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_g".to_string(),
+            float(m.volume_attenuation_color[1]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_b".to_string(),
+            float(m.volume_attenuation_color[2]),
+        );
+        // E1: textured variants of the four new families are report-only
+        // (factor-only v1), same doctrine as clearcoat/specular above.
+        if m.sheen_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_sheen has a sheenColorTexture/sheenRoughnessTexture — only the factors (sheenColorFactor/sheenRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.iridescence_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_iridescence has an iridescenceTexture/iridescenceThicknessTexture — only the factors are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.anisotropy_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_anisotropy has an anisotropyTexture — only the factors (anisotropyStrength/anisotropyRotation) are imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
+        if m.volume_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_volume has a thicknessTexture — only the factor (thicknessFactor) is imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
         let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
@@ -2165,6 +2251,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2359,6 +2461,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2792,6 +2910,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),

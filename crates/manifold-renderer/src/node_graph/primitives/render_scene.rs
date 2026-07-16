@@ -341,16 +341,53 @@ struct RenderSceneUniforms {
     /// matrix. Same always-present / first-frame-seeded rule as
     /// `prev_view_proj`.
     prev_model: [[f32; 4]; 4],
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: single aligned block,
+    /// grown ONCE here, sized for ALL FIVE families the design phases in
+    /// (sheen, iridescence, anisotropy, dispersion, transmission+volume) —
+    /// E2-E6 only fill/read these fields, they never grow the struct
+    /// again. Every default reproduces glTF's own implicit default
+    /// (0.0/neutral), so every existing asset is byte-identical until a
+    /// later phase's shader change reads a non-default value.
+    /// `KHR_materials_sheen`: `xyz` = `sheenColorFactor` (default
+    /// `[0,0,0]`, inert), `w` = `sheenRoughnessFactor` (default `0.0`).
+    sheen_params: [f32; 4],
+    /// `KHR_materials_iridescence`: `x` = `iridescenceFactor` (default
+    /// `0.0`, inert), `y` = `iridescenceIor` (default `1.3`), `z` =
+    /// `iridescenceThicknessMinimum` (default `100.0` nm), `w` =
+    /// `iridescenceThicknessMaximum` (default `400.0` nm).
+    iridescence_params: [f32; 4],
+    /// `KHR_materials_anisotropy`'s `anisotropyStrength` (`x`, default
+    /// `0.0`) + `anisotropyRotation` (`y`, default `0.0` rad) — only 2 of
+    /// 4 floats, so `KHR_materials_dispersion`'s single factor (`z`,
+    /// default `0.0`) shares this vec4 rather than costing its own
+    /// (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's explicit packing call).
+    /// `w` reserved.
+    anisotropy_dispersion_params: [f32; 4],
+    /// `KHR_materials_transmission`'s `transmissionFactor` (`x`, default
+    /// `0.0`) + `KHR_materials_volume`'s `thicknessFactor` (`y`, default
+    /// `0.0`) and `attenuationDistance` (`z`, default the finite
+    /// `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION` sentinel —
+    /// `gltf_load.rs`: glTF's own `+infinity` default isn't
+    /// `serde_json`-safe). `w` reserved.
+    transmission_volume_params: [f32; 4],
+    /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
+    /// `[1,1,1]` — neutral). `w` reserved.
+    volume_attenuation_color: [f32; 4],
 }
 
-// 656 = 41 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
 // `pbr_metallic_roughness` instead of growing the struct). Still 656 after
 // G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
-// reserved slots — no struct growth.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 656);
+// reserved slots — no struct growth. Now 736 after
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: five new vec4s
+// (`sheen_params`/`iridescence_params`/`anisotropy_dispersion_params`/
+// `transmission_volume_params`/`volume_attenuation_color`, +80 bytes) —
+// ONE migration sized for all five families this doc's phases add, per
+// D2 (never grown again per-family).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 736);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -1728,6 +1765,38 @@ fn build_uniforms(
         ],
         prev_view_proj,
         prev_model,
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2 — see the struct's field
+        // doc comments for the packing rationale.
+        sheen_params: [
+            material.sheen_color_factor[0],
+            material.sheen_color_factor[1],
+            material.sheen_color_factor[2],
+            material.sheen_roughness_factor,
+        ],
+        iridescence_params: [
+            material.iridescence_factor,
+            material.iridescence_ior,
+            material.iridescence_thickness_minimum,
+            material.iridescence_thickness_maximum,
+        ],
+        anisotropy_dispersion_params: [
+            material.anisotropy_strength,
+            material.anisotropy_rotation,
+            material.dispersion,
+            0.0,
+        ],
+        transmission_volume_params: [
+            material.transmission_factor,
+            material.volume_thickness_factor,
+            material.volume_attenuation_distance,
+            0.0,
+        ],
+        volume_attenuation_color: [
+            material.volume_attenuation_color[0],
+            material.volume_attenuation_color[1],
+            material.volume_attenuation_color[2],
+            0.0,
+        ],
     }
 }
 

@@ -17,14 +17,20 @@ use crate::generators::mesh_common::MeshVertex;
 /// glTF extensions MANIFOLD's importer actually supports, independent of
 /// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D1. Everything in `Cargo.toml`'s `gltf`
-/// feature list, plus three extensions this codebase maps downstream that
-/// the crate has no typed accessor for at this version: `KHR_materials_unlit`
+/// feature list, plus extensions this codebase maps downstream that the
+/// crate has no typed accessor for at this version: `KHR_materials_unlit`
 /// (`MATERIAL_SYSTEM_DESIGN.md`'s unlit shading mode),
 /// `KHR_materials_pbrSpecularGlossiness` (converted to metal-rough at
-/// import, BUG-167), and `KHR_materials_clearcoat` (raw-JSON sniff,
-/// `GLB_CONFORMANCE_DESIGN.md` G-P5). An asset whose `extensionsRequired`
-/// lists anything NOT in this set fails loudly, naming the extension —
-/// never silently, never approximated.
+/// import, BUG-167), `KHR_materials_clearcoat` (raw-JSON sniff,
+/// `GLB_CONFORMANCE_DESIGN.md` G-P5), and — as of
+/// `GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E1 — `KHR_materials_sheen`,
+/// `KHR_materials_iridescence`, `KHR_materials_anisotropy`, and
+/// `KHR_materials_dispersion` (all four raw-JSON sniffed, same doctrine as
+/// clearcoat: no typed accessor exists for any of them in `gltf`/
+/// `gltf-json` 1.4.1). `KHR_materials_volume` is typed (Cargo feature
+/// enabled) so it's covered by the feature-list rows below instead. An
+/// asset whose `extensionsRequired` lists anything NOT in this set fails
+/// loudly, naming the extension — never silently, never approximated.
 const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     // Cargo.toml's `gltf` feature list (typed crate support):
     "KHR_materials_emissive_strength",
@@ -33,10 +39,17 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_texture_transform",
     "KHR_materials_specular",
     "KHR_materials_ior",
+    "KHR_materials_volume",
     // MANIFOLD-mapped, no typed crate accessor at 1.4.1:
     "KHR_materials_unlit",
     "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_clearcoat",
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1 — raw-JSON sniffed, no typed
+    // accessor at 1.4.1:
+    "KHR_materials_sheen",
+    "KHR_materials_iridescence",
+    "KHR_materials_anisotropy",
+    "KHR_materials_dispersion",
 ];
 
 /// The ONE parse entry for `.glb`/`.gltf` files (`GLB_XFAIL_BURNDOWN_DESIGN.md`
@@ -871,6 +884,71 @@ pub(crate) struct GltfMaterialInfo {
     /// reported rather than silently dropped (Deferred #2 in
     /// GLB_CONFORMANCE_DESIGN.md owns map-driven coat).
     pub clearcoat_has_texture: bool,
+    /// `KHR_materials_sheen`'s `sheenColorFactor` (default `[0,0,0]` —
+    /// glTF's own implicit default, and the value that makes E1's sheen
+    /// lobe exactly inert). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1:
+    /// raw-JSON sniff (`extension_value`), same doctrine as clearcoat — no
+    /// typed accessor exists for `KHR_materials_sheen` in `gltf`/
+    /// `gltf-json` 1.4.1 (VERIFIED this session: no such Cargo feature in
+    /// either crate).
+    pub sheen_color_factor: [f32; 3],
+    /// `KHR_materials_sheen`'s `sheenRoughnessFactor` (default `0.0`).
+    pub sheen_roughness_factor: f32,
+    /// `true` when `KHR_materials_sheen` carries a `sheenColorTexture`
+    /// and/or `sheenRoughnessTexture` — v1 maps the FACTORS only (E1);
+    /// a textured sheen is unmapped and reported rather than silently
+    /// dropped, same doctrine as `clearcoat_has_texture`.
+    pub sheen_has_texture: bool,
+    /// `KHR_materials_iridescence`'s `iridescenceFactor` (default `0.0`,
+    /// inert). Raw-JSON sniff — no typed accessor at 1.4.1.
+    pub iridescence_factor: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceIor` (default `1.3` —
+    /// glTF's own implicit default for the thin-film layer's IOR).
+    pub iridescence_ior: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMinimum`
+    /// (default `100.0`, nanometres).
+    pub iridescence_thickness_minimum: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMaximum`
+    /// (default `400.0`, nanometres).
+    pub iridescence_thickness_maximum: f32,
+    /// `true` when `KHR_materials_iridescence` carries an
+    /// `iridescenceTexture` and/or `iridescenceThicknessTexture` —
+    /// factor-only v1, same doctrine as `sheen_has_texture`.
+    pub iridescence_has_texture: bool,
+    /// `KHR_materials_anisotropy`'s `anisotropyStrength` (default `0.0`,
+    /// inert). Raw-JSON sniff — no typed accessor at 1.4.1.
+    pub anisotropy_strength: f32,
+    /// `KHR_materials_anisotropy`'s `anisotropyRotation` (default `0.0`,
+    /// radians).
+    pub anisotropy_rotation: f32,
+    /// `true` when `KHR_materials_anisotropy` carries an
+    /// `anisotropyTexture` — factor-only v1, same doctrine as
+    /// `sheen_has_texture`.
+    pub anisotropy_has_texture: bool,
+    /// `KHR_materials_dispersion`'s single `dispersion` factor (default
+    /// `0.0`, inert). Raw-JSON sniff — no typed accessor at 1.4.1. The
+    /// extension defines no texture, so there is no `*_has_texture`
+    /// companion field for it.
+    pub dispersion: f32,
+    /// `KHR_materials_volume`'s `thicknessFactor` (default `0.0` — a
+    /// thin-walled surface, glTF's own implicit default). Typed accessor
+    /// (`Material::volume()`) — `KHR_materials_volume` HAS crate support
+    /// at 1.4.1 (VERIFIED this session: real Cargo feature on both
+    /// `gltf`/`gltf-json`), unlike sheen/iridescence/anisotropy/dispersion
+    /// above.
+    pub volume_thickness_factor: f32,
+    /// `KHR_materials_volume`'s `attenuationDistance` (default
+    /// `f32::INFINITY` — glTF's own implicit default, meaning "no
+    /// attenuation"; the `gltf` 1.4.1 crate's own
+    /// `AttenuationDistance::default()` uses the identical sentinel, so
+    /// this is not a MANIFOLD-invented substitute).
+    pub volume_attenuation_distance: f32,
+    /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]` —
+    /// neutral, no tint).
+    pub volume_attenuation_color: [f32; 3],
+    /// `true` when `KHR_materials_volume` carries a `thicknessTexture` —
+    /// factor-only v1, same doctrine as `sheen_has_texture`.
+    pub volume_has_texture: bool,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
     /// these to `alpha_mask` cutout (the F-P5 stopgap — `alpha_mask` above
     /// is already `true` when this is) and the importer emits a report
@@ -1021,6 +1099,21 @@ pub(crate) fn fold_uv_transform(offset: [f32; 2], rotation: f32, scale: [f32; 2]
 }
 
 pub(crate) const IDENTITY_UV_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: finite stand-in for
+/// `KHR_materials_volume`'s `attenuationDistance` spec default of
+/// `+infinity` ("no attenuation beneath the surface"). Chosen large
+/// enough that Beer-Lambert transmittance
+/// (`exp(-distance_travelled / attenuation_distance)`, E2's shading math)
+/// is indistinguishable from `1.0` — no attenuation — at any distance a
+/// real MANIFOLD scene can produce (world units are typically single/low
+/// double digits; this is six orders of magnitude beyond that), so it's a
+/// byte-identical-in-effect substitute for the spec's true infinity, not
+/// an approximation that changes behavior. A true `f32::INFINITY` is not
+/// usable here: `serde_json` errors serializing a non-finite float, and
+/// this is the default for every glTF import that doesn't carry an
+/// explicit `attenuationDistance` — i.e. almost every asset.
+pub(crate) const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
 
 /// Parse a raw `KHR_texture_transform` extension JSON object (the shape the
 /// spec defines: optional `offset: [f32; 2]`, `rotation: f32`,
@@ -1298,6 +1391,99 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     || v.get("clearcoatNormalTexture").is_some()
             });
 
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_sheen.
+            // Same raw-JSON-sniff doctrine as clearcoat above — no typed
+            // accessor at 1.4.1. glTF's own implicit defaults ([0,0,0] /
+            // 0.0) make an absent extension byte-identical to pre-E1.
+            let sheen_ext = m.extension_value("KHR_materials_sheen");
+            let f3 = |v: &serde_json::Value, key: &str, default: [f32; 3]| -> [f32; 3] {
+                v.get(key)
+                    .and_then(|a| a.as_array())
+                    .and_then(|a| {
+                        Some([
+                            a.first()?.as_f64()? as f32,
+                            a.get(1)?.as_f64()? as f32,
+                            a.get(2)?.as_f64()? as f32,
+                        ])
+                    })
+                    .unwrap_or(default)
+            };
+            let f1 = |v: &serde_json::Value, key: &str, default: f32| -> f32 {
+                v.get(key).and_then(|x| x.as_f64()).map(|x| x as f32).unwrap_or(default)
+            };
+            let sheen_color_factor = sheen_ext
+                .map(|v| f3(v, "sheenColorFactor", [0.0, 0.0, 0.0]))
+                .unwrap_or([0.0, 0.0, 0.0]);
+            let sheen_roughness_factor =
+                sheen_ext.map(|v| f1(v, "sheenRoughnessFactor", 0.0)).unwrap_or(0.0);
+            let sheen_has_texture = sheen_ext.is_some_and(|v| {
+                v.get("sheenColorTexture").is_some() || v.get("sheenRoughnessTexture").is_some()
+            });
+
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_iridescence.
+            // Raw-JSON sniff — no typed accessor at 1.4.1.
+            let iridescence_ext = m.extension_value("KHR_materials_iridescence");
+            let iridescence_factor =
+                iridescence_ext.map(|v| f1(v, "iridescenceFactor", 0.0)).unwrap_or(0.0);
+            let iridescence_ior =
+                iridescence_ext.map(|v| f1(v, "iridescenceIor", 1.3)).unwrap_or(1.3);
+            let iridescence_thickness_minimum = iridescence_ext
+                .map(|v| f1(v, "iridescenceThicknessMinimum", 100.0))
+                .unwrap_or(100.0);
+            let iridescence_thickness_maximum = iridescence_ext
+                .map(|v| f1(v, "iridescenceThicknessMaximum", 400.0))
+                .unwrap_or(400.0);
+            let iridescence_has_texture = iridescence_ext.is_some_and(|v| {
+                v.get("iridescenceTexture").is_some()
+                    || v.get("iridescenceThicknessTexture").is_some()
+            });
+
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_anisotropy.
+            // Raw-JSON sniff — no typed accessor at 1.4.1.
+            let anisotropy_ext = m.extension_value("KHR_materials_anisotropy");
+            let anisotropy_strength =
+                anisotropy_ext.map(|v| f1(v, "anisotropyStrength", 0.0)).unwrap_or(0.0);
+            let anisotropy_rotation =
+                anisotropy_ext.map(|v| f1(v, "anisotropyRotation", 0.0)).unwrap_or(0.0);
+            let anisotropy_has_texture =
+                anisotropy_ext.is_some_and(|v| v.get("anisotropyTexture").is_some());
+
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_dispersion.
+            // Raw-JSON sniff — no typed accessor at 1.4.1. Single-field
+            // extension, no texture defined by the spec.
+            let dispersion = m
+                .extension_value("KHR_materials_dispersion")
+                .map(|v| f1(v, "dispersion", 0.0))
+                .unwrap_or(0.0);
+
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume.
+            // Typed accessor (`Material::volume()`) — the Cargo feature IS
+            // enabled at 1.4.1, unlike the four raw-JSON families above.
+            // `attenuation_distance()`'s crate-level default is
+            // `f32::INFINITY` (glTF spec's own implicit default meaning "no
+            // attenuation") — NOT read straight through: `f32::INFINITY`
+            // is not representable in MANIFOLD's JSON project format
+            // (`serde_json` errors serializing a non-finite float, and
+            // EVERY glTF import without an explicit attenuationDistance —
+            // i.e. almost all of them — would hit this on save) nor is it
+            // a value later Beer-Lambert shading math (E2) can safely
+            // divide distance by. `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
+            // is the finite stand-in — see its doc comment.
+            let volume_ext = m.volume();
+            let volume_thickness_factor =
+                volume_ext.as_ref().map(|v| v.thickness_factor()).unwrap_or(0.0);
+            let volume_attenuation_distance = volume_ext
+                .as_ref()
+                .map(|v| v.attenuation_distance())
+                .filter(|d| d.is_finite())
+                .unwrap_or(VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION);
+            let volume_attenuation_color = volume_ext
+                .as_ref()
+                .map(|v| v.attenuation_color())
+                .unwrap_or([1.0, 1.0, 1.0]);
+            let volume_has_texture =
+                volume_ext.as_ref().is_some_and(|v| v.thickness_texture().is_some());
+
             let base_color_texture = base_color_info.map(|t| t.texture().index() as u32);
             let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
             let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
@@ -1346,6 +1532,22 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 clearcoat_factor,
                 clearcoat_roughness_factor,
                 clearcoat_has_texture,
+                sheen_color_factor,
+                sheen_roughness_factor,
+                sheen_has_texture,
+                iridescence_factor,
+                iridescence_ior,
+                iridescence_thickness_minimum,
+                iridescence_thickness_maximum,
+                iridescence_has_texture,
+                anisotropy_strength,
+                anisotropy_rotation,
+                anisotropy_has_texture,
+                dispersion,
+                volume_thickness_factor,
+                volume_attenuation_distance,
+                volume_attenuation_color,
+                volume_has_texture,
                 was_blend,
                 mr_texture_is_gloss_alpha,
                 vertex_count,
@@ -1389,6 +1591,22 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             ior: 1.5,
             specular_factor: 1.0,

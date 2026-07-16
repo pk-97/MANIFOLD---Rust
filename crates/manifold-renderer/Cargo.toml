@@ -49,6 +49,12 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # `gltf::material::PbrSpecularGlossiness`) — VERIFIED this session by
 # reading `gltf-1.4.1/src/material.rs` — unlike clearcoat above. Enabling
 # the feature is the whole fix; no raw-JSON sniff needed for this one.
+# GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume HAS typed
+# support at 1.4.1 (`Material::volume()`, `gltf::material::Volume` —
+# VERIFIED this session: `KHR_materials_volume` is a real Cargo feature on
+# both `gltf` and `gltf-json` 1.4.1's own `Cargo.toml`), unlike sheen/
+# iridescence/anisotropy/dispersion (E1 raw-JSON sniffs those four — no
+# feature or typed accessor exists for them at this pinned version).
 gltf = { version = "1", features = [
     "KHR_materials_emissive_strength",
     "KHR_materials_transmission",
@@ -58,6 +64,7 @@ gltf = { version = "1", features = [
     "KHR_materials_specular",
     "KHR_materials_ior",
     "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_volume",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

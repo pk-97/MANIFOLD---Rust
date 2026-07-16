@@ -45,11 +45,13 @@ struct Vertex {
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
 // aligned throughout — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed. Total 480 bytes (four mat4x4s + fourteen vec4s;
-// stale as "272"/"320"/"448"/"464" in older comments — grew with the P3
-// atmosphere fields, the P2 prev_view_proj/prev_model pair, the
-// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field, and
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2;
+// manual padding is needed. Total 736 bytes (four mat4x4s + twenty-four
+// vec4s; stale as "272"/"320"/"448"/"464"/"480" in older comments — grew
+// with the P3 atmosphere fields, the P2 prev_view_proj/prev_model pair, the
+// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field,
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2, and
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's five-vec4 material-extension
+// block at the end;
 // `RenderSceneUniforms`'s `size_of` assert in render_scene.rs is the
 // authoritative check).
 // Lights are NO LONGER in here: they live in the `@binding(8)` storage
@@ -156,6 +158,35 @@ struct Uniforms {
     // approximately — see RenderScene::evaluate.
     prev_view_proj: mat4x4<f32>,
     prev_model: mat4x4<f32>,
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: single aligned block, grown
+    // ONCE, sized for ALL FIVE families the design's phases add (sheen,
+    // iridescence, anisotropy, dispersion, transmission+volume) — see
+    // `RenderSceneUniforms`'s matching field doc comments in render_scene.rs
+    // for the authoritative packing rationale. NOT read by any fragment
+    // entry point below yet (E2-E6 wire that) — declared here only so the
+    // buffer size matches `RenderSceneUniforms`'s `size_of` assert.
+    // KHR_materials_sheen: xyz = sheenColorFactor (default [0,0,0], inert),
+    // w = sheenRoughnessFactor (default 0.0).
+    sheen_params: vec4<f32>,
+    // KHR_materials_iridescence: x = iridescenceFactor (default 0.0,
+    // inert), y = iridescenceIor (default 1.3), z =
+    // iridescenceThicknessMinimum (default 100.0 nm), w =
+    // iridescenceThicknessMaximum (default 400.0 nm).
+    iridescence_params: vec4<f32>,
+    // KHR_materials_anisotropy's anisotropyStrength (x, default 0.0) +
+    // anisotropyRotation (y, default 0.0 rad); KHR_materials_dispersion's
+    // single factor (z, default 0.0) shares this vec4 rather than costing
+    // its own. w reserved.
+    anisotropy_dispersion_params: vec4<f32>,
+    // KHR_materials_transmission's transmissionFactor (x, default 0.0) +
+    // KHR_materials_volume's thicknessFactor (y, default 0.0) and
+    // attenuationDistance (z, default a finite "no attenuation" sentinel —
+    // see gltf_load.rs's VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION). w
+    // reserved.
+    transmission_volume_params: vec4<f32>,
+    // KHR_materials_volume's attenuationColor (xyz, default [1,1,1] —
+    // neutral). w reserved.
+    volume_attenuation_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
