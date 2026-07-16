@@ -413,6 +413,16 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
 /// gating.
 const MAX_VIRTUAL_CHAIN: usize = 1;
 
+/// Upper bound on the estimated WGSL the inliner will materialize for one
+/// absorbed chain: consumer fetch sites × 4 bilinear corners × chain body
+/// bytes. Past this, absorption is refused and the producer runs as its own
+/// dispatch — one extra cheap dispatch beats a multi-second kernel compile on
+/// the content thread. 256 KB clears Watercolor's warp-into-blur (~75 KB, the
+/// largest shipped absorption) with ~3× headroom and rejects FilmGrain's
+/// noise-into-blur (~860 KB) by ~3×. See the BUG-175 gate in
+/// [`chain_is_absorbable`].
+const MAX_VIRTUAL_INLINE_BYTES: usize = 256 * 1024;
+
 /// Absorb eligible producer components into stencil members' gather inputs as
 /// [`VirtualChain`]s. A component qualifies when its ONLY escape is the single
 /// gather-consumed wire into one stencil member of `regions[ri]`, every member
@@ -702,6 +712,43 @@ fn chain_is_absorbable(
     // leave ~1 ulp of lerp noise per frame, which a loop amplifies — and a
     // PARTICLE loop amplifies anything (the parked f16 class) — both stay out.
     let consumer_taps_exact = node_taps_texel_exact(def, registry, consumer);
+    // Compile-cost gate (BUG-175): absorption pastes the chain's bodies into
+    // every corner evaluation of every fetch site in the consumer's body, and
+    // spirv-opt's InlineExhaustive materializes all of it — fetch_sites × 4
+    // corners × chain body bytes of WGSL. MAX_VIRTUAL_CHAIN prices the runtime
+    // ALU of that multiplication; this prices the CODE SIZE, which otherwise
+    // explodes kernel compile time. FilmGrain was the proof: noise absorbed
+    // into gaussian_blur = 35 fetch sites × 4 × ~6 KB ≈ 860 KB of inlined
+    // WGSL, ~50 s of synchronous spirv-opt + Metal compile per build on the
+    // content thread — twice, once more for the specialized variant (the
+    // 2026-07-16 stage freeze). Watercolor's warp-into-blur (~75 KB) is the
+    // largest absorption that must keep fusing.
+    let consumer_fetch_sites = def
+        .nodes
+        .iter()
+        .find(|n| n.id == consumer)
+        .and_then(|doc| configured_construct(registry, doc))
+        .and_then(|n| n.wgsl_body().map(|b| b.matches("fetch_").count()))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    let chain_body_bytes: usize = nodes
+        .iter()
+        .map(|id| {
+            def.nodes
+                .iter()
+                .find(|n| n.id == *id)
+                .and_then(|doc| configured_construct(registry, doc))
+                .and_then(|n| n.wgsl_body().map(str::len))
+                .unwrap_or(usize::MAX)
+        })
+        .fold(0usize, usize::saturating_add);
+    if consumer_fetch_sites
+        .saturating_mul(4)
+        .saturating_mul(chain_body_bytes)
+        > MAX_VIRTUAL_INLINE_BYTES
+    {
+        return false;
+    }
     for &id in nodes {
         let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
             return false;
