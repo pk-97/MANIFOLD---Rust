@@ -13793,7 +13793,8 @@
           "default": "0",
           "enum_values": [
             "Extended",
-            "Simple"
+            "Simple",
+            "Log"
           ],
           "label": "Curve",
           "name": "curve",
@@ -13801,7 +13802,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Reinhard tone mapping for HDR display in one of two curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights) or Simple (`x/(x+1)`, the textbook Reinhard curve, matches the legacy MetallicGlass render terminal bit-for-bit). intensity + contrast are port-shadowed pre-multipliers — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
+      "purpose": "Tone mapping for HDR display in one of three curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights), Simple (`x/(x+1)`, the textbook Reinhard curve, matches the legacy MetallicGlass render terminal bit-for-bit), or Log (`log2(1+x)/log2(1+64)` — the flame-fractal response for particle-density pipelines: reveals faint accumulation structure Reinhard compresses away; ride intensity as the exposure). intensity + contrast are port-shadowed pre-multipliers — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node.",

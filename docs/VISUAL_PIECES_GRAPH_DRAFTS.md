@@ -62,9 +62,19 @@
 
 **Audit.** `reinhard_tone_map` ships two curves (Extended — matches FluidSim bit-for-bit — and Simple). Extend, don't add a node (§6.2): existing curves must stay bit-identical.
 
-**Change.** `curve` enum gains `Log`: `out = log2(1 + x·exposure) / log2(1 + white·exposure)`, params `exposure` (port-shadowed, default 8.0) and `white` (default 64.0) — both already-present or added as port-shadowed floats that the existing curves ignore-free (they reuse `exposure` as pre-gain so no dead param: Extended/Simple apply it as linear pre-multiply, today's behaviour at 1.0).
+**Change (as built 2026-07-16, simpler than drafted).** `curve` enum gains `Log`:
+`out = log2(1 + x) / log2(1 + 64)` where `x` is the existing `intensity × contrast`
+pre-multiply. **Zero new params** — the drafted `exposure` was redundant with the
+already-port-shadowed `intensity` (it IS the exposure ride), and a `white` param
+would have been dead state in the Extended/Simple arms (§7); the white point is a
+fixed 64.0 constant inside the Log arm, the §6.4 pattern Extended already uses for
+its fixed 3.0.
 
-**Verify.** `gpu_tests` value-level: Log at known (x, exposure, white) triples; Extended/Simple regression rows unchanged bit-for-bit.
+**Verify (done).** `gpu_tests` value-level: Log at hand-computed (x, expected)
+pairs incl. the x=64→1.0 white-point pin and a faint-density-lift property vs
+Extended; Extended/Simple regression rows pinned; a curve=2 row added to the
+codegen generated-vs-hand parity sweep; fused-WGSL golden regenerated
+(intentional codegen change).
 
 ## L2. ~~`node.palette` — curated identity LUTs~~ (KILLED 2026-07-16)
 

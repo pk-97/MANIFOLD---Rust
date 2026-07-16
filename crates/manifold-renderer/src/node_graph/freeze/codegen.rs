@@ -4638,6 +4638,16 @@ mod gpu_tests {
         while reinhard_bytes.len() < 16 {
             reinhard_bytes.push(0);
         }
+        // reinhard again with curve=2 Log — the third arm has its own
+        // generated-vs-hand row so a codegen drift in the Log branch can't
+        // hide behind the Simple case.
+        let mut reinhard_log_bytes = Vec::new();
+        reinhard_log_bytes.extend_from_slice(&1.5f32.to_le_bytes());
+        reinhard_log_bytes.extend_from_slice(&1.2f32.to_le_bytes());
+        reinhard_log_bytes.extend_from_slice(&2u32.to_le_bytes());
+        while reinhard_log_bytes.len() < 16 {
+            reinhard_log_bytes.push(0);
+        }
 
         // chroma_key: key_color Vec3 (3 f32) + tolerance, softness (f32) + mode
         // (Enum -> u32) + pad → 32 B. The Vec3 param expands to 3 uniform floats,
@@ -4655,6 +4665,7 @@ mod gpu_tests {
         let cases: &[(&str, &str, &[u8])] = &[
             ("node.flash", "flash.wgsl", flash_bytes.as_slice()),
             ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_bytes.as_slice()),
+            ("node.reinhard_tone_map", "reinhard_tone_map.wgsl", reinhard_log_bytes.as_slice()),
             ("node.chroma_key", "chroma_key.wgsl", chroma_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
