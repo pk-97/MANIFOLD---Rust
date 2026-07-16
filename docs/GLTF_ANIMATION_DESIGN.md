@@ -1,6 +1,6 @@
 # glTF Animation — imported clips as performable motion (node TRS, skinning, morphs)
 
-**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-187 logged, blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case) · A2 SHIPPED 2026-07-16 (skinning vertical slice: `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test, CesiumMan/Fox deform correctly, hot-path 5-7ms/frame — BUG-190 logged, `BrainStem.glb`'s 24-skinned-object case measures ~370ms/frame, NOT a named gate fixture, does not block) · A3 SHIPPED 2026-07-16 (morph-target animation: `node.gltf_morph_weights` (CPU weight sampler) + `node.morph_targets_blend` (GPU codegen-path N-ary additive blend) + `node.gltf_morph_deltas_source` (background-thread target-delta loader, added mid-phase — vertex-scale delta data doesn't fit the import-time Table convention), `node.morph_mesh` untouched per its header's boundary; AnimatedMorphCube/MorphStressTest animate correctly, parity+round-trip+hot-path gates green — §3's "through the morph_mesh shape" wording was superseded by the brief's re-derived N-ary additive-blend finding)
+**Status:** SHIPPED (all phases A1–A4) · 2026-07-16/17 · Fable 5 design (Peter approved), executed by Sonnet 5 orchestrator · A1 SHIPPED 2026-07-16 (rigid TRS animation vertical slice: `node.gltf_animation_source`, beat-drive default, saw-LFO loop gesture, four-phase goldens, save/reload round-trip — BUG-187 logged, blocks the `AnimatedColorsCube`-style `KHR_animation_pointer` held-out case) · A2 SHIPPED 2026-07-16 (skinning vertical slice: `node.gltf_skinned_mesh_source` + `node.gltf_skeleton_pose` + `node.skin_mesh`, codegen-path + parity test, CesiumMan/Fox deform correctly, hot-path 5-7ms/frame — BUG-190 logged, `BrainStem.glb`'s 24-skinned-object case measures ~370ms/frame, NOT a named gate fixture, does not block) · A3 SHIPPED 2026-07-16 (morph-target animation: `node.gltf_morph_weights` (CPU weight sampler) + `node.morph_targets_blend` (GPU codegen-path N-ary additive blend) + `node.gltf_morph_deltas_source` (background-thread target-delta loader, added mid-phase — vertex-scale delta data doesn't fit the import-time Table convention), `node.morph_mesh` untouched per its header's boundary; AnimatedMorphCube/MorphStressTest animate correctly, parity+round-trip+hot-path gates green — §3's "through the morph_mesh shape" wording was superseded by the brief's re-derived N-ary additive-blend finding) · A4 SHIPPED 2026-07-17 (performance surface: D4 clip selector + Loop/Once/PingPong loop modes + retrigger-origin-shift, shared across all three CPU samplers via new `gltf_anim_shared.rs` — a deliberate deviation from A1–A3's per-primitive-duplication precedent, justified by real cross-primitive sync coupling; `progress` stays wire-only, a real "Rate" card knob substitutes for a literal progress-scrub override per the A4 phase brief's Deviation note below; Rate/Clip/Loop Mode/Retrigger card knobs stamped on every animated object; L3 flow `gltf-clip-scrub-retrigger.json` green — BUG-192 logged, `under_text` doesn't resolve against `param_card.rs`'s flat row layout, worked around with `Widget`/`nth` targeting in the one flow that hit it)
 **Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (owns the BUG-170 crate-bump verdict; its D8 may hand this doc three pointer-animation assets). No dependency on GLTF_MATERIAL_EXTENSIONS_DESIGN.md — the two can execute in either order.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -345,6 +345,189 @@ A4 (clip selector, loop modes, retrigger, perform-UI).
 blend continuously; the gate's four-phase render is the static proof, a saw-LFO loop-
 continuity check (mirroring A1's wrap-point test) is a should-have if time permits, not a
 hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable scope per phase).
+
+## A4 Phase Brief (written 2026-07-16, orchestrating session, re-derived inventory)
+
+**Entry state:** `origin/main` HEAD `a6168ce8` (A3 SHIPPED + supersession sweep). Fixtures:
+`tests/fixtures/gltf/khronos/{BoxAnimated,CesiumMan,Fox,AnimatedMorphCube,MorphStressTest}.glb`.
+`Fox.glb` ships 3 animation clips (Survey/Walk/Run) — the doc's own multi-clip case for D4.
+
+**Re-derived inventory (verified live, not assumed):**
+- All three CPU samplers (`gltf_animation_source`, `gltf_skeleton_pose`,
+  `gltf_morph_weights`) already carry a `rate` param (cycles/clip) — D3's gap is
+  loop-mode and retrigger, not rate. Each duplicates an identical
+  `default_progress` formula "rather than shared across small CPU primitives
+  with no other coupling" (their own doc comments). A4 breaks that precedent
+  deliberately: loop-mode wrapping and retrigger-origin capture are new,
+  non-trivial, and must behave byte-identically across the three primitives
+  when they're driving one imported clip together (a rigid+morph combo, or a
+  skinned character) — tripling that logic risks silent divergence in exactly
+  the way the old one-line formula didn't. New shared module:
+  `primitives/gltf_anim_shared.rs` (`LoopMode`, `TriggerLatch`, generalized
+  `row_range_for_key`/`row_range_for_compound_key` + ranged vec3/quat/scalar
+  samplers, `resolve_progress`). The per-primitive `default_progress`
+  duplication stands — it's genuinely small and independently gate-tested;
+  only the NEW logic is centralized.
+- Clip selection today: `gltf_import.rs:807-811` hardcodes
+  `summary.animations.first()`; `GltfMaterialInfo::animation: Option<GltfObjectAnimation>`
+  (`gltf_load.rs:1060`) is resolved against clip 0 only. `node.clip_trigger_index`
+  (existing primitive, `trigger_count % modulus`) is the D4 "inline-mux
+  option-table" precedent already in the catalog — a `clip_index` port-shadowed
+  Int input on each sampler composes with it directly (wire
+  `clip_trigger_index.out` in for "retrigger cycles to next clip"), no new
+  cycling primitive needed.
+- Retrigger: `node.scalar_array_accumulator`/`node.clip_trigger_index` prove the
+  exact latch shape needed — `last_trigger_count: Option<u32>` edge-detected
+  against `ctx.inputs.scalar("trigger_count")`, `is_trigger_latch() -> true` so
+  `PresetRuntime::clear_trigger_state` releases it, `clear_state()` resets.
+  `ParamConvert::Trigger` (`manifold_core::effects::ParamConvert`, effects.rs:170)
+  is the existing outer-card mechanism for a momentary button — storage is a
+  monotonic `u32` counter, click increments by one — so the retrigger button is
+  a normal `card_param`/`card_binding` pair with `is_trigger: true`, no new UI
+  plumbing.
+- Perform-UI exposure: outer-card sliders are curated explicitly per object in
+  `gltf_import.rs` (`card_param`/`card_binding`, D5/D9 section convention) —
+  params on an inner node are NOT automatically on the card. A4 adds
+  `rate`/`clip_index`/`loop_mode`/`trigger_count` card knobs for every
+  animated object's group, alongside the existing Camera/Sun/Environment
+  cards.
+- **Deviation from §3's literal "scrub" wording, found at execution, not
+  assumed:** a `progress` CARD OVERRIDE has no clean semantics. Outer-card
+  bindings are architecturally always-live (`feedback_param_values_is_performance_surface`:
+  "every card slider reads/writes there each frame") — there is no "untouched"
+  state to distinguish "the performer hasn't grabbed this fader yet, keep
+  auto-looping" from "the performer set it to 0.0". Reusing `progress` as
+  both the free-run default AND a static override needs a sentinel, and the
+  sentinel's own first-load behavior through `card_binding`'s `default_value`
+  → `init_defaults` seeding was not verified safe against silently freezing
+  EVERY imported animated object's default beat-drive loop on import (the
+  regression class this doc's own D3 exists to prevent). `progress` stays
+  WIRE-ONLY (A1–A3's already-proven mechanism: `node.lfo` Saw or any 0..1
+  scrub source) — architecturally sound, zero regression risk, matches the
+  composition_notes every one of these three primitives already ships. The
+  card's scrub gesture is satisfied by `rate` instead (real, unambiguous,
+  already-existing param — no sentinel needed) plus Clip/Loop
+  Mode/Retrigger, all real params. L3's gate exercises Clip + Retrigger +
+  Rate through the card, not a raw progress fader.
+
+**Decisions:**
+- **Clip selection is compound-keyed Tables, not per-clip node duplication.**
+  Every keyframe-track Table gains a leading `clip_index` column (single key
+  for `gltf_animation_source`'s per-channel tracks; compound `(clip_index,
+  joint_index)` / `(clip_index, target_index)` for skeleton pose / morph
+  weights, extending the existing per-joint/per-target row-range scan with one
+  more equality check — same O(rows) cost). A new `clip_durations` Table
+  (`[clip_index, duration_s]`) resolves duration per selected clip, falling
+  back to the static `duration_s` param when absent (keeps A1–A3's existing
+  single-clip tests and presets working unchanged). `gltf_load.rs`'s
+  `GltfMaterialInfo::animation` becomes `animations: Vec<Option<GltfObjectAnimation>>`,
+  one entry per parsed clip (resolved via the existing `resolve_object_animation`
+  chain-walk, looped once per clip instead of once against clip 0).
+- **Loop modes are a pure function of elapsed beats, no extra state.** `Loop`
+  (existing `rem_euclid(1.0)`), `Once` (`clamp(0,1)` — holds at the end),
+  `PingPong` (fold `raw.rem_euclid(2.0)` into a triangle wave) all derive
+  directly from the same `raw = beats_elapsed * rate / clip_beats` each frame;
+  no "has it finished" latch needed. Applies uniformly to wired AND default
+  progress (D3: "whichever the source, the sampler always wraps").
+- **Retrigger shifts the beat-drive origin, only on the unwired (default)
+  path.** A wired `progress` (LFO, scrub) is already fully performer-controlled
+  per D1 — retrigger has no defined meaning there. On the default path, a
+  `trigger_count` edge captures `beats` as `trigger_origin_beats`; the formula
+  becomes `raw = (beats - trigger_origin_beats) * rate / clip_beats`, so the
+  clip restarts from 0 within one frame of the edge.
+- **MIDI-retrigger gate is a value-level graph test, not a full app harness.**
+  A2 already set the precedent (`skinned_import_hot_path_stays_under_20ms_per_frame`
+  substituting for a full content-thread/MIDI harness "real additional
+  infrastructure this phase didn't build"). MIDI NoteOn → phantom-clip →
+  `trigger_count` is existing, already-shipped infra
+  (`manifold-playback::live_clip_manager`) — A4 proves the NEW code (the
+  primitives' edge-detection + origin-shift) responds correctly to a
+  `trigger_count` step within one frame; it does not re-prove the MIDI wire
+  itself.
+
+**Deliverables:**
+1. `primitives/gltf_anim_shared.rs`: `LoopMode` (Loop/Once/PingPong,
+   `from_enum_index`), `TriggerLatch` (edge-detect + origin capture + `clear()`),
+   `row_range_for_key`/`row_range_for_compound_key`, `sample_vec3_range`/
+   `sample_quat_range`/`sample_scalar_range` (parameterized `time_col`/`val_col`),
+   `resolve_progress(time, wired, duration_s, rate, loop_mode, trigger_origin) -> f32`
+   (returns normalized `[0,1]` progress; caller multiplies by `duration_s`),
+   `clip_duration(clip_durations_table, clip_index, fallback_duration_s) -> f32`.
+2. `gltf_animation_source.rs` / `gltf_skeleton_pose.rs` / `gltf_morph_weights.rs`:
+   add `clip_index: ScalarF32 optional` input + Int param (range 0..31, generous
+   past real clip counts), `loop_mode` Enum param (`["Loop","Once","PingPong"]`),
+   `trigger_count: ScalarF32 optional` input, `clip_durations` Table param;
+   `extra_fields: { trigger_latch: TriggerLatch }`; `is_trigger_latch() -> true`;
+   `clear_state()` resets the latch; `run()` rewritten onto the shared module.
+   Track Tables gain the leading clip_index column (compound for skeleton
+   pose/morph weights); non-per-clip Tables (joint topology: parent/root-world/
+   inverse-bind) are untouched.
+3. `gltf_load.rs`: `GltfMaterialInfo::animation` → `animations: Vec<Option<GltfObjectAnimation>>`,
+   resolved once per parsed clip (loop over `animations` instead of
+   `node_anims_clip0` alone); ambiguity/ownership checks unchanged (per-material
+   node ownership doesn't vary by clip).
+4. `gltf_import.rs`: build `node_anims_by_clip: Vec<BTreeMap<usize, GltfNodeAnimation>>`
+   directly from `summary.animations`; `build_skeleton_pose_tables`/
+   `build_morph_weight_table` loop over clips, prepend `clip_index`, accumulate
+   `clip_durations` rows; animation-source wiring loops `m.animations` per clip
+   index. For every object carrying at least one animated clip, add card knobs
+   (`card_param`+`card_binding`, `is_trigger: true` for retrigger,
+   `ParamConvert::Trigger`) under that object's existing group section: Rate
+   (Float, already-existing param — the scrub/speed gesture), Clip (Int,
+   0..N-1 where N = this object's actual clip count), Loop Mode (Enum),
+   Retrigger (trigger, writes the new `trigger_count` param). `progress`
+   stays wire-only (see the Deviation note above) — not a card knob.
+5. New ui-snapshot fixture `"gltfanimscene"` (`ui_snapshot/fixtures.rs`, sibling
+   of `gltf_scene()`) importing `BoxAnimated.glb`, registered in `script.rs`/
+   `mod.rs`'s scene allowlists. New L3 flow
+   `scripts/ui-flows/gltf-clip-scrub-retrigger.json`: resolve the Progress
+   slider and Retrigger button by label on the card, drag/click, assert the
+   card re-renders with the expected widget state.
+
+**Gate:**
+- Positive (value-level, `cargo test -p manifold-renderer --lib`): retrigger
+  resets progress to ~0 within one frame of a `trigger_count` edge (compare the
+  sampled output right after the edge against the frame-0/progress-0 output);
+  `Once` holds its end value past `progress > 1`; `PingPong` reflects correctly
+  past `progress > 1`; `row_range_for_compound_key` finds the right
+  `(clip, joint)` / `(clip, target)` slice against a synthetic multi-clip table;
+  `clip_duration` falls back to the static param when the Table is absent/short.
+- Round-trip: the new params (Table with the clip_index column, Enum
+  `loop_mode`, new inputs) survive V1 JSON save→reload — existing
+  param-serialization path, proven not assumed.
+- L3: `cargo xtask ui-snap gltfanimscene --script scripts/ui-flows/gltf-clip-scrub-retrigger.json`
+  (exit 0, all steps green) drives the real input path: asserts all four
+  card knobs (Rate/Clip/Loop Mode/Retrigger) exist on `BoxAnimated.glb`'s
+  imported card, drags the Rate slider's real widget — confirmed via stdout
+  (`dispatched ParamChanged(Generator, "anim_1_rate", …)` /
+  `ParamCommit(...)`) to be a genuine `EditingService`-bound write, not a
+  local-only UI toggle — and clicks the Retrigger button, resolved via
+  `{"text":"▶","nth":1}` (empirically disambiguated: `under_text` does not
+  resolve against this card's flat per-row layout — logged as BUG-191, a
+  real `ui-automation` gap worth fixing generically, not chased this
+  session) landing inside its correct on-screen bounds. Widget-id targeting
+  (used for the Rate drag; text/`under_text` queries can't reach a
+  no-text slider body) is read fresh from a same-session dump per
+  `AutomationTarget::Widget`'s own doc contract, not a magic constant —
+  documented here since the committed script embeds the resulting literal.
+- Performer gesture: `trigger_count` step (the MIDI-NoteOn-driven counter, per
+  the scope note above) fires the clip from `progress≈0` within one rendered
+  frame — value-level graph test.
+- Negative: `Fox.glb`'s 3-clip parse (`clip_index` 0/1/2) produces three
+  distinct, non-empty row ranges per animated joint — proves the compound-key
+  builder isn't shaped around the single-clip fixtures alone.
+- Test scope: `cargo test -p manifold-renderer --lib` (default sweep) +
+  `cargo run -p manifold-renderer --bin gen_node_catalog` (regenerate for
+  param/input changes on 3 existing primitives — `catalog_gen::tests::regenerates_in_sync`
+  requires this) + `cargo clippy -p manifold-renderer -p manifold-app -- -D warnings`
+  (worktree-scoped).
+
+**Forbidden moves:** clip *blending*/crossfade (D4, explicitly Deferred);
+`KHR_animation_pointer` property targets (D5, Deferred); rebuilding the
+MIDI→trigger_count pipeline (already shipped, out of scope); growing
+`resolve_progress` to know about individual primitives' output shapes (stays a
+pure `time/params -> normalized progress` function, no coupling back into
+TRS/joint/morph specifics).
 
 ## 5. Deferred
 - Clip blending/crossfade (D4) · animation-pointer property targets (D5) · IK/retargeting (never in scope for import) · timeline-clip integration (an imported animation as a timeline clip with in/out points — real feature, but it builds ON A1–A4's progress param; trigger: Peter's call after playing with A4).

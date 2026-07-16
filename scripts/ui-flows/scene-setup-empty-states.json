@@ -1,0 +1,34 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "PLASMA" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "This generator has no 3D scene." } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "NOISE FIELD" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "New 3D Scene" } },
+      "check": "Exists"
+    }
+  }
+]

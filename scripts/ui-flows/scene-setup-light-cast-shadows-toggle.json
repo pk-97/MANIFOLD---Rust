@@ -1,0 +1,50 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.cast_shadows_value",
+          "text": "On"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Point": { "x": 823.0, "y": 780.0 } },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.cast_shadows_value",
+          "text": "Off"
+        }
+      },
+      "check": "Exists"
+    }
+  }
+]

@@ -330,6 +330,14 @@ impl Application {
                 self.needs_rebuild = true;
             }
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+        }
+        // Scene Setup dock resize drag — mirror of the Audio Setup one above
+        // (SCENE_SETUP_PANEL_DESIGN D2).
+        else if self.ws.ui_root.scene_setup_resize_dragging {
+            if self.ws.ui_root.update_scene_setup_resize(self.cursor_pos.x) {
+                self.needs_rebuild = true;
+            }
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         } else {
             self.ws.ui_root.pointer_event(
                 self.cursor_pos,
@@ -480,6 +488,20 @@ impl Application {
                                     self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_audio_setup_handle_drag();
                                 }
+                            } else if self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
+                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
+                            {
+                                // Scene Setup dock resize handle — mirror of
+                                // the Audio Setup one above (D2).
+                                if self.is_double_click(self.scene_setup_handle_last_click) {
+                                    self.scene_setup_handle_last_click = None;
+                                    self.ws.ui_root.layout.reset_scene_setup_width();
+                                    self.needs_rebuild = true;
+                                } else {
+                                    self.scene_setup_handle_last_click = Some(std::time::Instant::now());
+                                    self.ws.ui_root.begin_scene_setup_resize(self.cursor_pos.x);
+                                    self.ws.ui_root.set_scene_setup_handle_drag();
+                                }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
@@ -540,6 +562,10 @@ impl Application {
                                 self.ws.ui_root.end_audio_setup_resize();
                                 self.cursor_manager.set_default();
                                 self.ws.ui_root.set_audio_setup_handle_idle();
+                            } else if self.ws.ui_root.scene_setup_resize_dragging {
+                                self.ws.ui_root.end_scene_setup_resize();
+                                self.cursor_manager.set_default();
+                                self.ws.ui_root.set_scene_setup_handle_idle();
                             } else {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,

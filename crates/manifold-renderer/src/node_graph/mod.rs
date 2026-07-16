@@ -44,6 +44,7 @@ mod persistence;
 pub mod ports;
 pub mod primitive;
 pub mod primitives;
+pub mod scene_vm;
 mod snapshot;
 mod state_store;
 pub mod trigger_shadow_lint;

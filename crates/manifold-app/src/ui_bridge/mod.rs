@@ -12,6 +12,12 @@ mod project;
 mod state_sync;
 mod transport;
 
+/// Re-exported so `Application::handle_text_input_commit`'s
+/// `SceneObjectRename` arm (main-window text-input commit, not a
+/// `PanelAction`) can resolve a layer's generator-graph catalog default the
+/// same way the Scene Setup panel's other dispatch arms do.
+pub(crate) use project::generator_catalog_default;
+
 use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -562,7 +568,14 @@ pub fn dispatch(
         | PanelAction::SetDisplayResolution(..)
         | PanelAction::SetRenderScale(_)
         | PanelAction::SetTonemapCurve(_)
-        | PanelAction::SetGenType(..) => project::dispatch_project(
+        | PanelAction::SetGenType(..)
+        | PanelAction::SceneSetupParamChanged(..)
+        | PanelAction::SceneSetupAddEnvironment(..)
+        | PanelAction::SceneSetupAddFog(..)
+        | PanelAction::SceneSetupAddObject(..)
+        | PanelAction::SceneSetupAddLight(..)
+        | PanelAction::SceneSetupImportModelClicked(..)
+        | PanelAction::SceneSetupNewScene(..) => project::dispatch_project(
             action,
             project,
             content_tx,
@@ -578,6 +591,12 @@ pub fn dispatch(
         | PanelAction::OpenGraphEditor(_)
         | PanelAction::OpenCardMapping(_)
         | PanelAction::OpenGeneratorGraphEditor
+        // D7 "Open Graph Editor" empty-state action — same watch_generator_graph
+        // + pending_open_graph_editor mechanism as OpenGeneratorGraphEditor
+        // above, just addressed by an explicit layer_id instead of
+        // `active_layer_id`. Only `Application` (app_render.rs) holds those
+        // fields, so this never reaches `dispatch` either.
+        | PanelAction::SceneSetupOpenGraphEditor(_)
         // (Graph-editor mutations are `GraphEditCommand` now — Phase 4.3 —
         // dispatched in app_render's `graph_edits` loop, not here.)
         | PanelAction::EffectMappingRangeSnapshot { .. }
@@ -593,6 +612,10 @@ pub fn dispatch(
         | PanelAction::EffectMappingGotoNode { .. }
         // Consumed in app_render (opens the inline rename editor); no-op here.
         | PanelAction::AudioSendLabelClicked(_)
+        // Consumed in app_render (opens the Scene Setup object-rename inline
+        // editor, SCENE_SETUP_PANEL_DESIGN.md P2) — same shape as
+        // `AudioSendLabelClicked` above.
+        | PanelAction::SceneSetupRenameObjectClicked(..)
         // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
         | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
 
@@ -603,6 +626,13 @@ pub fn dispatch(
         // so the tree must rebuild at the new geometry.
         PanelAction::OpenAudioSetup => {
             ui.toggle_audio_dock();
+            DispatchResult::structural()
+        }
+
+        // Scene Setup dock toggle — mirror of `OpenAudioSetup` above
+        // (SCENE_SETUP_PANEL_DESIGN D2).
+        PanelAction::OpenSceneSetup => {
+            ui.toggle_scene_dock();
             DispatchResult::structural()
         }
     }

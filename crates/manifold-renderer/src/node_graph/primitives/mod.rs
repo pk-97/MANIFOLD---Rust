@@ -100,6 +100,7 @@ mod generate_grid_mesh;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod generate_range;
+pub(crate) mod gltf_anim_shared;
 mod gltf_animation_source;
 mod gltf_mesh_source;
 mod gltf_morph_deltas_source;

@@ -1173,6 +1173,7 @@ impl Application {
                 M::Perform => actions.push(P::EnterPerformMode),
                 M::Monitor => actions.push(P::ToggleMonitor),
                 M::Audio => actions.push(P::OpenAudioSetup),
+                M::Scene => actions.push(P::OpenSceneSetup),
                 M::ImportVideo => self.import_video_clip(),
                 M::Undo => {
                     if let Some(tx) = self.content_tx.as_ref() {
@@ -1548,6 +1549,46 @@ impl Application {
                     // harness reaches the same one via ui_bridge::dispatch.
                     self.ws.ui_root.toggle_audio_dock();
                     needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::OpenSceneSetup => {
+                    // Mirror of `OpenAudioSetup` above (SCENE_SETUP_PANEL_DESIGN
+                    // D2) — same lockstep `open`/`scene_setup_width` toggle,
+                    // same structural rebuild, same dual reachability (live app
+                    // here, headless harness via `ui_bridge::dispatch`).
+                    self.ws.ui_root.toggle_scene_dock();
+                    needs_structural_sync = true;
+                    continue;
+                }
+                PanelAction::SceneSetupOpenGraphEditor(layer_id) => {
+                    // D7 "Open Graph Editor" empty state — same mechanism as
+                    // `OpenGeneratorGraphEditor` below, addressed explicitly by
+                    // the panel's own layer instead of `active_layer_id`.
+                    self.watch_generator_graph(layer_id.clone());
+                    self.pending_open_graph_editor = true;
+                    continue;
+                }
+                PanelAction::SceneSetupRenameObjectClicked(layer_id, group_node_id, name) => {
+                    // P2 object-name click — same shape as
+                    // `AudioSendLabelClicked` below: begin the shared inline
+                    // text-input session anchored over the row's own name
+                    // label. Commit routes to `RenameGroupCommand` addressed
+                    // directly at the layer (no graph editor needs to be
+                    // open — the panel is a fourth surface, not a canvas view).
+                    if let Some(r) = self
+                        .ws
+                        .ui_root
+                        .scene_setup_panel
+                        .object_name_rect(&self.ws.ui_root.tree, *group_node_id)
+                    {
+                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::SceneObjectRename(*group_node_id),
+                            name,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            11.0,
+                        );
+                    }
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {

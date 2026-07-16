@@ -109,7 +109,8 @@ pub fn run(scene: &str, script_path: &str) {
     let Some(mut data) = super::fixtures::build(scene) else {
         eprintln!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, \
-             paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene)"
+             paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
+             gltfanimscene)"
         );
         std::process::exit(2);
     };
@@ -143,6 +144,7 @@ pub fn run(scene: &str, script_path: &str) {
         || scene == "bug060heavy"
         || scene == "paramsteps"
         || scene == "gltfscene"
+        || scene == "gltfanimscene"
         || scene == "bug047"
     {
         ui.layout.inspector_width = 600.0;

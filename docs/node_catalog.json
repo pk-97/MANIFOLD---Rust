@@ -799,7 +799,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -994,7 +995,8 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:cross_frame_state",
       "inputs": [],
@@ -3869,7 +3871,9 @@
         "Box SOP"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "SceneStarter"
+      ],
       "fusion": "source",
       "inputs": [],
       "label": "Cube Mesh",
@@ -7739,6 +7743,16 @@
           "name": "progress",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "clip_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "trigger_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "glTF Animation Source",
@@ -7800,6 +7814,47 @@
             "16"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Clip",
+          "name": "clip_index",
+          "range": [
+            "0",
+            "31"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Loop",
+            "Once",
+            "PingPong"
+          ],
+          "label": "Loop Mode",
+          "name": "loop_mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Clip Durations",
+          "name": "clip_durations",
+          "type": "table"
+        },
+        {
+          "default": "0",
+          "label": "Retrigger",
+          "name": "trigger_count",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "type": "int"
         },
         {
           "default": "0",
@@ -8017,6 +8072,16 @@
           "name": "progress",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "clip_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "trigger_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "glTF Morph Weights",
@@ -8046,6 +8111,47 @@
             "16"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Clip",
+          "name": "clip_index",
+          "range": [
+            "0",
+            "31"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Loop",
+            "Once",
+            "PingPong"
+          ],
+          "label": "Loop Mode",
+          "name": "loop_mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Clip Durations",
+          "name": "clip_durations",
+          "type": "table"
+        },
+        {
+          "default": "0",
+          "label": "Retrigger",
+          "name": "trigger_count",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "type": "int"
         },
         {
           "default": "0",
@@ -8085,6 +8191,16 @@
           "name": "progress",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "clip_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "trigger_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "glTF Skeleton Pose",
@@ -8114,6 +8230,47 @@
             "16"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Clip",
+          "name": "clip_index",
+          "range": [
+            "0",
+            "31"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Loop",
+            "Once",
+            "PingPong"
+          ],
+          "label": "Loop Mode",
+          "name": "loop_mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Clip Durations",
+          "name": "clip_durations",
+          "type": "table"
+        },
+        {
+          "default": "0",
+          "label": "Retrigger",
+          "name": "trigger_count",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "type": "int"
         },
         {
           "default": "0",
@@ -8474,7 +8631,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "source",
       "inputs": [
@@ -9756,7 +9914,8 @@
       "category": "Materials & Lighting",
       "examples": [
         "ApricotWeather",
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -12034,7 +12193,8 @@
         "ApricotWeather",
         "DigitalPlants",
         "FluidSim3D",
-        "MetallicGlass"
+        "MetallicGlass",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -13838,7 +13998,8 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -15388,7 +15549,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:draw_call",
       "inputs": [
@@ -20176,7 +20338,8 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather"
+        "ApricotWeather",
+        "SceneStarter"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -21941,6 +22104,7 @@
         "ParticleText",
         "Plasma",
         "QuadMirror",
+        "SceneStarter",
         "SoftFocus",
         "StarField",
         "StrangeAttractor",
@@ -22001,6 +22165,7 @@
         "OilyFluid",
         "ParticleText",
         "Plasma",
+        "SceneStarter",
         "StarField",
         "StrangeAttractor",
         "Strobe",
@@ -22153,7 +22318,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 51,
+  "preset_count": 52,
   "presets": [
     {
       "category": "Geometry",
@@ -24332,6 +24497,14 @@
           "name": "Amount"
         }
       ]
+    },
+    {
+      "category": "Geometry",
+      "id": "SceneStarter",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Scene Starter",
+      "params": []
     },
     {
       "category": "Stylize",

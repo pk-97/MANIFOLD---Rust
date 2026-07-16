@@ -1049,15 +1049,19 @@ pub(crate) struct GltfMaterialInfo {
     pub mr_sampler: GltfSamplerInfo,
     pub occlusion_sampler: GltfSamplerInfo,
     pub emissive_sampler: GltfSamplerInfo,
-    /// GLTF_ANIMATION_DESIGN.md A1: this object's resolved TRS animation,
-    /// when its geometry is contributed by exactly one mesh-owning node
-    /// (see [`resolve_object_animation`]) whose ancestor chain carries a
-    /// translation/rotation/scale keyframe track in animation clip `[0]`.
-    /// `None` for a static object, for the synthetic default-material
-    /// entry (never resolved), or when more than one node contributes
-    /// this material's geometry (the documented multi-node-per-material
-    /// scope boundary — never partially or incorrectly animated).
-    pub animation: Option<GltfObjectAnimation>,
+    /// GLTF_ANIMATION_DESIGN.md A1/A4: this object's resolved TRS
+    /// animation, ONE ENTRY PER PARSED CLIP (aligned to the document's
+    /// `animations()` index — A4's D4 clip selection), when its geometry is
+    /// contributed by exactly one mesh-owning node (see
+    /// [`resolve_object_animation`]) whose ancestor chain carries a
+    /// translation/rotation/scale keyframe track in that clip. A clip entry
+    /// is `None` when this object isn't animated in that specific clip;
+    /// the whole vector is empty for a static object, the synthetic
+    /// default-material entry (never resolved), or when more than one node
+    /// contributes this material's geometry (the documented
+    /// multi-node-per-material scope boundary — never partially or
+    /// incorrectly animated).
+    pub animations: Vec<Option<GltfObjectAnimation>>,
     /// GLTF_ANIMATION_DESIGN.md A2 (D2): this object's resolved skin
     /// topology, when its geometry is contributed by exactly one
     /// mesh-owning node (the SAME single-node scope boundary `animation`
@@ -1210,17 +1214,17 @@ pub(crate) struct GltfImportSummary {
     /// GLTF_ANIMATION_DESIGN.md A1: every `document.animations()` entry,
     /// parsed as a per-node list of TRS keyframe tracks — raw, unresolved
     /// against any particular material/object. `gltf_import.rs` doesn't
-    /// consume this directly; it consumes [`GltfMaterialInfo::animation`]
-    /// (the per-object RESOLVED animation, computed below from clip 0 of
-    /// this list). Kept on the summary so a parse-only smoke test can
-    /// assert the parser sees the right channels on an asset it was never
-    /// wired against, independent of the per-material resolution step.
+    /// consume this directly; it consumes [`GltfMaterialInfo::animations`]
+    /// (the per-object RESOLVED animation, one entry per clip in this
+    /// list). Kept on the summary so a parse-only smoke test can assert the
+    /// parser sees the right channels on an asset it was never wired
+    /// against, independent of the per-material resolution step.
     /// GLTF_ANIMATION_DESIGN.md A2: also read directly by `gltf_import.rs`
     /// to build `node.gltf_skeleton_pose`'s per-joint Table params (a
-    /// joint's animated TRS track, looked up by node index against clip
-    /// `[0]`'s per-node map) — no longer test-only. A4's clip selector
-    /// (D4, deferred) will read `animations[1..]` the same way to expose
-    /// multi-clip glbs (`Fox` ships three) beyond clip `[0]`.
+    /// joint's animated TRS track, looked up by node index per clip). A4:
+    /// `gltf_import.rs` now loops every entry here (not just `[0]`) to
+    /// build the compound-keyed `(clip_index, joint_index)` Tables D4's
+    /// clip selector reads at runtime.
     pub animations: Vec<GltfAnimationInfo>,
     /// Non-fatal animation parse findings — a non-LINEAR interpolation
     /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
@@ -2046,11 +2050,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         return Err(format!("{}: parsed no geometry", path.display()));
     }
 
-    // GLTF_ANIMATION_DESIGN.md A1: parse every animation clip, then
-    // resolve clip `[0]` (multi-clip selection is D4/A4) against each
-    // material's mesh-owning node's full ancestor chain — see
-    // `resolve_object_animation` for why the chain (not just the leaf
-    // node) is required.
+    // GLTF_ANIMATION_DESIGN.md A1/A4: parse every animation clip, then
+    // resolve EVERY clip (D4 multi-clip selection) against each material's
+    // mesh-owning node's full ancestor chain — see `resolve_object_animation`
+    // for why the chain (not just the leaf node) is required.
     let animations = parse_animations(&document, &buffers);
     // GLTF_ANIMATION_DESIGN.md A2: parsed once per skin index — resolved
     // against a material below only when that material's geometry comes
@@ -2065,10 +2068,15 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             ));
         }
     }
-    let node_anims_clip0: std::collections::BTreeMap<usize, GltfNodeAnimation> = animations
-        .first()
+    let node_anims_by_clip: Vec<std::collections::BTreeMap<usize, GltfNodeAnimation>> = animations
+        .iter()
         .map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect())
-        .unwrap_or_default();
+        .collect();
+    // Union of every clip's animated node set — used only for the
+    // multi-node-per-material ambiguity check below (unchanged by A4: that
+    // check doesn't need to know WHICH clip animates the ambiguous node).
+    let any_clip_animated_nodes: std::collections::BTreeSet<usize> =
+        node_anims_by_clip.iter().flat_map(|m| m.keys().copied()).collect();
     let mesh_node_chains = collect_mesh_node_chains(&document);
     let mut chain_by_node: std::collections::BTreeMap<usize, Vec<usize>> =
         std::collections::BTreeMap::new();
@@ -2100,27 +2108,33 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 // Declared but unused by any geometry — nothing to draw.
                 return None;
             }
-            // A1: resolve this material's animation only when exactly one
-            // mesh-owning node contributes its geometry — the documented
-            // multi-node-per-material scope boundary (never partially or
-            // ambiguously animated).
-            let animation = match nodes_by_material.get(&Some(material_index as usize)) {
-                Some(nodes) if nodes.len() == 1 => {
-                    let node_index = *nodes.iter().next().unwrap();
-                    let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
-                    resolve_object_animation(&chain, &node_anims_clip0, &mut animation_report_lines)
-                }
-                Some(nodes) if nodes.len() > 1 && node_anims_clip0.keys().any(|n| nodes.contains(n)) => {
-                    animation_report_lines.push(format!(
-                        "material {material_index}: geometry contributed by {} nodes, at least \
-                         one of which is animated — multi-node-per-material animation is out of \
-                         A1 scope, this object is left static",
-                        nodes.len()
-                    ));
-                    None
-                }
-                _ => None,
-            };
+            // A1/A4: resolve this material's animation only when exactly
+            // one mesh-owning node contributes its geometry — the
+            // documented multi-node-per-material scope boundary (never
+            // partially or ambiguously animated) — once PER CLIP (A4/D4).
+            let animations: Vec<Option<GltfObjectAnimation>> =
+                match nodes_by_material.get(&Some(material_index as usize)) {
+                    Some(nodes) if nodes.len() == 1 => {
+                        let node_index = *nodes.iter().next().unwrap();
+                        let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
+                        node_anims_by_clip
+                            .iter()
+                            .map(|node_anims| {
+                                resolve_object_animation(&chain, node_anims, &mut animation_report_lines)
+                            })
+                            .collect()
+                    }
+                    Some(nodes) if nodes.len() > 1 && any_clip_animated_nodes.iter().any(|n| nodes.contains(n)) => {
+                        animation_report_lines.push(format!(
+                            "material {material_index}: geometry contributed by {} nodes, at least \
+                             one of which is animated in some clip — multi-node-per-material \
+                             animation is out of scope, this object is left static",
+                            nodes.len()
+                        ));
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                };
             // A2 (D2): resolve this material's skin the same way — exactly
             // one contributing node, and that node carries a `skin()`.
             let skin = match nodes_by_material.get(&Some(material_index as usize)) {
@@ -2524,7 +2538,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 mr_sampler,
                 occlusion_sampler,
                 emissive_sampler,
-                animation,
+                animations,
                 skin,
                 morph,
             })
@@ -2605,7 +2619,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // The synthetic default-material entry has no real glTF
             // material index to resolve animation against — never
             // animated.
-            animation: None,
+            animations: Vec::new(),
             skin: None,
             morph: None,
         });
@@ -2664,7 +2678,11 @@ mod animation_tests {
             .iter()
             .find(|m| m.name.as_deref() == Some("inner"))
             .expect("inner material present");
-        let anim = inner.animation.as_ref().expect("inner material resolves an animation");
+        let anim = inner
+            .animations
+            .first()
+            .and_then(|a| a.as_ref())
+            .expect("inner material resolves an animation in clip 0");
         assert!(anim.translation.is_some(), "translation lives on inner's ancestor node");
         assert!(anim.rotation.is_some(), "rotation lives on inner's own mesh node");
         assert!(anim.scale.is_none(), "BoxAnimated has no scale channel");
@@ -2679,7 +2697,10 @@ mod animation_tests {
             .iter()
             .find(|m| m.name.as_deref() == Some("outer"))
             .expect("outer material present");
-        assert!(outer.animation.is_none(), "outer_box is static in this fixture");
+        assert!(
+            outer.animations.iter().all(|a| a.is_none()),
+            "outer_box is static in this fixture"
+        );
     }
 
     /// Held-out parse-only smoke test (A1 deliverable 1): proves the

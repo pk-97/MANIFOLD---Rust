@@ -64,7 +64,12 @@ use std::path::{Path, PathBuf};
 // wire — same grandfathered defined-once-const pattern as the eight pin
 // colours beside it (Texture2D/3D, Scalar, Array, Camera, Light, Material,
 // Transform), folded into the same pin-colour debt the §15 ramp tokenises.
-const COLOR_BASELINE: usize = 199;
+// 199→209, 2026-07-16: SCENE_SETUP_PANEL_DESIGN P1 added `scene_setup_panel.rs`
+// (the new dock column, cloned from `audio_setup_panel.rs`), which repeats
+// that file's own not-yet-tokenized chrome/label/drag-value colours (10 raw
+// literals) — same inherited pattern the audio dock's own literals already
+// carry in this baseline, not new debt shape, folded into the same §15 ramp.
+const COLOR_BASELINE: usize = 209;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

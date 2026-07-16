@@ -32,8 +32,12 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
+use super::gltf_anim_shared::{
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, row_range_for_key,
+    sample_quat_range, sample_vec3_range,
+};
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
@@ -42,6 +46,8 @@ crate::primitive! {
     purpose: "Samples a parsed glTF TRS keyframe clip (translation/rotation/scale Tables authored at import time) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR interpolation only (A1 scope): lerp for translation/scale, slerp+quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the clip (Table left at its sentinel) passes through as the static neutral default (0 pos/rot, 1 scale).",
     inputs: {
         progress: ScalarF32 optional,
+        clip_index: ScalarF32 optional,
+        trigger_count: ScalarF32 optional,
     },
     outputs: {
         pos_x: ScalarF32,
@@ -69,6 +75,46 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0625, 16.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("clip_index"),
+            label: "Clip",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 31.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("loop_mode"),
+            label: "Loop Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (LOOP_MODES.len() - 1) as f32)),
+            enum_values: LOOP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("clip_durations"),
+            label: "Clip Durations",
+            ty: ParamType::Table,
+            // Rows: [clip_index, duration_s]. Sentinel (unset) means "use
+            // the static duration_s param for every clip" — the pre-A4
+            // single-clip convention.
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("trigger_count"),
+            label: "Retrigger",
+            ty: ParamType::Int,
+            // Port-shadowed by the same-named input (a graph trigger
+            // source wins when wired); unwired, an outer-card `is_trigger`
+            // button writes here directly (`ParamConvert::Trigger`'s
+            // monotonic-counter convention) — no separate wire needed for
+            // the card path.
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
         // GLTF_ANIMATION_DESIGN.md A1 fix (found rendering BoxAnimated.glb's
@@ -116,8 +162,10 @@ crate::primitive! {
             ty: ParamType::Table,
             // Tables can't live in static-const ParamValue — see
             // node.cycle_table_row's identical sentinel convention. Rows
-            // are [time_s, x, y, z]; absent (sentinel) means "this
-            // channel isn't animated in the source clip".
+            // are [clip_index, time_s, x, y, z] (A4: clip_index prepended
+            // for D4 multi-clip selection), grouped ascending by
+            // clip_index, ascending time within a clip. Absent (sentinel)
+            // means "this channel isn't animated in any clip".
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -126,7 +174,7 @@ crate::primitive! {
             name: Cow::Borrowed("rotation_track"),
             label: "Rotation Track",
             ty: ParamType::Table,
-            // Rows are [time_s, x, y, z, w] (quaternion).
+            // Rows are [clip_index, time_s, x, y, z, w] (quaternion).
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -135,7 +183,7 @@ crate::primitive! {
             name: Cow::Borrowed("scale_track"),
             label: "Scale Track",
             ty: ParamType::Table,
-            // Rows are [time_s, x, y, z].
+            // Rows are [clip_index, time_s, x, y, z].
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -149,139 +197,9 @@ crate::primitive! {
     role: Source,
     aliases: ["gltf animation", "imported animation", "clip sampler", "keyframe sampler"],
     boundary_reason: NonGpu,
-}
-
-/// D3 default: `progress = wrap(beats * rate / clip_beats)`, `clip_beats
-/// = duration_s * beats_per_second` where `beats_per_second` is read
-/// live off the current transport (`FrameTime.beats / FrameTime.seconds`
-/// — both clocks share the same tempo-scaled origin under this engine's
-/// transport model) rather than a plumbed BPM (no such value reaches a
-/// graph node today — see `EffectNodeContext`/`FrameTime`, which carry
-/// only beats/seconds/delta). Falls back to 2.0 (120 BPM) when `seconds`
-/// is ~0 (frame 0) to avoid a divide-by-zero; this ratio is exact under
-/// constant tempo, which the sync engine's shared-origin clocks
-/// guarantee within one playback session.
-fn default_progress(time: FrameTime, duration_s: f32, rate: f32) -> f32 {
-    let beats = time.beats.0 as f32;
-    let seconds = time.seconds.0 as f32;
-    let beats_per_second = if seconds.abs() > 1e-6 { beats / seconds } else { 2.0 };
-    let clip_beats = (duration_s * beats_per_second).max(1e-6);
-    let raw = beats * rate / clip_beats;
-    raw.rem_euclid(1.0)
-}
-
-/// Binary-search + lerp a `[time_s, x, y, z]` table at time `t`. Clamps
-/// (holds the boundary keyframe's value) for `t` outside the table's own
-/// time range — the glTF spec's own "before first / after last keyframe"
-/// rule — NOT the same as this primitive's own progress wrap, which
-/// happens one level up (`t` is already wrapped into `[0, duration_s)`
-/// before this function ever sees it). Returns `None` for an absent/
-/// malformed table (fewer than 4 columns or zero rows).
-fn sample_vec3_track(table: &TableData, t: f32) -> Option<[f32; 3]> {
-    if table.col_count() < 4 || table.row_count() == 0 {
-        return None;
-    }
-    let n = table.row_count();
-    let row3 = |i: usize| -> [f32; 3] {
-        let r = table.row(i).unwrap();
-        [r[1], r[2], r[3]]
-    };
-    if n == 1 {
-        return Some(row3(0));
-    }
-    let first_t = table.row(0).unwrap()[0];
-    let last_t = table.row(n - 1).unwrap()[0];
-    if t <= first_t {
-        return Some(row3(0));
-    }
-    if t >= last_t {
-        return Some(row3(n - 1));
-    }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if table.row(mid).unwrap()[0] <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (table.row(lo).unwrap()[0], table.row(hi).unwrap()[0]);
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    let (a, b) = (row3(lo), row3(hi));
-    Some([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f])
-}
-
-/// Same bracketing/clamp logic as [`sample_vec3_track`], but slerps the
-/// `[time_s, x, y, z, w]` quaternion pair instead of lerping.
-fn sample_quat_track(table: &TableData, t: f32) -> Option<[f32; 4]> {
-    if table.col_count() < 5 || table.row_count() == 0 {
-        return None;
-    }
-    let n = table.row_count();
-    let row4 = |i: usize| -> [f32; 4] {
-        let r = table.row(i).unwrap();
-        [r[1], r[2], r[3], r[4]]
-    };
-    if n == 1 {
-        return Some(row4(0));
-    }
-    let first_t = table.row(0).unwrap()[0];
-    let last_t = table.row(n - 1).unwrap()[0];
-    if t <= first_t {
-        return Some(row4(0));
-    }
-    if t >= last_t {
-        return Some(row4(n - 1));
-    }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if table.row(mid).unwrap()[0] <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (table.row(lo).unwrap()[0], table.row(hi).unwrap()[0]);
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    Some(slerp(row4(lo), row4(hi), f))
-}
-
-/// Spherical linear interpolation between two quaternions `[x, y, z, w]`.
-/// Takes the short arc (negates `b` when the dot product is negative)
-/// and falls back to a normalized lerp when the quaternions are nearly
-/// parallel (the standard near-`sin(theta)==0` numerical guard).
-fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    let dot0 = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let (b, dot) = if dot0 < 0.0 { ([-b[0], -b[1], -b[2], -b[3]], -dot0) } else { (b, dot0) };
-    if dot > 0.9995 {
-        let lerped = [
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            a[3] + (b[3] - a[3]) * t,
-        ];
-        return normalize_quat(lerped);
-    }
-    let theta_0 = dot.clamp(-1.0, 1.0).acos();
-    let theta = theta_0 * t;
-    let sin_theta_0 = theta_0.sin();
-    let s0 = (theta_0 - theta).sin() / sin_theta_0;
-    let s1 = theta.sin() / sin_theta_0;
-    [
-        a[0] * s0 + b[0] * s1,
-        a[1] * s0 + b[1] * s1,
-        a[2] * s0 + b[2] * s1,
-        a[3] * s0 + b[3] * s1,
-    ]
-}
-
-fn normalize_quat(q: [f32; 4]) -> [f32; 4] {
-    let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if len < 1e-12 { [0.0, 0.0, 0.0, 1.0] } else { [q[0] / len, q[1] / len, q[2] / len, q[3] / len] }
+    extra_fields: {
+        trigger_latch: TriggerLatch = TriggerLatch::new(),
+    },
 }
 
 /// Quaternion `[x, y, z, w]` → the `(rot_x, rot_y, rot_z)` Euler triple
@@ -350,23 +268,54 @@ impl Primitive for GltfAnimationSource {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let progress = match ctx.inputs.scalar("progress") {
-            Some(ParamValue::Float(f)) => f,
-            _ => default_progress(ctx.time, duration_s, rate),
+        let loop_mode = LoopMode::from_enum_index(
+            ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+        );
+        let clip_index = ctx
+            .inputs
+            .scalar("clip_index")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("clip_index").and_then(ParamValue::as_scalar))
+            .unwrap_or(0.0)
+            .round()
+            .max(0.0) as usize;
+
+        let trigger_count = ctx
+            .inputs
+            .scalar("trigger_count")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
+        self.trigger_latch.update(trigger_count, ctx.time.beats.0);
+
+        let clip_durations = match ctx.params.get("clip_durations") {
+            Some(ParamValue::Table(t)) => Some(t.as_ref()),
+            _ => None,
         };
-        // Wrap (never clamp) into [0, duration_s) — see the module docs
-        // and the primitive's `composition_notes`.
-        let t = progress.rem_euclid(1.0) * duration_s;
+        let duration_s = clip_duration(clip_durations, clip_index, duration_s);
+
+        let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
+        let progress = resolve_progress(
+            ctx.time,
+            wired_progress,
+            duration_s,
+            rate,
+            loop_mode,
+            self.trigger_latch.origin_beats(),
+        );
+        let t = progress * duration_s;
 
         let recenter = [
             ctx.params.get("recenter_x").and_then(ParamValue::as_scalar).unwrap_or(0.0),
             ctx.params.get("recenter_y").and_then(ParamValue::as_scalar).unwrap_or(0.0),
             ctx.params.get("recenter_z").and_then(ParamValue::as_scalar).unwrap_or(0.0),
         ];
-        let sampled_pos = match ctx.params.get("translation_track") {
-            Some(ParamValue::Table(table)) => sample_vec3_track(table, t).unwrap_or([0.0, 0.0, 0.0]),
-            _ => [0.0, 0.0, 0.0],
+        let translation_track = match ctx.params.get("translation_track") {
+            Some(ParamValue::Table(t)) => Some(t.as_ref()),
+            _ => None,
         };
+        let translation_range = row_range_for_key(translation_track, clip_index);
+        let sampled_pos =
+            sample_vec3_range(translation_track, translation_range, 1, 2, t, [0.0, 0.0, 0.0]);
         // Composed here, not left to the port-shadow at transform_3d — see
         // `recenter_x`'s doc comment.
         let pos = [
@@ -374,16 +323,19 @@ impl Primitive for GltfAnimationSource {
             sampled_pos[1] + recenter[1],
             sampled_pos[2] + recenter[2],
         ];
-        let scale = match ctx.params.get("scale_track") {
-            Some(ParamValue::Table(table)) => sample_vec3_track(table, t).unwrap_or([1.0, 1.0, 1.0]),
-            _ => [1.0, 1.0, 1.0],
+        let scale_track = match ctx.params.get("scale_track") {
+            Some(ParamValue::Table(t)) => Some(t.as_ref()),
+            _ => None,
         };
-        let rot = match ctx.params.get("rotation_track") {
-            Some(ParamValue::Table(table)) => sample_quat_track(table, t)
-                .map(quat_to_render_scene_euler)
-                .unwrap_or([0.0, 0.0, 0.0]),
-            _ => [0.0, 0.0, 0.0],
+        let scale_range = row_range_for_key(scale_track, clip_index);
+        let scale = sample_vec3_range(scale_track, scale_range, 1, 2, t, [1.0, 1.0, 1.0]);
+        let rotation_track = match ctx.params.get("rotation_track") {
+            Some(ParamValue::Table(t)) => Some(t.as_ref()),
+            _ => None,
         };
+        let rotation_range = row_range_for_key(rotation_track, clip_index);
+        let rot_quat = sample_quat_range(rotation_track, rotation_range, 1, 2, t);
+        let rot = quat_to_render_scene_euler(rot_quat);
 
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
         ctx.outputs.set_scalar("pos_y", ParamValue::Float(pos[1]));
@@ -395,6 +347,14 @@ impl Primitive for GltfAnimationSource {
         ctx.outputs.set_scalar("scale_y", ParamValue::Float(scale[1]));
         ctx.outputs.set_scalar("scale_z", ParamValue::Float(scale[2]));
     }
+
+    fn clear_state(&mut self) {
+        self.trigger_latch.clear();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -404,8 +364,9 @@ mod tests {
     use crate::node_graph::MockBackend;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::ParamValues;
+    use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::parameters::TableData;
     use crate::node_graph::ports::{PortType, ScalarType};
     use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
@@ -423,9 +384,11 @@ mod tests {
     #[test]
     fn declares_progress_input_and_nine_scalar_outputs() {
         assert_eq!(GltfAnimationSource::TYPE_ID, "node.gltf_animation_source");
-        assert_eq!(GltfAnimationSource::INPUTS.len(), 1);
+        assert_eq!(GltfAnimationSource::INPUTS.len(), 3);
         assert_eq!(GltfAnimationSource::INPUTS[0].name, "progress");
         assert!(!GltfAnimationSource::INPUTS[0].required);
+        assert_eq!(GltfAnimationSource::INPUTS[1].name, "clip_index");
+        assert_eq!(GltfAnimationSource::INPUTS[2].name, "trigger_count");
         assert_eq!(GltfAnimationSource::OUTPUTS.len(), 9);
         for (out, name) in GltfAnimationSource::OUTPUTS.iter().zip([
             "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z",
@@ -510,12 +473,22 @@ mod tests {
         result
     }
 
+    /// `rows` are `[time_s, x, y, z]` (pre-A4 shape); prepends `clip_index =
+    /// 0` — every test here targets the default-selected clip.
     fn translation_table(rows: Vec<[f32; 4]>) -> ParamValue {
-        ParamValue::Table(Arc::new(TableData::new(rows.into_iter().map(|r| r.to_vec()).collect()).unwrap()))
+        ParamValue::Table(Arc::new(
+            TableData::new(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
+                .unwrap(),
+        ))
     }
 
+    /// `rows` are `[time_s, x, y, z, w]` (pre-A4 shape); prepends
+    /// `clip_index = 0`.
     fn rotation_table(rows: Vec<[f32; 5]>) -> ParamValue {
-        ParamValue::Table(Arc::new(TableData::new(rows.into_iter().map(|r| r.to_vec()).collect()).unwrap()))
+        ParamValue::Table(Arc::new(
+            TableData::new(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
+                .unwrap(),
+        ))
     }
 
     #[test]
@@ -656,11 +629,14 @@ mod tests {
 
         let half_90 = (std::f32::consts::FRAC_PI_4).sin(); // sin(45deg)
         let cos_45 = (std::f32::consts::FRAC_PI_4).cos();
+        let general_raw = [0.2f32, 0.35, -0.15, 0.9];
+        let general_len = general_raw.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let general = general_raw.map(|v| v / general_len);
         let cases: [[f32; 4]; 6] = [
             [0.0, 0.0, 0.0, 1.0],                                   // identity
             [0.0, 0.0, (0.4_f32).sin(), (0.4_f32).cos()],           // Z-only
             [(0.3_f32).sin(), 0.0, 0.0, (0.3_f32).cos()],           // X-only
-            normalize_quat([0.2, 0.35, -0.15, 0.9]),                // general
+            general,                                                // general
             [0.0, half_90, 0.0, cos_45],                            // gimbal lock: +90 deg about Y
             [0.0, -half_90, 0.0, cos_45],                           // gimbal lock: -90 deg about Y
         ];
@@ -808,5 +784,161 @@ mod tests {
             "a seamless (0->peak->0) track must read continuously across the LFO's wrap: \
              near-end={near_end}, near-start={near_start}"
         );
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A4's performer-gesture gate: a `trigger_count`
+    /// step (the value MIDI NoteOn drives via the phantom-clip path — see
+    /// the phase brief's scope note) restarts the clip from `progress≈0`
+    /// within one frame, on the default (unwired-`progress`) beat-drive path.
+    /// Runs the SAME primitive instance across three frames so
+    /// `trigger_latch` state persists, mirroring `clip_trigger_index`'s own
+    /// test style rather than `run_with`'s fresh-instance-per-call shape.
+    #[test]
+    fn trigger_count_edge_retriggers_the_clip_from_zero_within_one_frame() {
+        let table = translation_table(vec![[0.0, 0.0, 0.0, 0.0], [1.0, 100.0, 0.0, 0.0]]);
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("translation_track"), table);
+
+        let mut prim = GltfAnimationSource::new();
+        let run_frame = |prim: &mut GltfAnimationSource, trigger: f32, time: FrameTime| -> f32 {
+            let mut backend = MockBackend::new();
+            let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, (0, 0));
+            let trig_slot = backend.acquire(ResourceId(1), PortType::Scalar(ScalarType::F32), None, (0, 0));
+            backend.set_scalar(trig_slot, ParamValue::Float(trigger));
+            let wire_slots = [("trigger_count", trig_slot)];
+            let out_slots = [("pos_x", out_slot)];
+            let mut scalar_scratch = Vec::new();
+            let mut camera_scratch = Vec::new();
+            let mut light_scratch = Vec::new();
+            let mut material_scratch = Vec::new();
+            let mut transform_scratch = Vec::new();
+            let mut atmosphere_scratch = Vec::new();
+            let inputs = NodeInputs::new(&wire_slots, &backend);
+            let outputs = NodeOutputs::new(
+                &out_slots,
+                &backend,
+                &mut scalar_scratch,
+                &mut camera_scratch,
+                &mut light_scratch,
+                &mut material_scratch,
+                &mut transform_scratch,
+                &mut atmosphere_scratch,
+            );
+            let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+            Primitive::run(prim, &mut ctx);
+            for (slot, value) in scalar_scratch.drain(..) {
+                backend.set_scalar(slot, value);
+            }
+            match backend.scalar(out_slot) {
+                Some(ParamValue::Float(f)) => f,
+                other => panic!("expected Float on pos_x, got {other:?}"),
+            }
+        };
+
+        // Frame 0 at beats=1.5 (duration_s=1, rate=1, 120bpm-equivalent
+        // fallback ratio -> clip_beats=2 -> progress=0.75, mid-clip, far
+        // from progress=0): establishes the trigger_count baseline without
+        // firing.
+        let deep = run_frame(&mut prim, 0.0, frame_time(1.5, 0.75));
+        assert!((deep - 75.0).abs() < 1.0, "beats=1.5 -> progress=0.75 -> x=75 lerped: {deep}");
+
+        // Frame 1, same beats, trigger_count edges 0 -> 1: must snap to
+        // progress=0 WITHIN THIS FRAME (one-frame latency, not next-frame).
+        let retriggered = run_frame(&mut prim, 1.0, frame_time(1.5, 0.75));
+        assert!(
+            (retriggered - 0.0).abs() < 1.0,
+            "trigger_count edge must reset progress to 0 within one frame, got pos_x={retriggered}"
+        );
+    }
+
+    #[test]
+    fn clip_index_selects_between_independent_clip_tracks() {
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
+        // Clip 0: 0 -> 10. Clip 1: 0 -> -10. Same time range, opposite sign.
+        let table = ParamValue::Table(Arc::new(
+            TableData::new(vec![
+                vec![0.0, 0.0, 0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 10.0, 0.0, 0.0],
+                vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                vec![1.0, 1.0, -10.0, 0.0, 0.0],
+            ])
+            .unwrap(),
+        ));
+        params.insert(Cow::Borrowed("translation_track"), table);
+
+        let out_clip0 = run_with_params(&params, 0.0, Some(0.5), frame_time(0.0, 0.0));
+        let out_clip1 = run_with_params(&params, 1.0, Some(0.5), frame_time(0.0, 0.0));
+        assert!((out_clip0 - 5.0).abs() < 1e-3, "clip 0 halfway: got {out_clip0}");
+        assert!((out_clip1 - -5.0).abs() < 1e-3, "clip 1 halfway: got {out_clip1}");
+    }
+
+    /// Runs a single frame with a wired `clip_index` and `progress`, sharing
+    /// `run_with`'s output-plumbing shape but taking pre-built `params`
+    /// directly (the `clip_index_selects_...` test needs a `Table` param it
+    /// builds itself, not one of `run_with`'s named overrides).
+    fn run_with_params(params: &ParamValues, clip_index: f32, progress: Option<f32>, time: FrameTime) -> f32 {
+        let mut backend = MockBackend::new();
+        let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, (0, 0));
+        let clip_slot = backend.acquire(ResourceId(1), PortType::Scalar(ScalarType::F32), None, (0, 0));
+        backend.set_scalar(clip_slot, ParamValue::Float(clip_index));
+        let mut wire_slots = vec![("clip_index", clip_slot)];
+        let progress_slot;
+        if let Some(p) = progress {
+            progress_slot = backend.acquire(ResourceId(2), PortType::Scalar(ScalarType::F32), None, (0, 0));
+            backend.set_scalar(progress_slot, ParamValue::Float(p));
+            wire_slots.push(("progress", progress_slot));
+        }
+        let out_slots = [("pos_x", out_slot)];
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let inputs = NodeInputs::new(&wire_slots, &backend);
+        let outputs = NodeOutputs::new(
+            &out_slots,
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+        );
+        let mut prim = GltfAnimationSource::new();
+        let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);
+        Primitive::run(&mut prim, &mut ctx);
+        for (slot, value) in scalar_scratch.drain(..) {
+            backend.set_scalar(slot, value);
+        }
+        match backend.scalar(out_slot) {
+            Some(ParamValue::Float(f)) => f,
+            other => panic!("expected Float on pos_x, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_trigger_latch_flag_is_set() {
+        let prim = GltfAnimationSource::new();
+        let node: &dyn EffectNode = &prim;
+        assert!(node.is_trigger_latch());
+    }
+
+    #[test]
+    fn clear_state_releases_the_trigger_latch() {
+        let mut prim = GltfAnimationSource::new();
+        prim.trigger_latch.update(Some(0.0), 0.0);
+        prim.trigger_latch.update(Some(1.0), 10.0);
+        assert_eq!(prim.trigger_latch.origin_beats(), Some(10.0));
+        {
+            let node: &mut dyn EffectNode = &mut prim;
+            node.clear_state();
+        }
+        assert_eq!(prim.trigger_latch.origin_beats(), None);
     }
 }
