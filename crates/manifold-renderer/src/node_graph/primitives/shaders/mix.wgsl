@@ -2,12 +2,17 @@
 //
 // Algorithm:
 //   blended = blend(a, b, mode)
-//   out     = mix(a, blended, amount)
+//   out.rgb = mix(a.rgb, blended, amount)
+//   out.a   = mix(a.a, b.a, amount)   if mode == Lerp (0)
+//           = a.a                     otherwise (BUG-181: blend modes are
+//                                      RGB-only; `a` is the base/display
+//                                      input and its alpha always survives)
 //
 // At mode = Lerp (0), blend(a,b) returns b, so the outer mix degenerates
 // to a pure linear crossfade `mix(a, b, amount)` and `amount = 0.5` gives
-// the half-average. At amount = 0 the result is always `a` regardless of
-// mode (the blend op is fully crossfaded out).
+// the half-average. At amount = 0 the RGB result is always `a` regardless
+// of mode (the blend op is fully crossfaded out); alpha is `a.a` in every
+// non-Lerp mode independent of `amount`.
 //
 // Mode indices (must match `MIX_MODES` in compose.rs):
 //   0 = Lerp        — blend = b (outer mix becomes pure lerp)
@@ -91,8 +96,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let blended_rgb = blend_rgb(a.rgb, b.rgb, uniforms.mode);
     let out_rgb = mix(a.rgb, blended_rgb, uniforms.amount);
-    // Alpha lerps from a→b just like Lerp; same as the legacy single-mode
-    // mix shader. Blend modes are RGB-only.
-    let out_a = mix(a.a, b.a, uniforms.amount);
+    // BUG-181: alpha only crossfades a->b in Lerp mode (a genuine crossfade,
+    // alpha included). Every other blend mode is RGB-only and passes `a`'s
+    // alpha through untouched, regardless of `amount` — otherwise a data
+    // texture's filler alpha (e.g. an SSAO map's alpha=1) overwrites a
+    // display chain's real alpha and flattens the frame opaque.
+    // Branchless to keep fused/standalone compilation identical (precision
+    // contract §7.1) — mix(x, y, 0.0) is exactly x, so t_a = 0 IS pass-through.
+    let t_a = select(0.0, uniforms.amount, uniforms.mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(out_rgb, out_a));
 }
