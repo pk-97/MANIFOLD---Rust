@@ -30,10 +30,10 @@ anchors carry re-derivation commands.
 
 | Piece | Where | State |
 |---|---|---|
-| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` | **the headline waste** |
+| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` | **waste (~4% measured — D1b; the headline moved to IBL)** |
 | `shadow_view_proj()` is a pure function of the light alone | `node_graph/light.rs:333` | exists — static light ⇒ bit-identical map every frame |
 | Importer wires shadows on, 4096² | `node_graph/gltf_import.rs:765` (`cast_shadows`=1.0), `:778` (`shadow_resolution`=4096.0) | exists |
-| IBL re-convolves every frame envmap is wired | `run_ibl_convolution`, `render_scene.rs:1428`; its own doc comment (~1410–1427) states `bake_equirect_envmap.run()` rewrites its output in place every frame, so an identity-based skip would go stale — the exact hazard D5/D6 below resolve with a generation signal instead | **waste, with a documented staleness trap** |
+| IBL re-convolves every frame envmap is wired | `run_ibl_convolution`, `render_scene.rs:1428`; its own doc comment (~1410–1427) states `bake_equirect_envmap.run()` rewrites its output in place every frame, so an identity-based skip would go stale — the exact hazard D5/D6 below resolve with a generation signal instead | **the headline waste (~41% measured — D1b), with a documented staleness trap** |
 | Build-once precedent | `brdf_lut_built` (`render_scene.rs` ~537, ~1410) — LUT built exactly once per device | exists — the pattern to generalize |
 | Identity-gating precedent | `gltf_texture_source.rs` `last_key` (~105, ~186) + `last_mip_identity` (~128, ~281): decode gated on param key, mip regen gated on output-texture identity — but the level-0 blit dispatch (~308–330) still runs every frame | exists, partial |
 | Static sources re-copy every frame | `gltf_mesh_source.rs` (module doc: staging "re-fills the output buffer every frame via a cheap blit"), `gltf_skinned_mesh_source.rs` ~199–219 (three `copy_buffer_to_buffer` per frame), `gltf_texture_source.rs` blit above; sweep: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-renderer/src/node_graph/primitives/gltf_*_source.rs` | **waste (R1)** |
@@ -64,6 +64,20 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
   the improvised-executor failure this doc exists to prevent. Rejected: "safe ones only" (R0/R1/R5,
   deferring R2/R3) — the headline waste IS the shadow+IBL re-render; shipping only the periphery
   would spend the night without touching BUG-189's actual floor.
+- **D1b — amendment (2026-07-17, post-P0): D1's "headline win" attribution was wrong; the measured
+  split reverses shadow and IBL.** P0's bisection (two consecutive profiled runs per resolution,
+  rank order stable): render_scene's own GPU time splits ~54% main pass / ~41% IBL (prefilter +
+  irradiance) / ~4% shadow, at BOTH 4K and 1080p (unprofiled anchors: @4K p50 13.554 ms p95
+  13.869 ms; @1080p p50 9.830 ms p95 11.768 ms). So R3 (IBL gating, P3) is the payoff phase; R2's
+  shadow caching reclaims only ~4% on its own. Build order is UNCHANGED: P2 remains P3's structural
+  prerequisite — the per-slot generation signal lives in P2, and shadow caching is that signal's
+  first proven consumer (the I1 mutation trio is what earns trust before IBL leans on it); splitting
+  the infra out of P2 buys nothing on a serial night (D10). What changes: P2's perf gate is
+  corrected (a ~4% delta ≈ ~0.5 ms @4K is inside unprofiled run-to-run noise — see the P2 gate
+  text), P3's gate carries the measured anchor, and §Deferred's R4 entry is updated — main pass is
+  the single largest share and cannot be dirty-gated (the camera animates on stage every frame), so
+  R4's revival is now near-certain rather than speculative; its trigger (P5's measured residual)
+  and the supervised-session requirement both stand.
 - **D2 — R4 (indexed geometry) and R6 (GPU culling) are deferred with named triggers.** R4:
   revive as its own Fable/Opus design session once P0–P5 land and the re-measure (P5) shows the
   remaining main-pass vertex share still matters at 4K60 — it kills the 3.84× amplification
@@ -80,6 +94,18 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
   names it and it becomes its own follow-up — no improvised fix tonight. Rejected: a dedicated
   BrainStem fix phase tonight (fix shape unknown until P0 runs; an unattended session must not
   invent one).
+- **D3b — amendment (2026-07-17, post-P0): BUG-190 diagnosis outcome + the animated-fixture
+  measurement gap.** Measured: the originally-filed ~370 ms/frame does NOT reproduce on the current
+  tip (original repro harness re-run, ~30 ms max — vanished regression, no bisect tonight; chasing
+  a fixed bug is not the mandate). The residual is CPU-side: GPU p50 6.8 ms / p95 8.85 ms (healthy)
+  vs CPU-encode-wall p50 21.4 ms / p95 22.4 ms (~3× the GPU side, 24 objects). Root cause of the
+  residual is unattributed, but its shape is exactly R5's target — per D3's own rule, P4 is the
+  test: BrainStem before/after CPU wall is P4's sensitive-fixture gate; if the wall is still
+  >16.6 ms after P4, the backlog entry names a follow-up with numbers, no improvised fix. D3's
+  diagnosis-only obligation is SATISFIED. Tool gap found en route: perf-soak's convergence-gated
+  warmup never converges on a continuously-animated fixture, so BrainStem's diagnosis needed an
+  uncommitted direct measurement — P4 gains a deliverable (a fixed-warmup override on import mode)
+  so its BrainStem numbers come from committed, reproducible tooling.
 - **D4 — R0 needs NO ablation flags and NO fixture surgery; the one tool change is report-side:
   unmatched profiled spans are grouped by their own label instead of collapsing into one scalar.**
   (This is an amendment to PERF_BUDGET_GATE_DESIGN.md D7/P2b — P0 appends it there as "D8 —
@@ -278,7 +304,7 @@ Test scope: `cargo test -p manifold-renderer --features gpu-proofs <touched_modu
 per source + default sweep (`cargo nextest run --workspace`) before commit. Dependencies (D9):
 none external; requires P0's numbers only as the before-anchor.
 
-**P2 — R2: per-slot write generations + dirty-gated shadow caching (one session, Sonnet — the headline).**
+**P2 — R2: per-slot write generations + dirty-gated shadow caching (one session, Sonnet — P3's prerequisite infra; see D1b).**
 Entry: P1 landed (sources declare unchanged; the declaration is stored).
 Read-back: this doc D5+D6+I1+I4; `execution.rs` end-to-end (write scratches 70–85, slot binding,
 node walk — find every point where a node's outputs are committed); `bindings.rs` (Slot,
@@ -297,10 +323,12 @@ scratch — hot-path discipline).
 Gate — positive: (a) correctness: gpu-proofs tests proving I1 — static scene: frame 30 color
 output bit-identical to fresh-executor frame 1 (I4); mutation trio: change a light param → next
 frame equals a fresh render; change an object transform → same; change mesh content (source param)
-→ same; (b) perf: unprofiled perf-soak on the AMG @4K, steady-state (skip warmup frames) GPU p50
-strictly below P0's recorded p50, with the delta consistent with P0's measured shadow share
-(within ±30% of it); a profiled sanity run shows `node.render_scene shadow` rows at <2% share on
-steady-state frames; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/`
+→ same; (b) perf: PRIMARY evidence is pass-level and profiled (D1b: shadow is only ~4% of
+render_scene GPU time — ~0.5 ms @4K, inside unprofiled run-to-run noise, so an unprofiled p50
+delta cannot gate this phase; D4b licenses pass-level ms/rank for exactly this): steady-state
+profiled runs show the `node.render_scene` row's `shadow` pass at <0.1 ms and <1% share (P0
+measured ~4%); unprofiled perf-soak before/after on the AMG @4K is still run and recorded in the
+commit message as direction sanity, NOT a pass/fail threshold; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/`
 unchanged (I6); the cache key function provably includes the rebuild epoch
 (`rg -n 'epoch' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`).
 Demo: before/after unprofiled JSON + the three mutation tests green — L2. Forbidden moves:
@@ -331,7 +359,8 @@ now answered (rg it; tombstone, don't leave the stale claim).
 Gate — positive: gpu-proofs animated-envmap parity (the I2 test): change an envmap param (e.g.
 `horizon_strength`) → next frame's lit output equals a fresh executor's render; static-envmap
 bit-identity across frames (I4 extension); unprofiled perf-soak before/after on the AMG @4K
-recorded, delta consistent with P0's IBL share (±30%); profiled sanity: `… ibl prefilter` /
+recorded, delta consistent with P0's measured IBL share — ~41% of render_scene GPU time (D1b), a
+multi-ms delta well above run noise (±30% tolerance stands); profiled sanity: `… ibl prefilter` /
 `… ibl irradiance` rows <2% on steady frames; negative: `rg -n 'go stale' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
 → the old warning text is gone/rewritten.
 Demo: before/after JSON + the animated-envmap test green — L2. Forbidden moves: gating
@@ -350,7 +379,11 @@ Deliverables: (1) per-object port-index tables built once at `rebuild()` (object
 resolved binding indices for mesh/material/maps/transform ports), replacing every per-frame
 `format!` + `iter().find` in `evaluate()` — lookups become direct indexing; (2) same treatment for
 the per-light and any other per-frame formatted lookups in the same path; (3) zero per-frame
-allocations in the repaired region (pre-allocated scratch where a collection is unavoidable).
+allocations in the repaired region (pre-allocated scratch where a collection is unavoidable);
+(4) perf-soak import mode: a fixed-warmup override flag (e.g. `--warmup-frames N`) that bypasses
+the convergence gate — report-only, no baseline interaction, project mode untouched — required
+because a continuously-animated fixture never converges (D3b); this phase's BrainStem numbers use
+it, with the flag value recorded in the commit message.
 Gate — positive: output unchanged — the existing render_scene gpu-proofs suite green, plus one
 readback bit-identity check before/after on the AMG frame 1; perf: perf-soak CPU encode wall time
 (the stats JSON reports it) on BrainStem AND the AMG, before/after in the commit message —
@@ -403,8 +436,11 @@ Dependencies: P1–P4.
 ## §. Deferred
 - **R4 — indexed mesh rendering** (kill the 3.84× vertex amplification; `Array` index port,
   `draw_indexed` in manifold-gpu, reconciliation over every flat-layout-assuming mesh consumer).
-  Revive: own Fable/Opus design session once P5's re-measure shows the residual main-pass vertex
-  share still threatens 4K60 — P5 records the number the trigger needs.
+  Revive: own Fable/Opus design session once P5's re-measure records the residual main-pass share.
+  Post-D1b forecast: main pass is ~54% of render_scene GPU time and cannot be dirty-gated (the
+  camera animates on stage), so after P2+P3 it will dominate the residual floor (~7 ms @4K) —
+  revival is near-certain; schedule the design session soon after tonight lands. The trigger
+  number and the supervised-session requirement are unchanged.
 - **R6 — GPU culling.** Revive: multi-GLB merged scenes routine (SCENE_SETUP_PANEL P4 shipped)
   AND P5 shows main-pass draw cost dominating; needs graph-side AABB infra that doesn't exist.
 - **Project-mode unmatched-span label breakdown** (mirror of P0's import-mode change). Revive:
