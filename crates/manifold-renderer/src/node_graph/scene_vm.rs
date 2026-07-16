@@ -19,7 +19,7 @@
 //! wrong architecture" callout: this module must never grow a persistent
 //! mirror of scene values.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 
@@ -113,6 +113,15 @@ pub enum SceneObjectVm {
         /// Chain of single-mesh-input/mesh-output nodes between the mesh
         /// source and the group output, in wire order (D6's modifier stack).
         modifier_chain: Vec<ModifierVm>,
+        /// `false` when the group's `vertices` chain couldn't be walked at
+        /// all (no `GROUP_OUTPUT_TYPE_ID` boundary, an unwired `vertices`
+        /// port, a dangling wire, or a cycle) — P5's "custom chain — edit in
+        /// graph" case, DISTINCT from a well-formed stack that's simply
+        /// empty (a fresh object with zero modifiers: `vertices` resolves
+        /// straight to the mesh source, `modifier_chain` is `[]` and this is
+        /// `true`). The panel disables "Add modifier" only when this is
+        /// `false` — never a blind splice into unrecognized topology (D6).
+        modifier_chain_parseable: bool,
     },
     /// Producer did NOT resolve to a group output — "Object k — custom
     /// (edit in graph)" per D3, degraded but never hidden.
@@ -123,6 +132,18 @@ pub enum SceneObjectVm {
 pub struct ModifierVm {
     pub node_doc_id: u32,
     pub type_id: String,
+    /// Every declared param on this atom's serialized `params` map, read as
+    /// f32 (`param_f32`'s own int/enum/float coercion). Generic bookkeeping,
+    /// not curation — the Vm stays a mechanical trace; `state_sync` (which
+    /// CAN depend on the primitives' own `ParamDef` labels/ranges) curates
+    /// which of these become labeled panel rows, same split D3 already draws
+    /// for Light/Camera/Environment.
+    pub params: BTreeMap<String, f32>,
+    /// Names of `params` keys currently driven by a wire into this node (any
+    /// port, not just ones present in `params` — a port-shadow param may be
+    /// wired with no stored `params` entry at all) — same meaning as every
+    /// other `_driven` field in this module.
+    pub driven: HashSet<String>,
 }
 
 /// One `node.transform_3d`'s write addresses + current values — D4's "3
@@ -528,11 +549,11 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneObject
                     // effort: an unparseable chain still shows the group as
                     // Known with an empty modifier list (nothing errors,
                     // per D3).
-                    let (modifier_chain, material, transform) = producer_node
+                    let (modifier_chain, material, transform, modifier_chain_parseable) = producer_node
                         .group
                         .as_ref()
                         .map(|g| trace_group_body(producer_id, g))
-                        .unwrap_or((Vec::new(), MaterialVm::None, None));
+                        .unwrap_or((Vec::new(), MaterialVm::None, None, false));
 
                     SceneObjectVm::Known {
                         index: k,
@@ -542,6 +563,7 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneObject
                         transform,
                         material,
                         modifier_chain,
+                        modifier_chain_parseable,
                     }
                 }
                 None => {
@@ -598,27 +620,52 @@ fn trace_transform(level: &Level, scope_path: Vec<u32>, node_id: u32) -> Transfo
 fn trace_group_body(
     group_node_id: u32,
     group: &manifold_core::effect_graph_def::GroupDef,
-) -> (Vec<ModifierVm>, MaterialVm, Option<TransformVm>) {
+) -> (Vec<ModifierVm>, MaterialVm, Option<TransformVm>, bool) {
     use manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID;
     let inner = Level { nodes: &group.nodes, wires: &group.wires };
     let scope = vec![group_node_id];
     let Some(out_node) = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID) else {
-        return (Vec::new(), MaterialVm::None, None);
+        return (Vec::new(), MaterialVm::None, None, false);
     };
 
     let mut chain = Vec::new();
     let mut cursor = inner.producer(out_node.id, "vertices");
+    // P5's "custom chain — edit in graph" flag: `false` the moment the walk
+    // can't resolve the chain at all (unwired `vertices`, a dangling wire, a
+    // cycle) — an empty-but-resolved chain (mesh source feeds the output
+    // directly, zero modifiers) stays `true`.
+    let mut parseable = cursor.is_some();
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
         if guard > 64 {
-            break; // cycle guard — never hang the panel on malformed JSON.
+            parseable = false; // cycle guard — never hang the panel on malformed JSON.
+            break;
         }
-        let Some(node) = inner.node(node_id) else { break };
+        let Some(node) = inner.node(node_id) else {
+            parseable = false; // dangling wire — genuinely malformed.
+            break;
+        };
         if !MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
-            break; // reached the mesh source (or something un-curated) — stop.
+            break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
-        chain.push(ModifierVm { node_doc_id: node.id, type_id: node.type_id.clone() });
+        let driven: HashSet<String> = inner
+            .wires
+            .iter()
+            .filter(|w| w.to_node == node.id)
+            .map(|w| w.to_port.clone())
+            .collect();
+        let params: BTreeMap<String, f32> = node
+            .params
+            .iter()
+            .filter_map(|(k, v)| match v {
+                SerializedParamValue::Float { value } => Some((k.clone(), *value)),
+                SerializedParamValue::Int { value } => Some((k.clone(), *value as f32)),
+                SerializedParamValue::Enum { value } => Some((k.clone(), *value as f32)),
+                _ => None,
+            })
+            .collect();
+        chain.push(ModifierVm { node_doc_id: node.id, type_id: node.type_id.clone(), params, driven });
         cursor = inner.producer(node.id, "in");
     }
     chain.reverse(); // wire order: source → … → output.
@@ -658,7 +705,7 @@ fn trace_group_body(
         .filter(|(n, _)| inner.node(*n).is_some_and(|nn| nn.type_id == TRANSFORM_3D_TYPE_ID))
         .map(|(n, _)| trace_transform(&inner, scope.clone(), n));
 
-    (chain, material, transform)
+    (chain, material, transform, parseable)
 }
 
 fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm> {
@@ -1231,12 +1278,13 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.objects.len(), 1);
         match &vm.objects[0] {
-            SceneObjectVm::Known { group_node_id, name, tint, modifier_chain, material, transform, .. } => {
+            SceneObjectVm::Known { group_node_id, name, tint, modifier_chain, modifier_chain_parseable, material, transform, .. } => {
                 assert_eq!(*group_node_id, 1);
                 assert_eq!(name, "Hero");
                 assert_eq!(*tint, Some([0.1, 0.2, 0.3, 1.0]));
                 assert_eq!(modifier_chain.len(), 1);
                 assert_eq!(modifier_chain[0].type_id, "node.bend_mesh");
+                assert!(*modifier_chain_parseable, "a well-formed one-modifier chain parses");
                 match material {
                     MaterialVm::Known(row) => {
                         assert_eq!(row.type_id, "node.phong_material");
@@ -1248,6 +1296,114 @@ mod tests {
                 assert_eq!(t.node_doc_id, 105);
                 assert_eq!(t.pos_value.1, 2.5);
                 assert_eq!(t.pos_addr.1.scope_path, vec![1], "transform lives inside the group — scoped address");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn modifier_chain_captures_params_and_driven_ports() {
+        // P5: the chain walk generically reads a modifier's own params and
+        // which of its ports are wired — `state_sync` curates these into
+        // labeled rows, but the Vm's job is just the mechanical capture.
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let angle_driver = node(2, "node.value", Some("angle_driver"));
+        let bend = with_param(
+            with_param(node(3, "node.bend_mesh", Some("bend")), "axis", SerializedParamValue::Enum { value: 2 }),
+            "center",
+            SerializedParamValue::Float { value: 1.5 },
+        );
+        let gout = node(4, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, angle_driver, bend, gout],
+            wires: vec![
+                wire(1, "vertices", 3, "in"),
+                wire(2, "out", 3, "angle"), // port-shadow: angle is wired, driven
+                wire(3, "out", 4, "vertices"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
+                assert!(*modifier_chain_parseable);
+                assert_eq!(modifier_chain.len(), 1);
+                let m = &modifier_chain[0];
+                assert_eq!(m.params.get("axis"), Some(&2.0));
+                assert_eq!(m.params.get("center"), Some(&1.5));
+                assert!(!m.params.contains_key("angle"), "angle has no stored params entry — it's port-shadowed");
+                assert!(m.driven.contains("angle"), "angle is wired — driven");
+                assert!(!m.driven.contains("center"), "center is a plain param, not wired");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zero_modifiers_with_mesh_source_feeding_output_directly_is_still_parseable() {
+        // A fresh object (no modifiers yet): `vertices` resolves straight to
+        // the mesh source. `modifier_chain` is empty but `parseable` is
+        // still `true` — distinct from the genuinely-unparseable case below.
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices")],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
+                assert!(modifier_chain.is_empty());
+                assert!(*modifier_chain_parseable, "zero modifiers is a valid, addable stack");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unwired_vertices_port_is_unparseable_custom_chain() {
+        // D6: a group whose `vertices` boundary port is unwired entirely —
+        // the panel must show "custom chain — edit in graph" and disable
+        // Add, never guess at a splice point.
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![gout],
+            wires: vec![],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
+                assert!(modifier_chain.is_empty());
+                assert!(!*modifier_chain_parseable, "unwired vertices port is unparseable");
             }
             other => panic!("expected Known object, got {other:?}"),
         }

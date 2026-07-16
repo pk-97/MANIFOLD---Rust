@@ -255,6 +255,21 @@ pub enum PanelAction {
     /// second (third, nth) model added to a scene the panel already shows,
     /// no graph editor trip required.
     SceneSetupImportModelClicked(LayerId, u32),
+    /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
+    /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
+    /// at the end of the object's stack (no position picker in v1 — D6's
+    /// default: "end of stack, just before the group output").
+    SceneSetupAddModifier(LayerId, u32, String),
+    /// P5 modifier-row remove button: `(layer_id, group_node_id,
+    /// modifier_node_id)`. Dispatches `RemoveMeshModifierCommand`.
+    SceneSetupRemoveModifier(LayerId, u32, u32),
+    /// P5 modifier-row up/down reorder: `(layer_id, group_node_id,
+    /// modifier_node_id, new_position)`. Dispatches
+    /// `MoveMeshModifierCommand` — `new_position` is resolved by the panel
+    /// from the row's own live index in the Vm's stack order (one hop
+    /// forward or back), same "read the live count off the Vm" convention
+    /// `SceneSetupAddObject`'s `next_index` already uses.
+    SceneSetupMoveModifier(LayerId, u32, u32, u32),
 
     // Footer
     CycleQuantize,
