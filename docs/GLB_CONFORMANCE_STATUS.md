@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 107 expect_pass, 41 xfail across 6 reasons, 0 unclassified.**
+**148 assets total — 134 expect_pass, 14 xfail across 7 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -12,7 +12,9 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 |---|---|
 | `ABeautifulGame.glb` | non_black_fraction_min |
 | `AlphaBlendModeTest.glb` | non_black_fraction_min, golden |
+| `AnimatedCube/AnimatedCube.gltf` | non_black_fraction_min, golden |
 | `AnimatedMorphCube.glb` | non_black_fraction_min, golden |
+| `AnimatedTriangle/AnimatedTriangle.gltf` | non_black_fraction_min, golden |
 | `AnisotropyBarnLamp.glb` | non_black_fraction_min |
 | `AnisotropyDiscTest.glb` | non_black_fraction_min |
 | `AnisotropyRotationTest.glb` | non_black_fraction_min, golden |
@@ -22,6 +24,8 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `Avocado.glb` | non_black_fraction_min, golden |
 | `BarramundiFish.glb` | non_black_fraction_min, golden |
 | `BoomBox.glb` | non_black_fraction_min, golden |
+| `BoomBoxWithAxes/BoomBoxWithAxes.gltf` | non_black_fraction_min, golden |
+| `Box With Spaces/Box With Spaces.gltf` | non_black_fraction_min, golden |
 | `Box.glb` | non_black_fraction_min, golden |
 | `BoxAnimated.glb` | non_black_fraction_min, golden |
 | `BoxInterleaved.glb` | non_black_fraction_min, golden |
@@ -29,6 +33,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `BoxTexturedNonPowerOfTwo.glb` | non_black_fraction_min, golden |
 | `BoxVertexColors.glb` | non_black_fraction_min, golden |
 | `BrainStem.glb` | non_black_fraction_min, golden |
+| `Cameras/Cameras.gltf` | non_black_fraction_min, golden |
 | `CarConcept.glb` | non_black_fraction_min |
 | `CarbonFibre.glb` | non_black_fraction_min |
 | `CesiumMan.glb` | non_black_fraction_min, golden |
@@ -56,6 +61,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `CompareTransmission.glb` | region_stddev_above |
 | `CompareVolume.glb` | region_green_minus_red_above |
 | `Corset.glb` | non_black_fraction_min, golden |
+| `Cube/Cube.gltf` | non_black_fraction_min, golden |
 | `DamagedHelmet.glb` | non_black_fraction_min, golden |
 | `DirectionalLight.glb` | non_black_fraction_min, golden |
 | `DispersionTest.glb` | non_black_fraction_min |
@@ -63,6 +69,8 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `DragonDispersion.glb` | non_black_fraction_min |
 | `Duck.glb` | non_black_fraction_min, golden |
 | `EmissiveStrengthTest.glb` | lights_off_nonblack_min, golden |
+| `EnvironmentTest/EnvironmentTest.gltf` | non_black_fraction_min, golden |
+| `FlightHelmet/FlightHelmet.gltf` | non_black_fraction_min, golden |
 | `Fox.glb` | non_black_fraction_min, golden |
 | `GlamVelvetSofa.glb` | non_black_fraction_min |
 | `GlassBrokenWindow.glb` | non_black_fraction_min |
@@ -71,11 +79,14 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `IORTestGrid.glb` | non_black_fraction_min |
 | `InterpolationTest.glb` | non_black_fraction_min, golden |
 | `IridescenceAbalone.glb` | non_black_fraction_min |
+| `IridescenceDielectricSpheres/IridescenceDielectricSpheres.gltf` | non_black_fraction_min, golden |
 | `IridescenceLamp.glb` | non_black_fraction_min |
+| `IridescenceMetallicSpheres/IridescenceMetallicSpheres.gltf` | non_black_fraction_min, golden |
 | `IridescenceSuzanne.glb` | non_black_fraction_min, golden |
 | `IridescentDishWithOlives.glb` | non_black_fraction_min |
 | `Lantern.glb` | non_black_fraction_min, golden |
 | `LightsPunctualLamp.glb` | non_black_fraction_min |
+| `MandarinOrange/MandarinOrange.gltf` | non_black_fraction_min, golden |
 | `MaterialsVariantsShoe.glb` | non_black_fraction_min, golden |
 | `MetalRoughSpheres.glb` | non_black_fraction_min, golden |
 | `MetalRoughSpheresNoTextures.glb` | non_black_fraction_min, golden |
@@ -83,6 +94,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `MorphStressTest.glb` | non_black_fraction_min, golden |
 | `MosquitoInAmber.glb` | non_black_fraction_min |
 | `MultiUVTest.glb` | non_black_fraction_min, golden |
+| `MultipleScenes/MultipleScenes.gltf` | non_black_fraction_min, golden |
 | `NegativeScaleTest.glb` | non_black_fraction_min, golden |
 | `NormalTangentMirrorTest.glb` | non_black_fraction_min, golden |
 | `NormalTangentTest.glb` | non_black_fraction_min, golden |
@@ -90,16 +102,28 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `PlaysetLightTest.glb` | non_black_fraction_min, golden |
 | `PointLightIntensityTest.glb` | non_black_fraction_min, golden |
 | `PotOfCoals.glb` | non_black_fraction_min, golden |
+| `PrimitiveModeNormalsTest/PrimitiveModeNormalsTest.gltf` | non_black_fraction_min, golden |
 | `RecursiveSkeletons.glb` | non_black_fraction_min, golden |
 | `RiggedFigure.glb` | non_black_fraction_min, golden |
 | `RiggedSimple.glb` | non_black_fraction_min, golden |
+| `SciFiHelmet/SciFiHelmet.gltf` | non_black_fraction_min, golden |
 | `SheenChair.glb` | non_black_fraction_min |
+| `SheenCloth/SheenCloth.gltf` | non_black_fraction_min, golden |
 | `SheenTestGrid.glb` | non_black_fraction_min, golden |
 | `SimpleInstancing.glb` | non_black_fraction_min, golden |
+| `SimpleMaterial/SimpleMaterial.gltf` | non_black_fraction_min, golden |
+| `SimpleMeshes/SimpleMeshes.gltf` | non_black_fraction_min, golden |
+| `SimpleMorph/SimpleMorph.gltf` | non_black_fraction_min, golden |
+| `SimpleSkin/SimpleSkin.gltf` | non_black_fraction_min, golden |
+| `SimpleSparseAccessor/SimpleSparseAccessor.gltf` | non_black_fraction_min, golden |
+| `SimpleTexture/SimpleTexture.gltf` | non_black_fraction_min, golden |
 | `SpecGlossVsMetalRough.glb` | non_black_fraction_min, golden |
 | `SpecularSilkPouf.glb` | non_black_fraction_min |
 | `SpecularTest.glb` | region_mean_luminance_below, golden |
+| `Sponza/Sponza.gltf` | non_black_fraction_min, golden |
+| `StainedGlassLamp/StainedGlassLamp.gltf` | non_black_fraction_min, golden |
 | `SunglassesKhronos.glb` | non_black_fraction_min |
+| `Suzanne/Suzanne.gltf` | non_black_fraction_min, golden |
 | `TextureCoordinateTest.glb` | non_black_fraction_min, golden |
 | `TextureEncodingTest.glb` | non_black_fraction_min, golden |
 | `TextureLinearInterpolationTest.glb` | non_black_fraction_min, golden |
@@ -111,6 +135,9 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `TransmissionRoughnessTest.glb` | region_mean_luminance_below |
 | `TransmissionTest.glb` | non_black_fraction_min |
 | `TransmissionThinwallTestGrid.glb` | non_black_fraction_min |
+| `Triangle/Triangle.gltf` | non_black_fraction_min, golden |
+| `TriangleWithoutIndices/TriangleWithoutIndices.gltf` | non_black_fraction_min, golden |
+| `TwoSidedPlane/TwoSidedPlane.gltf` | non_black_fraction_min, golden |
 | `USDShaderBallForGltf.glb` | non_black_fraction_min |
 | `Unicode❤♻Test.glb` | non_black_fraction_min, golden |
 | `UnlitTest.glb` | non_black_fraction_min, golden |
@@ -148,39 +175,17 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 - `SheenWoodLeatherSofa.glb`
 
-### `xfail:G-P7` — 29 asset(s)
+### `xfail:BUG-187` — 1 asset(s)
 
-**Gap:** no glTF-Binary variant in the pinned Khronos commit — not fetched (TextureTransformTest's sidecar-fetch exception, G-P4, is not extended to this set)
+**Gap:** (gap description not in this script's GAP_TEXT map)
 
-- `AnimatedCube (no glTF-Binary variant at pin)`
-- `AnimatedTriangle (no glTF-Binary variant at pin)`
-- `BoomBoxWithAxes (no glTF-Binary variant at pin)`
-- `Box With Spaces (no glTF-Binary variant at pin)`
-- `Cameras (no glTF-Binary variant at pin)`
-- `Cube (no glTF-Binary variant at pin)`
-- `EnvironmentTest (no glTF-Binary variant at pin)`
-- `FlightHelmet (no glTF-Binary variant at pin)`
-- `IridescenceDielectricSpheres (no glTF-Binary variant at pin)`
-- `IridescenceMetallicSpheres (no glTF-Binary variant at pin)`
-- `MandarinOrange (no glTF-Binary variant at pin)`
-- `MeshPrimitiveModes (no glTF-Binary variant at pin)`
-- `MeshoptCubeTest (no glTF-Binary variant at pin)`
-- `MultipleScenes (no glTF-Binary variant at pin)`
-- `PrimitiveModeNormalsTest (no glTF-Binary variant at pin)`
-- `SciFiHelmet (no glTF-Binary variant at pin)`
-- `SheenCloth (no glTF-Binary variant at pin)`
-- `SimpleMaterial (no glTF-Binary variant at pin)`
-- `SimpleMeshes (no glTF-Binary variant at pin)`
-- `SimpleMorph (no glTF-Binary variant at pin)`
-- `SimpleSkin (no glTF-Binary variant at pin)`
-- `SimpleSparseAccessor (no glTF-Binary variant at pin)`
-- `SimpleTexture (no glTF-Binary variant at pin)`
-- `Sponza (no glTF-Binary variant at pin)`
-- `StainedGlassLamp (no glTF-Binary variant at pin)`
-- `Suzanne (no glTF-Binary variant at pin)`
-- `Triangle (no glTF-Binary variant at pin)`
-- `TriangleWithoutIndices (no glTF-Binary variant at pin)`
-- `TwoSidedPlane (no glTF-Binary variant at pin)`
+- `MeshoptCubeTest/MeshoptCubeTest.gltf`
+
+### `xfail:BUG-188` — 1 asset(s)
+
+**Gap:** (gap description not in this script's GAP_TEXT map)
+
+- `MeshPrimitiveModes/MeshPrimitiveModes.gltf`
 
 ### `xfail:diffuse-transmission-deferred` — 4 asset(s)
 
