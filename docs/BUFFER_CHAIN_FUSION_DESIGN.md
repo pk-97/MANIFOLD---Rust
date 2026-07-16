@@ -1,6 +1,6 @@
 # Buffer-chain fusion: collapse FluidSim's per-particle dispatch chain
 
-Status: **design for review** (not yet implemented). Scoped 2026-06-09 after the
+Status: **SHIPPED / SUPERSEDED** — derived-uniform fusion landed and this doc's blocker table is resolved; FluidSim buffer regions fuse today (proof: `fluidsim_buffer_fusion_renders_like_unfused`). **`docs/FREEZE_COMPILER_MAP.md` is the authoritative current state** (it lists this doc as pre-derived-uniform-fusion history). Header corrected 2026-07-16. Scoped 2026-06-09 after the
 `array_feedback` zero-copy fix took FluidSimulation 11.8 → 5.5 ms.
 
 ## The target, measured

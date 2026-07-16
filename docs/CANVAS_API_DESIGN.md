@@ -1,5 +1,7 @@
 # Canvas API — Phase 4 Design
 
+**Status:** SHIPPED 2026-06-23 — as-built record (parseable status line added 2026-07-16; the banner below was invisible to the design status board).
+
 > **SHIPPED 2026-06-23.** All six tasks landed behaviour-preserving, one commit
 > each; manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings`
 > clean. This doc is the as-built record — the §3 scoping notes (canvas stays in

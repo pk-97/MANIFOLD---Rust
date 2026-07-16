@@ -1,11 +1,6 @@
 # Chrome API — declarative widget/layout for panels
 
-Status: **Phase 2a SHIPPED; 2b in progress** (verified in-tree 2026-07-05 baseline
-review: the `chrome/` module with `ChromeHost`, `validate`, layout/view/diff/theme is
-live and `clip_chrome.rs` is already migrated onto the View system — the header
-previously read "2a active"). Sub-design-doc for the UI Architecture Overhaul
-Phase 2 (`docs/UI_ARCHITECTURE_OVERHAUL.md` §Phase 2a/2b). This is the contract
-the chrome panels migrate onto in Phase 2b.
+Status: **SHIPPED — Phases 2a AND 2b complete 2026-06-22** (see the "Phase 2b COMPLETE" summary at the end of `docs/UI_ARCHITECTURE_OVERHAUL.md` §13: every panel's chrome is declarative on the Chrome API — footer, header, transport, master_chrome, layer_chrome, macros_panel, clip_chrome, param_card, layer_header, audio_setup_panel, inspector). Header corrected 2026-07-16 — the 2026-07-05 baseline review wrote "2b in progress" without checking the overhaul doc, where 2b had already been complete for two weeks. Sub-design-doc for the UI Architecture Overhaul Phase 2.
 
 ## Why
 
