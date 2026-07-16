@@ -23,8 +23,9 @@ use std::collections::BTreeMap;
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
-    GroupDef, GroupInterface, InterfacePortDef, SerializedParamValue,
+    BindingDef, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef, ParamSpecDef, PresetMetadata,
+    SerializedParamValue, SkipModeDef, StringBindingDef,
 };
 use manifold_core::project::Project;
 
@@ -2591,6 +2592,154 @@ impl Command for AddSceneFogCommand {
 
     fn description(&self) -> &str {
         "Add Fog"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import Model into Scene (merge-import)
+// (SCENE_SETUP_PANEL_DESIGN.md D5/P4) — "Import Model…" splices a SECOND
+// glTF's object groups into an EXISTING scene's `render_scene`, without
+// touching that scene's own chrome (camera/envmap/lights/lens). One undo
+// unit, shaped exactly like `AddSceneObjectCommand`/`GroupNodesCommand`:
+// undo restores the pre-edit `(nodes, wires, preset_metadata)` verbatim.
+// ---------------------------------------------------------------------------
+
+/// The plan's data (`new_nodes`/`new_wires`/`new_card_params`/…) is built by
+/// `manifold_renderer::node_graph::gltf_import::assemble_merge_plan` /
+/// `MergePlan`, which `manifold-editing` cannot depend on (dependency
+/// direction — the same constraint `AddSceneObjectCommand`'s own doc
+/// comment names for `OBJECT_SAFETY_MAX`). The caller (`manifold-app`,
+/// which depends on both crates) builds the plan there and hands its
+/// plain `manifold_core` fields to [`ImportModelIntoSceneCommand::new`].
+#[derive(Debug)]
+pub struct ImportModelIntoSceneCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    new_nodes: Vec<EffectGraphNode>,
+    new_wires: Vec<EffectGraphWire>,
+    new_objects_count: u32,
+    new_card_params: Vec<ParamSpecDef>,
+    new_card_bindings: Vec<BindingDef>,
+    new_string_bindings: Vec<StringBindingDef>,
+    catalog_default: EffectGraphDef,
+    /// Pre-edit `(nodes, wires)` at `scope_path`, plus the pre-edit
+    /// `preset_metadata` (whole-def field, outside the scoped level) — set
+    /// on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
+}
+
+impl ImportModelIntoSceneCommand {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        new_nodes: Vec<EffectGraphNode>,
+        new_wires: Vec<EffectGraphWire>,
+        new_objects_count: u32,
+        new_card_params: Vec<ParamSpecDef>,
+        new_card_bindings: Vec<BindingDef>,
+        new_string_bindings: Vec<StringBindingDef>,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            new_nodes,
+            new_wires,
+            new_objects_count,
+            new_card_params,
+            new_card_bindings,
+            new_string_bindings,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for ImportModelIntoSceneCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let new_nodes = self.new_nodes.clone();
+        let new_wires = self.new_wires.clone();
+        let objects = self.new_objects_count;
+        let new_card_params = self.new_card_params.clone();
+        let new_card_bindings = self.new_card_bindings.clone();
+        let new_string_bindings = self.new_string_bindings.clone();
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let prev_metadata = def.preset_metadata.clone();
+
+            // Card-spec additions land on the WHOLE def's preset_metadata
+            // (not the scoped level) — done before descending into scope so
+            // the two mutable borrows of `def` (metadata vs. nodes/wires)
+            // never overlap.
+            if !new_card_params.is_empty()
+                || !new_card_bindings.is_empty()
+                || !new_string_bindings.is_empty()
+            {
+                let meta = def.preset_metadata.get_or_insert_with(|| {
+                    // Safety net only: every real generator's catalog default
+                    // carries a `preset_metadata` (D9) — this arm exists so a
+                    // hand-built def with none doesn't silently drop the new
+                    // card entries rather than panic.
+                    PresetMetadata {
+                        id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                        display_name: "Scene".to_string(),
+                        category: "Geometry".to_string(),
+                        osc_prefix: "scene".to_string(),
+                        legacy_discriminant: None,
+                        available: true,
+                        is_line_based: false,
+                        params: Vec::new(),
+                        bindings: Vec::new(),
+                        skip_mode: SkipModeDef::default(),
+                        param_aliases: Vec::new(),
+                        value_aliases: Vec::new(),
+                        string_params: Vec::new(),
+                        string_bindings: Vec::new(),
+                    }
+                });
+                meta.params.extend(new_card_params);
+                meta.bindings.extend(new_card_bindings);
+                meta.string_bindings.extend(new_string_bindings);
+            }
+
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev_nodes_wires = (nodes.clone(), wires.clone());
+
+            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float { value: objects as f32 },
+            );
+            nodes.extend(new_nodes);
+            wires.extend(new_wires);
+
+            Some((prev_nodes_wires, prev_metadata))
+        });
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Import Model into Scene"
     }
 }
 
@@ -5909,5 +6058,160 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    // ── SCENE_SETUP_PANEL_DESIGN P4: Import Model into Scene (merge) ──
+
+    /// A plain, un-grouped merged object node (mesh source + material +
+    /// transform, no group wrapper) — this test exercises the COMMAND, not
+    /// the assembler, so a minimal top-level node stands in for the
+    /// (grouped) shape `merge_import_into_graph` would actually produce.
+    fn plain_merge_node(id: u32, handle: &str, type_id: &str) -> EffectGraphNode {
+        EffectGraphNode {
+            id,
+            node_id: manifold_core::NodeId::new(handle),
+            type_id: type_id.to_string(),
+            handle: Some(handle.to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        }
+    }
+
+    #[test]
+    fn import_model_into_scene_command_bumps_objects_adds_nodes_wires_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
+        let before = graph_of(&project, &fx).clone();
+
+        let new_node = plain_merge_node(100, "MergedObject", GROUP_TYPE_ID);
+        let new_wire = EffectGraphWire {
+            from_node: 100,
+            from_port: "vertices".to_string(),
+            to_node: 0,
+            to_port: "mesh_2".to_string(),
+        };
+
+        let mut cmd = ImportModelIntoSceneCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            vec![new_node],
+            vec![new_wire],
+            3,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("objects"),
+            Some(&SerializedParamValue::Float { value: 3.0 }),
+            "objects bumped to existing(2) + incoming(1)"
+        );
+        assert!(
+            def.nodes.iter().any(|n| n.id == 100 && n.handle.as_deref() == Some("MergedObject")),
+            "the merged node must be present"
+        );
+        assert!(
+            def.wires.iter().any(|w| w.from_node == 100 && w.to_node == 0 && w.to_port == "mesh_2"),
+            "the merged wire must be present"
+        );
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-merge graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
+        let mut base = render_scene_graph(1, 0);
+        base.preset_metadata = Some(PresetMetadata {
+            id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
+            display_name: "Existing".to_string(),
+            category: "Geometry".to_string(),
+            osc_prefix: "existing".to_string(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: vec![],
+            bindings: vec![],
+            skip_mode: SkipModeDef::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        let (mut project, fx) = project_with_graph(base);
+        let before = graph_of(&project, &fx).clone();
+
+        let new_param = ParamSpecDef {
+            id: "opacity_1".to_string(),
+            name: "Opacity".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 1.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: Some("MergedGlass".to_string()),
+        };
+        let new_binding = BindingDef {
+            id: "opacity_1".to_string(),
+            label: "Opacity".to_string(),
+            default_value: 1.0,
+            target: manifold_core::effect_graph_def::BindingTarget::Node {
+                node_id: manifold_core::NodeId::new("mat_1"),
+                param: "color_a".to_string(),
+            },
+            convert: manifold_core::effects::ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+        };
+
+        let mut cmd = ImportModelIntoSceneCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            vec![plain_merge_node(50, "MergedGlass", GROUP_TYPE_ID)],
+            vec![EffectGraphWire {
+                from_node: 50,
+                from_port: "vertices".to_string(),
+                to_node: 0,
+                to_port: "mesh_1".to_string(),
+            }],
+            2,
+            vec![new_param],
+            vec![new_binding],
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let meta = def.preset_metadata.as_ref().expect("metadata still present");
+        assert!(meta.params.iter().any(|p| p.id == "opacity_1"), "new card param appended");
+        assert!(meta.bindings.iter().any(|b| b.id == "opacity_1"), "new card binding appended");
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-merge graph AND metadata exactly");
     }
 }

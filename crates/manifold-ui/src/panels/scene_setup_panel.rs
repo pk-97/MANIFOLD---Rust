@@ -39,6 +39,8 @@ const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_OPEN_GRAPH_EDITOR: u64 = 80_013;
 const KEY_ADD_OBJECT: u64 = 80_014;
 const KEY_ADD_LIGHT: u64 = 80_015;
+/// "Import Model…" (P4, D4/D5) — merges a second glb into this scene.
+const KEY_IMPORT_MODEL: u64 = 80_016;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
 /// Objects are a variable-length list (unlike the four fixed Environment/Fog
@@ -506,6 +508,10 @@ pub struct ScenePanel {
     row_ids: [RowIds; 4],
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
+    /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
+    /// which opens the file dialog + merges on the app side (the panel
+    /// itself never touches the filesystem).
+    import_model_id: Option<NodeId>,
     /// P2 Objects section fold state — UI-local (like card sections, not
     /// serialized), keyed by the object's stable `index` (0..objects; never
     /// reassigned by rename — only append/remove would renumber, and remove
@@ -572,6 +578,7 @@ impl Default for ScenePanel {
             row_ids: [RowIds::default(); 4],
             add_object_id: None,
             add_light_id: None,
+            import_model_id: None,
             object_expanded: std::collections::HashMap::new(),
             object_value_cells: Vec::new(),
             object_steppers: Vec::new(),
@@ -682,6 +689,7 @@ impl ScenePanel {
         self.row_ids = [RowIds::default(); 4];
         self.add_object_id = None;
         self.add_light_id = None;
+        self.import_model_id = None;
         self.object_value_cells.clear();
         self.object_steppers.clear();
         self.object_name_ids.clear();
@@ -997,7 +1005,8 @@ impl ScenePanel {
     }
 
     /// The Objects section (P2, D4): per-object collapsible rows, then
-    /// "+ Object"/"+ Light" (Import Model… is P4).
+    /// "+ Object" / "+ Light" / "Import Model…" (P4 — D4's own row lists all
+    /// three under Objects).
     fn build_objects_section(
         &mut self,
         tree: &mut UITree,
@@ -1021,6 +1030,17 @@ impl ScenePanel {
             btn_style(),
             "+ Object",
             KEY_ADD_OBJECT,
+        ));
+        cy += ROW_H;
+        self.import_model_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "Import Model…",
+            KEY_IMPORT_MODEL,
         ));
         cy + ROW_H
     }
@@ -1755,6 +1775,11 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             vm.light_count as u32,
                         ));
+                    } else if self.import_model_id == Some(*node_id) {
+                        actions.push(PanelAction::SceneSetupImportModelClicked(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                        ));
                     } else if let Some((group_node_id, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2222,6 +2247,32 @@ mod tests {
         assert!(matches!(
             &actions[0],
             PanelAction::SceneSetupAddLight(l, 99, 1) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    /// P4: "Import Model…" is a real button (affordance legibility) that
+    /// dispatches `SceneSetupImportModelClicked(layer_id, render_scene_node_id)`
+    /// — the panel itself never touches the filesystem or the merge
+    /// assembler, just carries the address the app-side dispatch needs.
+    #[test]
+    fn import_model_button_emits_scene_setup_import_model_clicked() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let import_model_id = panel.import_model_id.unwrap();
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: import_model_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupImportModelClicked(l, 99) if *l == LayerId::new("layer-1")
         ));
     }
 
