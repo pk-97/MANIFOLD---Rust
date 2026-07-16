@@ -967,6 +967,14 @@ pub const DEFAULT_AUDIO_SETUP_WIDTH: f32 = 460.0;
 pub const MIN_AUDIO_SETUP_WIDTH: f32 = 340.0;
 pub const MAX_AUDIO_SETUP_WIDTH: f32 = 720.0;
 
+// ── Scene Setup dock (SCENE_SETUP_PANEL_DESIGN D2) ──
+// Cloned from the Audio Setup dock above: a fold-out column pinned to the
+// inspector's LEFT edge, mutually exclusive with the Audio Setup dock (only
+// one of the two utility columns is ever open at once).
+pub const DEFAULT_SCENE_SETUP_WIDTH: f32 = 400.0;
+pub const MIN_SCENE_SETUP_WIDTH: f32 = 320.0;
+pub const MAX_SCENE_SETUP_WIDTH: f32 = 640.0;
+
 // ── Group layout ────────────────────────────────────────────────────
 pub const GROUP_CHILD_INDENT_PX: f32 = 20.0;
 /// A group row is a structural container header (no clip bodies of its own), so

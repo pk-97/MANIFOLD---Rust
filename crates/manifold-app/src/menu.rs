@@ -52,6 +52,10 @@ pub enum MenuAction {
     Perform,
     Monitor,
     Audio,
+    /// Toggle the Scene Setup dock — mirrors [`Self::Audio`]
+    /// (`SCENE_SETUP_PANEL_DESIGN.md` D2: the two utility docks are the
+    /// same View-menu mechanism, mutually exclusive).
+    Scene,
     // App menu
     Settings,
 }
@@ -307,6 +311,7 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) 
     let _ = view_m.append(&item(actions, "view.perform", MenuAction::Perform, "Perform Mode", None));
     let _ = view_m.append(&item(actions, "view.monitor", MenuAction::Monitor, "Monitor", None));
     let _ = view_m.append(&item(actions, "view.audio", MenuAction::Audio, "Audio", None));
+    let _ = view_m.append(&item(actions, "view.scene", MenuAction::Scene, "Scene", None));
 
     let _ = menu.append(&app_m);
     let _ = menu.append(&file_m);

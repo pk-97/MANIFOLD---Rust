@@ -517,6 +517,9 @@ pub struct Application {
     /// double-click snaps the width back to its default, same shape as the
     /// inspector/split handles above.
     pub(crate) audio_setup_handle_last_click: Option<std::time::Instant>,
+    /// Double-click detect for the Scene Setup dock resize handle — mirror
+    /// of `audio_setup_handle_last_click` (SCENE_SETUP_PANEL_DESIGN D2).
+    pub(crate) scene_setup_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -755,6 +758,7 @@ impl Application {
             split_handle_last_click: None,
             inspector_handle_last_click: None,
             audio_setup_handle_last_click: None,
+            scene_setup_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,
@@ -905,6 +909,21 @@ impl Application {
             return;
         }
         self.ws.ui_root.set_audio_setup_handle_idle();
+
+        // Priority 2c: Scene Setup dock resize edge hover — mirror of Audio
+        // Setup above (SCENE_SETUP_PANEL_DESIGN D2).
+        if self.ws.ui_root.scene_setup_resize_dragging
+            || self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
+        {
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            if self.ws.ui_root.scene_setup_resize_dragging {
+                self.ws.ui_root.set_scene_setup_handle_drag();
+            } else {
+                self.ws.ui_root.set_scene_setup_handle_hover();
+            }
+            return;
+        }
+        self.ws.ui_root.set_scene_setup_handle_idle();
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
@@ -1475,6 +1494,35 @@ impl Application {
                         default,
                     );
                     self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md P2) ───────
+            // The panel addresses the layer directly (no graph editor needs
+            // to be open — it's a fourth surface, not a canvas view), so this
+            // resolves its own catalog default via `generator_catalog_default`
+            // instead of `watched_graph_target`/`watched_catalog_default`.
+            TextInputField::SceneObjectRename(group_node_id) => {
+                let new_handle = text.trim().to_string();
+                if !new_handle.is_empty()
+                    && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
+                {
+                    if let Some(default) =
+                        crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
+                    {
+                        let target = manifold_core::GraphTarget::Generator(layer_id);
+                        let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+                            target,
+                            Vec::new(),
+                            group_node_id,
+                            new_handle,
+                            default,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                    self.needs_rebuild = true;
                 }
             }
             TextInputField::GraphStringParam(node_id) => {

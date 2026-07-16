@@ -20,6 +20,7 @@ pub mod param_card;
 pub mod picker_core;
 pub mod param_slider_shared;
 pub mod perf_hud;
+pub mod scene_setup_panel;
 pub mod settings_popup;
 pub mod popup_shell;
 pub mod toast;
@@ -206,6 +207,46 @@ pub enum PanelAction {
     /// Open (toggle) the Audio Setup panel — the central place to route audio
     /// in and define named sends. Header button; also bound to ⌘⇧A.
     OpenAudioSetup,
+    /// Open (toggle) the Scene Setup panel (`SCENE_SETUP_PANEL_DESIGN.md` D2)
+    /// — mutually exclusive with [`Self::OpenAudioSetup`] (the app dispatch
+    /// closes the other dock, same either/or toggle policy as that pair).
+    /// Header button.
+    OpenSceneSetup,
+    /// A Scene Setup panel row write: `(layer_id, scope_path, node_doc_id,
+    /// param_name, new_value)`. Dispatched through the identical
+    /// `SetGraphNodeParamCommand` the graph editor's node face already uses —
+    /// the panel's "fourth surface" (D3: every editable row carries its
+    /// `(scope_path, node_doc_id, param_id)` write address). `scope_path` is
+    /// empty for root-level rows (Environment/Fog, Lights, Camera, object
+    /// transforms) and `[group_node_id]` for a P2 Objects material/modifier
+    /// row living inside the object's own group.
+    SceneSetupParamChanged(LayerId, Vec<u32>, u32, String, f32),
+    /// "Add environment" (D3): spawn `node.bake_environment` wired to the
+    /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupAddEnvironment(LayerId, u32),
+    /// "Add fog" (D3): spawn `node.atmosphere` wired to the scene's
+    /// `atmosphere` port. `(layer_id, render_scene_node_doc_id)`.
+    SceneSetupAddFog(LayerId, u32),
+    /// D7 "New 3D Scene" empty-state action: assign the bundled Scene
+    /// Starter generator preset to the selected layer — the SAME
+    /// generator-assignment path the picker's `SetGenType` already uses
+    /// (§1 VERIFY marker, resolved: `PanelAction::SetGenType`).
+    SceneSetupNewScene(LayerId),
+    /// D7 "Open Graph Editor" empty-state action for a generator layer with
+    /// no `render_scene` — reuses the existing open-editor action.
+    SceneSetupOpenGraphEditor(LayerId),
+    /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
+    /// (SCENE_BUILD P5) — no new mutation path.
+    SceneSetupAddObject(LayerId, u32, u32),
+    /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
+    SceneSetupAddLight(LayerId, u32, u32),
+    /// P2 object-name click: `(layer_id, group_node_id, current_name)` — opens
+    /// the shared inline text-input session (same mechanics as
+    /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
+    /// SCENE_BUILD P3 rename-sweep command, unchanged).
+    SceneSetupRenameObjectClicked(LayerId, u32, String),
 
     // Footer
     CycleQuantize,

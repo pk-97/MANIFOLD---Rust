@@ -60,6 +60,11 @@ pub struct HeaderPanel {
     export_progress_visible: bool,
     time_display: String,
     zoom_label: String,
+    /// Whether the Audio Setup / Scene Setup docks are open — drives the two
+    /// header toggle buttons' active-state highlight (D2: "beside the Audio
+    /// button", mutually exclusive so at most one is ever true).
+    audio_setup_open: bool,
+    scene_setup_open: bool,
 }
 
 impl HeaderPanel {
@@ -76,6 +81,8 @@ impl HeaderPanel {
             export_progress_visible: false,
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
+            audio_setup_open: false,
+            scene_setup_open: false,
         }
     }
 
@@ -108,6 +115,14 @@ impl HeaderPanel {
         self.zoom_label = text.into();
     }
 
+    /// Set the two utility-dock toggle buttons' active state (D2: mutually
+    /// exclusive — the app dispatch guarantees at most one is ever true, this
+    /// setter doesn't enforce it, it just paints whatever it's told).
+    pub fn set_dock_toggle_state(&mut self, audio_setup_open: bool, scene_setup_open: bool) {
+        self.audio_setup_open = audio_setup_open;
+        self.scene_setup_open = scene_setup_open;
+    }
+
     // ── Styles ──────────────────────────────────────────────────────
 
     // The zoom −/+ are neutral chrome chips — no state colour — sharing the kit's
@@ -117,6 +132,15 @@ impl HeaderPanel {
         UIStyle {
             font_size: color::FONT_TITLE,
             ..components::state_button_style(color::BUTTON_DIM, false)
+        }
+    }
+
+    /// Style for the Audio/Scene dock toggle buttons — the neutral chip,
+    /// raised to the active-state colour while its dock is open.
+    fn dock_toggle_style(active: bool) -> UIStyle {
+        UIStyle {
+            font_size: color::FONT_LABEL,
+            ..components::state_button_style(color::BUTTON_DIM, active)
         }
     }
 
@@ -215,8 +239,30 @@ impl HeaderPanel {
             .child(Self::spacer_fixed(PROGRESS_BAR_INSET))
             .child(export_progress);
 
+        // Utility-dock toggles (SCENE_SETUP_PANEL_DESIGN D2): "Audio" and
+        // "Scene" sit side by side, both always present (never conditionally
+        // hidden — `feedback_no_conditionally_visible_ui`), highlighted when
+        // their dock is open. Also reachable via the View menu (⌘⇧A for
+        // Audio) — this is the on-screen affordance the docs assume exists
+        // beside each other.
+        let dock_toggles = View::row(color::SPACE_XS)
+            .fill_h()
+            .child(
+                View::button("Audio")
+                    .w(Sizing::Fixed(60.0))
+                    .fill_h()
+                    .style(Self::dock_toggle_style(self.audio_setup_open))
+                    .on_click(PanelAction::OpenAudioSetup),
+            )
+            .child(
+                View::button("Scene")
+                    .w(Sizing::Fixed(60.0))
+                    .fill_h()
+                    .style(Self::dock_toggle_style(self.scene_setup_open))
+                    .on_click(PanelAction::OpenSceneSetup),
+            );
+
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
-        // (Audio / Perform / Monitor moved to the View menu.)
         let zoom_cluster = View::row(0.0)
             .fill_h()
             .child(
@@ -246,6 +292,7 @@ impl HeaderPanel {
             .fill()
             .main_align(Align::End)
             .child(export_group)
+            .child(dock_toggles)
             .child(zoom_cluster)
     }
 

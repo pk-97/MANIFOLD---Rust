@@ -211,6 +211,7 @@ pub struct UIRoot {
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
     pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
+    pub scene_setup_panel: manifold_ui::panels::scene_setup_panel::ScenePanel,
     pub settings_popup: manifold_ui::panels::settings_popup::SettingsPopup,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2). Fired by
@@ -297,6 +298,9 @@ pub struct UIRoot {
     pub audio_setup_resize_dragging: bool,
     audio_setup_drag_start_x: f32,
     audio_setup_drag_start_width: f32,
+    pub scene_setup_resize_dragging: bool,
+    scene_setup_drag_start_x: f32,
+    scene_setup_drag_start_width: f32,
 
     /// Set when overlay state changes (popup open/close, scroll, category change).
     /// Consumed by app.rs to trigger rebuild_scroll_panels.
@@ -347,6 +351,9 @@ pub struct UIRoot {
     /// Node ID for the Audio Setup dock resize handle (vertical bar at the
     /// dock's LEFT edge). `None` while the dock is closed. (D1)
     audio_setup_handle_id: Option<NodeId>,
+    /// Node ID for the Scene Setup dock resize handle — cloned from
+    /// `audio_setup_handle_id` above (SCENE_SETUP_PANEL_DESIGN D2).
+    scene_setup_handle_id: Option<NodeId>,
     /// P2 "panel-split snap-back" (D15): self-tracked elapsed time for
     /// `layout.tick_splits`, same self-contained-`Instant` shape as
     /// `InspectorCompositePanel::update`'s `motion_last_tick`.
@@ -456,6 +463,7 @@ impl UIRoot {
                 p.set_scope_lane_legend(legend, LANE_HEIGHT_FRAC);
                 p
             },
+            scene_setup_panel: manifold_ui::panels::scene_setup_panel::ScenePanel::new(),
             settings_popup: manifold_ui::panels::settings_popup::SettingsPopup::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             toast: manifold_ui::panels::toast::ToastPanel::new(),
@@ -483,6 +491,9 @@ impl UIRoot {
             audio_setup_resize_dragging: false,
             audio_setup_drag_start_x: 0.0,
             audio_setup_drag_start_width: 0.0,
+            scene_setup_resize_dragging: false,
+            scene_setup_drag_start_x: 0.0,
+            scene_setup_drag_start_width: 0.0,
             overlay_dirty: false,
             effect_clipboard_count: 0,
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
@@ -496,6 +507,7 @@ impl UIRoot {
             split_handle_id: None,
             inspector_handle_id: None,
             audio_setup_handle_id: None,
+            scene_setup_handle_id: None,
             layout_tick_last: std::time::Instant::now(),
             drag_owner: None,
             ableton_session: None,
@@ -717,6 +729,18 @@ impl UIRoot {
             self.tree.end_region(region, start);
         }
 
+        // Scene Setup dock (SCENE_SETUP_PANEL_DESIGN D2) — cloned from the
+        // Audio Setup dock above. Mutually exclusive with it at the toggle
+        // call site (`toggle_scene_dock`/`toggle_audio_dock`), so in practice
+        // at most one of these two blocks builds a non-empty region per frame.
+        if self.layout.scene_setup_width > 0.0 {
+            let dock = self.layout.scene_setup();
+            let region = self.tree.begin_region(dock, ZTier::Base, "scene_setup", UIFlags::empty());
+            let start = self.tree.count();
+            self.scene_setup_panel.build_docked(&mut self.tree, dock);
+            self.tree.end_region(region, start);
+        }
+
         // Split handle + inspector resize handle — thin drag affordances at
         // panel seams. Chrome tier: utility chrome that should never be
         // occluded, same reasoning as transport/header/footer. One shared
@@ -775,6 +799,24 @@ impl UIRoot {
         if self.layout.audio_setup_width > 0.0 {
             let dock = self.layout.audio_setup();
             self.audio_setup_handle_id = Some(self.tree.add_panel(
+                None,
+                dock.x,
+                dock.y,
+                4.0,
+                dock.height,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            ));
+        }
+
+        // Scene Setup dock resize handle — cloned from the Audio Setup one
+        // above (SCENE_SETUP_PANEL_DESIGN D2).
+        self.scene_setup_handle_id = None;
+        if self.layout.scene_setup_width > 0.0 {
+            let dock = self.layout.scene_setup();
+            self.scene_setup_handle_id = Some(self.tree.add_panel(
                 None,
                 dock.x,
                 dock.y,
@@ -1795,6 +1837,15 @@ impl UIRoot {
                 continue;
             }
 
+            // Escape closes the Scene Setup dock — same mirrored path
+            // (SCENE_SETUP_PANEL_DESIGN D2).
+            if self.scene_setup_panel.is_open()
+                && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
+            {
+                actions.push(PanelAction::OpenSceneSetup);
+                continue;
+            }
+
             // Audio Setup dock (D1) — a docked panel routed here, not an
             // overlay. It handles its own clicks + band/calibration drags and
             // consumes them so they don't fall through to the panels beneath.
@@ -1809,6 +1860,15 @@ impl UIRoot {
                     {
                         self.input.request_immediate_drag();
                     }
+                    continue;
+                }
+            }
+
+            // Scene Setup dock — mirror of the Audio Setup routing above.
+            if self.scene_setup_panel.is_open() {
+                let (consumed, mut acts) = self.scene_setup_panel.handle_event(event);
+                actions.append(&mut acts);
+                if consumed {
                     continue;
                 }
             }
@@ -2832,6 +2892,10 @@ impl UIRoot {
     /// (`app_render`'s `OpenAudioSetup` arm) and the headless script harness
     /// (`ui_bridge::dispatch`'s arm) call this ONE method so the toggle is
     /// reachable on both paths; the caller schedules the structural rebuild.
+    ///
+    /// Mutually exclusive with the Scene Setup dock (`SCENE_SETUP_PANEL_DESIGN`
+    /// D2): opening this one always closes that one first — a plain either/or
+    /// toggle, both docks' header buttons stay present regardless.
     pub fn toggle_audio_dock(&mut self) {
         self.audio_setup_panel.toggle();
         let open = self.audio_setup_panel.is_open();
@@ -2840,6 +2904,11 @@ impl UIRoot {
         } else {
             0.0
         };
+        if open && self.scene_setup_panel.is_open() {
+            self.scene_setup_panel.close();
+            self.layout.scene_setup_width = 0.0;
+        }
+        self.header.set_dock_toggle_state(open, self.scene_setup_panel.is_open());
     }
 
     /// Audio Setup dock resize-handle colour feedback (idle/hover/drag).
@@ -2851,6 +2920,74 @@ impl UIRoot {
     }
     pub fn set_audio_setup_handle_idle(&mut self) {
         self.set_handle_color(self.audio_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_IDLE);
+    }
+
+    // ── Scene Setup dock resize (SCENE_SETUP_PANEL_DESIGN D2) — mirror of
+    // the Audio Setup pair above ──
+    const SCENE_SETUP_MIN_W: f32 = manifold_ui::color::MIN_SCENE_SETUP_WIDTH;
+    const SCENE_SETUP_MAX_W: f32 = manifold_ui::color::MAX_SCENE_SETUP_WIDTH;
+
+    /// True if `pos` is near the Scene Setup dock's LEFT edge. False when the
+    /// dock is closed (zero width).
+    pub fn is_near_scene_setup_edge(&self, pos: Vec2) -> bool {
+        if self.layout.scene_setup_width <= 0.0 {
+            return false;
+        }
+        let dock = self.layout.scene_setup();
+        (pos.x - dock.x).abs() < Self::RESIZE_EDGE_PX && pos.y >= dock.y && pos.y <= dock.y + dock.height
+    }
+
+    /// Begin a Scene Setup dock resize drag.
+    pub fn begin_scene_setup_resize(&mut self, x: f32) {
+        self.scene_setup_resize_dragging = true;
+        self.scene_setup_drag_start_x = x;
+        self.scene_setup_drag_start_width = self.layout.scene_setup_width;
+    }
+
+    /// Update dock width during resize. Returns true if width moved.
+    pub fn update_scene_setup_resize(&mut self, x: f32) -> bool {
+        if !self.scene_setup_resize_dragging {
+            return false;
+        }
+        let delta = x - self.scene_setup_drag_start_x;
+        let new_width = (self.scene_setup_drag_start_width - delta)
+            .clamp(Self::SCENE_SETUP_MIN_W, Self::SCENE_SETUP_MAX_W);
+        if (new_width - self.layout.scene_setup_width).abs() > 1.0 {
+            self.layout.scene_setup_width = new_width;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// End Scene Setup dock resize drag.
+    pub fn end_scene_setup_resize(&mut self) {
+        self.scene_setup_resize_dragging = false;
+    }
+
+    /// Toggle the Scene Setup dock — mirror of [`Self::toggle_audio_dock`],
+    /// including the mutual-exclusion write-back.
+    pub fn toggle_scene_dock(&mut self) {
+        self.scene_setup_panel.toggle();
+        let open = self.scene_setup_panel.is_open();
+        self.layout.scene_setup_width =
+            if open { manifold_ui::color::DEFAULT_SCENE_SETUP_WIDTH } else { 0.0 };
+        if open && self.audio_setup_panel.is_open() {
+            self.audio_setup_panel.close();
+            self.layout.audio_setup_width = 0.0;
+        }
+        self.header.set_dock_toggle_state(self.audio_setup_panel.is_open(), open);
+    }
+
+    /// Scene Setup dock resize-handle colour feedback (idle/hover/drag).
+    pub fn set_scene_setup_handle_hover(&mut self) {
+        self.set_handle_color(self.scene_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_HOVER);
+    }
+    pub fn set_scene_setup_handle_drag(&mut self) {
+        self.set_handle_color(self.scene_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_DRAG);
+    }
+    pub fn set_scene_setup_handle_idle(&mut self) {
+        self.set_handle_color(self.scene_setup_handle_id, manifold_ui::color::RESIZE_HANDLE_IDLE);
     }
 
     fn set_handle_color(&mut self, id: Option<NodeId>, color: manifold_ui::node::Color32) {
