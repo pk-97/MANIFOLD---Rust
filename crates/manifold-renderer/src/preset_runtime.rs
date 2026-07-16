@@ -5985,6 +5985,76 @@ mod generator_runtime_tests {
         );
     }
 
+    /// Same resize-survival contract for FluidSim2D — the tuned reference
+    /// particle sim. Exists to prove (or refute) that the resize kill was
+    /// a class bug across particle presets, not Cymatics-specific.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn fluidsim2d_survives_live_resize() {
+        use crate::preset_context::PresetContext;
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/FluidSim2D.json");
+        let registry = PrimitiveRegistry::with_builtin();
+        let format = GpuTextureFormat::Rgba16Float;
+        let (w0, h0) = (512u32, 512u32);
+        let mut g = PresetRuntime::from_json_str_with_device(
+            json, &registry, device.arc(), w0, h0, format, None,
+        )
+        .expect("FluidSim2D preset must load");
+
+        let max_luma = |g: &mut PresetRuntime, w: u32, h: u32, frames: u32, base: u32| -> f32 {
+            let target = RenderTarget::new(&device, w, h, format, "fluid-resize-test");
+            for f in 0..frames {
+                let ctx = PresetContext {
+                    time: (base + f) as f64 / 60.0,
+                    beat: 0.0,
+                    dt: 1.0 / 60.0,
+                    width: w,
+                    height: h,
+                    output_width: w,
+                    output_height: h,
+                    aspect: w as f32 / h as f32,
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: i64::from(base + f),
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let mut enc = device.create_encoder("fluid-resize-frame");
+                {
+                    let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                    g.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut rb = device.create_encoder("fluid-resize-readback");
+            rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
+            rb.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared buffer mapped");
+            let px: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            px.chunks(4)
+                .map(|c| half::f16::from_bits(c[0]).to_f32())
+                .fold(0.0f32, f32::max)
+        };
+
+        let before = max_luma(&mut g, w0, h0, 90, 0);
+        assert!(before > 0.05, "FluidSim2D must render before resize (max luma {before})");
+        g.resize(&device, 384, 640);
+        let after = max_luma(&mut g, 384, 640, 90, 90);
+        assert!(
+            after > 0.05,
+            "FluidSim2D must still render after live resize (max luma {after})"
+        );
+    }
+
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
