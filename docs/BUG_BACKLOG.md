@@ -202,7 +202,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-193 (scene-setup-no-remove-object-command) — Scene Setup panel's Objects section has no "Remove" affordance — no composite command exists to dispatch
 
-**Status:** OPEN — found 2026-07-17 during SCENE_SETUP_PANEL_DESIGN.md P2 (Objects section), escalated per the design doc's own §8 contract rather than improvised.
+**Status:** OPEN — found 2026-07-17 during SCENE_SETUP_PANEL_DESIGN.md P2 (Objects section), escalated per the design doc's own §8 contract rather than improvised. Fix designed and scheduled: `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P3 (`RemoveSceneObjectCommand` + `RemoveSceneLightCommand`, APPROVED 2026-07-17).
 
 **Symptom:** SCENE_SETUP_PANEL_DESIGN.md's D4 table and P2 phase brief both call for a per-object "remove (delete-group + decrement composite, the existing path)" — the brief's own VERIFY marker (`rg -n "delete.*group|RemoveScene" crates/manifold-editing/src/commands/graph.rs`) turns up nothing: no composite command decrements `render_scene`'s `objects` count, renumbers the remaining `mesh_k`/`transform_k`/`material_k` wires above the removed index, and deletes the group subtree as one undo unit. `RemoveGraphNodeCommand` (generic node+wire removal) exists but does NOT touch the `objects` param or renumber subsequent object ports — using it alone would leave a gap (e.g. removing object 1 of 3 leaves `objects=3` with `mesh_1` unwired, showing as a phantom Custom row, while `mesh_2` stays wired at the wrong index). `RemoveSceneCommand` (`manifold-editing/src/commands/session_commands.rs`) is a different concept entirely (SESSION_MODE clip-launch scenes, not 3D scenes).
 
