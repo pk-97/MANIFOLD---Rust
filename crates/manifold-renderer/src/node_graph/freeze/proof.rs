@@ -1867,6 +1867,29 @@ fn render_effect_frames_with_state(
     result
 }
 
+/// BUG-175 (2026-07-16 FilmGrain stage freeze): absorbing the noise atom into
+/// the soften blur's fetch inlined ~860 KB of WGSL (35 fetch sites × 4 corners
+/// × ~6 KB noise body) and cost ~50 s of synchronous kernel compile on the
+/// content thread per build — then once more for the specialized variant. The
+/// `MAX_VIRTUAL_INLINE_BYTES` gate in `chain_is_absorbable` now refuses that
+/// absorption; the region collapses below `MIN_REGION_LEN`, so FilmGrain
+/// renders fully unfused (each node its own cheap dispatch). Watercolor's
+/// warp-into-blur absorption (~75 KB) must keep fusing — proven by
+/// `watercolor_inloop_chain_fusion_matches_unfused` below.
+#[test]
+fn filmgrain_noise_absorption_refused_by_inline_budget() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let base = crate::node_graph::loaded_preset_view_by_id(&manifold_core::PresetTypeId::new(
+        "FilmGrain",
+    ))
+    .expect("FilmGrain view");
+    assert!(
+        super::install::fuse_canonical_def(&base.canonical_def, &registry).is_none(),
+        "FilmGrain must not fuse: its only region is the noise-into-blur \
+         absorption the BUG-175 inline-size gate refuses"
+    );
+}
+
 /// The REAL Watercolor preset, fused vs unfused, 8 feedback frames. The fused
 /// def carries an IN-LOOP stencil region (the Linear diffuse blur with the
 /// uv-displace warp absorbed into its fetch) plus two in-loop pointwise
