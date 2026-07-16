@@ -60,6 +60,12 @@ DESIGN_RE = re.compile(r"\b([A-Z0-9][A-Z0-9_]*_DESIGN)(?:\.md)?\b")
 # A design named as the fix: a fix keyword within ~80 chars before the design token.
 FIX_DESIGN_RE = re.compile(
     r"(?is)(?:root fix|fix shape|fix is|fixed by|fix:)[^.]{0,80}?\b([A-Z0-9][A-Z0-9_]*_DESIGN)\b")
+# Explicit waiver for the shipped-design nudge: an entry line
+# `Verified-open-despite: SOME_DESIGN (reason)` says a human already did the
+# "verify + mark" step and the bug is genuinely still open even though that
+# design shipped (e.g. BUG-118: shafts shipped, Peter froze the bug before the
+# confirming re-render). The reason parenthetical is prose, not parsed.
+WAIVER_RE = re.compile(r"(?im)^Verified-open-despite:\s*([A-Z0-9][A-Z0-9_]*_DESIGN)\b")
 
 
 def derive_status(heading: str) -> str:
@@ -295,8 +301,9 @@ def check(text: str) -> list[str]:
         for e in entries:
             if e.status in RESOLVED:
                 continue
+            waived = set(WAIVER_RE.findall("\n".join(e.lines)))
             for d in e.fix_designs:
-                if d in shipped:
+                if d in shipped and d not in waived:
                     problems.append(
                         f"{e.id}: open, but names {d} which is SHIPPED — likely fixed, verify + mark")
                     break
