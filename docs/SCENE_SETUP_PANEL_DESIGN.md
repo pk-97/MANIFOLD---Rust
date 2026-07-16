@@ -513,7 +513,7 @@ finds itself adding content-thread work, that is a brief violation — stop and 
 - **Multi-scene picker** for graphs holding two live `render_scene` nodes (v1 shows the
   first + a chip). Trigger: a real project hits it.
 - **Animation section** (imported clips list, play/loop/speed in beats). Owner:
-  GLTF_ANIMATION_DESIGN (A3/A4 in flight); the panel gains the section when that doc says
+  GLTF_ANIMATION_DESIGN (A3 SHIPPED, A4 in flight); the panel gains the section when that doc says
   the vocabulary is stable.
 - **Video/layer textures into scene materials** via a panel picker (`base_color_map_k`
   accepts any Texture2D wire in the graph today — the capability exists; the curated picker
