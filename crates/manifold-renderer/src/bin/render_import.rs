@@ -57,13 +57,14 @@ struct Args {
     overrides: Vec<(String, String)>,
     frames_max: u32,
     non_black_floor: f64,
+    trace: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     let glb = argv
         .next()
-        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F]")?;
+        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--trace]")?;
     let mut args = Args {
         glb: PathBuf::from(glb),
         width: 1280,
@@ -72,8 +73,13 @@ fn parse_args() -> Result<Args, String> {
         overrides: Vec::new(),
         frames_max: 300,
         non_black_floor: 0.02,
+        trace: false,
     };
     while let Some(flag) = argv.next() {
+        if flag == "--trace" {
+            args.trace = true;
+            continue;
+        }
         let value = argv
             .next()
             .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -265,6 +271,25 @@ fn main() {
         } else {
             stable_count = 0;
         }
+
+        // D7 diagnosis instrument (BUG-165/BUG-169): print the non-black
+        // fraction and io_pending EVERY frame, not only after a stable
+        // streak — `last_fraction` below is only updated once a streak
+        // lands, so without this a reported 0.0000 is ambiguous between
+        // "renders black" and "never went stable" (render_import.rs
+        // pre-trace). Default off (`--trace`) since it's a per-frame
+        // readback+tonemap on top of the one the convergence check already
+        // does — real cost, only worth paying while bisecting.
+        if args.trace {
+            let frame_rgba =
+                readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height);
+            let frame_fraction = non_black_fraction(&frame_rgba);
+            println!(
+                "trace: frame={frame} fraction={frame_fraction:.4} io_pending={io_pending} \
+                 byte_stable={byte_stable} stable_count={stable_count}"
+            );
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         if stable_count >= STABLE_STREAK {

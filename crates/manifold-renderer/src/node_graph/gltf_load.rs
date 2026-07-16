@@ -14,6 +14,139 @@
 
 use crate::generators::mesh_common::MeshVertex;
 
+/// glTF extensions MANIFOLD's importer actually supports, independent of
+/// what the pinned `gltf` 1.4.1 crate's own feature-flag set types —
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D1. Everything in `Cargo.toml`'s `gltf`
+/// feature list, plus three extensions this codebase maps downstream that
+/// the crate has no typed accessor for at this version: `KHR_materials_unlit`
+/// (`MATERIAL_SYSTEM_DESIGN.md`'s unlit shading mode),
+/// `KHR_materials_pbrSpecularGlossiness` (converted to metal-rough at
+/// import, BUG-167), and `KHR_materials_clearcoat` (raw-JSON sniff,
+/// `GLB_CONFORMANCE_DESIGN.md` G-P5). An asset whose `extensionsRequired`
+/// lists anything NOT in this set fails loudly, naming the extension —
+/// never silently, never approximated.
+const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
+    // Cargo.toml's `gltf` feature list (typed crate support):
+    "KHR_materials_emissive_strength",
+    "KHR_materials_transmission",
+    "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
+    // MANIFOLD-mapped, no typed crate accessor at 1.4.1:
+    "KHR_materials_unlit",
+    "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_clearcoat",
+];
+
+/// The ONE parse entry for `.glb`/`.gltf` files (`GLB_XFAIL_BURNDOWN_DESIGN.md`
+/// D1/D3-data-model-delta) — every other call site in this crate routes
+/// through this helper instead of the `gltf` crate's `gltf::import(path)`
+/// convenience function.
+///
+/// Why: `gltf::import` validates `extensionsRequired` against the crate's
+/// OWN compiled-in feature set (`gltf_json::extensions::ENABLED_EXTENSIONS`)
+/// and hard-fails before MANIFOLD's importer ever runs, even for extensions
+/// MANIFOLD genuinely supports downstream (BUG-166: `KHR_materials_unlit`,
+/// `KHR_materials_clearcoat` — the latter has NO crate feature at 1.4.1 at
+/// all, so enabling flags alone can never fix it). This helper parses
+/// without the crate's built-in validation (`Gltf::from_slice_without_validation`),
+/// re-runs the SAME structural validation the crate would have run
+/// (`json::Root`'s `Validate` impl, invoked directly — index bounds, missing
+/// required fields, oversize, etc. all still checked), but drops only the
+/// `Unsupported`-under-`extensionsRequired` errors that validation produces
+/// (the one and only place `gltf_json::validation::Error::Unsupported` is
+/// ever raised — verified by reading `gltf-json-1.4.1/src/root.rs`'s
+/// `root_validate_hook` and confirming no other call site in the crate
+/// constructs that variant). MANIFOLD's own gate below then re-checks
+/// `extensionsRequired` against `MANIFOLD_SUPPORTED_EXTENSIONS`, so an asset
+/// that lists a genuinely unsupported extension still fails — with OUR
+/// error naming it, not the crate's generic "Unsupported extension".
+pub(crate) fn import_glb(
+    path: &std::path::Path,
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(&bytes)
+        .map_err(|e| format!("{}: gltf parse failed: {e}", path.display()))?;
+
+    // Re-run the crate's structural validation, filtering out the
+    // extensionsRequired veto (MANIFOLD's own gate, below, replaces it).
+    {
+        use gltf::json::validation::Validate;
+        let json = document.as_json();
+        let mut errors: Vec<(gltf::json::Path, gltf::json::validation::Error)> = Vec::new();
+        json.validate(json, gltf::json::Path::new, &mut |path_fn, error| {
+            errors.push((path_fn(), error));
+        });
+        let real_errors: Vec<_> = errors
+            .into_iter()
+            .filter(|(p, e)| {
+                !(*e == gltf::json::validation::Error::Unsupported
+                    && p.as_str().starts_with("extensionsRequired"))
+            })
+            .collect();
+        if !real_errors.is_empty() {
+            return Err(format!(
+                "{}: glTF validation failed: {:?}",
+                path.display(),
+                real_errors
+            ));
+        }
+    }
+
+    for ext in document.extensions_required() {
+        if !MANIFOLD_SUPPORTED_EXTENSIONS.contains(&ext) {
+            return Err(format!(
+                "{}: extensionsRequired[..] = \"{ext}\": unsupported extension (MANIFOLD does not import this extension)",
+                path.display()
+            ));
+        }
+    }
+
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    let buffers = gltf::import_buffers(&document, Some(base), blob)
+        .map_err(|e| format!("{}: buffer import failed: {e}", path.display()))?;
+    let images = gltf::import_images(&document, Some(base), &buffers)
+        .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
+
+    Ok((document, buffers, images))
+}
+
+/// Resolve the scene(s) to import when a glb has no default `scene` index
+/// (spec-legal — `GLB_XFAIL_BURNDOWN_DESIGN.md` D5, fixes BUG-172):
+/// the default scene if present; else the union of every `scenes[]` entry's
+/// nodes; else every parentless (root) node in the document. Returns owned
+/// nodes (not a `Scene` — there may be no single scene backing the union).
+pub(crate) fn resolve_import_nodes(document: &gltf::Document) -> Vec<gltf::Node<'_>> {
+    if let Some(scene) = document.default_scene() {
+        return scene.nodes().collect();
+    }
+    if document.scenes().len() > 0 {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut nodes = Vec::new();
+        for scene in document.scenes() {
+            for node in scene.nodes() {
+                if seen.insert(node.index()) {
+                    nodes.push(node);
+                }
+            }
+        }
+        return nodes;
+    }
+    // No scenes at all: every node with no parent.
+    let mut has_parent = std::collections::BTreeSet::new();
+    for node in document.nodes() {
+        for child in node.children() {
+            has_parent.insert(child.index());
+        }
+    }
+    document
+        .nodes()
+        .filter(|n| !has_parent.contains(&n.index()))
+        .collect()
+}
+
 /// A 4×4 column-major matrix: `m[col][row]`, matching both the `gltf`
 /// crate's `Transform::matrix()` convention and `render_scene.rs`'s
 /// `model_matrix`.
@@ -264,32 +397,26 @@ fn walk_gltf_node(
 /// Parse a `.glb`/`.gltf` file and flatten the selected geometry into a
 /// triangle-list `Vec<MeshVertex>`. See [`GltfMeshSelector`] for the three
 /// selection modes. Returns `Err(String)` on any failure — a missing/
-/// unreadable file, a document with no default scene (`WholeScene`), an
-/// out-of-range mesh/primitive index, or a non-Triangles primitive —
-/// rather than panicking, since this runs on a background thread inside
-/// `node.gltf_mesh_source`.
+/// unreadable file, an unsupported required extension, an out-of-range
+/// mesh/primitive index, or a non-Triangles primitive — rather than
+/// panicking, since this runs on a background thread inside
+/// `node.gltf_mesh_source`. A missing default scene no longer errors:
+/// `resolve_import_nodes` falls back per `GLB_XFAIL_BURNDOWN_DESIGN.md` D5.
 pub(crate) fn load_gltf_mesh(
     path: &std::path::Path,
     selector: GltfMeshSelector,
 ) -> Result<Vec<MeshVertex>, String> {
-    let (document, buffers, _images) =
-        gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
+    let (document, buffers, _images) = import_glb(path)?;
 
     let mut out = Vec::new();
     match selector {
         GltfMeshSelector::WholeScene => {
-            let scene = document.default_scene().ok_or_else(|| {
-                format!("{}: glb has no default scene — cannot walk node tree", path.display())
-            })?;
-            for node in scene.nodes() {
+            for node in resolve_import_nodes(&document) {
                 walk_gltf_node(&node, MAT4_IDENTITY, &buffers, None, &mut out)?;
             }
         }
         GltfMeshSelector::Material { material_index } => {
-            let scene = document.default_scene().ok_or_else(|| {
-                format!("{}: glb has no default scene — cannot walk node tree", path.display())
-            })?;
-            for node in scene.nodes() {
+            for node in resolve_import_nodes(&document) {
                 walk_gltf_node(&node, MAT4_IDENTITY, &buffers, Some(material_index), &mut out)?;
             }
         }
@@ -333,8 +460,7 @@ pub(crate) fn load_gltf_texture(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let (document, _buffers, images) =
-        gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
+    let (document, _buffers, images) = import_glb(path)?;
 
     let textures: Vec<gltf::Texture> = document.textures().collect();
     let tex = textures.get(texture_index as usize).ok_or_else(|| {
@@ -628,19 +754,16 @@ fn summarize_node(
 /// geometry, the world-space bbox, camera count, and unassigned-geometry
 /// count. One parse; no GPU. See [`GltfImportSummary`].
 pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSummary, String> {
-    let (document, buffers, _images) =
-        gltf::import(path).map_err(|e| format!("gltf::import({}): {e}", path.display()))?;
-    let scene = document.default_scene().ok_or_else(|| {
-        format!("{}: glb has no default scene", path.display())
-    })?;
+    let (document, buffers, _images) = import_glb(path)?;
+    let import_nodes = resolve_import_nodes(&document);
 
     let mut per_material: std::collections::BTreeMap<Option<usize>, u32> =
         std::collections::BTreeMap::new();
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
-    for node in scene.nodes() {
+    for node in &import_nodes {
         summarize_node(
-            &node,
+            node,
             MAT4_IDENTITY,
             &buffers,
             &mut per_material,
