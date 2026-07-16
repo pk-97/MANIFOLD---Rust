@@ -101,11 +101,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // alpha through untouched, regardless of `amount` — otherwise a data
     // texture's filler alpha (e.g. an SSAO map's alpha=1) overwrites a
     // display chain's real alpha and flattens the frame opaque.
-    var out_a: f32;
-    if uniforms.mode == 0u {
-        out_a = mix(a.a, b.a, uniforms.amount);
-    } else {
-        out_a = a.a;
-    }
+    // Branchless to keep fused/standalone compilation identical (precision
+    // contract §7.1) — mix(x, y, 0.0) is exactly x, so t_a = 0 IS pass-through.
+    let t_a = select(0.0, uniforms.amount, uniforms.mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(out_rgb, out_a));
 }

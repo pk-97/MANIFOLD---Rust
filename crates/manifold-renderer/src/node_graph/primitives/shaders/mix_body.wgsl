@@ -44,11 +44,12 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
 fn body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
-    var out_a: f32;
-    if mode == 0u {
-        out_a = mix(a.a, b.a, amount);
-    } else {
-        out_a = a.a;
-    }
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract §7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
     return vec4<f32>(out_rgb, out_a);
 }
