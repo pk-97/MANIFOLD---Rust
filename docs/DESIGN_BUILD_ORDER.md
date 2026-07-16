@@ -179,7 +179,9 @@ Grouped in waves; within a wave, items are independent and order is free.
     the release-content push directly; zero hard edges, re-rankable arbitrarily
     early like 13b/13c. P1 opens with a VERIFY-AT-IMPL prototype gate (§3 of the
     doc) — run that check before committing to the wave.
-13d2. PARAM_STORAGE_DESIGN P1–P5 (added 2026-07-05, Peter-driven). Id-keyed
+13d2. PARAM_STORAGE_DESIGN P1–P5 (SHIPPED 2026-07-05, closed 2026-07-16 —
+    remaining items are Peter-owned: V1.4 library re-save + VD-007–VD-010).
+    Id-keyed
     per-instance param manifest; registry demoted to a load/instantiation
     template; one-time migration kills the positional wire arms. Zero hard
     edges, but Peter ranked it AHEAD of new authoring features (2026-07-05):
