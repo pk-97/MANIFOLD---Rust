@@ -187,6 +187,15 @@ pub struct Executor {
     /// CPU encode cost in [`step_profiles`]. Off by default — one branch per
     /// step on the live path.
     profiling: bool,
+    /// This executor's instance identity (`fx:{layer_id}`, `gen:{layer_id}`,
+    /// `master`, `led:{...}`) — set by the owning compositor/generator-
+    /// renderer at chain-insertion time (D6 correction, PERF_BUDGET_GATE_DESIGN
+    /// P2). Stamped as the `"{scope}:s{idx}"` prefix on every profiled tag so
+    /// GPU spans from a multi-executor, multi-command-buffer frame join back
+    /// to the right instance instead of colliding on a bare `s{idx}`. Empty
+    /// string is a valid (unscoped) default — the tag format always includes
+    /// it so the join key shape never depends on whether a scope was set.
+    profile_scope: String,
     /// `(step_idx, node, type_id, cpu_nanos)` per live step of the last
     /// profiled frame. Cleared at frame start while [`profiling`] is on.
     step_profiles: Vec<StepProfile>,
@@ -266,14 +275,18 @@ struct StepMemo {
 
 /// One step's CPU-side cost from a profiled frame: acquire + evaluate
 /// (= GPU command encoding) + scalar drains. GPU time lives in the
-/// command buffer's [`manifold_gpu::GpuFrameProfile`], joined by tag
-/// `s{step_idx}`.
+/// command buffer's [`manifold_gpu::GpuFrameProfile`], joined by `tag`
+/// (the same `"{scope}:s{step_idx}"` string [`GpuEncoder::set_profile_tag`]
+/// stamped on the encoder for this step — D6 correction).
 #[derive(Clone, Debug)]
 pub struct StepProfile {
     pub step_idx: usize,
     pub node: NodeInstanceId,
     pub type_id: String,
     pub cpu_nanos: u64,
+    /// The scoped join key: `"{scope}:s{step_idx}"`, byte-identical to the
+    /// tag stamped on the GPU encoder for this step.
+    pub tag: String,
 }
 
 impl Executor {
@@ -315,6 +328,7 @@ impl Executor {
             preview_debug_last: None,
             profile_force_all_live: false,
             profiling: false,
+            profile_scope: String::new(),
             step_profiles: Vec::new(),
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
@@ -330,6 +344,16 @@ impl Executor {
     /// on the frame's encoder; read results via [`Self::take_step_profiles`].
     pub fn set_profiling(&mut self, on: bool) {
         self.profiling = on;
+    }
+
+    /// Set this executor's instance identity for profiled tags (D6
+    /// correction): `fx:{layer_id}`, `gen:{layer_id}`, `master`, `led:{...}`.
+    /// Cheap (a `String` assign) — call at chain-insertion time from the
+    /// owning compositor/generator-renderer, not gated on [`Self::profiling`]
+    /// so the scope is always current the moment profiling IS turned on.
+    pub fn set_profile_scope(&mut self, scope: &str) {
+        self.profile_scope.clear();
+        self.profile_scope.push_str(scope);
     }
 
     /// Drain the per-step CPU profiles recorded on the last profiled frame.
@@ -964,7 +988,8 @@ impl Executor {
             if self.profiling
                 && let Some(g) = gpu.as_deref_mut()
             {
-                g.native_enc.set_profile_tag(&format!("s{idx}"));
+                g.native_enc
+                    .set_profile_tag(&format!("{}:s{idx}", self.profile_scope));
             }
 
             // 1. Acquire output slots.
@@ -1238,6 +1263,7 @@ impl Executor {
                     node: step.node,
                     type_id,
                     cpu_nanos: u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                    tag: format!("{}:s{idx}", self.profile_scope),
                 });
             }
 
@@ -1376,7 +1402,8 @@ impl Executor {
             if self.profiling
                 && let Some(g) = gpu.as_deref_mut()
             {
-                g.native_enc.set_profile_tag(&format!("s{step_idx}"));
+                g.native_enc
+                    .set_profile_tag(&format!("{}:s{step_idx}", self.profile_scope));
             }
             // Re-resolve input slot bindings. State-capture inputs are
             // backed by persistent resources whose slots stay bound

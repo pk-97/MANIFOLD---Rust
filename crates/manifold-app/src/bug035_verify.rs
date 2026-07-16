@@ -31,7 +31,8 @@ use manifold_core::project::Project;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::TickContext;
 
-use crate::journey_proof::{headless_content_thread, star_field_generator_layer};
+use crate::headless_harness::headless_content_thread;
+use crate::journey_proof::star_field_generator_layer;
 
 /// 320×180 keeps the render cheap — this harness is about the clip-atlas
 /// persist path, not render cost. 96 beats at 120 BPM covers ~96s of

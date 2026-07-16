@@ -153,6 +153,18 @@ pub struct GeneratorRenderer {
     /// the rebuild sweeps below flip the watched layer's generator fused ⇄ unfused
     /// when this changes (mirrors the effect chain's `preview_effect` rebuild key).
     preview_layer: Option<LayerId>,
+    /// Per-step GPU/CPU attribution profiling on/off for every generator this
+    /// renderer owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Applied to each
+    /// generator's executor at chain-insertion time
+    /// (`install_layer_generator`) and fanned out to already-live generators
+    /// via [`Self::set_profiling`]. `false` costs one `bool` set per
+    /// generator per call — zero GPU/CPU timing.
+    profiling_enabled: bool,
+}
+
+/// This generator's profiled-tag scope: `gen:{layer_id}`.
+fn gen_scope(layer_id: &LayerId) -> String {
+    format!("gen:{layer_id}")
 }
 
 impl GeneratorRenderer {
@@ -190,7 +202,30 @@ impl GeneratorRenderer {
             uniform_arena,
             last_data_version: u64::MAX, // force scan on first frame
             preview_layer: None,
+            profiling_enabled: false,
         }
+    }
+
+    /// Enable/disable per-step attribution profiling on every generator this
+    /// renderer owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Fans out to
+    /// already-installed generators; `install_layer_generator` applies the
+    /// same flag to any generator installed after this call.
+    pub fn set_profiling(&mut self, on: bool) {
+        self.profiling_enabled = on;
+        for (layer_id, state) in self.layer_generators.iter_mut() {
+            state.generator.set_profiling(on);
+            state.generator.set_profile_scope(&gen_scope(layer_id));
+        }
+    }
+
+    /// Drain every owned generator's per-step CPU profiles recorded on the
+    /// last profiled frame.
+    pub fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+        let mut out = Vec::new();
+        for state in self.layer_generators.values_mut() {
+            out.extend(state.generator.take_step_profiles());
+        }
+        out
     }
 
     /// Set the device pointer after the GpuDevice has been moved to its
@@ -895,7 +930,7 @@ impl GeneratorRenderer {
         // live edits). The registry's fuse gate consults this; the rebuild
         // sweeps consult `built_watched` to re-instantiate when it toggles.
         let is_watched = self.preview_layer.as_ref() == Some(&layer_id);
-        let Some(generator) = self.registry.create_with_override(
+        let Some(mut generator) = self.registry.create_with_override(
             Arc::clone(&self.device),
             &gen_type,
             override_def,
@@ -906,6 +941,11 @@ impl GeneratorRenderer {
         ) else {
             return false;
         };
+        // D6 correction: apply the current profiling flag + this generator's
+        // scope at chain-insertion time, so a freshly (re)built generator
+        // never misses a --profile run in progress.
+        generator.set_profiling(self.profiling_enabled);
+        generator.set_profile_scope(&gen_scope(&layer_id));
         self.layer_generators.insert(
             layer_id.clone(),
             LayerGeneratorState {

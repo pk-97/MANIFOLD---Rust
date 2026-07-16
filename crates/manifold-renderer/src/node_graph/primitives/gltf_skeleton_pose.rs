@@ -31,8 +31,12 @@
 
 use std::borrow::Cow;
 
+use super::gltf_anim_shared::{
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, row_range_for_compound_key,
+    sample_quat_range, sample_vec3_range,
+};
 use crate::generators::mesh_common::JointMatrix;
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime};
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
@@ -49,6 +53,8 @@ crate::primitive! {
     purpose: "Samples a parsed glTF skeleton's per-joint TRS keyframe tracks (or static bind pose, for an unanimated joint) at a live `progress` (0..1) and emits the joint palette as Array(JointMatrix) — one skin matrix (jointWorldMatrix * inverseBindMatrix) per joint, in skin.joints() order. Wire the output straight into node.skin_mesh's `matrices` input. LINEAR interpolation only (A1/A2 scope): lerp for translation/scale, slerp for rotation. `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping.",
     inputs: {
         progress: ScalarF32 optional,
+        clip_index: ScalarF32 optional,
+        trigger_count: ScalarF32 optional,
     },
     outputs: {
         joint_matrices: Array(JointMatrix),
@@ -68,6 +74,42 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0625, 16.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("clip_index"),
+            label: "Clip",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 31.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("loop_mode"),
+            label: "Loop Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (LOOP_MODES.len() - 1) as f32)),
+            enum_values: LOOP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("clip_durations"),
+            label: "Clip Durations",
+            ty: ParamType::Table,
+            // Rows: [clip_index, duration_s]; sentinel means "use the
+            // static duration_s param for every clip".
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("trigger_count"),
+            label: "Retrigger",
+            ty: ParamType::Int,
+            // Port-shadowed by the same-named input; unwired, an outer-card
+            // `is_trigger` button writes here directly.
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -113,8 +155,10 @@ crate::primitive! {
             name: Cow::Borrowed("translation_tracks"),
             label: "Translation Tracks",
             ty: ParamType::Table,
-            // Rows: [joint_index, time_s, x, y, z], grouped ascending by
-            // joint_index, ascending time within a joint.
+            // Rows: [clip_index, joint_index, time_s, x, y, z] (A4:
+            // clip_index prepended for D4 multi-clip selection), grouped
+            // ascending by (clip_index, joint_index), ascending time within
+            // a (clip, joint) block.
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -123,7 +167,7 @@ crate::primitive! {
             name: Cow::Borrowed("rotation_tracks"),
             label: "Rotation Tracks",
             ty: ParamType::Table,
-            // Rows: [joint_index, time_s, x, y, z, w].
+            // Rows: [clip_index, joint_index, time_s, x, y, z, w].
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
@@ -132,13 +176,13 @@ crate::primitive! {
             name: Cow::Borrowed("scale_tracks"),
             label: "Scale Tracks",
             ty: ParamType::Table,
-            // Rows: [joint_index, time_s, x, y, z].
+            // Rows: [clip_index, joint_index, time_s, x, y, z].
             default: ParamValue::Float(0.0),
             range: None,
             enum_values: &[],
         },
     ],
-    composition_notes: "gltf_import.rs builds all six Tables at import time from GltfMaterialInfo::skin, sorted ascending by joint_index. Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
+    composition_notes: "gltf_import.rs builds all six Tables at import time from GltfMaterialInfo::skin, sorted ascending by joint_index (topology tables) or (clip_index, joint_index) (track tables). Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
     examples: [],
     picker: { label: "glTF Skeleton Pose", category: Driver },
     summary: "Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the pose.",
@@ -146,19 +190,9 @@ crate::primitive! {
     role: Source,
     aliases: ["skeleton pose", "joint palette", "skin pose", "rig pose"],
     boundary_reason: NonGpu,
-}
-
-/// Same default-beat-drive formula as `gltf_animation_source::default_progress`
-/// (D3) — duplicated rather than shared across two small CPU primitives
-/// with no other coupling; both are independently gate-tested against the
-/// identical formula.
-fn default_progress(time: FrameTime, duration_s: f32, rate: f32) -> f32 {
-    let beats = time.beats.0 as f32;
-    let seconds = time.seconds.0 as f32;
-    let beats_per_second = if seconds.abs() > 1e-6 { beats / seconds } else { 2.0 };
-    let clip_beats = (duration_s * beats_per_second).max(1e-6);
-    let raw = beats * rate / clip_beats;
-    raw.rem_euclid(1.0)
+    extra_fields: {
+        trigger_latch: TriggerLatch = TriggerLatch::new(),
+    },
 }
 
 fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
@@ -166,147 +200,6 @@ fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
         Some(ParamValue::Table(t)) => Some(t.as_ref()),
         _ => None,
     }
-}
-
-/// Row range `[start, end)` within `table` whose leading `joint_index`
-/// column equals `joint`, assuming rows are grouped ascending by that
-/// column (the `gltf_import.rs` emission contract). One linear scan per
-/// call; `table` has at most a few thousand rows across all joints for
-/// the documented stress case (BrainStem), so a handful of these scans
-/// per frame stays well inside the 20ms hot-path budget.
-fn joint_row_range(table: Option<&TableData>, joint: usize) -> (usize, usize) {
-    let Some(table) = table else { return (0, 0) };
-    let n = table.row_count();
-    let mut start = None;
-    let mut end = n;
-    for i in 0..n {
-        let row = table.row(i).unwrap();
-        let idx = row[0].round() as i64;
-        if idx == joint as i64 {
-            if start.is_none() {
-                start = Some(i);
-            }
-        } else if start.is_some() {
-            end = i;
-            break;
-        }
-    }
-    match start {
-        Some(s) => (s, end),
-        None => (0, 0),
-    }
-}
-
-/// Sample a `[joint_index, time_s, x, y, z]` row range (columns 1..4) at
-/// `t`, lerping between bracketing keyframes and holding boundary values
-/// outside the range — identical clamp semantics to
-/// `gltf_animation_source::sample_vec3_track`.
-fn sample_vec3_range(table: Option<&TableData>, range: (usize, usize), t: f32, default: [f32; 3]) -> [f32; 3] {
-    let (start, end) = range;
-    let Some(table) = table else { return default };
-    let n = end.saturating_sub(start);
-    if n == 0 {
-        return default;
-    }
-    let row = |i: usize| -> [f32; 3] {
-        let r = table.row(start + i).unwrap();
-        [r[2], r[3], r[4]]
-    };
-    let time = |i: usize| -> f32 { table.row(start + i).unwrap()[1] };
-    if n == 1 {
-        return row(0);
-    }
-    let (first_t, last_t) = (time(0), time(n - 1));
-    if t <= first_t {
-        return row(0);
-    }
-    if t >= last_t {
-        return row(n - 1);
-    }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if time(mid) <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (time(lo), time(hi));
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    let (a, b) = (row(lo), row(hi));
-    [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
-}
-
-/// Same as [`sample_vec3_range`] but for a `[joint_index, time_s, x, y,
-/// z, w]` quaternion range (columns 1..5), slerping between keyframes.
-fn sample_quat_range(table: Option<&TableData>, range: (usize, usize), t: f32) -> [f32; 4] {
-    let (start, end) = range;
-    let default = [0.0, 0.0, 0.0, 1.0];
-    let Some(table) = table else { return default };
-    let n = end.saturating_sub(start);
-    if n == 0 {
-        return default;
-    }
-    let row = |i: usize| -> [f32; 4] {
-        let r = table.row(start + i).unwrap();
-        [r[2], r[3], r[4], r[5]]
-    };
-    let time = |i: usize| -> f32 { table.row(start + i).unwrap()[1] };
-    if n == 1 {
-        return row(0);
-    }
-    let (first_t, last_t) = (time(0), time(n - 1));
-    if t <= first_t {
-        return row(0);
-    }
-    if t >= last_t {
-        return row(n - 1);
-    }
-    let mut lo = 0usize;
-    let mut hi = n - 1;
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if time(mid) <= t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let (t0, t1) = (time(lo), time(hi));
-    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    slerp(row(lo), row(hi), f)
-}
-
-fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    let dot0 = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let (b, dot) = if dot0 < 0.0 { ([-b[0], -b[1], -b[2], -b[3]], -dot0) } else { (b, dot0) };
-    if dot > 0.9995 {
-        let lerped = [
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            a[3] + (b[3] - a[3]) * t,
-        ];
-        return normalize_quat(lerped);
-    }
-    let theta_0 = dot.clamp(-1.0, 1.0).acos();
-    let theta = theta_0 * t;
-    let sin_theta_0 = theta_0.sin();
-    let s0 = (theta_0 - theta).sin() / sin_theta_0;
-    let s1 = theta.sin() / sin_theta_0;
-    [
-        a[0] * s0 + b[0] * s1,
-        a[1] * s0 + b[1] * s1,
-        a[2] * s0 + b[2] * s1,
-        a[3] * s0 + b[3] * s1,
-    ]
-}
-
-fn normalize_quat(q: [f32; 4]) -> [f32; 4] {
-    let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if len < 1e-12 { [0.0, 0.0, 0.0, 1.0] } else { [q[0] / len, q[1] / len, q[2] / len, q[3] / len] }
 }
 
 /// Read joint `j`'s `[joint_index, m0..m15]` row (column-major 4x4),
@@ -384,11 +277,38 @@ impl Primitive for GltfSkeletonPose {
             Some(ParamValue::Float(f)) => *f,
             _ => 1.0,
         };
-        let progress = match ctx.inputs.scalar("progress") {
-            Some(ParamValue::Float(f)) => f,
-            _ => default_progress(ctx.time, duration_s, rate),
-        };
-        let t = progress.rem_euclid(1.0) * duration_s;
+        let loop_mode = LoopMode::from_enum_index(
+            ctx.params.get("loop_mode").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+        );
+        let clip_index = ctx
+            .inputs
+            .scalar("clip_index")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("clip_index").and_then(ParamValue::as_scalar))
+            .unwrap_or(0.0)
+            .round()
+            .max(0.0) as usize;
+
+        let trigger_count = ctx
+            .inputs
+            .scalar("trigger_count")
+            .and_then(|v| v.as_scalar())
+            .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
+        self.trigger_latch.update(trigger_count, ctx.time.beats.0);
+
+        let clip_durations = table_or_empty(ctx.params.get("clip_durations"));
+        let duration_s = clip_duration(clip_durations, clip_index, duration_s);
+
+        let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
+        let progress = resolve_progress(
+            ctx.time,
+            wired_progress,
+            duration_s,
+            rate,
+            loop_mode,
+            self.trigger_latch.origin_beats(),
+        );
+        let t = progress * duration_s;
 
         let joint_count = match ctx.params.get("joint_count") {
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MAX_JOINTS),
@@ -424,9 +344,12 @@ impl Primitive for GltfSkeletonPose {
         for j in 0..joint_count {
             root_world[j] = mat4_from_table(root_world_table, j);
             inverse_bind[j] = mat4_from_table(inverse_bind_table, j);
-            let tr = sample_vec3_range(translation_tracks, joint_row_range(translation_tracks, j), t, [0.0, 0.0, 0.0]);
-            let rot = sample_quat_range(rotation_tracks, joint_row_range(rotation_tracks, j), t);
-            let sc = sample_vec3_range(scale_tracks, joint_row_range(scale_tracks, j), t, [1.0, 1.0, 1.0]);
+            let tr_range = row_range_for_compound_key(translation_tracks, clip_index, j);
+            let tr = sample_vec3_range(translation_tracks, tr_range, 2, 3, t, [0.0, 0.0, 0.0]);
+            let rot_range = row_range_for_compound_key(rotation_tracks, clip_index, j);
+            let rot = sample_quat_range(rotation_tracks, rot_range, 2, 3, t);
+            let sc_range = row_range_for_compound_key(scale_tracks, clip_index, j);
+            let sc = sample_vec3_range(scale_tracks, sc_range, 2, 3, t, [1.0, 1.0, 1.0]);
             local[j] = mat4_from_trs(tr, rot, sc);
         }
 
@@ -457,6 +380,14 @@ impl Primitive for GltfSkeletonPose {
             out_buf.write(0, bytemuck::cast_slice(&skin_matrices[..n]));
         }
     }
+
+    fn clear_state(&mut self) {
+        self.trigger_latch.clear();
+    }
+
+    fn is_trigger_latch(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -469,7 +400,7 @@ mod tests {
     fn declares_progress_input_and_joint_matrix_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         assert_eq!(GltfSkeletonPose::TYPE_ID, "node.gltf_skeleton_pose");
-        assert_eq!(GltfSkeletonPose::INPUTS.len(), 1);
+        assert_eq!(GltfSkeletonPose::INPUTS.len(), 3);
         assert_eq!(GltfSkeletonPose::INPUTS[0].name, "progress");
         assert!(!GltfSkeletonPose::INPUTS[0].required);
         assert_eq!(GltfSkeletonPose::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
@@ -489,10 +420,17 @@ mod tests {
         TableData::new(rows).unwrap()
     }
 
+    /// Prepends `clip_index = 0` to each `[joint_index, time_s, ...]` row
+    /// (pre-A4 test shape) — every test here targets the default-selected
+    /// clip.
+    fn clip0_track_table(rows: Vec<Vec<f32>>) -> TableData {
+        track_table(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
+    }
+
     #[test]
     fn joint_row_range_finds_a_grouped_slice() {
-        // Rows for joints 0, 0, 1, 1, 1, 3 (joint 2 has no rows).
-        let table = track_table(vec![
+        // Rows for joints 0, 0, 1, 1, 1, 3 (joint 2 has no rows), clip 0.
+        let table = clip0_track_table(vec![
             vec![0.0, 0.0, 0.0, 0.0, 0.0],
             vec![0.0, 1.0, 1.0, 0.0, 0.0],
             vec![1.0, 0.0, 2.0, 0.0, 0.0],
@@ -500,35 +438,35 @@ mod tests {
             vec![1.0, 1.0, 4.0, 0.0, 0.0],
             vec![3.0, 0.0, 5.0, 0.0, 0.0],
         ]);
-        assert_eq!(joint_row_range(Some(&table), 0), (0, 2));
-        assert_eq!(joint_row_range(Some(&table), 1), (2, 5));
-        assert_eq!(joint_row_range(Some(&table), 2), (0, 0), "no rows for joint 2");
-        assert_eq!(joint_row_range(Some(&table), 3), (5, 6));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 0), (0, 2));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 1), (2, 5));
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 2), (0, 0), "no rows for joint 2");
+        assert_eq!(row_range_for_compound_key(Some(&table), 0, 3), (5, 6));
     }
 
     #[test]
     fn sample_vec3_range_lerps_and_holds_boundaries() {
-        let table = track_table(vec![vec![0.0, 0.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 10.0, 0.0, 0.0]]);
-        let range = joint_row_range(Some(&table), 0);
-        let mid = sample_vec3_range(Some(&table), range, 0.5, [0.0, 0.0, 0.0]);
+        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 10.0, 0.0, 0.0]]);
+        let range = row_range_for_compound_key(Some(&table), 0, 0);
+        let mid = sample_vec3_range(Some(&table), range, 2, 3, 0.5, [0.0, 0.0, 0.0]);
         assert!((mid[0] - 5.0).abs() < 1e-4, "halfway lerp, got {}", mid[0]);
-        let before = sample_vec3_range(Some(&table), range, -1.0, [0.0, 0.0, 0.0]);
+        let before = sample_vec3_range(Some(&table), range, 2, 3, -1.0, [0.0, 0.0, 0.0]);
         assert!((before[0] - 0.0).abs() < 1e-4, "holds first keyframe before range");
-        let after = sample_vec3_range(Some(&table), range, 5.0, [0.0, 0.0, 0.0]);
+        let after = sample_vec3_range(Some(&table), range, 2, 3, 5.0, [0.0, 0.0, 0.0]);
         assert!((after[0] - 10.0).abs() < 1e-4, "holds last keyframe after range");
     }
 
     #[test]
     fn sample_vec3_range_falls_back_to_default_when_joint_has_no_rows() {
-        let out = sample_vec3_range(None, (0, 0), 0.5, [1.0, 2.0, 3.0]);
+        let out = sample_vec3_range(None, (0, 0), 2, 3, 0.5, [1.0, 2.0, 3.0]);
         assert_eq!(out, [1.0, 2.0, 3.0]);
     }
 
     #[test]
     fn sample_quat_range_single_row_is_the_static_bind_pose() {
-        let table = track_table(vec![vec![0.0, 0.0, 0.1, 0.2, 0.3, 0.9]]);
-        let range = joint_row_range(Some(&table), 0);
-        let q = sample_quat_range(Some(&table), range, 0.7);
+        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.1, 0.2, 0.3, 0.9]]);
+        let range = row_range_for_compound_key(Some(&table), 0, 0);
+        let q = sample_quat_range(Some(&table), range, 2, 3, 0.7);
         assert_eq!(q, [0.1, 0.2, 0.3, 0.9], "single-row table returns the static value at any t");
     }
 
