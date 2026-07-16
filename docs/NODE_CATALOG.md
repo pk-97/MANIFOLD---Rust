@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 241 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 245 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -155,7 +155,7 @@ _Generated from the node registry. Do not hand-edit. 241 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (44)
+### 3D Geometry (46)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -174,6 +174,7 @@ _Generated from the node registry. Do not hand-edit. 241 nodes registered, group
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | glTF Mesh | `node.gltf_mesh_source` | Source | Loads a glTF/.glb model file from disk as mesh geometry, so imported 3D assets flow into the render pipeline like any other shape primitive. |
+| glTF Skinned Mesh | `node.gltf_skinned_mesh_source` | Source | Loads an imported glTF character's bind-pose geometry and its per-vertex joint weights, ready to be deformed by a Skin Mesh node. |
 | Grid Edges | `node.grid_edges` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
 | Grid Mesh | `node.grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
 | Grid Points (UV) | `node.grid_points` | Source | Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes. |
@@ -198,6 +199,7 @@ _Generated from the node registry. Do not hand-edit. 241 nodes registered, group
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Scatter On Mesh | `node.scatter_on_mesh` | Source | Scatters copies of an object across a mesh's surface — a field of instances placed and sized randomly but deterministically, area-weighted so they don't clump … |
+| Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
@@ -259,7 +261,7 @@ _Generated from the node registry. Do not hand-edit. 241 nodes registered, group
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 
-### Control (20)
+### Control (22)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -273,6 +275,8 @@ _Generated from the node registry. Do not hand-edit. 241 nodes registered, group
 | Envelope Decay | `node.envelope_decay` | Control | Snaps to full on each trigger then fades back to zero at a rate you set. The classic one-shot envelope for hits and flashes. |
 | Envelope Follower (A/R) | `node.envelope_follower_ar` | Control | Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth. |
 | Frequency Ratio | `node.frequency_ratio` | Control | Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form. |
+| glTF Animation Source | `node.gltf_animation_source` | Source | Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loo… |
+| glTF Skeleton Pose | `node.gltf_skeleton_pose` | Source | Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the p… |
 | Inject Burst | `node.inject_burst` | Control | On each trigger it runs a short timed burst, giving an active flag, a 0-to-1 ramp, and a random spot to inject at. Built for fluid sims that puff in new materi… |
 | LFO | `node.lfo` | Control | A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free. |
 | Math | `node.math` | Control | Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation. |
