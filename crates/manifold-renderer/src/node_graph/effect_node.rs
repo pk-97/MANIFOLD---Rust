@@ -209,6 +209,14 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// slots. Read and performed by the executor after `late_capture`
     /// returns; ignored on the `evaluate` path.
     pub texture_swap_request: Option<(&'static str, &'static str)>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5/I3 — set by
+    /// [`Self::mark_outputs_unchanged`], read by the executor after
+    /// `run`/`evaluate` returns and stored per node per frame (P1 stub —
+    /// nothing consumes the stored value yet; P2 gates dirty-caching
+    /// decisions on it). `false` by default: a node that never calls the
+    /// API is always treated as having produced fresh output this frame,
+    /// which is the safe (never-stale) direction.
+    pub outputs_unchanged: bool,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -231,6 +239,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             gpu_accessed: false,
             errors: None,
             texture_swap_request: None,
+            outputs_unchanged: false,
         }
     }
 
@@ -259,6 +268,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             gpu_accessed: false,
             errors: None,
             texture_swap_request: None,
+            outputs_unchanged: false,
         }
     }
 
@@ -271,6 +281,31 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// slot isn't bound.
     pub fn request_texture_swap(&mut self, out_port: &'static str, in_port: &'static str) {
         self.texture_swap_request = Some((out_port, in_port));
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — declare that this
+    /// node's outputs this frame are unchanged from last frame.
+    ///
+    /// **I3's contract, verbatim: a node may declare it only when its
+    /// outputs are bit-identical to the previous frame *including physical
+    /// output identity*.** "Physical output identity" means the actual
+    /// slot/buffer/texture object a downstream consumer would read from —
+    /// not just the bytes. A node whose output slot was handed a
+    /// different physical resource this frame (pool recycle, resize) must
+    /// NOT call this even if the bytes it would have written are the same
+    /// as last time's, because the resource that held those bytes is
+    /// gone.
+    ///
+    /// Call this ONLY on the exact code path that skipped writing (the
+    /// node's actual no-op branch) — never speculatively, never on a path
+    /// that also performs a write. The default (never calling this) is
+    /// always safe: it means "assume dirty", which is correct but leaves
+    /// the waste this design removes. Declaring falsely is the only way
+    /// to introduce staleness under this API — there is no other failure
+    /// mode, so per-declaring-node parity tests (frame N readback ==
+    /// fresh-executor frame 1 readback) are the enforcement (I3).
+    pub fn mark_outputs_unchanged(&mut self) {
+        self.outputs_unchanged = true;
     }
 
     /// Attach a per-step error scratch buffer. The executor calls this

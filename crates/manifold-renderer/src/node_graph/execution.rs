@@ -213,6 +213,14 @@ pub struct Executor {
     /// detect upstream changes. Non-pure producers bump every frame they run,
     /// which conservatively keeps their consumers dirty.
     resource_epoch: ahash::AHashMap<ResourceId, u64>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-step "this node
+    /// declared its outputs unchanged this frame" flag
+    /// (`ctx.mark_outputs_unchanged()`). Reset to `false` for every step
+    /// EVERY frame (unlike `step_memo`, which persists across frames) —
+    /// sized to the plan's step count alongside it. Populated after each
+    /// step's `evaluate` returns; READ BY NOTHING yet (P1 stub only — P2
+    /// consumes this to gate dirty-caching decisions elsewhere).
+    node_declared_unchanged: Vec<bool>,
     /// Per-step HOISTABLE bit: the step's node is pure AND every input is
     /// produced by a hoistable step. The closure itself is classified at
     /// plan compile time ([`ExecutionPlan::step_hoistable`] /
@@ -332,6 +340,7 @@ impl Executor {
             step_profiles: Vec::new(),
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
+            node_declared_unchanged: Vec::new(),
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
             empty_resources_prev: ahash::AHashSet::default(),
@@ -772,7 +781,12 @@ impl Executor {
             self.step_memo.clear();
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
+            self.node_declared_unchanged.resize(plan.steps().len(), false);
         }
+        // D5: reset every frame (not sticky like `step_memo`) — a node
+        // must re-declare on every frame it wants to skip; the executor
+        // never carries last frame's declaration forward.
+        self.node_declared_unchanged.iter_mut().for_each(|v| *v = false);
 
         // Reset preview capture for this frame. Re-resolved below if the
         // target node is live and produces a texture.
@@ -1178,6 +1192,10 @@ impl Executor {
                             inst.node.type_id().as_str(),
                             inst.node.aliased_array_io(),
                         );
+                        // D5: record this step's declaration for the
+                        // frame. `idx` indexes `plan.steps()`, which
+                        // `node_declared_unchanged` is sized to match.
+                        self.node_declared_unchanged[idx] = ctx.outputs_unchanged;
                     }
                     // Drain scalar writes back into the backend so
                     // downstream readers in the same frame see them via

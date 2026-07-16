@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-192 | **is-multiple-of-clippy-debt-gltf-import-render-scene** | `cargo clippy -p manifold-renderer --features gpu-proofs --tests -- -D warnings` (only surfaces with the gpu-proofs feature's test binaries compiled) fails on 6 pre-existing `manual_is_multiple_of` lints in `gltf_import.rs` (4 sites, `% 4 != 0` padding loops) and `render_scene.rs` (1 site, `% 2 == 0` band check) — unrelated to RENDER_SCENE_PERF_OPTIMIZATION_DESIGN P1 (neither file touched this phase); the plain `cargo clippy -p manifold-renderer -p manifold-gpu -- -D warnings` scope used for P1's own gate is clean. LOW (mechanical `.is_multiple_of()` rewrite, no behavior change; blocks a full gpu-proofs-featured clippy sweep, not the default one). |
 | BUG-191 | **perf-soak-start-seek-first-frame-spike** | `cargo xtask perf-soak <project> --start <beats>` shows a ~34-37ms content-thread frame right after the transport seeks to `--start`, tripping I1's 20ms hard-fail line on that one frame — confirmed pre-existing on unmodified `origin/main` (not a PERF_BUDGET_GATE_DESIGN P2 regression), root cause not investigated. MED (the gate can't yet soak a targeted mid-set passage via `--start` without a spurious I1 failure; `--seconds`-from-top runs are unaffected). |
 | BUG-190 | **brainstem-24-skinned-objects-370ms-per-frame** | `BrainStem.glb` (24 skinned objects, 78 materials) renders a flat ~370ms/frame from frame 0 — 18x over the 20ms hot-path budget. NOT blocking A2 (never a named gate fixture; the real gate fixtures CesiumMan/Fox measure 5-7ms/frame). Root cause unknown — likely a pre-existing many-object render_scene scaling cost (BUG-189's territory) rather than skinning-specific. MED (blocks a real multi-skinned-character asset from being performable; not the A1/A2 gate fixtures). |
 | BUG-189 | **import-graph-10ms-resolution-independent-gpu-floor** | The glb import graph costs ~10 ms of true GPU time per frame regardless of resolution (9.8 ms @1080p vs 13.5 ms @4K on the 302k-tri AMG GT3, M4 Max) — the floor, not per-pixel shading, is what breaks the 16.7 ms budget at 4K (p95 22.7 ms). Root cause unknown; suspects: per-frame shadow-map re-render, per-pass overhead across the import graph's many small passes, mip/dome regeneration. MED (release-content: 4K60 export/preview headroom). |
@@ -134,6 +135,16 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-192 (is-multiple-of-clippy-debt-gltf-import-render-scene) — `cargo clippy --features gpu-proofs --tests -- -D warnings` fails on 6 pre-existing `manual_is_multiple_of` lints outside this phase's touched files — found 2026-07-17 during RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1
+
+**Status:** OPEN — found incidentally, not fixed (out of P1's scope fence — neither file is one P1 touches).
+
+**Symptom:** `cargo clippy -p manifold-renderer -p manifold-gpu --features gpu-proofs --tests -- -D warnings` fails with 6 `clippy::manual_is_multiple_of` errors: `gltf_import.rs:2368`, `:2510`, `:5191`, `:5196`, `:5235` (all `while <len>.len() % 4 != 0 { … }` padding loops) and `render_scene.rs:4493` (`if band % 2 == 0 { … }`). The plain scoped clippy P1 actually gates on — `cargo clippy -p manifold-renderer -p manifold-gpu -- -D warnings` (no `--features gpu-proofs --tests`) — is clean; these lints only surface once the gpu-proofs feature's test binaries pull that code into a lint pass, which P1's phase brief didn't require but running the full gpu-proofs test suite for the four touched glTF source primitives incidentally exercised.
+
+**Root cause:** a clippy version bump added the `manual_is_multiple_of` lint (stabilized `u32::is_multiple_of` in a recent Rust release); the 6 sites predate the lint and were never touched by any session since.
+
+**Fix shape:** mechanical — replace `x % n != 0` with `!x.is_multiple_of(n)` (and `x % n == 0` with `x.is_multiple_of(n)`) at the 6 named sites. No behavior change. Whoever next touches `gltf_import.rs` or `render_scene.rs` for an unrelated reason should fold this in rather than opening a dedicated session for 6 one-line rewrites.
 
 ### BUG-191 (perf-soak-start-seek-first-frame-spike) — `cargo xtask perf-soak --start <beats>` produces a ~34-37ms content-thread frame right after the transport seeks, tripping I1 on that one frame — found 2026-07-16 during PERF_BUDGET_GATE_DESIGN.md P2, confirmed pre-existing
 
