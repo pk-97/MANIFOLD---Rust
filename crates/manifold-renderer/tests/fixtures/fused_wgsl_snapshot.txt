@@ -3966,7 +3966,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r3);
 }
 
-=== generator:Cymatics node:43 ===
+=== generator:Cymatics node:45 ===
 // @static_param: n1_a
 // @static_param: n1_b
 // @static_param: n1_c
@@ -4217,7 +4217,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r10);
 }
 
-=== generator:Cymatics node:44 ===
+=== generator:Cymatics node:46 ===
 struct Element {
     position: vec3<f32>,
     velocity: vec3<f32>,

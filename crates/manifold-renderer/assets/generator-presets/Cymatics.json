@@ -49,9 +49,9 @@
       {
         "id": "sand",
         "name": "Sand",
-        "min": 10000.0,
-        "max": 400000.0,
-        "defaultValue": 250000.0,
+        "min": 50000.0,
+        "max": 1000000.0,
+        "defaultValue": 500000.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
@@ -138,7 +138,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "spawn",
@@ -151,7 +151,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "sample_forces",
@@ -164,7 +164,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "jiggle_kick",
@@ -177,7 +177,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "euler",
@@ -190,7 +190,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "wrap",
@@ -203,7 +203,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "splat",
@@ -268,7 +268,7 @@
       {
         "id": "sand",
         "label": "Sand",
-        "defaultValue": 250000.0,
+        "defaultValue": 500000.0,
         "target": {
           "kind": "node",
           "nodeId": "energy_calc",
@@ -667,11 +667,11 @@
       "params": {
         "max_capacity": {
           "type": "Int",
-          "value": 524288
+          "value": 1048576
         },
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         },
         "seed_mode": {
           "type": "Enum",
@@ -715,7 +715,7 @@
       "params": {
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         }
       }
     },
@@ -728,7 +728,7 @@
       "params": {
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         },
         "strength": {
           "type": "Float",
@@ -745,7 +745,7 @@
       "params": {
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         },
         "speed": {
           "type": "Float",
@@ -762,7 +762,7 @@
       "params": {
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         }
       }
     },
@@ -775,7 +775,7 @@
       "params": {
         "active_count": {
           "type": "Int",
-          "value": 250000
+          "value": 500000
         }
       }
     },
@@ -799,7 +799,7 @@
         },
         "intensity": {
           "type": "Float",
-          "value": 8.0
+          "value": 3.0
         },
         "contrast": {
           "type": "Float",
@@ -816,11 +816,11 @@
       "params": {
         "a": {
           "type": "Float",
-          "value": 250000.0
+          "value": 500000.0
         },
         "scale": {
           "type": "Float",
-          "value": 0.008192
+          "value": 0.0008192
         },
         "offset": {
           "type": "Float",
@@ -842,6 +842,34 @@
         "offset": {
           "type": "Float",
           "value": 0.12
+        }
+      }
+    },
+    {
+      "id": 43,
+      "nodeId": "area_scale",
+      "typeId": "node.canvas_area_scale",
+      "handle": "area_scale",
+      "title": "Resolution Compensation"
+    },
+    {
+      "id": 44,
+      "nodeId": "intensity_calc",
+      "typeId": "node.scale_offset_value",
+      "handle": "intensity_calc",
+      "title": "Tone Intensity (\u00d73)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
         }
       }
     }
@@ -1122,6 +1150,30 @@
       "fromPort": "out",
       "toNode": 1,
       "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 43,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 43,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 43,
+      "fromPort": "out",
+      "toNode": 44,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 44,
+      "fromPort": "out",
+      "toNode": 36,
+      "toPort": "intensity"
     }
   ]
 }
