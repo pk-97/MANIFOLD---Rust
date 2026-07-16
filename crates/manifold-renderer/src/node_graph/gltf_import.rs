@@ -836,6 +836,46 @@ fn build_import_graph(
                     .insert(format!("{prefix}{part}"), float(*value));
             }
         }
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
+        // settings → `node.pbr_material`'s `{prefix}wrap_u/wrap_v/mag_filter/
+        // min_filter` enum params. Index order matches that primitive's
+        // `WRAP_MODES`/`FILTER_MODES` arrays (0 = Repeat / Linear, the
+        // default both sides agree on).
+        let wrap_idx = |w: gltf_load::GltfWrapMode| -> u32 {
+            match w {
+                gltf_load::GltfWrapMode::Repeat => 0,
+                gltf_load::GltfWrapMode::ClampToEdge => 1,
+                gltf_load::GltfWrapMode::MirrorRepeat => 2,
+            }
+        };
+        let filter_idx = |f: gltf_load::GltfFilterMode| -> u32 {
+            match f {
+                gltf_load::GltfFilterMode::Linear => 0,
+                gltf_load::GltfFilterMode::Nearest => 1,
+            }
+        };
+        for (prefix, s) in [
+            ("", &m.base_color_sampler),
+            ("nrm_", &m.normal_sampler),
+            ("mr_", &m.mr_sampler),
+            ("occ_", &m.occlusion_sampler),
+            ("em_", &m.emissive_sampler),
+        ] {
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_u"), enum_val(wrap_idx(s.wrap_u)));
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_v"), enum_val(wrap_idx(s.wrap_v)));
+            mat_node.params.insert(
+                format!("{prefix}mag_filter"),
+                enum_val(filter_idx(s.mag_filter)),
+            );
+            mat_node.params.insert(
+                format!("{prefix}min_filter"),
+                enum_val(filter_idx(s.min_filter)),
+            );
+        }
         group_nodes.push(mat_node);
 
         // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
@@ -2127,6 +2167,11 @@ mod tests {
             clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -2316,6 +2361,11 @@ mod tests {
             clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         }
     }
 
@@ -2744,6 +2794,11 @@ mod tests {
             clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],

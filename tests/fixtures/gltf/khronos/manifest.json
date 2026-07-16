@@ -136,8 +136,19 @@
   },
   {
     "asset": "TextureSettingsTest.glb",
-    "checks": [],
-    "status": "xfail:BUG-164"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_settings_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-164 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D3): render_scene now binds one sampler per map family (base/normal/mr/occlusion/emissive), each built from that glTF texture's own wrapS/wrapT/filter instead of one scene-wide hardcoded REPEAT sampler. This asset's 10 materials use the SAME source textures under DIFFERENT samplers (clamp/repeat/mirror per S/T axis) -- the per-quadrant divergence in the golden IS the proof; single-sided vs double-sided (unrelated to D3) is expected to differ per the asset's own design."
   },
   {
     "asset": "AnimatedMorphCube.glb",
@@ -1225,9 +1236,19 @@
   },
   {
     "asset": "SimpleInstancing.glb",
-    "checks": [],
-    "status": "xfail:BUG-168",
-    "note": "EXT_mesh_gpu_instancing entirely unhandled"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.05
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/simple_instancing.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-168 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P4/D6): EXT_mesh_gpu_instancing parsed via raw-JSON sniff (no typed support in gltf 1.4.1); each instance's TRANSLATION/ROTATION/SCALE composes with the node's own world transform and bakes a separate world-space copy into the SAME per-material combined mesh at flatten time -- zero new code in the render/graph-assembly path (v1 expands to N wired copies, not true GPU instancing, per D6's explicit rejection of render_instanced_3d_mesh). 125 instances render as 125 visibly distinct cubes; object_count stays 1 (one render_scene object, one combined 4500-vertex mesh) since instancing never adds materials -- OBJECT_SAFETY_MAX's trigger condition (deferred) does not apply here."
   },
   {
     "asset": "MetalRoughSpheresNoTextures.glb",

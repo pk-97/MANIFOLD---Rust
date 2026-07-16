@@ -74,7 +74,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
-use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
@@ -416,10 +416,17 @@ pub struct RenderScene {
     prev_view_proj: Option<[[f32; 4]; 4]>,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
-    /// Material-map sampler (binding 22) — REPEAT both axes, the glTF
-    /// default. See `ensure_sampler` for why it must not share the
-    /// envmap's clamp-V sampler.
-    material_sampler: Option<manifold_gpu::GpuSampler>,
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
+    /// (bindings 22..26), keyed by [`sampler_cache_key`] — one entry per
+    /// DISTINCT `MapSamplerDesc` seen so far, not per object or per family
+    /// (most scenes share the same wrap/filter settings across every
+    /// object, so this stays a handful of entries even in a 53-object
+    /// scene). Metal sampler objects are trivially cheap to create; this
+    /// cache exists only to avoid re-creating the same one every frame.
+    /// Replaces the single hardcoded-REPEAT `material_sampler` (landed
+    /// `85b5bb9d` — fixed the striped-helmet smear; see `ensure_material_sampler`
+    /// for why the new per-family default still can't reintroduce it).
+    material_samplers: AHashMap<u32, manifold_gpu::GpuSampler>,
     /// Ring of per-frame light storage buffers (see [`FRAMES_IN_FLIGHT`]).
     /// Grown on demand; rotated each `evaluate` so a frame's write never
     /// lands on a buffer an in-flight frame is still reading.
@@ -565,7 +572,7 @@ impl RenderScene {
             prev_view_proj: None,
             dummy_texture: None,
             sampler: None,
-            material_sampler: None,
+            material_samplers: AHashMap::default(),
             light_buffers: Vec::new(),
             light_frame: 0,
             light_capacity: 0,
@@ -808,28 +815,61 @@ impl RenderScene {
                 ..Default::default()
             }));
         }
-        // Material-map sampler (binding 22): REPEAT on both axes — the glTF
-        // default sampler. Assets author UVs outside [0,1] freely (the
-        // DamagedHelmet fixture's V range is [1.0, 2.0]); clamping smears
-        // the texture's edge row across the whole mesh (the 2026-07-15
-        // striped-helmet bug — the five map resolves shared the envmap's
-        // clamp-V sampler, which is correct only for equirect poles).
-        if self.material_sampler.is_none() {
-            self.material_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: pack a `MapSamplerDesc` into a small
+    /// dense key for the `material_samplers` cache. `GpuAddressMode`/
+    /// `GpuFilterMode` don't derive `Hash` (foreign types in `manifold-gpu`,
+    /// not worth adding a derive there for one call site) — a hand-rolled
+    /// 4-variant/2-variant discriminant packs into 3 bits, well inside a u32.
+    fn sampler_cache_key(desc: MapSamplerDesc) -> u32 {
+        fn addr_code(a: manifold_gpu::GpuAddressMode) -> u32 {
+            match a {
+                manifold_gpu::GpuAddressMode::ClampToEdge => 0,
+                manifold_gpu::GpuAddressMode::Repeat => 1,
+                manifold_gpu::GpuAddressMode::MirrorRepeat => 2,
+                manifold_gpu::GpuAddressMode::ClampToZero => 3,
+            }
+        }
+        fn filter_code(f: manifold_gpu::GpuFilterMode) -> u32 {
+            match f {
+                manifold_gpu::GpuFilterMode::Nearest => 0,
+                manifold_gpu::GpuFilterMode::Linear => 1,
+            }
+        }
+        addr_code(desc.wrap_u)
+            | (addr_code(desc.wrap_v) << 2)
+            | (filter_code(desc.mag_filter) << 4)
+            | (filter_code(desc.min_filter) << 5)
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure a cached sampler exists for
+    /// `desc`, creating it on first sight. Replaces the single hardcoded
+    /// REPEAT material-map sampler (binding 22, landed `85b5bb9d`) — but
+    /// `MapSamplerDesc::default()` (an unwired map, or a glTF texture with
+    /// no explicit `sampler` index) still resolves to REPEAT+linear, so
+    /// every asset that never sets these fields (every pre-D3 passing
+    /// asset, plus DamagedHelmet's UV range [1.0, 2.0] that motivated the
+    /// original fix) gets byte-identical sampler behavior to before this
+    /// phase — the striped-helmet regression `85b5bb9d` fixed stays fixed.
+    fn ensure_material_sampler(&mut self, device: &manifold_gpu::GpuDevice, desc: MapSamplerDesc) {
+        let key = Self::sampler_cache_key(desc);
+        self.material_samplers.entry(key).or_insert_with(|| {
+            device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                mag_filter: desc.mag_filter,
+                min_filter: desc.min_filter,
                 mip_filter: manifold_gpu::GpuFilterMode::Linear,
-                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
-                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_u: desc.wrap_u,
+                address_mode_v: desc.wrap_v,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
                 compare: None,
                 // Anisotropic filtering (D7, GLB_CONFORMANCE G-P3): glancing-angle
                 // minification on grazing surfaces (floors, the AMG's paint) stays
-                // sharp instead of over-blurring. Material sampler only — every
+                // sharp instead of over-blurring. Material samplers only — every
                 // other sampler in this file keeps the field's default (1).
                 max_anisotropy: 8,
-            }));
-        }
+            })
+        });
     }
 
     fn ensure_dummy_texture(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -1914,6 +1954,14 @@ impl EffectNode for RenderScene {
             mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
             occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
             emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
+            /// sampler settings, order `[base_color, normal, mr, occlusion,
+            /// emissive]` — matches `binding_sets`' 22..26 slot order below.
+            /// Resolved to actual `&GpuSampler`s in Pass 2 via
+            /// `ensure_material_sampler` (ensured for every draw in the
+            /// "Ensure cached GPU resources" block, so the Pass-2 cache
+            /// lookup can never miss).
+            sampler_descs: [MapSamplerDesc; 5],
             /// Wired `instances_n` buffer, or `None` (unwired — bind the
             /// identity stub at draw time; see `identity_instance_stub`).
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
@@ -2030,6 +2078,17 @@ impl EffectNode for RenderScene {
                 uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
             }
 
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
+            // still in scope (it's consumed by `build_uniforms` above by
+            // reference, still live here).
+            let sampler_descs = [
+                material.base_color_sampler,
+                material.normal_sampler,
+                material.mr_sampler,
+                material.occlusion_sampler,
+                material.emissive_sampler,
+            ];
+
             let alpha_mode = material.alpha_mode;
             let is_blend = alpha_mode == AlphaMode::Blend;
             let pipeline = {
@@ -2064,6 +2123,7 @@ impl EffectNode for RenderScene {
                 mr_map,
                 occlusion_map,
                 emissive_map,
+                sampler_descs,
                 instances,
                 instance_count,
                 alpha_mode,
@@ -2106,6 +2166,15 @@ impl EffectNode for RenderScene {
                 self.ensure_velocity_msaa_target(gpu.device, width, height);
             }
             self.ensure_sampler(gpu.device);
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure every distinct
+            // per-map-family sampler this frame's draws need. Runs before
+            // Pass 2 builds `binding_sets`, so every lookup there is
+            // guaranteed a cache hit.
+            for draw in &draws {
+                for desc in draw.sampler_descs {
+                    self.ensure_material_sampler(gpu.device, desc);
+                }
+            }
             self.ensure_dummy_texture(gpu.device);
             // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL resources —
             // always ensured (fixed size, allocated once) so
@@ -2277,7 +2346,15 @@ impl EffectNode for RenderScene {
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
-        let material_sampler = self.material_sampler.as_ref().expect("just inserted");
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-draw, per-map-family sampler
+        // lookup — every descriptor was ensured into the cache above, so
+        // this is a guaranteed hit, never a fallback/dummy.
+        let material_samplers = &self.material_samplers;
+        let sampler_for = |desc: MapSamplerDesc| -> &manifold_gpu::GpuSampler {
+            material_samplers
+                .get(&Self::sampler_cache_key(desc))
+                .expect("ensured in the 'Ensure cached GPU resources' block above")
+        };
         let dummy = self.dummy_texture.as_ref().expect("just inserted");
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
         let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
@@ -2322,7 +2399,7 @@ impl EffectNode for RenderScene {
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 23]> = draws
+        let binding_sets: Vec<[GpuBinding; 27]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2440,11 +2517,29 @@ impl EffectNode for RenderScene {
                         binding: 21,
                         texture: draw.emissive_map.unwrap_or(dummy),
                     },
-                    // Material-map sampler — REPEAT both axes (glTF default);
-                    // see ensure_sampler.
+                    // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family
+                    // samplers, one per texture family — no longer one
+                    // scene-wide REPEAT sampler. Order matches
+                    // `ObjectDraw::sampler_descs` / `Material`'s field order.
                     GpuBinding::Sampler {
                         binding: 22,
-                        sampler: material_sampler,
+                        sampler: sampler_for(draw.sampler_descs[0]), // base_color
+                    },
+                    GpuBinding::Sampler {
+                        binding: 23,
+                        sampler: sampler_for(draw.sampler_descs[1]), // normal
+                    },
+                    GpuBinding::Sampler {
+                        binding: 24,
+                        sampler: sampler_for(draw.sampler_descs[2]), // mr
+                    },
+                    GpuBinding::Sampler {
+                        binding: 25,
+                        sampler: sampler_for(draw.sampler_descs[3]), // occlusion
+                    },
+                    GpuBinding::Sampler {
+                        binding: 26,
+                        sampler: sampler_for(draw.sampler_descs[4]), // emissive
                     },
                 ]
             })

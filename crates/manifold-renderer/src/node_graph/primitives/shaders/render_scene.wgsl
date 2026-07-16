@@ -164,11 +164,20 @@ struct Uniforms {
 // the scene.
 @group(0) @binding(2) var envmap: texture_2d<f32>;
 @group(0) @binding(3) var envmap_sampler: sampler;
-// Material maps sample with REPEAT on both axes (the glTF default sampler)
-// — assets author UVs outside [0,1] freely (DamagedHelmet's V range is
-// [1.0, 2.0]). envmap_sampler stays clamp-V for the equirect poles; sharing
-// it here was the 2026-07-15 whole-helmet-smeared-to-the-texture-edge bug.
-@group(0) @binding(22) var material_sampler: sampler;
+// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family samplers, each built
+// Rust-side from that glTF texture's OWN wrapS/wrapT/filter (default
+// REPEAT+linear when the texture has no explicit `sampler`) — no longer one
+// scene-wide hardcoded-REPEAT sampler. envmap_sampler (binding 3) stays
+// clamp-V for the equirect poles and is never reused here; sharing it with
+// material maps was the 2026-07-15 whole-helmet-smeared-to-the-texture-edge
+// bug that motivated the original single material_sampler fix (`85b5bb9d`),
+// which this per-family split still preserves (unwired/no-sampler default
+// is byte-identical REPEAT+linear).
+@group(0) @binding(22) var base_color_sampler: sampler;
+@group(0) @binding(23) var normal_sampler: sampler;
+@group(0) @binding(24) var mr_sampler: sampler;
+@group(0) @binding(25) var occlusion_sampler: sampler;
+@group(0) @binding(26) var emissive_sampler: sampler;
 // binding(4): normal_map_n (D3/F-P2) — tangent-space glTF normal map,
 // gated by texture_flags.x, reconstructed via the screen-space cotangent
 // frame in resolve_normal below (D4). Unwired binds the 1×1 dummy, flag
@@ -597,7 +606,7 @@ fn resolve_normal(uv: vec2<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>)
         // uv_t == uv bit-for-bit (1*u + 0*v + 0), so pre-G-P4 assets are
         // byte-identical.
         let uv_t = apply_uv_transform(uv, u.normal_uv_m, u.normal_uv_t);
-        let sampled = textureSample(normal_map, material_sampler, uv_t).rgb;
+        let sampled = textureSample(normal_map, normal_sampler, uv_t).rgb;
         let tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
         let tbn = cotangent_frame(n, world_pos, uv_t);
         return normalize(tbn * tangent_normal);
@@ -620,7 +629,7 @@ fn apply_uv_transform(uv: vec2<f32>, m: vec4<f32>, t: vec4<f32>) -> vec2<f32> {
 fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
         let uv_t = apply_uv_transform(uv, u.base_color_uv_m, u.base_color_uv_t);
-        let t = textureSample(base_color_map, material_sampler, uv_t);
+        let t = textureSample(base_color_map, base_color_sampler, uv_t);
         return vec4<f32>(u.base_color.rgb * t.rgb, u.base_color.a * t.a);
     }
     return u.base_color;
@@ -634,7 +643,7 @@ fn resolve_albedo(uv: vec2<f32>) -> vec4<f32> {
 fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
         let uv_t = apply_uv_transform(uv, u.mr_uv_m, u.mr_uv_t);
-        let t = textureSample(mr_map, material_sampler, uv_t);
+        let t = textureSample(mr_map, mr_sampler, uv_t);
         return vec2<f32>(max(t.g, 0.01), clamp(t.b, 0.0, 1.0));
     }
     return vec2<f32>(max(u.pbr_metallic_roughness.y, 0.01), clamp(u.pbr_metallic_roughness.x, 0.0, 1.0));
@@ -647,7 +656,7 @@ fn resolve_mr(uv: vec2<f32>) -> vec2<f32> {
 fn resolve_occlusion(uv: vec2<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
         let uv_t = apply_uv_transform(uv, u.occlusion_uv_m, u.occlusion_uv_t);
-        return textureSample(occlusion_map, material_sampler, uv_t).r;
+        return textureSample(occlusion_map, occlusion_sampler, uv_t).r;
     }
     return 1.0;
 }
@@ -660,7 +669,7 @@ fn resolve_occlusion(uv: vec2<f32>) -> f32 {
 fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
     if u.texture_flags2.z > 0.5 {
         let uv_t = apply_uv_transform(uv, u.emissive_uv_m, u.emissive_uv_t);
-        let t = textureSample(emissive_map, material_sampler, uv_t).rgb;
+        let t = textureSample(emissive_map, emissive_sampler, uv_t).rgb;
         return u.emission.rgb * t;
     }
     return u.emission.rgb;

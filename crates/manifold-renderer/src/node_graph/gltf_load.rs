@@ -259,6 +259,146 @@ pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): build a column-major `Mat4`
+/// from a glTF-convention TRS triple (`q` = quaternion `[x, y, z, w]`) — the
+/// same formula the glTF spec uses to define a node's own TRS matrix, so an
+/// `EXT_mesh_gpu_instancing` instance transform composes with `mat4_mul`
+/// exactly like a node's `transform().matrix()` does.
+pub(crate) fn mat4_from_trs(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> Mat4 {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    let (xx, yy, zz) = (x * x, y * y, z * z);
+    let (xy, xz, yz) = (x * y, x * z, y * z);
+    let (wx, wy, wz) = (w * x, w * y, w * z);
+    [
+        [
+            (1.0 - 2.0 * (yy + zz)) * s[0],
+            (2.0 * (xy + wz)) * s[0],
+            (2.0 * (xz - wy)) * s[0],
+            0.0,
+        ],
+        [
+            (2.0 * (xy - wz)) * s[1],
+            (1.0 - 2.0 * (xx + zz)) * s[1],
+            (2.0 * (yz + wx)) * s[1],
+            0.0,
+        ],
+        [
+            (2.0 * (xz + wy)) * s[2],
+            (2.0 * (yz - wx)) * s[2],
+            (1.0 - 2.0 * (xx + yy)) * s[2],
+            0.0,
+        ],
+        [t[0], t[1], t[2], 1.0],
+    ]
+}
+
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D6: read one accessor's raw components as
+/// `f32`, un-interleaving `view.stride()` if present. `EXT_mesh_gpu_instancing`'s
+/// TRANSLATION/ROTATION/SCALE accessors are always plain `FLOAT` VEC3/VEC4
+/// per spec (no normalized integers, no sparse) — anything else errors
+/// rather than silently misreading bytes.
+fn read_f32_accessor(accessor: &gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Result<Vec<f32>, String> {
+    if accessor.data_type() != gltf::accessor::DataType::F32 {
+        return Err(format!(
+            "EXT_mesh_gpu_instancing accessor has non-F32 component type {:?} — unsupported",
+            accessor.data_type()
+        ));
+    }
+    let comp_count = match accessor.dimensions() {
+        gltf::accessor::Dimensions::Vec3 => 3,
+        gltf::accessor::Dimensions::Vec4 => 4,
+        d => return Err(format!("EXT_mesh_gpu_instancing accessor has unsupported dimensions {d:?}")),
+    };
+    let view = accessor
+        .view()
+        .ok_or_else(|| "EXT_mesh_gpu_instancing accessor has no buffer view (sparse accessors unsupported)".to_string())?;
+    let buffer = buffers.get(view.buffer().index()).ok_or_else(|| {
+        "EXT_mesh_gpu_instancing accessor's buffer view has an out-of-range buffer index".to_string()
+    })?;
+    let elem_size = comp_count * 4;
+    let stride = view.stride().unwrap_or(elem_size);
+    let base = view.offset() + accessor.offset();
+    let mut out = Vec::with_capacity(accessor.count() * comp_count);
+    for i in 0..accessor.count() {
+        let start = base + i * stride;
+        for c in 0..comp_count {
+            let off = start + c * 4;
+            let bytes = buffer.0.get(off..off + 4).ok_or_else(|| {
+                "EXT_mesh_gpu_instancing accessor read out of buffer bounds".to_string()
+            })?;
+            out.push(f32::from_le_bytes(bytes.try_into().unwrap()));
+        }
+    }
+    Ok(out)
+}
+
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): `EXT_mesh_gpu_instancing`
+/// raw-JSON sniff (⚠ VERIFIED-AT-IMPL: no typed support in gltf 1.4.1 — no
+/// `EXT_mesh_gpu_instancing` feature or accessor exists in either `gltf` or
+/// `gltf-json` 1.4.1's source, same absence pattern as `KHR_materials_clearcoat`).
+/// Returns `Ok(None)` when the node carries no such extension (the
+/// overwhelmingly common case — every non-instanced node), `Ok(Some(N
+/// matrices))` for a valid one, `Err` for a malformed extension (missing
+/// accessor index, wrong component type) so a broken instancing block
+/// surfaces as a named import error rather than silently rendering zero or
+/// garbage instances.
+fn node_instance_transforms(
+    node: &gltf::Node,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Result<Option<Vec<Mat4>>, String> {
+    let Some(ext) = node.extension_value("EXT_mesh_gpu_instancing") else {
+        return Ok(None);
+    };
+    let attrs = ext
+        .get("attributes")
+        .ok_or_else(|| "EXT_mesh_gpu_instancing extension has no \"attributes\" object".to_string())?;
+    let read_attr = |name: &str, expected_dim: usize| -> Result<Option<Vec<f32>>, String> {
+        let Some(idx) = attrs.get(name).and_then(|v| v.as_u64()) else {
+            return Ok(None);
+        };
+        let accessor = document.accessors().nth(idx as usize).ok_or_else(|| {
+            format!("EXT_mesh_gpu_instancing {name} accessor index {idx} out of range")
+        })?;
+        let data = read_f32_accessor(&accessor, buffers)?;
+        debug_assert_eq!(data.len() % expected_dim, 0);
+        Ok(Some(data))
+    };
+    let translations = read_attr("TRANSLATION", 3)?;
+    let rotations = read_attr("ROTATION", 4)?;
+    let scales = read_attr("SCALE", 3)?;
+    // Spec: at least one of the three attributes must be present; instance
+    // count is that attribute's accessor `count`. Absent channels fall back
+    // to the TRS identity component (no translation / identity quat / unit
+    // scale) — same "missing = neutral" convention as every other optional
+    // glTF field this importer reads.
+    let count = translations
+        .as_ref()
+        .map(|d| d.len() / 3)
+        .or_else(|| rotations.as_ref().map(|d| d.len() / 4))
+        .or_else(|| scales.as_ref().map(|d| d.len() / 3))
+        .ok_or_else(|| {
+            "EXT_mesh_gpu_instancing has no TRANSLATION/ROTATION/SCALE attribute".to_string()
+        })?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let t = translations
+            .as_ref()
+            .map(|d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]])
+            .unwrap_or([0.0, 0.0, 0.0]);
+        let q = rotations
+            .as_ref()
+            .map(|d| [d[i * 4], d[i * 4 + 1], d[i * 4 + 2], d[i * 4 + 3]])
+            .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        let s = scales
+            .as_ref()
+            .map(|d| [d[i * 3], d[i * 3 + 1], d[i * 3 + 2]])
+            .unwrap_or([1.0, 1.0, 1.0]);
+        out.push(mat4_from_trs(t, q, s));
+    }
+    Ok(Some(out))
+}
+
 /// Which geometry to extract from a parsed glTF document.
 pub(crate) enum GltfMeshSelector {
     /// Walk the default scene's node tree, world-transforming every
@@ -379,9 +519,19 @@ fn flatten_primitive(
 /// When `material_filter` is `Some(idx)`, only primitives whose material
 /// index equals `idx` are flattened (the importer's per-material object);
 /// `None` takes every primitive (the whole-scene combine).
+///
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): a node carrying
+/// `EXT_mesh_gpu_instancing` flattens its mesh's primitives once PER
+/// INSTANCE, each at `world * instance_transform`, instead of once at
+/// `world` — the same "N repeated nodes" result the extension exists to
+/// avoid spelling out literally, so the existing per-material combine
+/// (zero new code past this function) ends up with N world-baked copies.
+/// Children still recurse at the node's own (non-instanced) `world`, per
+/// spec — the extension only multiplies the node's OWN mesh.
 fn walk_gltf_node(
     node: &gltf::Node,
     parent_world: Mat4,
+    document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
     material_filter: MaterialFilter,
     out: &mut Vec<MeshVertex>,
@@ -390,31 +540,38 @@ fn walk_gltf_node(
     let world = mat4_mul(&parent_world, &local);
 
     if let Some(mesh) = node.mesh() {
-        // Normal matrix = transpose(inverse(upper3x3(world))) — correct
-        // under non-uniform scale, not just rotation + uniform scale.
-        let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(&world)));
-        for primitive in mesh.primitives() {
-            match material_filter {
-                MaterialFilter::All => {}
-                // `material().index()` is `None` for the glTF default
-                // material; a numeric filter never matches that.
-                MaterialFilter::Material(want) => {
-                    if primitive.material().index() != Some(want as usize) {
-                        continue;
+        let instances = node_instance_transforms(node, document, buffers)?;
+        let instance_worlds: Vec<Mat4> = match &instances {
+            Some(list) => list.iter().map(|it| mat4_mul(&world, it)).collect(),
+            None => vec![world],
+        };
+        for instance_world in &instance_worlds {
+            // Normal matrix = transpose(inverse(upper3x3(world))) — correct
+            // under non-uniform scale, not just rotation + uniform scale.
+            let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(instance_world)));
+            for primitive in mesh.primitives() {
+                match material_filter {
+                    MaterialFilter::All => {}
+                    // `material().index()` is `None` for the glTF default
+                    // material; a numeric filter never matches that.
+                    MaterialFilter::Material(want) => {
+                        if primitive.material().index() != Some(want as usize) {
+                            continue;
+                        }
+                    }
+                    MaterialFilter::DefaultOnly => {
+                        if primitive.material().index().is_some() {
+                            continue;
+                        }
                     }
                 }
-                MaterialFilter::DefaultOnly => {
-                    if primitive.material().index().is_some() {
-                        continue;
-                    }
-                }
+                flatten_primitive(&primitive, buffers, instance_world, &normal_mat, out)?;
             }
-            flatten_primitive(&primitive, buffers, &world, &normal_mat, out)?;
         }
     }
 
     for child in node.children() {
-        walk_gltf_node(&child, world, buffers, material_filter, out)?;
+        walk_gltf_node(&child, world, document, buffers, material_filter, out)?;
     }
     Ok(())
 }
@@ -437,7 +594,14 @@ pub(crate) fn load_gltf_mesh(
     match selector {
         GltfMeshSelector::WholeScene => {
             for node in resolve_import_nodes(&document) {
-                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, MaterialFilter::All, &mut out)?;
+                walk_gltf_node(
+                    &node,
+                    MAT4_IDENTITY,
+                    &document,
+                    &buffers,
+                    MaterialFilter::All,
+                    &mut out,
+                )?;
             }
         }
         GltfMeshSelector::Material { material_index } => {
@@ -445,6 +609,7 @@ pub(crate) fn load_gltf_mesh(
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
+                    &document,
                     &buffers,
                     MaterialFilter::Material(material_index),
                     &mut out,
@@ -456,6 +621,7 @@ pub(crate) fn load_gltf_mesh(
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
+                    &document,
                     &buffers,
                     MaterialFilter::DefaultOnly,
                     &mut out,
@@ -560,6 +726,79 @@ pub(crate) fn load_gltf_texture(
     };
 
     Ok((width, height, rgba))
+}
+
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): glTF `wrapS`/`wrapT`, decoupled
+/// from `manifold_gpu` (this module is content-thread parse code, no GPU
+/// dependency) — `gltf_import.rs` translates these into `node.pbr_material`'s
+/// enum params, which `render_scene` then reads back into
+/// `manifold_gpu::GpuAddressMode`. Default `Repeat` matches both glTF's own
+/// implicit no-sampler default and `WrappingMode`'s crate-level default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GltfWrapMode {
+    #[default]
+    Repeat,
+    ClampToEdge,
+    MirrorRepeat,
+}
+
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D3: glTF `magFilter`/`minFilter`, collapsed
+/// to the two states `manifold_gpu::GpuFilterMode` supports — `minFilter`'s
+/// mipmap component (`*_MIPMAP_NEAREST`/`*_MIPMAP_LINEAR`) has no GPU-side
+/// equivalent to plumb per-map (the renderer's `mip_filter` stays fixed
+/// Linear for every sampler, same as the pre-D3 hardcoded material sampler),
+/// so only the base Nearest/Linear choice survives; `TextureSettingsTest`
+/// only exercises wrap anyway (verified: all 5 of its samplers share
+/// `magFilter: LINEAR, minFilter: NEAREST_MIPMAP_LINEAR`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GltfFilterMode {
+    #[default]
+    Linear,
+    Nearest,
+}
+
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D3: one map family's sampler settings.
+/// Default reproduces glTF's implicit no-sampler default (Repeat/Repeat/
+/// Linear/Linear) — byte-identical to the pre-D3 hardcoded REPEAT sampler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct GltfSamplerInfo {
+    pub wrap_u: GltfWrapMode,
+    pub wrap_v: GltfWrapMode,
+    pub mag_filter: GltfFilterMode,
+    pub min_filter: GltfFilterMode,
+}
+
+/// Read `document.textures().nth(idx)`'s sampler, or the default when `idx`
+/// is `None` (map unwired) — the same default `GltfSamplerInfo::default()`
+/// already encodes, kept as one call site so the two never drift.
+fn sampler_info_for(document: &gltf::Document, idx: Option<u32>) -> GltfSamplerInfo {
+    let Some(tex) = idx.and_then(|i| document.textures().nth(i as usize)) else {
+        return GltfSamplerInfo::default();
+    };
+    let s = tex.sampler();
+    let wrap = |w: gltf::texture::WrappingMode| -> GltfWrapMode {
+        match w {
+            gltf::texture::WrappingMode::Repeat => GltfWrapMode::Repeat,
+            gltf::texture::WrappingMode::ClampToEdge => GltfWrapMode::ClampToEdge,
+            gltf::texture::WrappingMode::MirroredRepeat => GltfWrapMode::MirrorRepeat,
+        }
+    };
+    let mag = match s.mag_filter() {
+        Some(gltf::texture::MagFilter::Nearest) => GltfFilterMode::Nearest,
+        _ => GltfFilterMode::Linear,
+    };
+    let min = match s.min_filter() {
+        Some(gltf::texture::MinFilter::Nearest)
+        | Some(gltf::texture::MinFilter::NearestMipmapNearest)
+        | Some(gltf::texture::MinFilter::NearestMipmapLinear) => GltfFilterMode::Nearest,
+        _ => GltfFilterMode::Linear,
+    };
+    GltfSamplerInfo {
+        wrap_u: wrap(s.wrap_s()),
+        wrap_v: wrap(s.wrap_t()),
+        mag_filter: mag,
+        min_filter: min,
+    }
 }
 
 /// One distinct glTF material that has geometry, plus everything the
@@ -694,6 +933,16 @@ pub(crate) struct GltfMaterialInfo {
     /// IS converted) is Deferred (§8) — not read here at all.
     pub mr_texture_is_gloss_alpha: bool,
     pub vertex_count: u32,
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
+    /// settings, read straight off each map's own glTF `sampler` (default
+    /// when unwired or the texture has no explicit sampler:
+    /// `GltfSamplerInfo::default()`, Repeat/Repeat/Linear/Linear —
+    /// byte-identical to the pre-D3 hardcoded REPEAT `material_sampler`).
+    pub base_color_sampler: GltfSamplerInfo,
+    pub normal_sampler: GltfSamplerInfo,
+    pub mr_sampler: GltfSamplerInfo,
+    pub occlusion_sampler: GltfSamplerInfo,
+    pub emissive_sampler: GltfSamplerInfo,
 }
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
@@ -819,18 +1068,33 @@ pub(crate) struct GltfImportSummary {
 /// Recursively accumulate per-material world-combined vertex counts and a
 /// world-space bounding box over a node subtree. Keyed by
 /// `material().index()` (`None` = glTF default material).
+///
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168): mirrors `walk_gltf_node`'s
+/// instancing expansion — a node's vertex count and bbox contribution are
+/// counted once PER INSTANCE (not once per node), so the report the
+/// importer builds from this walk (`vertex_count`, the D4 object-safety
+/// gate) already reflects the real N-copy geometry `walk_gltf_node`
+/// produces at flatten time. Returns `Err` only when a node's own
+/// `EXT_mesh_gpu_instancing` block is malformed.
 fn summarize_node(
     node: &gltf::Node,
     parent_world: Mat4,
+    document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
     per_material: &mut std::collections::BTreeMap<Option<usize>, u32>,
     bbox_min: &mut [f32; 3],
     bbox_max: &mut [f32; 3],
-) {
+) -> Result<(), String> {
     let local = node.transform().matrix();
     let world = mat4_mul(&parent_world, &local);
 
     if let Some(mesh) = node.mesh() {
+        let instances = node_instance_transforms(node, document, buffers)?;
+        let instance_count = instances.as_ref().map_or(1, |v| v.len().max(1));
+        let instance_worlds: Vec<Mat4> = match &instances {
+            Some(list) => list.iter().map(|it| mat4_mul(&world, it)).collect(),
+            None => vec![world],
+        };
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
@@ -843,20 +1107,23 @@ fn summarize_node(
                 Some(idx) => idx.into_u32().count() as u32,
                 None => positions.len() as u32,
             };
-            *per_material.entry(prim.material().index()).or_insert(0) += vcount;
-            for p in &positions {
-                let wp = mat4_transform_point(&world, *p);
-                for i in 0..3 {
-                    bbox_min[i] = bbox_min[i].min(wp[i]);
-                    bbox_max[i] = bbox_max[i].max(wp[i]);
+            *per_material.entry(prim.material().index()).or_insert(0) += vcount * instance_count as u32;
+            for instance_world in &instance_worlds {
+                for p in &positions {
+                    let wp = mat4_transform_point(instance_world, *p);
+                    for i in 0..3 {
+                        bbox_min[i] = bbox_min[i].min(wp[i]);
+                        bbox_max[i] = bbox_max[i].max(wp[i]);
+                    }
                 }
             }
         }
     }
 
     for child in node.children() {
-        summarize_node(&child, world, buffers, per_material, bbox_min, bbox_max);
+        summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max)?;
     }
+    Ok(())
 }
 
 /// Parse a glb's structure for the importer: the distinct materials with
@@ -874,11 +1141,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         summarize_node(
             node,
             MAT4_IDENTITY,
+            &document,
             &buffers,
             &mut per_material,
             &mut bbox_min,
             &mut bbox_max,
-        );
+        )?;
     }
 
     if !bbox_min[0].is_finite() {
@@ -1030,6 +1298,20 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     || v.get("clearcoatNormalTexture").is_some()
             });
 
+            let base_color_texture = base_color_info.map(|t| t.texture().index() as u32);
+            let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
+            let occlusion_texture = m.occlusion_texture().map(|t| t.texture().index() as u32);
+            let emissive_texture = m.emissive_texture().map(|t| t.texture().index() as u32);
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): one lookup per map
+            // family, keyed off the same texture index each map's own
+            // field above already resolved — `None` (map unwired) reads
+            // `GltfSamplerInfo::default()` inside the helper.
+            let base_color_sampler = sampler_info_for(&document, base_color_texture);
+            let normal_sampler = sampler_info_for(&document, normal_texture);
+            let mr_sampler = sampler_info_for(&document, mr_texture_index);
+            let occlusion_sampler = sampler_info_for(&document, occlusion_texture);
+            let emissive_sampler = sampler_info_for(&document, emissive_texture);
+
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
@@ -1039,13 +1321,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 emissive: m.emissive_factor(),
                 alpha_mask,
                 alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
-                base_color_texture: base_color_info.map(|t| t.texture().index() as u32),
-                normal_texture: m.normal_texture().map(|t| t.texture().index() as u32),
+                base_color_texture,
+                normal_texture,
                 normal_scale: m.normal_texture().map(|t| t.scale()).unwrap_or(1.0),
                 mr_texture: mr_texture_index,
-                occlusion_texture: m.occlusion_texture().map(|t| t.texture().index() as u32),
+                occlusion_texture,
                 occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
-                emissive_texture: m.emissive_texture().map(|t| t.texture().index() as u32),
+                emissive_texture,
                 emissive_strength: m.emissive_strength().unwrap_or(1.0),
                 ior,
                 specular_factor,
@@ -1067,6 +1349,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 was_blend,
                 mr_texture_is_gloss_alpha,
                 vertex_count,
+                base_color_sampler,
+                normal_sampler,
+                mr_sampler,
+                occlusion_sampler,
+                emissive_sampler,
             })
         })
         .collect();
@@ -1115,6 +1402,11 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             uv_tex_coord_override: false,
             mr_texture_is_gloss_alpha: false,
             vertex_count: default_material_vertex_count,
+            base_color_sampler: GltfSamplerInfo::default(),
+            normal_sampler: GltfSamplerInfo::default(),
+            mr_sampler: GltfSamplerInfo::default(),
+            occlusion_sampler: GltfSamplerInfo::default(),
+            emissive_sampler: GltfSamplerInfo::default(),
         });
     }
 
