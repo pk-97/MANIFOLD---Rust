@@ -295,6 +295,20 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(27) var opaque_scene_color: texture_2d<f32>;
 @group(0) @binding(28) var opaque_scene_color_sampler: sampler;
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full spec
+// surface per family): sheen/iridescence/anisotropy extension textures.
+// Always bound (same always-bind ABI-stub discipline as bindings 19-21),
+// gated by the presence flags packed into texture_flags/texture_flags2/
+// anisotropy_dispersion_params/transmission_volume_params's reserved `w`/
+// `y` slots (render_scene.rs's E3/E4/E5 comment). Sampled with the
+// existing base_color_sampler/mr_sampler bindings rather than five more
+// dedicated samplers — see render_scene.rs's binding(29) comment.
+@group(0) @binding(29) var sheen_color_map: texture_2d<f32>;
+@group(0) @binding(30) var sheen_roughness_map: texture_2d<f32>;
+@group(0) @binding(31) var iridescence_map: texture_2d<f32>;
+@group(0) @binding(32) var iridescence_thickness_map: texture_2d<f32>;
+@group(0) @binding(33) var anisotropy_map: texture_2d<f32>;
+
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 // Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
 // forked, not shared, per this file's header convention.
@@ -716,6 +730,64 @@ fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
     return u.emission.rgb;
 }
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3 (D1 revised): `KHR_materials_sheen`
+// factors + optional textures. `sheenColorTexture` is sRGB (tinted by
+// `sheenColorFactor`), `sheenRoughnessTexture`'s ALPHA channel carries
+// roughness (tinted by `sheenRoughnessFactor`) per the spec. v1
+// simplification: no `KHR_texture_transform` support on these two maps
+// (unlike the base five) — sampled at the raw mesh UV; acceptable because
+// no Compare/gate asset in this doc's manifest combines sheen with a UV
+// transform on the sheen maps specifically.
+fn resolve_sheen(uv: vec2<f32>) -> vec4<f32> {
+    var color = u.sheen_params.rgb;
+    if u.texture_flags.y > 0.5 {
+        color = color * textureSample(sheen_color_map, base_color_sampler, uv).rgb;
+    }
+    var roughness = u.sheen_params.w;
+    if u.texture_flags.w > 0.5 {
+        roughness = roughness * textureSample(sheen_roughness_map, mr_sampler, uv).a;
+    }
+    return vec4<f32>(color, roughness);
+}
+
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4 (D1 revised): `KHR_materials_
+// iridescence` factors + optional textures. `iridescenceTexture`'s R
+// channel scales `iridescenceFactor`; `iridescenceThicknessTexture`'s G
+// channel lerps between `iridescenceThicknessMinimum`/`Maximum` — both per
+// spec. Same "no KHR_texture_transform on these maps" v1 simplification as
+// resolve_sheen. Returns (factor, ior, thickness_nm, 0).
+fn resolve_iridescence(uv: vec2<f32>) -> vec3<f32> {
+    var factor = u.iridescence_params.x;
+    if u.texture_flags2.w > 0.5 {
+        factor = factor * textureSample(iridescence_map, mr_sampler, uv).r;
+    }
+    var thickness = u.iridescence_params.w; // default = thicknessMaximum (spec: texture absent → max)
+    if u.anisotropy_dispersion_params.w > 0.5 {
+        let t = textureSample(iridescence_thickness_map, mr_sampler, uv).g;
+        thickness = mix(u.iridescence_params.z, u.iridescence_params.w, t);
+    }
+    return vec3<f32>(factor, u.iridescence_params.y, thickness);
+}
+
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5 (D1 revised): `KHR_materials_
+// anisotropy` factors + optional texture. `anisotropyTexture`'s RG encodes
+// a per-texel rotation (cos/sin, remapped from [0,1] to [-1,1]) that
+// ROTATES the factor's own `anisotropyRotation`, and its B channel scales
+// `anisotropyStrength` — both per spec ("Direction and strength ... encoded
+// in the .rg and .b channels ... rotated by anisotropyRotation"). Returns
+// (strength, rotation_radians).
+fn resolve_anisotropy(uv: vec2<f32>) -> vec2<f32> {
+    var strength = u.anisotropy_dispersion_params.x;
+    var rotation = u.anisotropy_dispersion_params.y;
+    if u.transmission_volume_params.w > 0.5 {
+        let t = textureSample(anisotropy_map, mr_sampler, uv).rgb;
+        let tex_rotation = atan2(t.g * 2.0 - 1.0, t.r * 2.0 - 1.0);
+        rotation = rotation + tex_rotation;
+        strength = strength * t.b;
+    }
+    return vec2<f32>(strength, rotation);
+}
+
 // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: KHR_materials_transmission +
 // KHR_materials_volume screen-space refraction — the real glass pass that
 // REPLACES the D8/F-P5 alpha-blend approximation (D3 explicitly rejects
@@ -876,6 +948,26 @@ fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, albedo.a);
 }
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: `KHR_materials_sheen`'s Charlie
+// (velvet) NDF — the glTF spec's own reference distribution.
+fn D_Charlie(sheen_roughness: f32, n_dot_h: f32) -> f32 {
+    let alpha = max(sheen_roughness * sheen_roughness, 0.000001);
+    let inv_alpha = 1.0 / alpha;
+    let cos2h = n_dot_h * n_dot_h;
+    let sin2h = max(1.0 - cos2h, 0.0000001);
+    return (2.0 + inv_alpha) * pow(sin2h, inv_alpha * 0.5) / (2.0 * PI);
+}
+
+// Ashikhmin visibility term — the glTF spec's own cited "simpler
+// alternative" to the full Charlie/Estevez fitted visibility (whose
+// lambda-function form is a multi-constant curve fit not worth this
+// shader's added complexity for a single additive lobe). Already includes
+// the `4·NdotV·NdotL` normalization, same convention as the base
+// microfacet `specular` term below.
+fn V_Ashikhmin(n_dot_v: f32, n_dot_l: f32) -> f32 {
+    return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
+}
+
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse, summed over
 // every wired light (H/D/G/F/kd/diffuse are all light-dependent via H,
 // so they're recomputed per light); IBL reflection + ambient + emission
@@ -897,6 +989,15 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let mr = resolve_mr(in.uv);
     let roughness = mr.x;
     let metallic = mr.y;
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: resolved once per fragment —
+    // (sheenColor.rgb, sheenRoughness). Default (0,0,0,0) makes every
+    // term below exactly zero (D_Charlie's alpha floor keeps it finite,
+    // but `sheen_color == 0` zeroes the tinted result regardless),
+    // byte-identical to pre-E3 output for every material without the
+    // extension.
+    let sheen = resolve_sheen(in.uv);
+    let sheen_color = sheen.rgb;
+    let sheen_roughness = sheen.w;
 
     let n_dot_v = max(dot(N, V), 0.001);
     // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior →
@@ -953,6 +1054,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // and never substituted into `direct` itself, so this cannot perturb
     // `direct`'s bit-for-bit value for any material (glass or not).
     var direct_diffuse = vec3<f32>(0.0);
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: accumulated in parallel with
+    // `direct`, same shape as `direct_coat` — never read unless
+    // `sheen_color` is nonzero (see the composition below), so this cannot
+    // perturb `direct`/`direct_coat`'s bit-for-bit value for any material.
+    var direct_sheen = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
         let l_dir = lights[i * 2u];
@@ -987,6 +1093,14 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let F_coat = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
         let specular_coat = (D_coat * G_coat * F_coat) / (4.0 * n_dot_v * n_dot_l + 0.0001);
         direct_coat = direct_coat + specular_coat * l_col.rgb * n_dot_l * l_dir.w * vis;
+
+        // E3: Charlie NDF × Ashikhmin visibility, tinted by sheenColor —
+        // no Fresnel term (the spec's sheen lobe is grazing-independent),
+        // no diffuse term (a fabric/velvet fuzz has none of its own).
+        let D_sheen = D_Charlie(sheen_roughness, n_dot_h);
+        let V_sheen = V_Ashikhmin(n_dot_v, n_dot_l);
+        let specular_sheen = sheen_color * D_sheen * V_sheen;
+        direct_sheen = direct_sheen + specular_sheen * l_col.rgb * n_dot_l * l_dir.w * vis;
     }
 
     // Split-sum IBL (IMPORT_FIDELITY_DESIGN.md D2/F-P1): prefiltered
@@ -1014,6 +1128,20 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let coat_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, clearcoat_roughness * PREFILTER_MAX_MIP).rgb;
     let coat_env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, clearcoat_roughness), 0.0).rg;
     let coat_ibl = coat_prefiltered * (CLEARCOAT_F0 * coat_env_brdf.x + coat_env_brdf.y);
+
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: sheen IBL. No dedicated
+    // Charlie-DFG LUT exists in this codebase (adding one is its own
+    // precompute-pass project, out of this phase's scope) — reused
+    // approximation, same precedent as the clearcoat IBL resample two
+    // lines up reusing the metallic-roughness split-sum LUT for a
+    // different distribution: resample the prefiltered environment at
+    // `sheen_roughness` and weight by the LUT's grazing-independent bias
+    // term (`env_brdf.y` at `sheen_roughness`) — Charlie's own lobe has no
+    // Fresnel/F0 dependence, so the bias-only term is the closer of the
+    // LUT's two components to what a real sheen-DFG would give.
+    let sheen_env_brdf = textureSampleLevel(brdf_lut, envmap_sampler, vec2<f32>(n_dot_v, sheen_roughness), 0.0).rg;
+    let sheen_prefiltered = textureSampleLevel(prefiltered_specular, envmap_sampler, r_uv, sheen_roughness * PREFILTER_MAX_MIP).rgb;
+    let sheen_ibl = sheen_color * sheen_prefiltered * clamp(sheen_env_brdf.y, 0.0, 1.0);
 
     // View-angle Fresnel splits IBL energy between specular and diffuse —
     // the standard split-sum substitute for the light-dependent N·H term a
@@ -1055,6 +1183,16 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let fc = clearcoat * clearcoat_fresnel;
     let emissive = resolve_emissive(in.uv);
     var base_rgb = direct + ibl + ambient + emissive;
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: sheen is its own additive
+    // layer over the base material (glTF extension layering order: sheen
+    // sits ON the metallic-roughness base, clearcoat mixes over the result
+    // of everything below it — hence added here, before the clearcoat mix
+    // a few lines down). `sheen_color == 0` (the default, no extension)
+    // makes both terms exactly zero, byte-identical to pre-E3 output. No
+    // energy-compensation scaling on the base term (spec-optional, needs
+    // the same DFG LUT the IBL approximation above doesn't have) — known
+    // v1 limitation, same doctrine as `specular_factor`'s f90 note above.
+    base_rgb = base_rgb + direct_sheen + sheen_ibl;
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: transmission REPLACES the
     // diffuse response with the refracted-and-tinted background sample
     // (mixed by transmission_factor, per the glTF sample viewer's

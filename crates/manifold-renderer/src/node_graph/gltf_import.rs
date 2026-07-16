@@ -894,23 +894,12 @@ fn build_import_graph(
             "volume_attenuation_color_b".to_string(),
             float(m.volume_attenuation_color[2]),
         );
-        // E1: textured variants of the four new families are report-only
-        // (factor-only v1), same doctrine as clearcoat/specular above.
-        if m.sheen_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_sheen has a sheenColorTexture/sheenRoughnessTexture — only the factors (sheenColorFactor/sheenRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
-            ));
-        }
-        if m.iridescence_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_iridescence has an iridescenceTexture/iridescenceThicknessTexture — only the factors are imported in v1, the texture(s) are not sampled (report-only)"
-            ));
-        }
-        if m.anisotropy_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_anisotropy has an anisotropyTexture — only the factors (anisotropyStrength/anisotropyRotation) are imported in v1, the texture is not sampled (report-only)"
-            ));
-        }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised): sheen,
+        // iridescence, and anisotropy textures are now sampled (see the
+        // `sheenColorMap`/etc wiring below) — E1's report-only warnings for
+        // these three families are gone. `KHR_materials_volume`'s
+        // `thicknessTexture` stays report-only; it belongs to E2's family
+        // and is out of scope here.
         if m.volume_has_texture {
             report_lines.push(format!(
                 "{group_name}: KHR_materials_volume has a thicknessTexture — only the factor (thicknessFactor) is imported in v1, the texture is not sampled (report-only)"
@@ -1176,6 +1165,107 @@ fn build_import_graph(
                 0,
             );
         }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full
+        // spec surface per family): sheen/iridescence/anisotropy extension
+        // textures, same `wire_map_texture` doctrine as the base five maps
+        // above. sheenColorTexture is a colour map (sRGB); every other
+        // extension texture here is a data map (linear) per its own spec
+        // section.
+        let has_sheen_color_tex = m.sheen_color_texture.is_some();
+        if let Some(tex_index) = m.sheen_color_texture {
+            wire_map_texture(
+                tex_index,
+                0, // sRGB — sheenColorTexture is a colour map
+                "sheen_color_tex",
+                "sheenColorMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_sheen_roughness_tex = m.sheen_roughness_texture.is_some();
+        if let Some(tex_index) = m.sheen_roughness_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (alpha channel)
+                "sheen_roughness_tex",
+                "sheenRoughnessMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_iridescence_tex = m.iridescence_texture.is_some();
+        if let Some(tex_index) = m.iridescence_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (R channel = factor scale)
+                "iridescence_tex",
+                "iridescenceMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_iridescence_thickness_tex = m.iridescence_thickness_texture.is_some();
+        if let Some(tex_index) = m.iridescence_thickness_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (G channel = thickness lerp)
+                "iridescence_thickness_tex",
+                "iridescenceThicknessMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_anisotropy_tex = m.anisotropy_texture.is_some();
+        if let Some(tex_index) = m.anisotropy_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (RG = rotation, B = strength)
+                "anisotropy_tex",
+                "anisotropyMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
 
         // `system.group_output` closes the body; its port names are the
         // interface output names the inner wires above target. A boundary node
@@ -1223,6 +1313,47 @@ fn build_import_graph(
         }
         if has_emissive {
             wires.push(wire(group_id, "emissiveMap", render_id, &format!("emissive_map_{k}")));
+        }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
+        if has_sheen_color_tex {
+            wires.push(wire(
+                group_id,
+                "sheenColorMap",
+                render_id,
+                &format!("sheen_color_map_{k}"),
+            ));
+        }
+        if has_sheen_roughness_tex {
+            wires.push(wire(
+                group_id,
+                "sheenRoughnessMap",
+                render_id,
+                &format!("sheen_roughness_map_{k}"),
+            ));
+        }
+        if has_iridescence_tex {
+            wires.push(wire(
+                group_id,
+                "iridescenceMap",
+                render_id,
+                &format!("iridescence_map_{k}"),
+            ));
+        }
+        if has_iridescence_thickness_tex {
+            wires.push(wire(
+                group_id,
+                "iridescenceThicknessMap",
+                render_id,
+                &format!("iridescence_thickness_map_{k}"),
+            ));
+        }
+        if has_anisotropy_tex {
+            wires.push(wire(
+                group_id,
+                "anisotropyMap",
+                render_id,
+                &format!("anisotropy_map_{k}"),
+            ));
         }
     }
 
@@ -2263,15 +2394,17 @@ mod tests {
             clearcoat_has_texture: false,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
-            sheen_has_texture: false,
+            sheen_color_texture: None,
+            sheen_roughness_texture: None,
             iridescence_factor: 0.0,
             iridescence_ior: 1.3,
             iridescence_thickness_minimum: 100.0,
             iridescence_thickness_maximum: 400.0,
-            iridescence_has_texture: false,
+            iridescence_texture: None,
+            iridescence_thickness_texture: None,
             anisotropy_strength: 0.0,
             anisotropy_rotation: 0.0,
-            anisotropy_has_texture: false,
+            anisotropy_texture: None,
             dispersion: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
@@ -2473,15 +2606,17 @@ mod tests {
             clearcoat_has_texture: false,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
-            sheen_has_texture: false,
+            sheen_color_texture: None,
+            sheen_roughness_texture: None,
             iridescence_factor: 0.0,
             iridescence_ior: 1.3,
             iridescence_thickness_minimum: 100.0,
             iridescence_thickness_maximum: 400.0,
-            iridescence_has_texture: false,
+            iridescence_texture: None,
+            iridescence_thickness_texture: None,
             anisotropy_strength: 0.0,
             anisotropy_rotation: 0.0,
-            anisotropy_has_texture: false,
+            anisotropy_texture: None,
             dispersion: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
@@ -2925,15 +3060,17 @@ mod tests {
             clearcoat_has_texture: false,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
-            sheen_has_texture: false,
+            sheen_color_texture: None,
+            sheen_roughness_texture: None,
             iridescence_factor: 0.0,
             iridescence_ior: 1.3,
             iridescence_thickness_minimum: 100.0,
             iridescence_thickness_maximum: 400.0,
-            iridescence_has_texture: false,
+            iridescence_texture: None,
+            iridescence_thickness_texture: None,
             anisotropy_strength: 0.0,
             anisotropy_rotation: 0.0,
-            anisotropy_has_texture: false,
+            anisotropy_texture: None,
             dispersion: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,

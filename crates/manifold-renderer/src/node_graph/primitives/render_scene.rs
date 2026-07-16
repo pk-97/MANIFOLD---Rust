@@ -757,6 +757,39 @@ impl RenderScene {
                 kind: PortKind::Input,
                 required: false,
             });
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full
+            // spec surface per family): sheen/iridescence/anisotropy extension
+            // textures, same always-bind-stub pattern as the five maps above.
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("sheen_color_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("sheen_roughness_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("iridescence_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("iridescence_thickness_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("anisotropy_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("transform_{i}")),
                 ty: PortType::Transform,
@@ -2121,6 +2154,13 @@ impl EffectNode for RenderScene {
             mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
             occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
             emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
+            /// same "None = unwired, dummy-bind at draw time" shape.
+            sheen_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            sheen_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            iridescence_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            iridescence_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            anisotropy_map: Option<&'ctx manifold_gpu::GpuTexture>,
             /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
             /// sampler settings, order `[base_color, normal, mr, occlusion,
             /// emissive]` — matches `binding_sets`' 22..26 slot order below.
@@ -2210,6 +2250,13 @@ impl EffectNode for RenderScene {
             let mr_map = ctx.inputs.texture_2d(&format!("mr_map_{n}"));
             let occlusion_map = ctx.inputs.texture_2d(&format!("occlusion_map_{n}"));
             let emissive_map = ctx.inputs.texture_2d(&format!("emissive_map_{n}"));
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
+            let sheen_color_map = ctx.inputs.texture_2d(&format!("sheen_color_map_{n}"));
+            let sheen_roughness_map = ctx.inputs.texture_2d(&format!("sheen_roughness_map_{n}"));
+            let iridescence_map = ctx.inputs.texture_2d(&format!("iridescence_map_{n}"));
+            let iridescence_thickness_map =
+                ctx.inputs.texture_2d(&format!("iridescence_thickness_map_{n}"));
+            let anisotropy_map = ctx.inputs.texture_2d(&format!("anisotropy_map_{n}"));
 
             // Unwired `transform_n` = identity (`Transform::default()`) —
             // matches the old scattered params' defaults exactly (pos 0,
@@ -2256,6 +2303,26 @@ impl EffectNode for RenderScene {
             }
             if emissive_map.is_some() {
                 uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
+            }
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised):
+            // five new presence flags packed into the five reserved `w`/`y`
+            // slots the E1 uniform migration already left inert (no struct
+            // growth — same reuse doctrine as ior/specular_factor riding
+            // pbr_metallic_roughness.zw and clearcoat riding alpha_params.zw).
+            if sheen_color_map.is_some() {
+                uniforms.texture_flags[1] = 1.0; // y = sheen_color_map present (resolve_sheen's gate)
+            }
+            if sheen_roughness_map.is_some() {
+                uniforms.texture_flags[3] = 1.0; // w = sheen_roughness_map present
+            }
+            if iridescence_map.is_some() {
+                uniforms.texture_flags2[3] = 1.0; // w = iridescence_map present
+            }
+            if iridescence_thickness_map.is_some() {
+                uniforms.anisotropy_dispersion_params[3] = 1.0; // w = iridescence_thickness_map present
+            }
+            if anisotropy_map.is_some() {
+                uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
             }
 
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
@@ -2307,6 +2374,11 @@ impl EffectNode for RenderScene {
                 mr_map,
                 occlusion_map,
                 emissive_map,
+                sheen_color_map,
+                sheen_roughness_map,
+                iridescence_map,
+                iridescence_thickness_map,
+                anisotropy_map,
                 sampler_descs,
                 instances,
                 instance_count,
@@ -2688,7 +2760,7 @@ impl EffectNode for RenderScene {
         // is), but the option lets the same closure serve both cases
         // without a branch on `has_transmission` itself.
         let opaque_scene_color_snapshot = self.opaque_scene_color.as_ref();
-        let binding_sets: Vec<[GpuBinding; 29]> = draws
+        let binding_sets: Vec<[GpuBinding; 34]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2848,6 +2920,36 @@ impl EffectNode for RenderScene {
                     GpuBinding::Sampler {
                         binding: 28,
                         sampler,
+                    },
+                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1
+                    // revised): sheen/iridescence/anisotropy extension
+                    // textures. Same always-bind ABI-stub discipline as
+                    // 19-21; sampled with the existing base_color_sampler
+                    // (binding 22, sRGB colour maps) / mr_sampler (binding
+                    // 24, linear data maps) rather than adding five more
+                    // dedicated sampler bindings — a documented v1
+                    // simplification (no per-extension-map sampler wrap/
+                    // filter override; every extension texture gets that
+                    // family's default repeat/linear behavior).
+                    GpuBinding::Texture {
+                        binding: 29,
+                        texture: draw.sheen_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 30,
+                        texture: draw.sheen_roughness_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 31,
+                        texture: draw.iridescence_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 32,
+                        texture: draw.iridescence_thickness_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 33,
+                        texture: draw.anisotropy_map.unwrap_or(dummy),
                     },
                 ]
             })
@@ -3134,7 +3236,10 @@ mod tests {
 
     /// IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate: `texture_flags2`
     /// bits must be read ONLY inside their dedicated resolve functions
-    /// (`resolve_mr`/`resolve_occlusion`/`resolve_emissive`), never ad-hoc
+    /// (`resolve_mr`/`resolve_occlusion`/`resolve_emissive`, plus
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4's `resolve_iridescence` —
+    /// `texture_flags2.w` is iridescence_map's presence flag, same reuse
+    /// doctrine as the render_scene.rs E3/E4/E5 comment), never ad-hoc
     /// from a fragment entry point directly — the shape D3 explicitly
     /// requires (a dedicated resolve function per map, not a shared
     /// channel-select branch scattered across call sites). Plain
@@ -3170,14 +3275,19 @@ mod tests {
         let total = src.matches(access).count();
         assert!(total > 0, "expected at least one texture_flags2 read (sanity check on the scan itself)");
 
-        let inside: usize = ["fn resolve_mr(", "fn resolve_occlusion(", "fn resolve_emissive("]
+        let inside: usize = [
+            "fn resolve_mr(",
+            "fn resolve_occlusion(",
+            "fn resolve_emissive(",
+            "fn resolve_iridescence(",
+        ]
             .iter()
             .map(|sig| function_body(src, sig).matches(access).count())
             .sum();
 
         assert_eq!(
             total, inside,
-            "u.texture_flags2 must be read ONLY inside resolve_mr/resolve_occlusion/resolve_emissive \
+            "u.texture_flags2 must be read ONLY inside resolve_mr/resolve_occlusion/resolve_emissive/resolve_iridescence \
              (IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate) — found a read elsewhere"
         );
     }
@@ -3281,10 +3391,12 @@ mod tests {
         let s = RenderScene::new();
         // camera + envmap + atmosphere + light_0 +
         // (mesh_0,material_0,base_color_map_0,normal_map_0,mr_map_0,
-        //  occlusion_map_0,emissive_map_0,transform_0,instances_0) +
-        // (mesh_1,material_1,base_color_map_1,normal_map_1,mr_map_1,
-        //  occlusion_map_1,emissive_map_1,transform_1,instances_1)
-        assert_eq!(s.inputs().len(), 3 + 1 + 18);
+        //  occlusion_map_0,emissive_map_0,sheen_color_map_0,
+        //  sheen_roughness_map_0,iridescence_map_0,
+        //  iridescence_thickness_map_0,anisotropy_map_0,transform_0,
+        //  instances_0) × 2 objects — GLTF_MATERIAL_EXTENSIONS_DESIGN.md
+        // E3/E4/E5 (D1 revised) added five new per-object texture ports.
+        assert_eq!(s.inputs().len(), 3 + 1 + 28);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
