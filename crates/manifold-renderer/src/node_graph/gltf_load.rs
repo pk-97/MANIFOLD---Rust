@@ -1201,6 +1201,11 @@ pub(crate) struct GltfImportSummary {
     /// this list). Kept on the summary so a parse-only smoke test can
     /// assert the parser sees the right channels on an asset it was never
     /// wired against, independent of the per-material resolution step.
+    /// Read only from `#[cfg(test)]` code today (`cargo clippy` without
+    /// `--tests` doesn't see that) — un-suppression trigger: A4's clip
+    /// selector (D4, deferred) will read `animations[1..]` directly to
+    /// expose multi-clip glbs (`Fox` ships three) beyond clip `[0]`.
+    #[allow(dead_code)]
     pub animations: Vec<GltfAnimationInfo>,
     /// Non-fatal animation parse findings — a non-LINEAR interpolation
     /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
@@ -1559,14 +1564,14 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         std::collections::BTreeMap::new();
     for (node_index, chain) in &mesh_node_chains {
         chain_by_node.insert(*node_index, chain.clone());
-        if let Some(node) = document.nodes().nth(*node_index) {
-            if let Some(mesh) = node.mesh() {
-                for primitive in mesh.primitives() {
-                    nodes_by_material
-                        .entry(primitive.material().index())
-                        .or_default()
-                        .insert(*node_index);
-                }
+        if let Some(node) = document.nodes().nth(*node_index)
+            && let Some(mesh) = node.mesh()
+        {
+            for primitive in mesh.primitives() {
+                nodes_by_material
+                    .entry(primitive.material().index())
+                    .or_default()
+                    .insert(*node_index);
             }
         }
     }
@@ -2040,9 +2045,9 @@ mod animation_tests {
     /// finding (this session): `BoxAnimated.glb` is NOT the "one node,
     /// one mesh, one material" asset the phase brief assumed — it has
     /// TWO materials ("inner"/"outer") and its single animated object
-    /// splits translation onto an ANCESTOR node (node 0) from rotation
-    /// on the mesh's own node (node 2), via an intermediate no-op node
-    /// 1. `resolve_object_animation`'s ancestor-chain walk exists
+    /// splits translation onto an ANCESTOR node (node zero) from rotation
+    /// on the mesh's own node (node two), via an intermediate no-op node.
+    /// `resolve_object_animation`'s ancestor-chain walk exists
     /// specifically because of this asset.
     #[test]
     fn box_animated_resolves_split_translation_and_rotation_onto_one_object() {
@@ -2074,7 +2079,7 @@ mod animation_tests {
         assert!(anim.rotation.is_some(), "rotation lives on inner's own mesh node");
         assert!(anim.scale.is_none(), "BoxAnimated has no scale channel");
         assert!(
-            (anim.duration_s - 3.708_329_9).abs() < 1e-3,
+            (anim.duration_s - 3.708_33).abs() < 1e-3,
             "duration should be the translation track's last keyframe time, got {}",
             anim.duration_s
         );

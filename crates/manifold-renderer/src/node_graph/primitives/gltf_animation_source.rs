@@ -71,6 +71,45 @@ crate::primitive! {
             range: Some((0.0625, 16.0)),
             enum_values: &[],
         },
+        // GLTF_ANIMATION_DESIGN.md A1 fix (found rendering BoxAnimated.glb's
+        // own goldens — the four phases came out pixel-identical): a
+        // transform_3d input port is a port-SHADOW — wiring it makes the
+        // wire win OUTRIGHT over the node's own static param, it does not
+        // add to it. gltf_import.rs's per-object static recenter
+        // (`-object_center`) lives on transform_3d's pos_x/y/z params, so
+        // wiring this node's pos_x/y/z straight into those ports silently
+        // discarded the recenter for every animated object — the sampled
+        // translation landed in raw (un-recentered) glTF space instead of
+        // the recentered space every OTHER node in the scene uses,
+        // typically moving the object far outside the framing camera.
+        // Composing the recenter HERE (added to the sampled position
+        // before it reaches transform_3d) is the fix: one node still owns
+        // the whole pos_x/y/z port-shadow, and its output is correct in
+        // the same recentered space as a static object's.
+        ParamDef {
+            name: Cow::Borrowed("recenter_x"),
+            label: "Recenter X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("recenter_y"),
+            label: "Recenter Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("recenter_z"),
+            label: "Recenter Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-1000.0, 1000.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("translation_track"),
             label: "Translation Track",
@@ -319,10 +358,22 @@ impl Primitive for GltfAnimationSource {
         // and the primitive's `composition_notes`.
         let t = progress.rem_euclid(1.0) * duration_s;
 
-        let pos = match ctx.params.get("translation_track") {
+        let recenter = [
+            ctx.params.get("recenter_x").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+            ctx.params.get("recenter_y").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+            ctx.params.get("recenter_z").and_then(ParamValue::as_scalar).unwrap_or(0.0),
+        ];
+        let sampled_pos = match ctx.params.get("translation_track") {
             Some(ParamValue::Table(table)) => sample_vec3_track(table, t).unwrap_or([0.0, 0.0, 0.0]),
             _ => [0.0, 0.0, 0.0],
         };
+        // Composed here, not left to the port-shadow at transform_3d — see
+        // `recenter_x`'s doc comment.
+        let pos = [
+            sampled_pos[0] + recenter[0],
+            sampled_pos[1] + recenter[1],
+            sampled_pos[2] + recenter[2],
+        ];
         let scale = match ctx.params.get("scale_track") {
             Some(ParamValue::Table(table)) => sample_vec3_track(table, t).unwrap_or([1.0, 1.0, 1.0]),
             _ => [1.0, 1.0, 1.0],
@@ -638,5 +689,124 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A1's performer-gesture gate, at the
+    /// GRAPH level: `node.lfo` (Saw, one cycle per beat) wired directly
+    /// into `node.gltf_animation_source.progress`, sampled just before
+    /// and just after the LFO's own wrap point (beats 0.999 and 1.001 —
+    /// the LFO itself wraps `fract()` internally, already proven in
+    /// `lfo.rs`'s tests). Uses a bounce-shaped translation track (rises
+    /// then returns to 0 — the SAME shape `BoxAnimated.glb`'s real
+    /// translation channel has, verified against the actual fixture
+    /// bytes this session) so the two samples are expected to be close.
+    ///
+    /// NOTE for whoever reads this next to `BoxAnimated.glb` itself:
+    /// that asset's ROTATION channel does NOT loop seamlessly (identity
+    /// at t=0, held at 180°-about-X from t=2.5 to the clip's end at
+    /// t=3.708 — verified against the raw keyframe bytes) — a real
+    /// authored-content property of that specific fixture, not a
+    /// sampler defect. A whole-frame pixel "near-progress-0 vs
+    /// near-progress-1" render assertion would be FALSE for that asset;
+    /// this test instead exercises the wrap-continuity claim on data
+    /// that genuinely loops, at the value level (the reliable oracle
+    /// for a computable claim), and `progress_wraps_not_clamps_at_the_loop_boundary`
+    /// above independently proves the sampler's wrap-vs-clamp mechanics
+    /// hold regardless of asset content.
+    #[test]
+    fn lfo_driven_progress_loops_a_seamless_track_continuously_at_the_wrap_point() {
+        use crate::node_graph::EffectNode;
+        use crate::node_graph::effect_node::EffectNodeType;
+        use crate::node_graph::execution_plan::compile;
+        use crate::node_graph::graph::Graph;
+        use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+        use crate::node_graph::primitives::lfo::Lfo;
+        use crate::node_graph::Executor;
+        use manifold_core::{Beats, Seconds};
+        use std::sync::Mutex;
+
+        struct Capture {
+            type_id: EffectNodeType,
+            seen: std::sync::Arc<Mutex<Option<ParamValue>>>,
+        }
+        impl EffectNode for Capture {
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                static INPUTS: [NodeInput; 1] = [NodePort {
+                    name: Cow::Borrowed("in"),
+                    ty: PortType::Scalar(ScalarType::F32),
+                    kind: PortKind::Input,
+                    required: true,
+                }];
+                &INPUTS
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &[]
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+                *self.seen.lock().unwrap() = ctx.inputs.scalar("in");
+            }
+        }
+
+        fn sample_pos_y_at(beats: f32) -> f32 {
+            let seen = std::sync::Arc::new(Mutex::new(None));
+            let mut g = Graph::new();
+            let lfo = g.add_node(Box::new(Lfo::new()));
+            g.set_param(lfo, "rate_mode", ParamValue::Enum(0)).unwrap(); // Musical
+            g.set_param(lfo, "rate", ParamValue::Enum(0)).unwrap(); // "1/1" — one cycle per beat
+            g.set_param(lfo, "shape", ParamValue::Enum(2)).unwrap(); // Saw
+
+            let anim = g.add_node(Box::new(GltfAnimationSource::new()));
+            g.set_param(anim, "duration_s", ParamValue::Float(1.0)).unwrap();
+            // Bounce shape matching BoxAnimated.glb's real translation
+            // track: 0 -> peak -> peak (hold) -> back to 0.
+            let table = translation_table(vec![
+                [0.0, 0.0, 2.52, 0.0],
+                [0.4, 0.0, 2.52, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ]);
+            g.set_param(anim, "translation_track", table).unwrap();
+            g.connect((lfo, "out"), (anim, "progress")).unwrap();
+
+            let sink = g.add_node(Box::new(Capture {
+                type_id: EffectNodeType::new("test.capture"),
+                seen: seen.clone(),
+            }));
+            g.connect((anim, "pos_y"), (sink, "in")).unwrap();
+
+            let plan = compile(&g).unwrap();
+            let mut exec = Executor::with_mock();
+            exec.execute_frame(
+                &mut g,
+                &plan,
+                FrameTime {
+                    beats: Beats(beats as f64),
+                    seconds: Seconds(beats as f64 * 0.5),
+                    delta: Seconds(1.0 / 60.0),
+                    frame_count: 0,
+                },
+            );
+            match seen.lock().unwrap().clone() {
+                Some(ParamValue::Float(f)) => f,
+                v => panic!("gltf_animation_source did not emit a Float on pos_y: {v:?}"),
+            }
+        }
+
+        // rate=1/1 -> the LFO completes one Saw cycle per beat, so
+        // beats=0.999 sits just before its own wrap and beats=1.001
+        // just after (into the next cycle) — the LFO's `fract()` makes
+        // these progress ~0.999 and ~0.001 respectively.
+        let near_end = sample_pos_y_at(0.999);
+        let near_start = sample_pos_y_at(1.001);
+        assert!(
+            (near_end - near_start).abs() < 0.05,
+            "a seamless (0->peak->0) track must read continuously across the LFO's wrap: \
+             near-end={near_end}, near-start={near_start}"
+        );
     }
 }

@@ -242,6 +242,9 @@ mod tests {
                 "Trigger Ease To",
                 "Trigger Gate",
                 "Value",
+                // Sorts last: ASCII byte-order puts a lowercase leading
+                // letter after every uppercase-leading label above.
+                "glTF Animation Source",
             ],
         );
     }

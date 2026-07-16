@@ -1037,6 +1037,15 @@ fn build_import_graph(
             let mut anim_node =
                 plain_node(anim_id, &anim_node_id, "node.gltf_animation_source", &anim_node_id);
             anim_node.params.insert("duration_s".to_string(), float(anim.duration_s.max(1e-6)));
+            // The wire into transform_3d's pos_x/y/z port-shadows WINS
+            // outright over that node's own static recenter param — see
+            // node.gltf_animation_source's `recenter_x` doc comment. Fold
+            // the same `-center` recenter offset in here so the animated
+            // object lands in the same recentered space as every static
+            // object in the scene.
+            anim_node.params.insert("recenter_x".to_string(), float(-center[0]));
+            anim_node.params.insert("recenter_y".to_string(), float(-center[1]));
+            anim_node.params.insert("recenter_z".to_string(), float(-center[2]));
             if let Some(t) = &anim.translation {
                 let rows: Vec<Vec<f32>> = t
                     .times
@@ -3255,7 +3264,10 @@ mod tests {
             }),
             rotation: Some(QuatTrack {
                 times: vec![0.0, 1.0],
-                values: vec![[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.7071, 0.7071]],
+                values: vec![
+                    [0.0, 0.0, 0.0, 1.0],
+                    [0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2],
+                ],
             }),
             scale: None,
         });
@@ -3291,7 +3303,7 @@ mod tests {
             Some(SerializedParamValue::Table { rows }) if rows.len() == 2
         ));
         assert!(
-            anim.params.get("scale_track").is_none(),
+            !anim.params.contains_key("scale_track"),
             "absent scale channel must not be fabricated as a Table"
         );
         assert_eq!(anim.params.get("duration_s"), Some(&float(2.0)));
@@ -3327,9 +3339,9 @@ mod tests {
 
         let mut animated = full_material(0, "Inner", 1000);
         animated.animation = Some(GltfObjectAnimation {
-            duration_s: 3.708_329_9,
+            duration_s: 3.708_33,
             translation: Some(Vec3Track {
-                times: vec![0.0, 1.25, 2.5, 3.708_329_9],
+                times: vec![0.0, 1.25, 2.5, 3.708_33],
                 values: vec![[0.0, 0.0, 0.0], [0.0, 2.52, 0.0], [0.0, 2.52, 0.0], [0.0, 0.0, 0.0]],
             }),
             rotation: Some(QuatTrack {
@@ -4012,6 +4024,258 @@ mod tests {
         println!("create_with_override proof: wrote {out_path} (fraction {fraction:.4})");
     }
 
+    #[cfg(feature = "gpu-proofs")]
+    fn box_animated_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/BoxAnimated.glb")
+    }
+
+    /// GLTF_ANIMATION_DESIGN.md A1's `duration_s`, read straight off the
+    /// assembled graph's animated `node.gltf_animation_source` — so the
+    /// render tests below can pick exact `(beats, seconds)` pairs that
+    /// land on a specific `progress` through the DEFAULT (unwired) beat
+    /// drive, without wiring a scrub source into the graph.
+    #[cfg(feature = "gpu-proofs")]
+    fn box_animated_duration_s() -> f32 {
+        let summary = gltf_load::gltf_import_summary(&box_animated_fixture_path())
+            .expect("parse BoxAnimated.glb");
+        summary
+            .materials
+            .iter()
+            .find_map(|m| m.animation.as_ref())
+            .expect("BoxAnimated.glb must resolve an animation on one of its materials")
+            .duration_s
+    }
+
+    /// Render-and-look finding (this session, verified with a throwaway
+    /// probe test before writing this): `BoxAnimated.glb`'s "inner_box"
+    /// (the only animated object) sits almost entirely INSIDE the
+    /// stationary "outer_box" shell — under the importer's DEFAULT
+    /// synthesized camera (a ~17-degree-above-horizon orbit shot tuned
+    /// for typical hero objects) the inner box is visible only as a
+    /// sliver of color peeking through a gap at the very top rim. Once
+    /// its translation lifts it more than ~0.4 world units (well before
+    /// progress=0.25 in this clip), it moves entirely out of that sliver
+    /// and the rendered frame goes back to "no visible inner box" —
+    /// IDENTICAL to every other progress where it's equally absent from
+    /// the sliver. A default-camera four-phase test would (and, before
+    /// this fix, DID) come back pixel-identical for 3 of the 4 phases —
+    /// not a wiring bug, a camera-framing fact about this specific asset
+    /// discovered by rendering and looking, not assumed. This override
+    /// re-points the SAME synthesized camera near-vertical (looking down
+    /// through the shell's open top — confirmed with the probe render:
+    /// the inner box's full motion and rotation are clearly visible from
+    /// here) via its own card bindings (`cam_tilt`/`cam_dist` — NOT the
+    /// raw node params, which the binding evaluation overwrites every
+    /// frame with its own default_value regardless of what the node
+    /// param says). Test-only instrumentation — never a change to the
+    /// production import default.
+    #[cfg(feature = "gpu-proofs")]
+    fn point_camera_down_to_see_inner_box(def: &mut manifold_core::effect_graph_def::EffectGraphDef) {
+        let meta = def.preset_metadata.as_mut().expect("import graph carries v2 metadata");
+        for b in meta.bindings.iter_mut() {
+            match b.id.as_str() {
+                "cam_tilt" => b.default_value = 1.4,
+                "cam_dist" => b.default_value = 6.0,
+                _ => {}
+            }
+        }
+    }
+
+    /// Render the assembled `def` at a chosen `progress` (via the
+    /// `node.gltf_animation_source` default beat-drive: `progress =
+    /// wrap(beats * rate / (duration_s * beats_per_second))` with
+    /// `rate=1.0` and the `beats_per_second=2.0` fallback this test picks
+    /// by setting `seconds = beats * 0.5` — see
+    /// `gltf_animation_source::default_progress`), polling for the
+    /// background mesh-parse to converge (same BUG-100 double-condition
+    /// convergence loop `imported_azalea_renders_faithfully_to_png` uses).
+    /// Returns the tonemapped RGBA8 buffer.
+    #[cfg(feature = "gpu-proofs")]
+    #[allow(clippy::too_many_arguments)]
+    fn render_box_animated_at_progress(
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        w: u32,
+        h: u32,
+        progress: f32,
+        duration_s: f32,
+    ) -> Vec<u8> {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let beats = progress * duration_s * 2.0;
+        let seconds = (beats * 0.5) as f64;
+
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("BoxAnimated graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "box-animated");
+        let ctx = PresetContext {
+            time: seconds,
+            beat: beats as f64,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        const STABLE_STREAK: u32 = 3;
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        for _attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("box-animated-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut readback_enc = device.create_encoder("box-animated-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            let fraction = non_black as f64 / (w * h) as f64;
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+            if stable_count >= STABLE_STREAK {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        rgba
+    }
+
+    /// A1 gate item 1 (four-phase PNG goldens): `BoxAnimated.glb`
+    /// imported and rendered headless at progress 0 / 0.25 / 0.5 / 0.75
+    /// must produce four visibly distinct frames — the box's translation
+    /// (and, past progress ~0.34, its rotation too) actually moves it
+    /// across frame. Written to `tests/fixtures/gltf/goldens/` following
+    /// the suite's existing `box_animated.png` naming (that file is the
+    /// STATIC single-frame conformance golden from GLB_CONFORMANCE —
+    /// this test's four phase-suffixed files are new, additive, and
+    /// never overwrite it).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn box_animated_four_phase_pngs_are_visibly_distinct() {
+        let path = box_animated_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "box_animated_four_phase_pngs_are_visibly_distinct: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let duration_s = box_animated_duration_s();
+        let (w, h) = (256u32, 256u32);
+        let phases = [0.0f32, 0.25, 0.5, 0.75];
+        let mut frames = Vec::new();
+        for &p in &phases {
+            let (mut def, _report) = assemble_import_graph(&path).expect("assemble BoxAnimated");
+            point_camera_down_to_see_inner_box(&mut def);
+            frames.push(render_box_animated_at_progress(def, w, h, p, duration_s));
+        }
+
+        let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/goldens");
+        std::fs::create_dir_all(&out_dir).expect("create goldens dir");
+        for (p, rgba) in phases.iter().zip(frames.iter()) {
+            let out_path = out_dir.join(format!("box_animated_p{:03}.png", (p * 100.0).round() as u32));
+            image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
+                .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
+        }
+
+        for i in 0..frames.len() {
+            for j in (i + 1)..frames.len() {
+                assert_ne!(
+                    frames[i], frames[j],
+                    "progress {} and progress {} rendered byte-identical frames — the clip isn't animating",
+                    phases[i], phases[j]
+                );
+            }
+        }
+    }
+
+    /// A1 gate item 2 (round-trip): build the import graph, serialize it
+    /// through the V1 JSON path, reload, re-render at progress 0.5, and
+    /// confirm a pixel match against the pre-reload progress-0.5 render —
+    /// proves `Table` params (the keyframe tracks) and the new
+    /// `node.gltf_animation_source` node type survive save→reload AND
+    /// stay live (not just structurally present — STANDARD §5's
+    /// "modulation live after reload" gate, same doctrine as
+    /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn box_animated_round_trip_preserves_animation_and_renders_identically() {
+        let path = box_animated_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "box_animated_round_trip_preserves_animation_and_renders_identically: \
+                 fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let duration_s = box_animated_duration_s();
+        let (w, h) = (256u32, 256u32);
+
+        let (mut def, _report) = assemble_import_graph(&path).expect("assemble BoxAnimated");
+        point_camera_down_to_see_inner_box(&mut def);
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef =
+            serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        let before = render_box_animated_at_progress(def, w, h, 0.5, duration_s);
+        let after = render_box_animated_at_progress(reloaded, w, h, 0.5, duration_s);
+        assert_eq!(
+            before, after,
+            "progress-0.5 render must pixel-match before and after a save/reload round trip"
+        );
+    }
+
     // Only used by the `#[cfg(feature = "gpu-proofs")]` render gates below —
     // gated the same way to avoid a dead-code warning on the default
     // (GPU-free) test sweep.
@@ -4496,4 +4760,5 @@ mod tests {
         println!("amg_gt3_glb_imports_and_renders_without_error_if_present: rendered without error");
     }
 }
+
 
