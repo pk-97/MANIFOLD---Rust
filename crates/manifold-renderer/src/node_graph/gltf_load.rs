@@ -2711,7 +2711,7 @@ mod animation_tests {
     /// and the pinned `gltf-json` 1.4.1's `Target` struct has no
     /// `#[serde(default)]` on its `node` field — so the file fails to
     /// even DESERIALIZE (`missing field \`node\``), before any
-    /// validation or animation parsing runs. Logged as BUG-187 (see
+    /// validation or animation parsing runs. Logged as BUG-200 (see
     /// docs/BUG_BACKLOG.md) — a pre-existing crate-parsing gap, not a
     /// regression from this phase. `InterpolationTest.glb` instead
     /// exercises translation/rotation/scale channels across MULTIPLE
