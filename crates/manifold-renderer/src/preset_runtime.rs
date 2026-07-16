@@ -3215,6 +3215,19 @@ impl PresetRuntime {
         {
             log::warn!("PresetRuntime::resize re-allocation failed: {e}");
         }
+        // Resize wiped the Array<T> wire buffers, and stateful loops whose
+        // state rides those buffers in place (`array_feedback`'s aliased
+        // in/out variant — every particle sim) came back zeroed with no
+        // re-seed: dead particles, black output, and no way for the
+        // performer to recover short of rebuilding the layer. Clear ALL
+        // graph state so every seed-bootstrap path re-arms — a resolution
+        // change reads as "the sim restarts", which is the honest contract
+        // (positions are UV-normalized but density/canvas-sized buffers
+        // aren't resolution-portable anyway).
+        for inst in self.graph.nodes_mut() {
+            inst.node.clear_state();
+        }
+        self.state_store.cleanup_all();
     }
 
     /// Aim the authoring-time node-output preview at the editor's stable
@@ -5889,6 +5902,87 @@ mod generator_runtime_tests {
                 "Array resource {res:?} has no backing buffer after resize",
             );
         }
+    }
+
+    /// Live project-resolution change must not kill a particle preset
+    /// (Peter's report on Cymatics, 2026-07-16: "breaks when I change
+    /// project resolution"). `resize()` wipes every pinned binding
+    /// including Array<T> wires; a particle sim whose state rides those
+    /// buffers (or whose re-seed never re-fires) comes back dead — black
+    /// output, sand gone. This renders warm-up frames, resizes, renders
+    /// again, and asserts the output still carries energy.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn cymatics_survives_live_resize() {
+        use crate::preset_context::PresetContext;
+        let device = crate::test_device();
+        let json = include_str!("../assets/generator-presets/Cymatics.json");
+        let registry = PrimitiveRegistry::with_builtin();
+        let format = GpuTextureFormat::Rgba16Float;
+        let (w0, h0) = (512u32, 512u32);
+        let mut g = PresetRuntime::from_json_str_with_device(
+            json, &registry, device.arc(), w0, h0, format, None,
+        )
+        .expect("Cymatics preset must load");
+
+        let max_luma = |g: &mut PresetRuntime, w: u32, h: u32, frames: u32, base: u32| -> f32 {
+            let target = RenderTarget::new(&device, w, h, format, "cymatics-resize-test");
+            for f in 0..frames {
+                let ctx = PresetContext {
+                    time: (base + f) as f64 / 60.0,
+                    beat: 0.0,
+                    dt: 1.0 / 60.0,
+                    width: w,
+                    height: h,
+                    output_width: w,
+                    output_height: h,
+                    aspect: w as f32 / h as f32,
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: i64::from(base + f),
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let mut enc = device.create_encoder("cymatics-resize-frame");
+                {
+                    let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                    g.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut rb = device.create_encoder("cymatics-resize-readback");
+            rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
+            rb.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared buffer mapped");
+            let px: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            px.chunks(4)
+                .map(|c| half::f16::from_bits(c[0]).to_f32())
+                .fold(0.0f32, f32::max)
+        };
+
+        let before = max_luma(&mut g, w0, h0, 90, 0);
+        assert!(
+            before > 0.05,
+            "Cymatics must render visible sand before resize (max luma {before})"
+        );
+
+        let (w1, h1) = (384u32, 640u32);
+        g.resize(&device, w1, h1);
+
+        let after = max_luma(&mut g, w1, h1, 90, 90);
+        assert!(
+            after > 0.05,
+            "Cymatics must still render visible sand after a live resize \
+             (max luma {after} — resize killed the particle state)"
+        );
     }
 
     #[cfg(feature = "gpu-proofs")]

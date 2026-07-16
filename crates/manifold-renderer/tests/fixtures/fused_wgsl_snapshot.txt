@@ -4368,6 +4368,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // @static_param: n1_contrast
 // @static_param: n1_curve
 // @static_param: n1_intensity
+// @static_param: n2_amount
 // @static_param: n2_contrast
 struct Params {
     n0_kernel_size: u32,

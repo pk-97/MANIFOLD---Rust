@@ -83,18 +83,6 @@
         "oscSuffix": "jiggle"
       },
       {
-        "id": "color",
-        "name": "Color",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 1.0,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F2",
-        "oscSuffix": "color"
-      },
-      {
         "id": "cycle_modes",
         "name": "Cycle Modes",
         "min": 0.0,
@@ -246,19 +234,6 @@
           "kind": "node",
           "nodeId": "jiggle_kick",
           "param": "strength"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "color",
-        "label": "Color",
-        "defaultValue": 1.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "colored",
-          "param": "amount"
         },
         "convert": {
           "type": "Float"
@@ -824,11 +799,11 @@
         },
         "radius": {
           "type": "Float",
-          "value": 2.0
+          "value": 1.5
         },
         "radius_mode": {
           "type": "Enum",
-          "value": 1
+          "value": 0
         }
       }
     },
@@ -845,11 +820,11 @@
         },
         "radius": {
           "type": "Float",
-          "value": 2.0
+          "value": 1.5
         },
         "radius_mode": {
           "type": "Enum",
-          "value": 1
+          "value": 0
         }
       }
     },

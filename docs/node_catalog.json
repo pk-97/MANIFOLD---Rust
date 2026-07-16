@@ -21308,13 +21308,6 @@
           "name": "Jiggle"
         },
         {
-          "default": "1",
-          "id": "color",
-          "max": "1",
-          "min": "0",
-          "name": "Color"
-        },
-        {
           "default": "0",
           "id": "cycle_modes",
           "max": "1",
