@@ -45,11 +45,13 @@ struct Vertex {
 
 // Superset uniform, rebuilt once per object per draw call. 16-byte
 // aligned throughout — every member is already a vec4/mat4 multiple, so no
-// manual padding is needed. Total 480 bytes (four mat4x4s + fourteen vec4s;
-// stale as "272"/"320"/"448"/"464" in older comments — grew with the P3
-// atmosphere fields, the P2 prev_view_proj/prev_model pair, the
-// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field, and
-// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2;
+// manual padding is needed. Total 736 bytes (four mat4x4s + twenty-four
+// vec4s; stale as "272"/"320"/"448"/"464"/"480" in older comments — grew
+// with the P3 atmosphere fields, the P2 prev_view_proj/prev_model pair, the
+// VOLUMETRIC_LIGHT_DESIGN.md P1 shaft_params field,
+// IMPORT_FIDELITY_DESIGN.md D3/F-P2's texture_flags2, and
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's five-vec4 material-extension
+// block at the end;
 // `RenderSceneUniforms`'s `size_of` assert in render_scene.rs is the
 // authoritative check).
 // Lights are NO LONGER in here: they live in the `@binding(8)` storage
@@ -156,6 +158,35 @@ struct Uniforms {
     // approximately — see RenderScene::evaluate.
     prev_view_proj: mat4x4<f32>,
     prev_model: mat4x4<f32>,
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: single aligned block, grown
+    // ONCE, sized for ALL FIVE families the design's phases add (sheen,
+    // iridescence, anisotropy, dispersion, transmission+volume) — see
+    // `RenderSceneUniforms`'s matching field doc comments in render_scene.rs
+    // for the authoritative packing rationale. NOT read by any fragment
+    // entry point below yet (E2-E6 wire that) — declared here only so the
+    // buffer size matches `RenderSceneUniforms`'s `size_of` assert.
+    // KHR_materials_sheen: xyz = sheenColorFactor (default [0,0,0], inert),
+    // w = sheenRoughnessFactor (default 0.0).
+    sheen_params: vec4<f32>,
+    // KHR_materials_iridescence: x = iridescenceFactor (default 0.0,
+    // inert), y = iridescenceIor (default 1.3), z =
+    // iridescenceThicknessMinimum (default 100.0 nm), w =
+    // iridescenceThicknessMaximum (default 400.0 nm).
+    iridescence_params: vec4<f32>,
+    // KHR_materials_anisotropy's anisotropyStrength (x, default 0.0) +
+    // anisotropyRotation (y, default 0.0 rad); KHR_materials_dispersion's
+    // single factor (z, default 0.0) shares this vec4 rather than costing
+    // its own. w reserved.
+    anisotropy_dispersion_params: vec4<f32>,
+    // KHR_materials_transmission's transmissionFactor (x, default 0.0) +
+    // KHR_materials_volume's thicknessFactor (y, default 0.0) and
+    // attenuationDistance (z, default a finite "no attenuation" sentinel —
+    // see gltf_load.rs's VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION). w
+    // reserved.
+    transmission_volume_params: vec4<f32>,
+    // KHR_materials_volume's attenuationColor (xyz, default [1,1,1] —
+    // neutral). w reserved.
+    volume_attenuation_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -253,6 +284,16 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(19) var mr_map: texture_2d<f32>;
 @group(0) @binding(20) var occlusion_map: texture_2d<f32>;
 @group(0) @binding(21) var emissive_map: texture_2d<f32>;
+
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the opaque-scene-color snapshot
+// (Pass A's fully-shaded opaque result, blitted between Pass A and Pass B) a
+// transmissive fragment will sample for screen-space refraction — E2b's
+// work. Declared here now so the pipeline layout is correct and stable
+// across E2a/E2b; NOT read anywhere in `fs_pbr` yet (pipeline-layout-only
+// this phase, per the E2a/E2b split — see render_scene.rs's `is_transmissive`
+// always-bind-or-dummy comment for the CPU side of this same rule).
+@group(0) @binding(27) var opaque_scene_color: texture_2d<f32>;
+@group(0) @binding(28) var opaque_scene_color_sampler: sampler;
 
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 // Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
@@ -675,6 +716,94 @@ fn resolve_emissive(uv: vec2<f32>) -> vec3<f32> {
     return u.emission.rgb;
 }
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: KHR_materials_transmission +
+// KHR_materials_volume screen-space refraction — the real glass pass that
+// REPLACES the D8/F-P5 alpha-blend approximation (D3 explicitly rejects
+// keeping that approximation once real refraction ships; see fs_pbr's call
+// site for how the two are kept from double-applying). Follows the Khronos
+// glTF-Sample-Viewer reference shape (getVolumeTransmissionRay /
+// getIBLVolumeRefraction, the house-standard real-time approximation, not
+// ray tracing): refract the view ray through the surface, walk
+// `thickness_factor` world units along it (scaled by the object's own
+// model-matrix scale, so a non-uniformly-scaled mesh's glass reads the
+// right thickness), project the exit point back into `opaque_scene_color`'s
+// screen space, and Beer-Lambert-tint the sample. Roughness blurs the
+// sample via `opaque_scene_color`'s own mip chain (E2b, F-P6 mip-gen
+// infra), the SAME roughness*max_mip shape `prefiltered_specular` already
+// uses above (`roughness * PREFILTER_MAX_MIP`) — not a new formula.
+// `transmission_factor == 0.0` short-circuits before this ever runs (see
+// call site) — zero cost, zero shading change for every non-glass object.
+fn transmission_diffuse(
+    N: vec3<f32>,
+    V: vec3<f32>,
+    world_pos: vec3<f32>,
+    roughness: f32,
+    ior: f32,
+    albedo_rgb: vec3<f32>,
+    F0: vec3<f32>,
+    env_brdf: vec2<f32>,
+) -> vec3<f32> {
+    let thickness = u.transmission_volume_params.y;
+    let attenuation_distance = u.transmission_volume_params.z;
+    let attenuation_color = u.volume_attenuation_color.rgb;
+
+    // Refract the view ray (I = -V, the direction light travels INTO the
+    // surface) through the dielectric interface. eta = 1/ior: air (1.0)
+    // into the medium. WGSL's `refract` returns a zero vector on total
+    // internal reflection (grazing exits at high IOR) — fall back to
+    // straight-through along -N so the sample never NaNs on normalize(0).
+    var refraction_dir = refract(-V, N, 1.0 / max(ior, 1.0));
+    if dot(refraction_dir, refraction_dir) < 1e-8 {
+        refraction_dir = -N;
+    }
+    refraction_dir = normalize(refraction_dir);
+
+    // Model-matrix scale (column lengths) — a non-uniformly-scaled glass
+    // mesh's `thickness_factor` (authored in the mesh's own local units)
+    // needs this to land in world units, same as the Khronos sample
+    // viewer's `getVolumeTransmissionRay`.
+    let model_scale = vec3<f32>(
+        length(u.model[0].xyz),
+        length(u.model[1].xyz),
+        length(u.model[2].xyz),
+    );
+    let transmission_ray = refraction_dir * thickness * model_scale;
+    let exit_pos = world_pos + transmission_ray;
+
+    let ndc = u.view_proj * vec4<f32>(exit_pos, 1.0);
+    let ndc_xy = ndc.xy / ndc.w;
+    // Same NDC->UV convention as `shadow_factor`'s `project_to_shadow_uv`
+    // above: y flipped (Metal texture origin is top-left).
+    let refraction_uv = vec2<f32>(ndc_xy.x * 0.5 + 0.5, ndc_xy.y * -0.5 + 0.5);
+
+    let max_mip = f32(textureNumLevels(opaque_scene_color) - 1u);
+    let mip_level = clamp(roughness * max_mip, 0.0, max_mip);
+    let transmitted = textureSampleLevel(opaque_scene_color, opaque_scene_color_sampler, refraction_uv, mip_level).rgb;
+
+    // Beer-Lambert (KHR_materials_volume): attenuation_coefficient =
+    // -ln(attenuationColor)/attenuationDistance, tint =
+    // exp(-coefficient*distance_travelled). Defaults (attenuationColor =
+    // [1,1,1], attenuationDistance = the gltf_load.rs 1e6 "no attenuation"
+    // sentinel) collapse ln(1) = 0 -> coefficient = 0 -> tint = exactly 1
+    // (no tinting) — verified numerically at authoring time (E2b execution
+    // report), not just assumed algebraically.
+    let safe_color = max(attenuation_color, vec3<f32>(1e-6));
+    let attenuation_coefficient = -log(safe_color) / max(attenuation_distance, 1e-4);
+    let travelled = length(transmission_ray);
+    let tint = exp(-attenuation_coefficient * travelled);
+    let attenuated = transmitted * tint;
+
+    // Same specular-reflectance fraction the split-sum IBL above already
+    // computes (F0*brdf.x + brdf.y, f90 implicitly 1.0) — the glass's own
+    // specular highlight/reflection stays additive on top (composed at the
+    // call site, untouched); only the DIFFUSE response is replaced by the
+    // refracted sample, per the glTF sample viewer's f_diffuse
+    // substitution — surface base_color still tints the see-through
+    // (real glass isn't perfectly colorless).
+    let specular_color = F0 * env_brdf.x + env_brdf.y;
+    return (vec3<f32>(1.0) - specular_color) * attenuated * albedo_rgb;
+}
+
 // Exponential depth fog (P3), applied to a lit fragment's STRAIGHT
 // (non-premultiplied) rgb just before return. Distance is camera→fragment;
 // height_falloff scales density by exp(-falloff·max(y,0)) so fog thins with
@@ -818,6 +947,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
     var direct = vec3<f32>(0.0);
     var direct_coat = vec3<f32>(0.0);
+    // E2b: accumulated in PARALLEL with `direct` below using the exact same
+    // already-computed `diffuse`/`l_col`/`n_dot_l`/`l_dir.w`/`vis` terms —
+    // never read unless transmission_factor > 0 (see the composition below)
+    // and never substituted into `direct` itself, so this cannot perturb
+    // `direct`'s bit-for-bit value for any material (glass or not).
+    var direct_diffuse = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
     for (var i = 0u; i < light_count; i = i + 1u) {
         let l_dir = lights[i * 2u];
@@ -841,6 +976,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 
         let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis;
+        direct_diffuse = direct_diffuse + diffuse * l_col.rgb * n_dot_l * l_dir.w * vis;
 
         // Coat lobe: same D_GGX/G_Smith shape at clearcoat_roughness,
         // fixed F0 = 0.04, no diffuse term (a clear lacquer has none).
@@ -917,7 +1053,29 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let v_dot_nc = n_dot_v;
     let clearcoat_fresnel = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_nc, 0.0, 1.0), 5.0);
     let fc = clearcoat * clearcoat_fresnel;
-    let base_rgb = direct + ibl + ambient + resolve_emissive(in.uv);
+    let emissive = resolve_emissive(in.uv);
+    var base_rgb = direct + ibl + ambient + emissive;
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: transmission REPLACES the
+    // diffuse response with the refracted-and-tinted background sample
+    // (mixed by transmission_factor, per the glTF sample viewer's
+    // f_diffuse substitution) rather than layering on top of it — D3's
+    // explicit rejection of "alpha-blend approximation kept permanently"
+    // means this and the old approximation must never both be active. The
+    // import side (gltf_import.rs) no longer darkens base_color.a by
+    // transmission_factor (that darkening WAS the old approximation), so
+    // there is nothing left for this to double up against; specular
+    // (direct_specular = direct - direct_diffuse, and specular_ibl) stays
+    // untouched — only diffuse is swapped. `transmission_factor == 0.0`
+    // (every non-glass object, the overwhelming common case) skips this
+    // block entirely: `base_rgb` is left exactly as computed above, byte-
+    // identical to pre-E2b output.
+    let transmission_factor = u.transmission_volume_params.x;
+    if transmission_factor > 0.0 {
+        let diffuse_component = direct_diffuse + diffuse_ibl;
+        let transmitted_diffuse = transmission_diffuse(N, V, in.world_pos, roughness, ior, albedo.rgb, F0, env_brdf);
+        let final_diffuse = mix(diffuse_component, transmitted_diffuse, transmission_factor);
+        base_rgb = (direct - direct_diffuse) + specular_ibl + final_diffuse + ambient + emissive;
+    }
     let coat_rgb = direct_coat + coat_ibl;
     let lit = base_rgb * (1.0 - fc) + coat_rgb * fc;
 

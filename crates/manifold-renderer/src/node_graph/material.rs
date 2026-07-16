@@ -211,6 +211,60 @@ pub struct Material {
     /// exactly zero).
     pub clearcoat_roughness: f32,
 
+    // ---- Sheen / iridescence / anisotropy / dispersion / transmission +
+    // volume (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1). Inert when
+    // `kind != Pbr`, same pattern as clearcoat above. Every field defaults
+    // to glTF's own implicit default (0.0/[0,0,0] factors are inert;
+    // iridescence_ior/thickness and volume_attenuation_color default to
+    // their spec-neutral values). No shading math reads these yet — E2-E6
+    // wire the lobes/pass that consume them; this phase only carries the
+    // values through so a later phase's shader change is the only diff. ----
+    /// `KHR_materials_sheen`'s `sheenColorFactor` (default `[0,0,0]`,
+    /// inert).
+    pub sheen_color_factor: [f32; 3],
+    /// `KHR_materials_sheen`'s `sheenRoughnessFactor` (default `0.0`).
+    pub sheen_roughness_factor: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceFactor` (default `0.0`,
+    /// inert).
+    pub iridescence_factor: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceIor` (default `1.3`).
+    pub iridescence_ior: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMinimum`
+    /// (default `100.0`, nanometres).
+    pub iridescence_thickness_minimum: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMaximum`
+    /// (default `400.0`, nanometres).
+    pub iridescence_thickness_maximum: f32,
+    /// `KHR_materials_anisotropy`'s `anisotropyStrength` (default `0.0`,
+    /// inert).
+    pub anisotropy_strength: f32,
+    /// `KHR_materials_anisotropy`'s `anisotropyRotation` (default `0.0`,
+    /// radians).
+    pub anisotropy_rotation: f32,
+    /// `KHR_materials_dispersion`'s single `dispersion` factor (default
+    /// `0.0`, inert).
+    pub dispersion: f32,
+    /// `KHR_materials_transmission`'s `transmissionFactor` (default `0.0`,
+    /// inert). Already imported and folded into `alpha_mode`/`base_color.a`
+    /// at import time (IMPORT_FIDELITY_DESIGN.md D8); this is the SAME
+    /// factor carried through to the uniform for E2's real refraction pass
+    /// to read directly, rather than reverse-engineering it from alpha.
+    pub transmission_factor: f32,
+    /// `KHR_materials_volume`'s `thicknessFactor` (default `0.0` —
+    /// thin-walled).
+    pub volume_thickness_factor: f32,
+    /// `KHR_materials_volume`'s `attenuationDistance`. glTF's own implicit
+    /// default is `+infinity` ("no attenuation"); MANIFOLD substitutes the
+    /// finite `gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
+    /// sentinel at import time (`f32::INFINITY` is not `serde_json`-safe
+    /// and every import without an explicit value would hit it), so this
+    /// field is never non-finite. A hand-authored material leaves it at
+    /// that same finite "no attenuation" default.
+    pub volume_attenuation_distance: f32,
+    /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]`,
+    /// neutral).
+    pub volume_attenuation_color: [f32; 3],
+
     // ---- Per-map-family samplers (GLB_XFAIL_BURNDOWN_DESIGN.md D3).
     // Replaces `render_scene`'s single hardcoded REPEAT `material_sampler`
     // (`85b5bb9d`) — each map family samples with its OWN glTF sampler
@@ -255,6 +309,19 @@ impl Material {
             emissive_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             clearcoat: 0.0,
             clearcoat_roughness: 0.0,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            dispersion: 0.0,
+            transmission_factor: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
             base_color_sampler: MapSamplerDesc::default(),
             normal_sampler: MapSamplerDesc::default(),
             mr_sampler: MapSamplerDesc::default(),
@@ -490,10 +557,14 @@ mod tests {
         // Trip-wire on the size — the per-frame copy cost matters because
         // every wire carries one. Ceiling raised 128 → 256 for
         // GLB_CONFORMANCE_DESIGN.md G-P4's five per-map UV transforms
-        // (5 × 24 B) — a ~224-byte Copy per wire per frame is still far
-        // below anything measurable next to a single texture bind.
+        // (5 × 24 B), then 256 → 336 for
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's sheen/iridescence/
+        // anisotropy/dispersion/transmission+volume fields (17 × 4 B =
+        // 68 B, plus struct padding) — a ~300-byte Copy per wire per frame
+        // is still far below anything measurable next to a single texture
+        // bind.
         let sz = std::mem::size_of::<Material>();
-        assert!(sz <= 256, "Material grew unexpectedly large: {sz} bytes");
+        assert!(sz <= 336, "Material grew unexpectedly large: {sz} bytes");
         let m = Material::default_unlit_white();
         let _copy = m;
         let _another = m;

@@ -691,12 +691,22 @@ fn build_import_graph(
         }
         // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
         // KHR_materials_transmission both become a real `Blend` material.
-        // One formula covers both — `transmission_factor == 0.0` (plain
-        // BLEND, no transmission extension) reduces to the material's own
-        // base_color.a unchanged.
+        //
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: `effective_alpha` used
+        // to darken base_color.a by `(1 - transmission_factor)` — that WAS
+        // the D8/F-P5 alpha-blend approximation for transmission (fake
+        // see-through via low opacity). Real screen-space refraction ships
+        // in `fs_pbr` (render_scene.wgsl's `transmission_diffuse`) as of
+        // E2b, and D3 explicitly rejects keeping the approximation active
+        // once the real thing exists — the two must never both apply (that
+        // would double-darken: alpha-composited over the background AND
+        // shader-mixed with it). So `effective_alpha` is now just the
+        // material's own authored base_color.a — Blend/glass alpha keeps
+        // its normal meaning (author/performer-controlled fade via the
+        // Opacity card below), while transmission's see-through is carried
+        // entirely by the shader's diffuse substitution, not by alpha.
         let is_glass = m.was_blend || m.transmission_factor > 0.0;
-        let effective_alpha =
-            (m.base_color_factor[3] * (1.0 - m.transmission_factor)).clamp(0.0, 1.0);
+        let effective_alpha = m.base_color_factor[3].clamp(0.0, 1.0);
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -742,9 +752,9 @@ fn build_import_graph(
         mat_node
             .params
             .insert("color_b".to_string(), float(m.base_color_factor[2]));
-        // IMPORT_FIDELITY_DESIGN.md D8: `effective_alpha` folds the
-        // transmission formula in; for a plain opaque/mask material
-        // (transmission_factor == 0.0) this is exactly base_color.a.
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
+        // exactly `base_color.a` (see its definition above for why the old
+        // transmission-darkening formula was removed).
         mat_node
             .params
             .insert("color_a".to_string(), float(effective_alpha));
@@ -820,6 +830,92 @@ fn build_import_graph(
             "clearcoat_roughness".to_string(),
             float(m.clearcoat_roughness_factor),
         );
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume factors → uniform
+        // slots on `node.pbr_material` (`render_scene.wgsl` declares the
+        // matching struct fields but reads none of them yet — E2-E6 wire
+        // the shading math). Every default reproduces glTF's own implicit
+        // default, so a material without these extensions wires
+        // byte-identical params to pre-E1.
+        mat_node
+            .params
+            .insert("sheen_color_r".to_string(), float(m.sheen_color_factor[0]));
+        mat_node
+            .params
+            .insert("sheen_color_g".to_string(), float(m.sheen_color_factor[1]));
+        mat_node
+            .params
+            .insert("sheen_color_b".to_string(), float(m.sheen_color_factor[2]));
+        mat_node
+            .params
+            .insert("sheen_roughness".to_string(), float(m.sheen_roughness_factor));
+        mat_node
+            .params
+            .insert("iridescence".to_string(), float(m.iridescence_factor));
+        mat_node
+            .params
+            .insert("iridescence_ior".to_string(), float(m.iridescence_ior));
+        mat_node.params.insert(
+            "iridescence_thickness_min".to_string(),
+            float(m.iridescence_thickness_minimum),
+        );
+        mat_node.params.insert(
+            "iridescence_thickness_max".to_string(),
+            float(m.iridescence_thickness_maximum),
+        );
+        mat_node
+            .params
+            .insert("anisotropy_strength".to_string(), float(m.anisotropy_strength));
+        mat_node
+            .params
+            .insert("anisotropy_rotation".to_string(), float(m.anisotropy_rotation));
+        mat_node
+            .params
+            .insert("dispersion".to_string(), float(m.dispersion));
+        mat_node
+            .params
+            .insert("transmission".to_string(), float(m.transmission_factor));
+        mat_node
+            .params
+            .insert("volume_thickness".to_string(), float(m.volume_thickness_factor));
+        mat_node.params.insert(
+            "volume_attenuation_distance".to_string(),
+            float(m.volume_attenuation_distance),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_r".to_string(),
+            float(m.volume_attenuation_color[0]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_g".to_string(),
+            float(m.volume_attenuation_color[1]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_b".to_string(),
+            float(m.volume_attenuation_color[2]),
+        );
+        // E1: textured variants of the four new families are report-only
+        // (factor-only v1), same doctrine as clearcoat/specular above.
+        if m.sheen_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_sheen has a sheenColorTexture/sheenRoughnessTexture — only the factors (sheenColorFactor/sheenRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.iridescence_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_iridescence has an iridescenceTexture/iridescenceThicknessTexture — only the factors are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.anisotropy_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_anisotropy has an anisotropyTexture — only the factors (anisotropyStrength/anisotropyRotation) are imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
+        if m.volume_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_volume has a thicknessTexture — only the factor (thicknessFactor) is imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
         let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
@@ -2165,6 +2261,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2359,6 +2471,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2552,12 +2680,15 @@ mod tests {
             Some(&enum_val(2)),
             "transmission/BLEND material must map to alpha_mode Blend (2)"
         );
-        // base_color.a (1.0) * (1 - transmission_factor 0.9) = 0.1
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: color_a is base_color.a
+        // alone now (1.0) — transmission's see-through is carried by
+        // fs_pbr's shader-side diffuse substitution, not by darkened alpha
+        // (the old D8/F-P5 approximation this phase removes).
         let color_a = mat.params.get("color_a").expect("color_a set");
         match color_a {
             SerializedParamValue::Float { value } => assert!(
-                (value - 0.1).abs() < 1e-4,
-                "color_a must fold the transmission formula, got {value}"
+                (value - 1.0).abs() < 1e-4,
+                "color_a must equal base_color.a unchanged, got {value}"
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
@@ -2792,6 +2923,22 @@ mod tests {
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),

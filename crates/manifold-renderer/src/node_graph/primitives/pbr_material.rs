@@ -62,6 +62,27 @@ crate::primitive! {
         // report lines.
         clearcoat: ScalarF32 optional,
         clearcoat_roughness: ScalarF32 optional,
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume. Factor-only v1,
+        // same doctrine as clearcoat above — no shading math reads these
+        // yet (E2-E6), this phase only carries the values through.
+        sheen_color_r: ScalarF32 optional,
+        sheen_color_g: ScalarF32 optional,
+        sheen_color_b: ScalarF32 optional,
+        sheen_roughness: ScalarF32 optional,
+        iridescence: ScalarF32 optional,
+        iridescence_ior: ScalarF32 optional,
+        iridescence_thickness_min: ScalarF32 optional,
+        iridescence_thickness_max: ScalarF32 optional,
+        anisotropy_strength: ScalarF32 optional,
+        anisotropy_rotation: ScalarF32 optional,
+        dispersion: ScalarF32 optional,
+        transmission: ScalarF32 optional,
+        volume_thickness: ScalarF32 optional,
+        volume_attenuation_distance: ScalarF32 optional,
+        volume_attenuation_color_r: ScalarF32 optional,
+        volume_attenuation_color_g: ScalarF32 optional,
+        volume_attenuation_color_b: ScalarF32 optional,
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -262,6 +283,149 @@ crate::primitive! {
             label: "Clearcoat Roughness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume. Every default is
+        // glTF's own implicit default (see `Material`'s field doc
+        // comments) — a material that never sets these is byte-identical
+        // to pre-E1.
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_r"),
+            label: "Sheen Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_g"),
+            label: "Sheen Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_b"),
+            label: "Sheen Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_roughness"),
+            label: "Sheen Roughness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence"),
+            label: "Iridescence",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_ior"),
+            label: "Iridescence IOR",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.3),
+            range: Some((1.0, 3.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_thickness_min"),
+            label: "Iridescence Thickness Min (nm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(100.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_thickness_max"),
+            label: "Iridescence Thickness Max (nm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(400.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("anisotropy_strength"),
+            label: "Anisotropy Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("anisotropy_rotation"),
+            label: "Anisotropy Rotation",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("dispersion"),
+            label: "Dispersion",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("transmission"),
+            label: "Transmission",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_thickness"),
+            label: "Volume Thickness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_distance"),
+            label: "Volume Attenuation Distance",
+            ty: ParamType::Float,
+            default: ParamValue::Float(
+                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            ),
+            range: Some((0.001, 1.0e6)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_r"),
+            label: "Volume Attenuation Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_g"),
+            label: "Volume Attenuation Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_b"),
+            label: "Volume Attenuation Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
@@ -719,6 +883,30 @@ impl Primitive for PbrMaterial {
         // GGX landmine in the coat lobe's own D/G terms too.
         let clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
         let clearcoat_roughness = ctx.scalar_or_param("clearcoat_roughness", 0.0).max(0.01);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume — read straight
+        // through, no clamping beyond each param's own declared range
+        // (no shading math consumes these yet).
+        let sheen_color_r = ctx.scalar_or_param("sheen_color_r", 0.0);
+        let sheen_color_g = ctx.scalar_or_param("sheen_color_g", 0.0);
+        let sheen_color_b = ctx.scalar_or_param("sheen_color_b", 0.0);
+        let sheen_roughness = ctx.scalar_or_param("sheen_roughness", 0.0);
+        let iridescence = ctx.scalar_or_param("iridescence", 0.0);
+        let iridescence_ior = ctx.scalar_or_param("iridescence_ior", 1.3);
+        let iridescence_thickness_min = ctx.scalar_or_param("iridescence_thickness_min", 100.0);
+        let iridescence_thickness_max = ctx.scalar_or_param("iridescence_thickness_max", 400.0);
+        let anisotropy_strength = ctx.scalar_or_param("anisotropy_strength", 0.0);
+        let anisotropy_rotation = ctx.scalar_or_param("anisotropy_rotation", 0.0);
+        let dispersion = ctx.scalar_or_param("dispersion", 0.0);
+        let transmission = ctx.scalar_or_param("transmission", 0.0);
+        let volume_thickness = ctx.scalar_or_param("volume_thickness", 0.0);
+        let volume_attenuation_distance = ctx.scalar_or_param(
+            "volume_attenuation_distance",
+            crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        );
+        let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
+        let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
+        let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
         // One folded per-map UV affine per family (G-P4). The closure keeps
         // the 30 reads mechanical; identity defaults are exactly inert.
         let uv_xf = |prefix: &str| -> [f32; 6] {
@@ -791,6 +979,23 @@ impl Primitive for PbrMaterial {
         material.ior = ior;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
+        material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];
+        material.sheen_roughness_factor = sheen_roughness;
+        material.iridescence_factor = iridescence;
+        material.iridescence_ior = iridescence_ior;
+        material.iridescence_thickness_minimum = iridescence_thickness_min;
+        material.iridescence_thickness_maximum = iridescence_thickness_max;
+        material.anisotropy_strength = anisotropy_strength;
+        material.anisotropy_rotation = anisotropy_rotation;
+        material.dispersion = dispersion;
+        material.transmission_factor = transmission;
+        material.volume_thickness_factor = volume_thickness;
+        material.volume_attenuation_distance = volume_attenuation_distance;
+        material.volume_attenuation_color = [
+            volume_attenuation_color_r,
+            volume_attenuation_color_g,
+            volume_attenuation_color_b,
+        ];
         material.base_color_uv_transform = base_color_uv_transform;
         material.normal_uv_transform = normal_uv_transform;
         material.mr_uv_transform = mr_uv_transform;
