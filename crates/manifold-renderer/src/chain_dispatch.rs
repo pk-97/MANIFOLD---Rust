@@ -126,6 +126,15 @@ fn topology_dump(
 /// caller owns the slot and is responsible for clearing it when the
 /// owner is reset.
 ///
+/// `scope` is this chain's instance identity for profiled GPU-attribution
+/// tags (`fx:{layer_id}`, `master`, `led:{...}` — PERF_BUDGET_GATE_DESIGN P2 /
+/// D6 correction) and `profiling` is whether attribution profiling is on this
+/// frame. Both are (re-)applied on every call — including across a rebuild,
+/// which replaces the cached [`PresetRuntime`] and its executor — so a scope
+/// or profiling toggle can never go stale on a topology change. The cost when
+/// `profiling` is `false` is a cheap `String`/`bool` set, not a GPU or
+/// per-step cost (that stays gated inside the executor).
+///
 /// Returns `None` when:
 ///
 /// - The chain has no enabled effects (caller should use the original
@@ -135,6 +144,7 @@ fn topology_dump(
 ///
 /// The cache survives "no enabled effects" frames so its `RenderTarget`
 /// pool and primitive state aren't thrown away on transient ducks.
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_chain<'a>(
     cache: &'a mut Option<PresetRuntime>,
     gpu: &mut GpuEncoder<'_>,
@@ -143,6 +153,8 @@ pub fn dispatch_chain<'a>(
     groups: &[EffectGroup],
     ctx: &PresetContext,
     preview_effect: Option<&EffectId>,
+    scope: &str,
+    profiling: bool,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
         return None;
@@ -203,6 +215,10 @@ pub fn dispatch_chain<'a>(
         CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         return None;
     };
+    // D6 correction: re-applied every call (cheap) so a rebuild above (which
+    // replaces `cg`'s executor) can never leave a stale scope/profiling flag.
+    cg.set_profile_scope(scope);
+    cg.set_profiling(profiling);
     let t0 = std::time::Instant::now();
     let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
     if ran {

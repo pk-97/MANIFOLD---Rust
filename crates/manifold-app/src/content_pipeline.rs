@@ -924,6 +924,26 @@ pub struct ContentPipeline {
     /// strip maps 1:1 to one column. Updated by ContentThread when the LED
     /// controller is initialized; defaults to LedSettings defaults otherwise.
     led_grid_size: (u32, u32),
+
+    /// PERF_BUDGET_GATE_DESIGN P2 / D6: per-dispatch GPU timestamp sampler,
+    /// created once (sized against the fixture's span count — see
+    /// `set_profiling`'s doc) and re-attached to both the Generators and
+    /// Compositor command buffers every profiled frame. `None` when
+    /// profiling is off or unsupported on this device.
+    #[cfg(target_os = "macos")]
+    profiling_sampler: Option<manifold_gpu::GpuTimestampSampler>,
+    /// Whether `--profile` mode is on this run. Forces `composite_serial`
+    /// (via `compositor.set_force_serial`) and switches both command-buffer
+    /// commits to the `_profiled` variant. Off by default — zero cost on the
+    /// live path (no sampler attached, no extra wait).
+    profiling_enabled: bool,
+    /// Resolved [`manifold_gpu::GpuFrameProfile`]s from the last profiled
+    /// frame: `(command_buffer_label, profile)` — `"Generators"` and
+    /// `"Compositor"`, since D6's forced-serial mode still runs them as two
+    /// separate command buffers (only the compositor's internal per-layer
+    /// buffers collapse to one). Drained by [`Self::take_gpu_profiles`].
+    #[cfg(target_os = "macos")]
+    last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
 }
 
 /// The semantic node-preview render pipelines, borrowed as one bundle so the
@@ -1048,7 +1068,71 @@ impl ContentPipeline {
                 manifold_led::DEFAULT_STRIP_COUNT,
                 manifold_led::DEFAULT_LEDS_PER_STRIP,
             ),
+            #[cfg(target_os = "macos")]
+            profiling_sampler: None,
+            profiling_enabled: false,
+            #[cfg(target_os = "macos")]
+            last_gpu_profiles: Vec::new(),
         }
+    }
+
+    /// PERF_BUDGET_GATE_DESIGN P2 / D6: turn per-dispatch GPU attribution
+    /// profiling on/off for this content pipeline's next frames. `max_spans`
+    /// sizes the sampler (two counter samples per span) — the caller (the
+    /// `--profile` xtask) verifies this against the fixture's actual span
+    /// count and reports overflow rather than silently truncating (D6's
+    /// capacity check). Forces `composite_serial` in the compositor (D6
+    /// correction) and fans profiling out to every effect chain + generator
+    /// via `Compositor::set_profiling` / `GeneratorRenderer::set_profiling`.
+    /// Turning this off drops the sampler and un-forces serial compositing.
+    #[cfg(target_os = "macos")]
+    pub fn set_profiling(&mut self, on: bool, max_spans: usize) {
+        self.profiling_enabled = on;
+        self.compositor.set_profiling(on);
+        self.compositor.set_force_serial(on);
+        self.profiling_sampler = if on {
+            self.native_device
+                .as_ref()
+                .and_then(|d| d.create_timestamp_sampler(max_spans))
+        } else {
+            None
+        };
+    }
+
+    /// Whether the sampler requested by [`Self::set_profiling`] was actually
+    /// created — `false` means the device didn't support counter sampling at
+    /// all (never silently downgrades to unprofiled; the caller must report
+    /// this, not proceed as if profiling were on).
+    #[cfg(target_os = "macos")]
+    pub fn profiling_sampler_ready(&self) -> bool {
+        self.profiling_sampler.is_some()
+    }
+
+    /// This run's sampler capacity in spans (two samples per span) — the D6
+    /// capacity check compares this against the fixture's actual per-frame
+    /// span count. `None` if profiling isn't on / the sampler wasn't created.
+    #[cfg(target_os = "macos")]
+    pub fn profiling_sampler_capacity(&self) -> Option<usize> {
+        self.profiling_sampler.as_ref().map(|s| s.max_spans())
+    }
+
+    /// Drain the last profiled frame's resolved GPU command-buffer profiles
+    /// (`"Generators"`, `"Compositor"`) — empty when profiling is off or no
+    /// frame has run yet.
+    #[cfg(target_os = "macos")]
+    pub fn take_gpu_profiles(&mut self) -> Vec<(&'static str, manifold_gpu::GpuFrameProfile)> {
+        std::mem::take(&mut self.last_gpu_profiles)
+    }
+
+    /// Drain the compositor's owned chains' per-step CPU profiles from the
+    /// last profiled frame (screen + LED + master effect chains). Generator
+    /// profiles are separate — `GeneratorRenderer` lives on
+    /// `PlaybackEngine::renderers`, not on `ContentPipeline`; the caller
+    /// (the `--profile` xtask) drains those directly via
+    /// `engine.renderers_mut()` + `as_any_mut().downcast_mut::<GeneratorRenderer>()`
+    /// and combines both lists.
+    pub fn take_step_profiles(&mut self) -> Vec<manifold_renderer::node_graph::StepProfile> {
+        self.compositor.take_step_profiles()
     }
 
     /// Update the LED grid dimensions. Called by ContentThread when the LED
@@ -1783,6 +1867,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         {
             let mut gen_enc = native_device.create_encoder("Generators");
+            // PERF_BUDGET_GATE_DESIGN P2 / D6: attach the dispatch sampler to
+            // this command buffer when a --profile run is active. Every
+            // generator's executor was already scoped (`gen:{layer_id}`) at
+            // chain-insertion time (`GeneratorRenderer::install_layer_generator`).
+            if self.profiling_enabled
+                && let Some(sampler) = self.profiling_sampler.clone()
+            {
+                gen_enc.enable_dispatch_profiling(sampler, native_device);
+            }
             {
                 let mut gpu_gen = if let Some(pool) = texture_pool {
                     GpuEncoder::with_pool(&mut gen_enc, native_device, pool)
@@ -1920,7 +2013,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.last_node_atlas_layout = l;
                 }
             }
-            gen_enc.commit();
+            if self.profiling_enabled {
+                // D6: profiled commit waits synchronously so the resolved
+                // spans are available before this frame's stats are read —
+                // the same trade `freeze_profile.rs` makes; never on the
+                // live path (profiling_enabled is always false there).
+                let profile = gen_enc.commit_and_wait_profiled(native_device);
+                self.last_gpu_profiles.push(("Generators", profile));
+            } else {
+                gen_enc.commit();
+            }
         }
         // Tap the watched generator's live node-param values for the editor
         // canvas (post-render, so card / driver / Ableton / envelope writes are
@@ -1939,6 +2041,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // ── Compositor CB (+ direct present, preview, recording) ────
         let mut native_enc = native_device.create_encoder("Compositor");
+        // PERF_BUDGET_GATE_DESIGN P2 / D6: same sampler, same command buffer
+        // — the compositor was forced to `composite_serial` by
+        // `set_profiling` so this IS the single shared compositor command
+        // buffer D6 needs. Every chain's executor was already scoped
+        // (`fx:{layer_id}`, `master`, `led:{...}`) at chain-insertion time.
+        if self.profiling_enabled
+            && let Some(sampler) = self.profiling_sampler.clone()
+        {
+            native_enc.enable_dispatch_profiling(sampler, native_device);
+        }
 
         // ── Build clip + layer descriptors (CPU only) ────────────────
         let _t0 = std::time::Instant::now();
@@ -2751,7 +2863,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             *sig = self.native_signal_value;
         }
         native_enc.add_completed_handler_with_status("Compositor");
-        native_enc.commit();
+        if self.profiling_enabled {
+            // D6: profiled commit waits synchronously (see the Generators CB
+            // above) — never on the live path.
+            let profile = native_enc.commit_and_wait_profiled(native_device);
+            self.last_gpu_profiles.push(("Compositor", profile));
+        } else {
+            native_enc.commit();
+        }
         native_device.capture_scope_end();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
         rtrace.mark("commit");

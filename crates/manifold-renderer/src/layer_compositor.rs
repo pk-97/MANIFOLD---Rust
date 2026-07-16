@@ -495,6 +495,29 @@ pub struct LayerCompositor {
     /// visible-only thumbnail atlas. The content layer reads
     /// [`Self::dump_textures`] after that frame. `None` = no dump pending.
     dump_request: Option<crate::compositor::DumpRequest>,
+
+    /// Per-step GPU/CPU attribution profiling on/off for every chain this
+    /// compositor owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Fanned out to each
+    /// chain's executor at dispatch time (see `fx_scope`/`led_scope`
+    /// helpers) — `false` costs one `bool` set per dispatch, zero GPU/CPU
+    /// timing. Set via [`Self::set_profiling`].
+    profiling_enabled: bool,
+    /// Force the serial composite path (D6 correction: profiled mode needs
+    /// one shared compositor command buffer to attach the dispatch sampler
+    /// to). Set via [`Self::set_force_serial`].
+    force_serial: bool,
+}
+
+/// This chain's profiled-tag scope for a screen/LED per-layer effect chain:
+/// `fx:{layer_id}`.
+fn fx_scope(layer_id: &LayerId) -> String {
+    format!("fx:{layer_id}")
+}
+
+/// This chain's profiled-tag scope for a per-group-on-the-LED-path effect
+/// chain: `led:{group_id}`.
+fn led_scope(group_id: &LayerId) -> String {
+    format!("led:{group_id}")
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
@@ -593,6 +616,8 @@ impl LayerCompositor {
             led_black_tex: None,
             preview_request: None,
             dump_request: None,
+            profiling_enabled: false,
+            force_serial: false,
         }
     }
 
@@ -878,6 +903,7 @@ impl LayerCompositor {
 
     /// Apply effect chain to the given input texture, returning the processed texture
     /// if any effects were applied, or None if the input should be used as-is.
+    #[allow(clippy::too_many_arguments)]
     fn apply_effects<'a>(
         effect_chain: &'a mut Option<PresetRuntime>,
         gpu: &mut GpuEncoder,
@@ -886,6 +912,8 @@ impl LayerCompositor {
         groups: &[EffectGroup],
         ctx: &PresetContext,
         preview_effect: Option<&EffectId>,
+        scope: &str,
+        profiling: bool,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -895,6 +923,8 @@ impl LayerCompositor {
             groups,
             ctx,
             preview_effect,
+            scope,
+            profiling,
         )
     }
 
@@ -1131,6 +1161,8 @@ impl LayerCompositor {
                         ld.effect_groups,
                         &ctx,
                         preview_fx.as_ref(),
+                        &fx_scope(ld.layer_id),
+                        self.profiling_enabled,
                     )
                 } else {
                     None
@@ -1430,6 +1462,8 @@ impl LayerCompositor {
                                 &ctx,
                                 // LED path is not a preview surface — never unfuse for it.
                                 None,
+                                &led_scope(group.layer_id),
+                                self.profiling_enabled,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -1641,6 +1675,8 @@ impl LayerCompositor {
                     group_desc.effect_groups,
                     &ctx,
                     preview_fx.as_ref(),
+                    &fx_scope(group_id),
+                    self.profiling_enabled,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -1902,6 +1938,8 @@ impl LayerCompositor {
                             ld.effect_groups,
                             &ctx,
                             preview_fx.as_ref(),
+                            &fx_scope(ld.layer_id),
+                            self.profiling_enabled,
                         )
                     } else {
                         None
@@ -2088,6 +2126,70 @@ impl Compositor for LayerCompositor {
         self.dump_request = request;
     }
 
+    /// PERF_BUDGET_GATE_DESIGN P2 / D6: fan out to every chain this
+    /// compositor currently owns (screen, group, LED-group, master, LED
+    /// master), applying the profiling flag + this chain's instance-identity
+    /// scope. New chains built later this frame (or on a future frame) get
+    /// the same treatment at dispatch time via `apply_effects`'s `scope`/
+    /// `profiling` args (chain_dispatch.rs) — this walker only needs to
+    /// reach chains that already exist so a mid-run toggle doesn't skip them.
+    fn set_profiling(&mut self, on: bool) {
+        self.profiling_enabled = on;
+        for (id, chain) in self.effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&fx_scope(id));
+            }
+        }
+        for (id, chain) in self.group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&fx_scope(id));
+            }
+        }
+        for (id, chain) in self.led_group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&led_scope(id));
+            }
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            cg.set_profiling(on);
+            cg.set_profile_scope("master");
+        }
+        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+            cg.set_profiling(on);
+            cg.set_profile_scope("led:master");
+        }
+    }
+
+    /// D6 correction: profiled mode needs one shared compositor command
+    /// buffer to attach the dispatch sampler to; `composite_parallel` gives
+    /// each layer its own. Checked at the serial-vs-parallel decision point.
+    fn set_force_serial(&mut self, on: bool) {
+        self.force_serial = on;
+    }
+
+    fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+        let mut out = Vec::new();
+        for chain in self.effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        for chain in self.group_effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        for chain in self.led_group_effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            out.extend(cg.take_step_profiles());
+        }
+        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+            out.extend(cg.take_step_profiles());
+        }
+        out
+    }
+
     fn dump_textures(&self) -> Vec<crate::compositor::DumpTextureRef<'_>> {
         let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
             return Vec::new();
@@ -2170,7 +2272,11 @@ impl Compositor for LayerCompositor {
         #[cfg(target_os = "macos")]
         {
             let active_layers = count_active_layers(frame, any_solo);
-            if active_layers >= 2 {
+            // D6 correction: profiled mode forces serial so there is one
+            // compositor command buffer to attach the dispatch sampler to —
+            // composite_parallel gives each layer its own command buffer,
+            // which the sampler can't span.
+            if active_layers >= 2 && !self.force_serial {
                 self.composite_parallel(gpu, frame, any_solo);
             } else {
                 self.composite_serial(gpu, frame, any_solo);
@@ -2249,6 +2355,8 @@ impl Compositor for LayerCompositor {
                 frame.master_effect_groups,
                 &ctx,
                 preview_fx.as_ref(),
+                "master",
+                self.profiling_enabled,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -2318,6 +2426,8 @@ impl Compositor for LayerCompositor {
                 &ctx,
                 // LED path is not a preview surface — never unfuse for it.
                 None,
+                "led:master",
+                self.profiling_enabled,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,

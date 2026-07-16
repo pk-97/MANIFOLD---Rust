@@ -2922,6 +2922,26 @@ impl PresetRuntime {
         self.executor.set_dump_all(on);
     }
 
+    /// Enable/disable per-step attribution profiling on this chain's executor
+    /// (PERF_BUDGET_GATE_DESIGN P2 / D6). Off by default — one branch per
+    /// step on the live path.
+    pub fn set_profiling(&mut self, on: bool) {
+        self.executor.set_profiling(on);
+    }
+
+    /// Set this chain's instance identity for profiled tags (D6 correction):
+    /// `fx:{layer_id}`, `gen:{layer_id}`, `master`, `led:{...}`. Called by the
+    /// owning compositor/generator-renderer at chain-insertion time.
+    pub fn set_profile_scope(&mut self, scope: &str) {
+        self.executor.set_profile_scope(scope);
+    }
+
+    /// Drain this chain's per-step CPU profiles recorded on the last profiled
+    /// frame (each entry's `tag` is the scoped GPU-span join key).
+    pub fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+        self.executor.take_step_profiles()
+    }
+
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.
     #[allow(clippy::too_many_arguments)]

@@ -53,8 +53,24 @@ pub fn run(args: &[String]) -> ! {
     };
 
     let update_baseline = args.iter().any(|a| a == "--update-baseline");
+    let profile_mode = args.iter().any(|a| a == "--profile");
 
-    match run_soak(&project_path, seconds, start_beats, update_baseline) {
+    // I4: a profiled run never reaches the baseline write and never sets a
+    // failing exit code — rejected outright rather than silently ignoring
+    // one of the two flags (no-silent-fallbacks).
+    if profile_mode && update_baseline {
+        usage_exit("--profile cannot be combined with --update-baseline (I4: profiled runs never write a baseline)");
+    }
+
+    let result = if profile_mode {
+        run_profile(&project_path, seconds, start_beats)
+    } else {
+        run_soak(&project_path, seconds, start_beats, update_baseline)
+    };
+
+    match result {
+        // I4: a profiled run always reports, never judges — `run_profile`
+        // itself only ever returns `Ok(true)` on success (see its doc).
         Ok(gate_passed) => std::process::exit(if gate_passed { 0 } else { 1 }),
         Err(e) => {
             eprintln!("perf-soak: {e}");
@@ -67,7 +83,7 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!("perf-soak: {msg}");
     eprintln!(
         "usage: cargo xtask perf-soak <project.manifold> --seconds N \
-         [--start <beats>] [--update-baseline]"
+         [--start <beats>] [--update-baseline] [--profile]"
     );
     std::process::exit(2);
 }
@@ -296,6 +312,283 @@ fn run_soak(
         eprintln!("perf-soak: PASS");
     }
     Ok(passed)
+}
+
+/// Sampler capacity in spans (two counter samples per span). Sized generously
+/// against the Liveschool fixture's per-frame dispatch count (~an order of
+/// magnitude more dispatches than `freeze_profile`'s single-preset runs, D6);
+/// the capacity check below reports actual usage/overflow rather than
+/// silently truncating if a heavier project needs more.
+const PROFILE_SAMPLER_MAX_SPANS: usize = 8192;
+
+/// Worst-frame count reported in the attribution JSON (D6/P2 default).
+const PROFILE_WORST_FRAMES_K: usize = 5;
+
+/// One node's accumulated attribution within a single profiled frame, keyed
+/// by the scoped tag (`"{scope}:s{idx}"`) that both the CPU `StepProfile` and
+/// the GPU `GpuProfiledSpan` carry — the D6 join key.
+struct ProfiledNode {
+    type_id: String,
+    gpu_ms: f64,
+    cpu_us: f64,
+}
+
+/// One profiled frame's attribution: every node's share plus whatever GPU
+/// time no executor's tag claimed (compositor/blend/tonemap passes — D6's
+/// "compositor/untagged" row, never dropped).
+struct ProfiledFrame {
+    index: u64,
+    total_gpu_ms: f64,
+    /// Dispatches that ran unprofiled because the sampler buffer filled up
+    /// (summed across both command buffers this frame).
+    overflow: usize,
+    /// Spans actually recorded this frame (summed across both command
+    /// buffers) — the D6 capacity check compares this against
+    /// `PROFILE_SAMPLER_MAX_SPANS` / 2 (max_spans).
+    spans_used: usize,
+    untagged_ms: f64,
+    nodes: std::collections::HashMap<String, ProfiledNode>,
+}
+
+/// `cargo xtask perf-soak <project> --seconds N [--start <beats>] --profile`
+/// — PERF_BUDGET_GATE_DESIGN.md P2 / D6 attribution pass. Re-runs the same
+/// real-time-paced window as `run_soak`, but with per-dispatch GPU
+/// attribution profiling on: forces `composite_serial` (one shared
+/// compositor command buffer for the sampler — D6 correction), joins GPU
+/// spans back to CPU step costs by the scoped tag `"{scope}:s{idx}"`, and
+/// reports the `PROFILE_WORST_FRAMES_K` frames with the highest total GPU
+/// time as a per-node breakdown.
+///
+/// I4: this function's return is `Ok(true)` on every successful run —
+/// profiled mode reports, it never judges pass/fail — and it never touches
+/// the baseline file (see `run()`'s `--update-baseline` rejection above).
+/// `Err` is a run failure (load/tick/device error), matching `run_soak`.
+fn run_profile(project_path_str: &str, seconds: f64, start_beats: Option<f64>) -> Result<bool, String> {
+    let project_path = Path::new(project_path_str);
+
+    let project = manifold_io::loader::load_project_with(
+        project_path,
+        crate::project_io::install_embedded_presets,
+    )
+    .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+
+    let width = project.settings.output_width.max(1) as u32;
+    let height = project.settings.output_height.max(1) as u32;
+    let frame_rate = project.settings.frame_rate as f64;
+    let bpm = project.settings.bpm;
+
+    let mut ct = headless_content_thread(project, width, height);
+    ct.timer.set_target_fps(frame_rate);
+    crate::content_thread::apply_realtime_thread_policy(frame_rate);
+
+    if let Some(beats) = start_beats {
+        ct.handle_command(ContentCommand::SeekToBeat(manifold_core::Beats(beats)));
+    }
+    ct.handle_command(ContentCommand::Play);
+
+    ct.content_pipeline
+        .set_profiling(true, PROFILE_SAMPLER_MAX_SPANS);
+    if !ct.content_pipeline.profiling_sampler_ready() {
+        return Err(
+            "GPU dispatch profiling unsupported on this device (counter sampling at stage \
+             boundaries not available)"
+                .to_string(),
+        );
+    }
+    // GeneratorRenderer lives on PlaybackEngine::renderers, not on
+    // ContentPipeline (see ContentPipeline::take_step_profiles's doc) — its
+    // profiling flag is set directly here, before any generator is installed,
+    // so `install_layer_generator`'s chain-insertion-time stamp (D6
+    // correction) sees it on from the very first frame.
+    for renderer in ct.engine.renderers_mut() {
+        if let Some(gen_renderer) = renderer
+            .as_any_mut()
+            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+        {
+            gen_renderer.set_profiling(true);
+        }
+    }
+
+    eprintln!(
+        "perf-soak --profile: profiling '{}' for {seconds:.1}s at {frame_rate:.1} fps \
+         ({width}x{height}, bpm={:.1}{}) — forced composite_serial (D6)",
+        project_path.display(),
+        bpm.0,
+        start_beats.map(|b| format!(", start={b:.1} beats")).unwrap_or_default(),
+    );
+
+    let (state_tx, state_rx) = crossbeam_channel::unbounded::<crate::content_state::ContentState>();
+    let drain = std::thread::Builder::new()
+        .name("perf-soak-profile-drain".into())
+        .spawn(move || while state_rx.recv().is_ok() {})
+        .map_err(|e| format!("spawn drain thread: {e}"))?;
+
+    let mut frames: Vec<ProfiledFrame> = Vec::new();
+    let mut frame_idx: u64 = 0;
+    let deadline = Instant::now() + Duration::from_secs_f64(seconds);
+    while Instant::now() < deadline {
+        ct.timer.wait_for_deadline();
+        ct.tick_frame(&state_tx);
+
+        let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
+        let mut cpu_profiles = ct.content_pipeline.take_step_profiles();
+        // GeneratorRenderer lives on PlaybackEngine::renderers, not on
+        // ContentPipeline — drained directly here (see
+        // ContentPipeline::take_step_profiles's doc).
+        for renderer in ct.engine.renderers_mut() {
+            if let Some(gen_renderer) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+            {
+                cpu_profiles.extend(gen_renderer.take_step_profiles());
+            }
+        }
+
+        let cpu_by_tag: std::collections::HashMap<&str, &manifold_renderer::node_graph::StepProfile> =
+            cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
+
+        let mut frame = ProfiledFrame {
+            index: frame_idx,
+            total_gpu_ms: 0.0,
+            overflow: 0,
+            spans_used: 0,
+            untagged_ms: 0.0,
+            nodes: std::collections::HashMap::new(),
+        };
+        for (_cb_label, profile) in &gpu_profiles {
+            frame.total_gpu_ms += profile.total_ms;
+            frame.overflow += profile.overflow;
+            frame.spans_used += profile.spans.len();
+            for span in &profile.spans {
+                // A span whose tag matches no live executor step this frame
+                // (empty scope, or a compositor-owned pass — blend/tonemap/
+                // LED slicer — with no `Executor` behind it at all) is
+                // reported explicitly, never silently dropped (D6).
+                match cpu_by_tag.get(span.tag.as_str()) {
+                    Some(cpu) => {
+                        let entry = frame.nodes.entry(span.tag.clone()).or_insert_with(|| {
+                            ProfiledNode {
+                                type_id: cpu.type_id.clone(),
+                                gpu_ms: 0.0,
+                                cpu_us: cpu.cpu_nanos as f64 / 1000.0,
+                            }
+                        });
+                        entry.gpu_ms += span.millis;
+                    }
+                    None => frame.untagged_ms += span.millis,
+                }
+            }
+        }
+        frames.push(frame);
+        frame_idx += 1;
+    }
+
+    drop(state_tx);
+    drain.join().map_err(|_| "drain thread panicked".to_string())?;
+
+    if frames.is_empty() {
+        return Err("no frames recorded — soak duration too short?".to_string());
+    }
+
+    // D6 capacity check: report, never silently truncate. `max_spans` is the
+    // sampler's capacity in spans; a frame using >= it means dispatches were
+    // dropped (already visible per-frame as `overflow`, surfaced here as one
+    // whole-run verdict too).
+    let sampler_capacity_spans = ct.content_pipeline.profiling_sampler_capacity().unwrap_or(0);
+    let max_frame_spans_used = frames.iter().map(|f| f.spans_used).max().unwrap_or(0);
+    let any_overflow = frames.iter().any(|f| f.overflow > 0);
+    if any_overflow {
+        eprintln!(
+            "perf-soak --profile: WARNING — sampler capacity ({sampler_capacity_spans} spans) \
+             overflowed on at least one frame (max used {max_frame_spans_used}); some \
+             dispatches ran unprofiled. Increase PROFILE_SAMPLER_MAX_SPANS."
+        );
+    } else {
+        eprintln!(
+            "perf-soak --profile: capacity OK — {max_frame_spans_used}/{sampler_capacity_spans} \
+             spans on the busiest frame"
+        );
+    }
+
+    // Worst-K frames by total GPU time.
+    let mut ranked: Vec<&ProfiledFrame> = frames.iter().collect();
+    ranked.sort_by(|a, b| b.total_gpu_ms.partial_cmp(&a.total_gpu_ms).unwrap_or(std::cmp::Ordering::Equal));
+    let worst: Vec<serde_json::Value> = ranked
+        .iter()
+        .take(PROFILE_WORST_FRAMES_K)
+        .map(|f| {
+            let mut node_rows: Vec<(&String, &ProfiledNode)> = f.nodes.iter().collect();
+            node_rows.sort_by(|a, b| {
+                b.1.gpu_ms.partial_cmp(&a.1.gpu_ms).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let share_denom = if f.total_gpu_ms > 0.0 { f.total_gpu_ms } else { 1.0 };
+            let mut nodes_json: Vec<serde_json::Value> = node_rows
+                .iter()
+                .map(|(tag, n)| {
+                    serde_json::json!({
+                        "tag": tag,
+                        "type_id": n.type_id,
+                        "gpu_ms": n.gpu_ms,
+                        "cpu_us": n.cpu_us,
+                        "share_of_frame": n.gpu_ms / share_denom,
+                    })
+                })
+                .collect();
+            // D6: spans no executor owns (compositor blend/tonemap/LED
+            // slicer passes) are reported explicitly, never dropped.
+            nodes_json.push(serde_json::json!({
+                "tag": "compositor/untagged",
+                "type_id": "compositor/untagged",
+                "gpu_ms": f.untagged_ms,
+                "cpu_us": 0.0,
+                "share_of_frame": f.untagged_ms / share_denom,
+            }));
+            serde_json::json!({
+                "frame_index": f.index,
+                "total_gpu_ms": f.total_gpu_ms,
+                "overflow_dispatches": f.overflow,
+                "spans_used": f.spans_used,
+                "nodes": nodes_json,
+            })
+        })
+        .collect();
+
+    let profile_json = serde_json::json!({
+        "mode": "project",
+        "profile": true,
+        "project": project_path.display().to_string(),
+        "seconds": seconds,
+        "start_beats": start_beats,
+        "forced_composite_serial": true,
+        "frames_measured": frames.len(),
+        "sampler_capacity_spans": sampler_capacity_spans,
+        "max_frame_spans_used": max_frame_spans_used,
+        "capacity_overflow": any_overflow,
+        "worst_frames": worst,
+    });
+
+    let out_dir = Path::new("target/perf-profile");
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
+    let stem = project_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".to_string());
+    let out_path = out_dir.join(format!("{stem}-profile.json"));
+    std::fs::write(&out_path, serde_json::to_string_pretty(&profile_json).unwrap())
+        .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    eprintln!("perf-soak --profile: attribution JSON written to {}", out_path.display());
+    if let Some(worst) = ranked.first() {
+        eprintln!(
+            "perf-soak --profile: worst frame #{} = {:.3}ms GPU ({} nodes + untagged {:.3}ms)",
+            worst.index,
+            worst.total_gpu_ms,
+            worst.nodes.len(),
+            worst.untagged_ms
+        );
+    }
+
+    // I4: profiled mode reports, never judges — always Ok(true) on success.
+    Ok(true)
 }
 
 struct Stats {

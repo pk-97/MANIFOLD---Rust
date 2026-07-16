@@ -260,4 +260,25 @@ pub trait Compositor: Send {
     ) -> Vec<crate::node_graph::OuterParamRouting> {
         Vec::new()
     }
+
+    /// Enable/disable per-step GPU attribution profiling on every effect
+    /// chain (screen + LED + master) this compositor owns
+    /// (PERF_BUDGET_GATE_DESIGN P2 / D6). Fans out to each chain's executor
+    /// with its instance-identity scope (`fx:{layer_id}`, `master`,
+    /// `led:{...}`) already applied at chain-insertion time. Default no-op
+    /// for compositors without effect chains.
+    fn set_profiling(&mut self, _on: bool) {}
+
+    /// Force the serial composite path even with 2+ active layers
+    /// (PERF_BUDGET_GATE_DESIGN D6 correction): profiled mode needs one
+    /// shared compositor command buffer to attach the dispatch-profiling
+    /// sampler to, and `composite_parallel` gives each layer its own command
+    /// buffer. Default no-op for compositors without a parallel path.
+    fn set_force_serial(&mut self, _on: bool) {}
+
+    /// Drain every owned chain's per-step CPU profiles recorded on the last
+    /// profiled frame (PERF_BUDGET_GATE_DESIGN P2). Default empty.
+    fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+        Vec::new()
+    }
 }
