@@ -1,6 +1,6 @@
 # Perf Budget Gate — a standing frame-time regression gate on the canonical show file
 
-**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P2b–P3) · design 2026-07-09 · Fable · amended 2026-07-14 (Fable + Peter): D5/D6 added — per-node GPU attribution pass (P2) + real-time pacing with `--start` targeting; protocol wiring renumbered to P3 · amended 2026-07-16 (Fable + Peter): D7/P2b added — bare-glb import-graph mode (BUG-189 is the first customer); all D7 decisions closed, zero executor discretion
+**Status:** APPROVED 2026-07-09 (Peter) — design ready, awaiting build (Sonnet, P1–P2b–P3) · design 2026-07-09 · Fable · amended 2026-07-14 (Fable + Peter): D5/D6 added — per-node GPU attribution pass (P2) + real-time pacing with `--start` targeting; protocol wiring renumbered to P3 · amended 2026-07-16 (Fable + Peter): D7/P2b added — bare-glb import-graph mode (BUG-189 is the first customer); all D7 decisions closed, zero executor discretion · amended 2026-07-16 (Fable + Peter, mid-P2): D6 corrected — a real project frame is multi-executor / multi-command-buffer (every layer's chain + every generator is its own `Executor`, `composite_parallel` gives each layer its own command buffer), so the bare `"s{idx}"` step tag collides across executors; scoped tags (`"{scope}:s{idx}"`) adopted as the join key, profiled mode forces `composite_serial`, untagged spans reported explicitly. P2 brief updated accordingly; all decisions closed, zero executor discretion.
 **Prerequisites:** none (extends existing harness + trace infra; UI_HARNESS_UNIFICATION P0 makes the numbers more representative but is not a blocker)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -75,6 +75,30 @@ measurement system.
   totals); a separate profiling tool beside perf-soak (the sampler plumbing and the project
   loader are the same — one tool, two passes).
 
+  **D6 correction (2026-07-16, mid-P2, Fable + Peter):** the P2 brief as first written assumed
+  "the frame's encoder" — one `Executor`, one command buffer, matching `freeze_profile.rs`'s
+  isolated-preset case. A real project frame is not that shape: `content_pipeline.rs` runs a
+  Generators pass and a Compositor pass, and every layer's effect chain plus every generator
+  gets its own `PresetRuntime`/`Executor` (`layer_compositor.rs`'s five chain maps — per-layer,
+  per-group, master, LED, generators). Worse, with 2+ active layers `composite_parallel` gives
+  **each layer its own command buffer** (`layer_compositor.rs` `create_encoder("Layer")`,
+  committed per layer) — there is often no single shared frame encoder to attach profiling to
+  at all. The existing tag, `format!("s{idx}")` (execution.rs), is bare and restarts at 0 for
+  every executor instance; joining by that string alone on a multi-executor frame silently
+  merges unrelated nodes' GPU time under one label (layer A's step 3 collides with layer B's
+  step 3). Fix, adopted over count-based bracketing (rejected: encodes today's encoding order
+  as a hidden contiguity invariant, and breaks structurally on the parallel path where spans
+  live in different `ProfileState`s per command buffer): give `Executor` a `profile_scope:
+  String` (instance identity the compositor already knows at chain-insertion time — `fx:
+  {layer_id}`, `gen:{layer_id}`, `master`, `led:{...}`), tag as `"{scope}:s{idx}"`, and join
+  per-runtime `take_step_profiles()` drains against `(scope, idx)` — stateless, no contiguity
+  assumption, survives the parallel path. Profiled mode forces `composite_serial` (stated in
+  the output JSON) so there is one compositor command buffer to attach the sampler to — the
+  same D6 trade already declared (profiled totals are inflated regardless; only
+  concurrency-dependent totals shift, and those were never gate-trustworthy). Untagged spans
+  (compositing/blend/tonemap passes no executor owns) are reported as an explicit
+  "compositor/untagged" row, never dropped (no-silent-fallbacks).
+
 - **D7 — Bare-glb input runs the import graph on a sibling frame loop; shared plumbing,
   separate loop, report-only.** (Added 2026-07-16; first customer is BUG-189's ~10 ms
   resolution-independent floor.) The tool dispatches on input extension: `.manifold` →
@@ -137,21 +161,35 @@ the deliverable, not the mean); running windowed instead of headless. Test scope
 
 **P2 — profiled attribution pass (one session, Sonnet).**
 Entry: P1 landed; read `manifold-gpu` `metal/profiling.rs` top-of-module doc (the
-stage-boundary/encoder-splitting contract) and `freeze_profile.rs`'s enable pattern
-end-to-end before wiring anything. Deliverables: a `--profile` flag on the same xtask
-(D6) — re-runs the soak window with `enable_dispatch_profiling` on the frame encoder and
-emits per-node attribution JSON for the K worst frames (node/primitive label, ms,
-share-of-frame; K default 5), plus a capacity check: assert-and-report if the sampler
-buffer would overflow on the project's span count (verify against the Liveschool fixture
-— its frame has an order of magnitude more dispatches than freeze_profile's single
-presets). Gate — positive: on the Liveschool fixture, a profiled run's top-node shares
-are stable across two consecutive runs (rank order of the top 5 unchanged); negative:
+stage-boundary/encoder-splitting contract), `freeze_profile.rs`'s enable pattern
+end-to-end, AND the D6 correction above (multi-executor/multi-command-buffer frame
+shape, scoped tags, forced-serial profiled compositing) before wiring anything.
+Deliverables: a `profile_scope: String` field + setter on `Executor`, tag format
+changed to `"{scope}:s{idx}"` at both stamp sites (execution.rs); a scope-fan-out
+(`set_profiling`/scope assignment) and a per-runtime `take_step_profiles()` drain
+threaded through `LayerCompositor` (all five chain maps) and `GeneratorRenderer`,
+each executor's scope set to its instance identity (`fx:{layer_id}`, `gen:{layer_id}`,
+`master`, `led:{...}`) at chain-insertion time — pass-through additions on existing
+per-chain walkers, no new shared state, zero cost when profiling is off; a `--profile`
+flag on the same xtask (D6) that forces `composite_serial`, re-runs the soak window
+with `enable_dispatch_profiling` on each command buffer, joins spans by `(scope, idx)`,
+and emits per-node attribution JSON for the K worst frames (node/primitive label, ms,
+share-of-frame; K default 5) with an explicit "compositor/untagged" row for spans no
+executor owns; plus a capacity check: assert-and-report if the sampler buffer would
+overflow on the project's span count (verify against the Liveschool fixture — its frame
+has an order of magnitude more dispatches than freeze_profile's single presets).
+Gate — positive: on the Liveschool fixture, a profiled run's top-node shares are
+stable across two consecutive runs (rank order of the top 5 unchanged); negative:
 `rg -n 'update_baseline' <tool>` proves `--profile` cannot reach the baseline write and
-cannot set a failing exit code (I4). Demo: the attribution JSON for the fixture's worst
-frame, read by the orchestrator — L2. Forbidden moves: gating on profiled totals (D6);
-inventing a second label scheme beside the executor's step tags; leaving overflow silent
-(no-silent-fallbacks). Test scope: focused (`-p` the harness crate + `-p manifold-gpu
---lib`); GPU feature run only if profiling.rs itself is touched.
+cannot set a failing exit code (I4), and `rg -n 'fn.*composite_parallel'` call sites
+under `--profile` show the forced-serial branch. Demo: the attribution JSON for the
+fixture's worst frame, read by the orchestrator — L2. Forbidden moves: gating on
+profiled totals (D6); inventing a second label scheme beside the executor's step tags
+(scoping the existing tag is not a second scheme); leaving overflow OR untagged spans
+silent (no-silent-fallbacks); bracketing by span count instead of scoped tags (rejected
+above — hidden contiguity invariant, breaks on the parallel path). Test scope: focused
+(`-p` the harness crate + `-p manifold-renderer --lib` + `-p manifold-gpu --lib`); GPU
+feature run only if profiling.rs itself is touched.
 
 **P2b — bare-glb import-graph mode (half session, Sonnet, own executor).**
 Entry: P2 landed or gate-green in the same worktree. Read end-to-end before wiring:
