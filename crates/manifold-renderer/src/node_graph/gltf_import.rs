@@ -147,11 +147,21 @@ fn wire_map_texture(
     group_wires: &mut Vec<EffectGraphWire>,
     outputs: &mut Vec<InterfacePortDef>,
     string_bindings: &mut Vec<StringBindingDef>,
-    cache: &mut std::collections::HashMap<u32, (u32, String)>,
+    cache: &mut std::collections::HashMap<(u32, u32, u32), (u32, String)>,
     out_id: u32,
     channel_mode: u32,
 ) {
-    let (node_numeric_id, _node_id_str) = if let Some(existing) = cache.get(&tex_index) {
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 bugfix: the cache key MUST
+    // include `color_space`/`channel_mode`, not just `tex_index` — the base
+    // five maps only ever reuse a shared texture index under the SAME
+    // decode (e.g. ORM occlusion+mr both linear), but `KHR_materials_
+    // specular`'s `specularTexture` (linear, alpha channel) and
+    // `specularColorTexture` (sRGB, rgb channels) can legally reference the
+    // SAME physical image with DIFFERENT decodes (CompareSpecular.glb does
+    // exactly this) — a tex_index-only key would silently reuse the first
+    // decode for both ports and corrupt the second one.
+    let cache_key = (tex_index, color_space, channel_mode);
+    let (node_numeric_id, _node_id_str) = if let Some(existing) = cache.get(&cache_key) {
         existing.clone()
     } else {
         let node_id_str = format!("{node_prefix}_{k}");
@@ -181,7 +191,7 @@ fn wire_map_texture(
         });
 
         let entry = (tid, node_id_str);
-        cache.insert(tex_index, entry.clone());
+        cache.insert(cache_key, entry.clone());
         entry
     };
 
@@ -645,19 +655,12 @@ fn build_import_graph(
         let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
-        // line, never a silent drop. GLB_CONFORMANCE_DESIGN.md G-P5/D5:
-        // clearcoatFactor/clearcoatRoughnessFactor are now REAL mappings
-        // (below, on `node.pbr_material`) — only a TEXTURED coat
-        // (clearcoatTexture/clearcoatRoughnessTexture/
-        // clearcoatNormalTexture, factor-only v1) stays report-only
-        // (Deferred #2). Transmission and BLEND are also real mappings —
-        // IMPORT_FIDELITY_DESIGN.md D8/F-P5 maps both to a real `Blend`
-        // material below, so they produce no line here.
-        if m.clearcoat_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_clearcoat has a clearcoatTexture/clearcoatRoughnessTexture/clearcoatNormalTexture — only the factors (clearcoatFactor/clearcoatRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
-            ));
-        }
+        // line, never a silent drop. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
+        // (D1 revised — full spec surface): clearcoat/specular/
+        // transmission/volume-thickness textures are now REAL mappings
+        // (wired below, same doctrine as sheen/iridescence/anisotropy in
+        // E3/E4/E5) — no report line for any of them any more.
+        //
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform is
         // applied per-map (all five families) — the only variant still
         // unmapped is a texCoord index override (v1 imports TEXCOORD_0
@@ -665,11 +668,6 @@ fn build_import_graph(
         if m.uv_tex_coord_override {
             report_lines.push(format!(
                 "{group_name}: KHR_texture_transform.texCoord override — only TEXCOORD_0 is imported in v1, the override is ignored (report-only; the transform itself IS applied)"
-            ));
-        }
-        if m.specular_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_specular has a specularTexture/specularColorTexture — only the factor (specularFactor/specularColorFactor) is imported in v1, the texture is not sampled (report-only)"
             ));
         }
         // `render_scene` shipped no per-object normal-scale / occlusion-strength
@@ -894,17 +892,11 @@ fn build_import_graph(
             "volume_attenuation_color_b".to_string(),
             float(m.volume_attenuation_color[2]),
         );
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised): sheen,
-        // iridescence, and anisotropy textures are now sampled (see the
-        // `sheenColorMap`/etc wiring below) — E1's report-only warnings for
-        // these three families are gone. `KHR_materials_volume`'s
-        // `thicknessTexture` stays report-only; it belongs to E2's family
-        // and is out of scope here.
-        if m.volume_has_texture {
-            report_lines.push(format!(
-                "{group_name}: KHR_materials_volume has a thicknessTexture — only the factor (thicknessFactor) is imported in v1, the texture is not sampled (report-only)"
-            ));
-        }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5/E6 (D1 revised):
+        // sheen, iridescence, anisotropy, and now (E6) clearcoat/specular/
+        // transmission/volume-thickness textures are all sampled (see the
+        // wiring below) — no report-only warnings remain for any family's
+        // texture in this doc.
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
         let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
@@ -1083,7 +1075,7 @@ fn build_import_graph(
         // twice. Colour space per D6: normal/MR/occlusion decode linear
         // (data maps — the raw bytes ARE the value), emissive decodes sRGB
         // (a colour map, same as base-colour).
-        let mut map_tex_cache: std::collections::HashMap<u32, (u32, String)> =
+        let mut map_tex_cache: std::collections::HashMap<(u32, u32, u32), (u32, String)> =
             std::collections::HashMap::new();
         let has_normal = m.normal_texture.is_some();
         if let Some(tex_index) = m.normal_texture {
@@ -1266,6 +1258,147 @@ fn build_import_graph(
                 0,
             );
         }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+        // surface): the texture-completion sweep. Same `wire_map_texture`
+        // doctrine as the seven maps above — clearcoatTexture/
+        // clearcoatRoughnessTexture/clearcoatNormalTexture are data maps
+        // (R/G/RGB channels respectively, none are colour); specularTexture
+        // is a data map (alpha channel); specularColorTexture is a colour
+        // map (sRGB, tints an RGB factor); transmissionTexture and
+        // thicknessTexture are data maps (R/G channels).
+        let has_clearcoat_tex = m.clearcoat_texture.is_some();
+        if let Some(tex_index) = m.clearcoat_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (R channel = clearcoatFactor scale)
+                "clearcoat_tex",
+                "clearcoatMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_clearcoat_roughness_tex = m.clearcoat_roughness_texture.is_some();
+        if let Some(tex_index) = m.clearcoat_roughness_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (G channel = clearcoatRoughnessFactor scale)
+                "clearcoat_roughness_tex",
+                "clearcoatRoughnessMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_clearcoat_normal_tex = m.clearcoat_normal_texture.is_some();
+        if let Some(tex_index) = m.clearcoat_normal_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — tangent-space normal map, same convention as normalMap
+                "clearcoat_normal_tex",
+                "clearcoatNormalMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_specular_tex = m.specular_texture.is_some();
+        if let Some(tex_index) = m.specular_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (ALPHA channel = specularFactor scale)
+                "specular_tex",
+                "specularMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_specular_color_tex = m.specular_color_texture.is_some();
+        if let Some(tex_index) = m.specular_color_texture {
+            wire_map_texture(
+                tex_index,
+                0, // sRGB — specularColorTexture is a colour map
+                "specular_color_tex",
+                "specularColorMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_transmission_tex = m.transmission_texture.is_some();
+        if let Some(tex_index) = m.transmission_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (R channel = transmissionFactor scale)
+                "transmission_tex",
+                "transmissionMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
+        let has_volume_thickness_tex = m.volume_thickness_texture.is_some();
+        if let Some(tex_index) = m.volume_thickness_texture {
+            wire_map_texture(
+                tex_index,
+                1, // Linear — data map (G channel = thicknessFactor scale)
+                "volume_thickness_tex",
+                "volumeThicknessMap",
+                k,
+                &path_str,
+                &mut fresh_id,
+                &mut group_nodes,
+                &mut group_wires,
+                &mut outputs,
+                &mut string_bindings,
+                &mut map_tex_cache,
+                out_id,
+                0,
+            );
+        }
 
         // `system.group_output` closes the body; its port names are the
         // interface output names the inner wires above target. A boundary node
@@ -1353,6 +1486,54 @@ fn build_import_graph(
                 "anisotropyMap",
                 render_id,
                 &format!("anisotropy_map_{k}"),
+            ));
+        }
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised): texture-
+        // completion sweep top-level wires.
+        if has_clearcoat_tex {
+            wires.push(wire(group_id, "clearcoatMap", render_id, &format!("clearcoat_map_{k}")));
+        }
+        if has_clearcoat_roughness_tex {
+            wires.push(wire(
+                group_id,
+                "clearcoatRoughnessMap",
+                render_id,
+                &format!("clearcoat_roughness_map_{k}"),
+            ));
+        }
+        if has_clearcoat_normal_tex {
+            wires.push(wire(
+                group_id,
+                "clearcoatNormalMap",
+                render_id,
+                &format!("clearcoat_normal_map_{k}"),
+            ));
+        }
+        if has_specular_tex {
+            wires.push(wire(group_id, "specularMap", render_id, &format!("specular_map_{k}")));
+        }
+        if has_specular_color_tex {
+            wires.push(wire(
+                group_id,
+                "specularColorMap",
+                render_id,
+                &format!("specular_color_map_{k}"),
+            ));
+        }
+        if has_transmission_tex {
+            wires.push(wire(
+                group_id,
+                "transmissionMap",
+                render_id,
+                &format!("transmission_map_{k}"),
+            ));
+        }
+        if has_volume_thickness_tex {
+            wires.push(wire(
+                group_id,
+                "volumeThicknessMap",
+                render_id,
+                &format!("volume_thickness_map_{k}"),
             ));
         }
     }
@@ -2380,7 +2561,8 @@ mod tests {
             ior: 1.5,
             specular_factor: 1.0,
             specular_color_factor: [1.0, 1.0, 1.0],
-            specular_has_texture: false,
+            specular_texture: None,
+            specular_color_texture: None,
             base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
@@ -2389,9 +2571,12 @@ mod tests {
             uv_tex_coord_override: false,
             mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
+            transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
-            clearcoat_has_texture: false,
+            clearcoat_texture: None,
+            clearcoat_roughness_texture: None,
+            clearcoat_normal_texture: None,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
             sheen_color_texture: None,
@@ -2409,7 +2594,7 @@ mod tests {
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
-            volume_has_texture: false,
+            volume_thickness_texture: None,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2592,7 +2777,8 @@ mod tests {
             ior: 1.5,
             specular_factor: 1.0,
             specular_color_factor: [1.0, 1.0, 1.0],
-            specular_has_texture: false,
+            specular_texture: None,
+            specular_color_texture: None,
             base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
@@ -2601,9 +2787,12 @@ mod tests {
             uv_tex_coord_override: false,
             mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
+            transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
-            clearcoat_has_texture: false,
+            clearcoat_texture: None,
+            clearcoat_roughness_texture: None,
+            clearcoat_normal_texture: None,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
             sheen_color_texture: None,
@@ -2621,7 +2810,7 @@ mod tests {
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
-            volume_has_texture: false,
+            volume_thickness_texture: None,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
@@ -2759,21 +2948,21 @@ mod tests {
         }
     }
 
-    /// D9 doctrine ("every import produces a report") applied to G-P5's one
-    /// remaining not-yet-mapped clearcoat feature: a TEXTURED coat.
-    /// Transmission and BLEND (F-P5/D8) are real mappings, not
-    /// report-only; clearcoat's FACTOR is now a real mapping too (G-P5/D5).
-    /// An over-featured synthetic material carrying a textured clearcoat
-    /// together with transmission and a BLEND alphaMode must report only
-    /// the clearcoat texture, and must build a real `Blend` material with
-    /// the transmission-folded alpha AND the clearcoat factor wired onto
-    /// `node.pbr_material`.
+    /// D9 doctrine ("every import produces a report") applied to G-P5's
+    /// clearcoat feature set. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
+    /// revised — full spec surface): a TEXTURED coat is now a real mapping
+    /// too (no more report-only gap) — an over-featured synthetic material
+    /// carrying a textured clearcoat together with transmission and a
+    /// BLEND alphaMode must produce ZERO report lines, and must build a
+    /// real `Blend` material with the transmission-folded alpha, the
+    /// clearcoat factor, AND the clearcoatMap wire onto `node.pbr_material`
+    /// / its group's output.
     #[test]
-    fn over_featured_material_reports_only_clearcoat_texture_and_maps_transmission_to_blend() {
+    fn over_featured_material_wires_clearcoat_texture_and_maps_transmission_to_blend() {
         let mut m = full_material(0, "Kitchen Sink", 300);
         m.clearcoat_factor = 1.0;
         m.clearcoat_roughness_factor = 0.1;
-        m.clearcoat_has_texture = true;
+        m.clearcoat_texture = Some(0);
         m.transmission_factor = 0.9;
         m.was_blend = true;
         m.alpha_mask = false; // a real glTF BLEND material never sets MASK too
@@ -2788,14 +2977,9 @@ mod tests {
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
         println!("over-featured report: {:#?}", report.report_lines);
-        assert_eq!(
-            report.report_lines.len(),
-            1,
-            "only the clearcoat texture remains report-only (the factor is now mapped)"
-        );
         assert!(
-            report.report_lines.iter().any(|l| l.contains("clearcoat")),
-            "missing a clearcoat report line: {:?}",
+            !report.report_lines.iter().any(|l| l.contains("clearcoat")),
+            "clearcoat texture must no longer be report-only: {:?}",
             report.report_lines
         );
         assert!(
@@ -2827,10 +3011,22 @@ mod tests {
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
-        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: the factor IS mapped, only the
-        // texture is report-only.
         assert_eq!(mat.params.get("clearcoat"), Some(&float(1.0)));
         assert_eq!(mat.params.get("clearcoat_roughness"), Some(&float(0.1)));
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: the textured coat wires
+        // `clearcoatMap` from this object's group into `render.clearcoat_map_0`
+        // through the flattener, same as sheen/iridescence/anisotropy.
+        let render = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("render_scene node");
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.to_node == render.id && w.to_port == "clearcoat_map_0"),
+            "expected clearcoat_map_0 wired on render_scene"
+        );
     }
 
     /// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
@@ -3046,7 +3242,8 @@ mod tests {
             ior: 1.5,
             specular_factor: 1.0,
             specular_color_factor: [1.0, 1.0, 1.0],
-            specular_has_texture: false,
+            specular_texture: None,
+            specular_color_texture: None,
             base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
@@ -3055,9 +3252,12 @@ mod tests {
             uv_tex_coord_override: false,
             mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
+            transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
-            clearcoat_has_texture: false,
+            clearcoat_texture: None,
+            clearcoat_roughness_texture: None,
+            clearcoat_normal_texture: None,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
             sheen_color_texture: None,
@@ -3075,7 +3275,7 @@ mod tests {
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
-            volume_has_texture: false,
+            volume_thickness_texture: None,
             was_blend: false,
             vertex_count: verts,
             base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
