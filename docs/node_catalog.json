@@ -277,6 +277,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -2346,6 +2347,7 @@
       ],
       "category": "Control",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
@@ -5216,6 +5218,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText",
@@ -5888,6 +5891,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "OilyFluid",
@@ -10445,6 +10449,7 @@
       "category": "Composite",
       "examples": [
         "Bloom",
+        "Caustics",
         "ChromaticAberration",
         "ColorGrade",
         "Cymatics",
@@ -10650,6 +10655,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -13745,6 +13751,7 @@
       ],
       "category": "Color & Tone",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
@@ -14575,6 +14582,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "FluidSim3D",
@@ -15264,6 +15272,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim2D",
         "ParticleText"
@@ -15428,6 +15437,7 @@
       ],
       "category": "Math & Convert",
       "examples": [
+        "Caustics",
         "Cymatics",
         "DepthOfField",
         "DigitalDrift",
@@ -15507,6 +15517,7 @@
         "ApricotWeather",
         "BlackHole",
         "BlobTracking",
+        "Caustics",
         "Cymatics",
         "DigitalPlants",
         "FluidSim2D",
@@ -16028,6 +16039,7 @@
       ],
       "category": "Noise",
       "examples": [
+        "Caustics",
         "MetallicGlass",
         "OilyFluid"
       ],
@@ -17063,6 +17075,7 @@
       ],
       "category": "Particles 2D",
       "examples": [
+        "Caustics",
         "Cymatics",
         "FluidSim3D",
         "ParticleText",
@@ -20425,6 +20438,7 @@
         "BlobTracking",
         "Bloom",
         "BlossomWire",
+        "Caustics",
         "ChromaticAberration",
         "ColorCompass",
         "ColorGrade",
@@ -20498,6 +20512,7 @@
         "BasicShapes",
         "BlackHole",
         "BlossomWire",
+        "Caustics",
         "ConcentricTunnel",
         "Cymatics",
         "DigitalDrift",
@@ -20665,7 +20680,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 49,
+  "preset_count": 50,
   "presets": [
     {
       "category": "Geometry",
@@ -21063,6 +21078,43 @@
           "max": "1",
           "min": "0",
           "name": "Color A"
+        }
+      ]
+    },
+    {
+      "category": "Pattern",
+      "id": "Caustics",
+      "is_line_based": false,
+      "kind": "generator",
+      "name": "Caustics",
+      "params": [
+        {
+          "default": "0.01",
+          "id": "depth",
+          "max": "0.04",
+          "min": "0",
+          "name": "Depth"
+        },
+        {
+          "default": "3",
+          "id": "scale",
+          "max": "10",
+          "min": "1",
+          "name": "Scale"
+        },
+        {
+          "default": "0.35",
+          "id": "speed",
+          "max": "1.5",
+          "min": "0",
+          "name": "Speed"
+        },
+        {
+          "default": "500000",
+          "id": "photons",
+          "max": "1000000",
+          "min": "100000",
+          "name": "Photons"
         }
       ]
     },

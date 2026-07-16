@@ -1,0 +1,682 @@
+{
+  "version": 2,
+  "name": "Caustics",
+  "description": "Light through water: a photon-scatter caustics generator. An animated two-octave simplex height field plays the water surface; its gradient bends half a million fresh photons every frame (spawn EveryFrame \u2192 sample the slope \u2192 one Euler step, so the bend amount is literally the water depth), and the photons pile up in a density accumulator exactly where refraction concentrates them \u2014 fold lines brighten because light genuinely converges there, which a scrolling caustics texture can never do. Display follows the FluidSim recipe (VISUAL_PIECES_GRAPH_DRAFTS 'particle-density display recipe'): no display blur, single-texel photons, Extended Reinhard with canvas-area-compensated intensity, white-hot HDR folds on pure black. Depth is the performance card \u2014 bind the sub-bass send and the water gets violent with the low end.",
+  "presetMetadata": {
+    "id": "Caustics",
+    "displayName": "Caustics",
+    "category": "Pattern",
+    "oscPrefix": "caustics",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "depth",
+        "name": "Depth",
+        "min": 0.0,
+        "max": 0.04,
+        "defaultValue": 0.01,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "oscSuffix": "depth"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 1.0,
+        "max": 10.0,
+        "defaultValue": 3.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "oscSuffix": "scale"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 1.5,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "speed"
+      },
+      {
+        "id": "photons",
+        "name": "Photons",
+        "min": 100000.0,
+        "max": 1000000.0,
+        "defaultValue": 500000.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "photons"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "depth",
+        "label": "Depth",
+        "defaultValue": 0.01,
+        "target": {
+          "kind": "node",
+          "nodeId": "bend",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "swell",
+          "param": "scale_x"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "swell",
+          "param": "scale_y"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple",
+          "param": "scale_x"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 2.33
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple",
+          "param": "scale_y"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 2.33
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "swell_clock",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple_clock",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 1.7
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "emit",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sample_slope",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bend",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "splat",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "energy_calc",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "photons",
+        "label": "Photons",
+        "defaultValue": 500000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "scatter_emit",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 2,
+      "nodeId": "swell_clock",
+      "typeId": "node.scale_offset_value",
+      "handle": "swell_clock",
+      "title": "Swell Time",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "ripple_clock",
+      "typeId": "node.scale_offset_value",
+      "handle": "ripple_clock",
+      "title": "Ripple Time",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "offset": {
+          "type": "Float",
+          "value": 7.3
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "swell",
+      "typeId": "node.simplex_field_2d",
+      "handle": "swell",
+      "title": "Water: Swell Octave",
+      "params": {
+        "scale_x": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "ripple",
+      "typeId": "node.simplex_field_2d",
+      "handle": "ripple",
+      "title": "Water: Ripple Octave",
+      "params": {
+        "scale_x": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 7.0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "ripple_gain",
+      "typeId": "node.scale_offset_image",
+      "handle": "ripple_gain",
+      "title": "Ripple \u00d7 0.45",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 0.45
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "surface",
+      "typeId": "node.mix",
+      "handle": "surface",
+      "title": "Water Surface",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "slope",
+      "typeId": "node.edge_slope",
+      "handle": "slope",
+      "title": "Surface Slope",
+      "params": {
+        "channel": {
+          "type": "Enum",
+          "value": 0
+        },
+        "scale_mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "wrap_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "emit",
+      "typeId": "node.spawn_particles",
+      "handle": "emit",
+      "title": "Photons (fresh each frame)",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 1048576
+        },
+        "active_count": {
+          "type": "Int",
+          "value": 500000
+        },
+        "seed_mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "sample_slope",
+      "typeId": "node.sample_image_at_particles",
+      "handle": "sample_slope",
+      "title": "Refract At Photons",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 500000
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "bend",
+      "typeId": "node.move_particles",
+      "handle": "bend",
+      "title": "Bend By Depth",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 500000
+        },
+        "speed": {
+          "type": "Float",
+          "value": 0.01
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "splat",
+      "typeId": "node.draw_particles",
+      "handle": "splat",
+      "title": "Focus Light",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 500000
+        },
+        "boundary": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "resolve",
+      "typeId": "node.resolve_scatter",
+      "handle": "resolve",
+      "title": "Light Density"
+    },
+    {
+      "id": 14,
+      "nodeId": "energy_calc",
+      "typeId": "node.scale_offset_value",
+      "handle": "energy_calc",
+      "title": "Energy Per Photon",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 500000.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.0024576
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "area_scale",
+      "typeId": "node.canvas_area_scale",
+      "handle": "area_scale",
+      "title": "Resolution Compensation"
+    },
+    {
+      "id": 16,
+      "nodeId": "intensity_calc",
+      "typeId": "node.scale_offset_value",
+      "handle": "intensity_calc",
+      "title": "Tone Intensity (\u00d73)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 17,
+      "nodeId": "tone",
+      "typeId": "node.reinhard_tone_map",
+      "handle": "tone",
+      "title": "Display Tone",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 0
+        },
+        "contrast": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 18,
+      "nodeId": "scatter_emit",
+      "typeId": "node.anti_clump_particles",
+      "handle": "scatter_emit",
+      "title": "Randomise Emission",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 500000
+        },
+        "strength": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "z"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "z"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 12,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 12,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "scaled_energy"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "accum",
+      "toNode": 13,
+      "toPort": "accum"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 15,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 15,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 16,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "intensity"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "density",
+      "toNode": 17,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "particles",
+      "toNode": 18,
+      "toPort": "in"
+    }
+  ]
+}
