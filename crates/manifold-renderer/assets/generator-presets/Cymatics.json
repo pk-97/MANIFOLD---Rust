@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Cymatics",
-  "description": "Chladni plate simulation: sand settles onto the nodal lines of a standing wave, and changing the mode numbers physically rearranges it. The plate field is the closed-form Chladni pattern sin(nπx)sin(mπy) ± sin(mπx)sin(nπy), built from four projected sine terms multiplied and combined in both symmetry families. Sand particles feel a force toward the nodal lines (the gradient of the negated absolute field) and a Brownian jiggle whose strength is modulated by the field itself — sand vibrates violently on loud regions of the plate and freezes on the quiet lines, which is the physical tell of the real experiment. Density accumulates through draw/resolve, persists through a decaying trail loop, and grades through the Log tone curve into a warm sand gradient over a near-black plate. Mode X / Mode Y are prime modulation targets (bind pitch or bands); Cycle Modes walks a curated (n,m) table on clip triggers.",
+  "description": "Chladni plate simulation: sand settles onto the nodal lines of a standing wave, and changing the mode numbers physically rearranges it. The plate field is the closed-form Chladni pattern sin(n\u03c0x)sin(m\u03c0y) \u00b1 sin(m\u03c0x)sin(n\u03c0y), built from four projected sine terms multiplied and combined in both symmetry families. Sand particles feel a force toward the nodal lines (the gradient of the negated absolute field) and a Brownian jiggle whose strength is modulated by the field itself \u2014 sand vibrates violently on loud regions of the plate and freezes on the quiet lines, which is the physical tell of the real experiment. Density accumulates through draw/resolve on a pure black void, and grades through the Log tone curve into a warm sand gradient over a near-black plate. Mode X / Mode Y are prime modulation targets (bind pitch or bands); Cycle Modes walks a curated (n,m) table on clip triggers.",
   "presetMetadata": {
     "id": "Cymatics",
     "displayName": "Cymatics",
@@ -10,179 +10,1233 @@
     "available": true,
     "isLineBased": false,
     "params": [
-      { "id": "mode_x", "name": "Mode X", "min": 1.0, "max": 12.0, "defaultValue": 3.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "oscSuffix": "modeX" },
-      { "id": "mode_y", "name": "Mode Y", "min": 1.0, "max": 12.0, "defaultValue": 2.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "oscSuffix": "modeY" },
-      { "id": "symmetry", "name": "Symmetry", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": true, "isTrigger": false, "formatString": "F0", "oscSuffix": "symmetry" },
-      { "id": "sand", "name": "Sand", "min": 10000.0, "max": 400000.0, "defaultValue": 120000.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "oscSuffix": "sand" },
-      { "id": "settle", "name": "Settle", "min": 0.0, "max": 4.0, "defaultValue": 1.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "oscSuffix": "settle" },
-      { "id": "jiggle", "name": "Jiggle", "min": 0.0, "max": 0.08, "defaultValue": 0.015, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F3", "oscSuffix": "jiggle" },
-      { "id": "trail", "name": "Trail", "min": 0.0, "max": 0.98, "defaultValue": 0.6, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "oscSuffix": "trail" },
-      { "id": "color", "name": "Color", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "oscSuffix": "color" },
-      { "id": "cycle_modes", "name": "Cycle Modes", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": true, "isTrigger": false, "formatString": "F0", "oscSuffix": "cycleModes" }
+      {
+        "id": "mode_x",
+        "name": "Mode X",
+        "min": 1.0,
+        "max": 12.0,
+        "defaultValue": 3.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "modeX"
+      },
+      {
+        "id": "mode_y",
+        "name": "Mode Y",
+        "min": 1.0,
+        "max": 12.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "modeY"
+      },
+      {
+        "id": "symmetry",
+        "name": "Symmetry",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "symmetry"
+      },
+      {
+        "id": "sand",
+        "name": "Sand",
+        "min": 10000.0,
+        "max": 400000.0,
+        "defaultValue": 250000.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "sand"
+      },
+      {
+        "id": "settle",
+        "name": "Settle",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "settle"
+      },
+      {
+        "id": "jiggle",
+        "name": "Jiggle",
+        "min": 0.0,
+        "max": 0.08,
+        "defaultValue": 0.008,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "oscSuffix": "jiggle"
+      },
+      {
+        "id": "color",
+        "name": "Color",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "color"
+      },
+      {
+        "id": "cycle_modes",
+        "name": "Cycle Modes",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "cycleModes"
+      }
     ],
     "bindings": [
-      { "id": "mode_x", "label": "Mode X", "defaultValue": 3.0, "target": { "kind": "node", "nodeId": "mode_x_val", "param": "value" }, "convert": { "type": "Float" } },
-      { "id": "mode_y", "label": "Mode Y", "defaultValue": 2.0, "target": { "kind": "node", "nodeId": "mode_y_val", "param": "value" }, "convert": { "type": "Float" } },
-      { "id": "symmetry", "label": "Symmetry", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "plate_pick", "param": "selector" }, "convert": { "type": "Float" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "spawn", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "sample_forces", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "jiggle_kick", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "euler", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "wrap", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "sand", "label": "Sand", "defaultValue": 120000.0, "target": { "kind": "node", "nodeId": "splat", "param": "active_count" }, "convert": { "type": "IntRound" } },
-      { "id": "settle", "label": "Settle", "defaultValue": 1.5, "target": { "kind": "node", "nodeId": "euler", "param": "speed" }, "convert": { "type": "Float" } },
-      { "id": "jiggle", "label": "Jiggle", "defaultValue": 0.015, "target": { "kind": "node", "nodeId": "jiggle_kick", "param": "strength" }, "convert": { "type": "Float" } },
-      { "id": "trail", "label": "Trail", "defaultValue": 0.6, "target": { "kind": "node", "nodeId": "trail_decay", "param": "scale" }, "convert": { "type": "Float" } },
-      { "id": "color", "label": "Color", "defaultValue": 1.0, "target": { "kind": "node", "nodeId": "colored", "param": "amount" }, "convert": { "type": "Float" } },
-      { "id": "cycle_modes", "label": "Cycle Modes", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "pick_n", "param": "selector" }, "convert": { "type": "Float" } },
-      { "id": "cycle_modes", "label": "Cycle Modes", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "pick_m", "param": "selector" }, "convert": { "type": "Float" } }
+      {
+        "id": "mode_x",
+        "label": "Mode X",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_x_val",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mode_y",
+        "label": "Mode Y",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_y_val",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "symmetry",
+        "label": "Symmetry",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "plate_pick",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "spawn",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "sample_forces",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "jiggle_kick",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "euler",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "wrap",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "splat",
+          "param": "active_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "settle",
+        "label": "Settle",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "euler",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "jiggle",
+        "label": "Jiggle",
+        "defaultValue": 0.008,
+        "target": {
+          "kind": "node",
+          "nodeId": "jiggle_kick",
+          "param": "strength"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "color",
+        "label": "Color",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "colored",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cycle_modes",
+        "label": "Cycle Modes",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "pick_n",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cycle_modes",
+        "label": "Cycle Modes",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "pick_m",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "sand",
+        "label": "Sand",
+        "defaultValue": 250000.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "energy_calc",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ]
   },
   "nodes": [
-    { "id": 0, "nodeId": "input", "typeId": "system.generator_input", "handle": "input" },
-    { "id": 1, "nodeId": "final_output", "typeId": "system.final_output", "handle": "final_output" },
-
-    { "id": 2, "nodeId": "uv", "typeId": "node.uv_field", "handle": "uv", "title": "Plate Coordinates" },
-    { "id": 3, "nodeId": "sin_nu", "typeId": "node.sine_wave", "handle": "sin_nu", "title": "sin(nπx)",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "c": { "type": "Float", "value": 0.0 }, "freq_scale": { "type": "Float", "value": 3.14159265 }, "time_scale": { "type": "Float", "value": 0.0 } } },
-    { "id": 4, "nodeId": "sin_mv", "typeId": "node.sine_wave", "handle": "sin_mv", "title": "sin(mπy)",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 1.0 }, "c": { "type": "Float", "value": 0.0 }, "freq_scale": { "type": "Float", "value": 3.14159265 }, "time_scale": { "type": "Float", "value": 0.0 } } },
-    { "id": 5, "nodeId": "sin_mu", "typeId": "node.sine_wave", "handle": "sin_mu", "title": "sin(mπx)",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "c": { "type": "Float", "value": 0.0 }, "freq_scale": { "type": "Float", "value": 3.14159265 }, "time_scale": { "type": "Float", "value": 0.0 } } },
-    { "id": 6, "nodeId": "sin_nv", "typeId": "node.sine_wave", "handle": "sin_nv", "title": "sin(nπy)",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 1.0 }, "c": { "type": "Float", "value": 0.0 }, "freq_scale": { "type": "Float", "value": 3.14159265 }, "time_scale": { "type": "Float", "value": 0.0 } } },
-    { "id": 7, "nodeId": "term_nm", "typeId": "node.mix", "handle": "term_nm", "title": "sin(nπx)·sin(mπy)",
-      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 1.0 } } },
-    { "id": 8, "nodeId": "term_mn", "typeId": "node.mix", "handle": "term_mn", "title": "sin(mπx)·sin(nπy)",
-      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 1.0 } } },
-    { "id": 9, "nodeId": "plate_plus", "typeId": "node.mix", "handle": "plate_plus", "title": "Plate (+ family)",
-      "params": { "mode": { "type": "Enum", "value": 2 }, "amount": { "type": "Float", "value": 1.0 } } },
-    { "id": 10, "nodeId": "plate_minus", "typeId": "node.mix", "handle": "plate_minus", "title": "Plate (− family)",
-      "params": { "mode": { "type": "Enum", "value": 5 }, "amount": { "type": "Float", "value": 1.0 } } },
-    { "id": 11, "nodeId": "abs_plus", "typeId": "node.absolute_value", "handle": "abs_plus", "title": "|Plate +|" },
-    { "id": 12, "nodeId": "abs_minus", "typeId": "node.absolute_value", "handle": "abs_minus", "title": "|Plate −|" },
-    { "id": 13, "nodeId": "plate_pick", "typeId": "node.switch_texture", "handle": "plate_pick", "title": "Symmetry Family",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 14, "nodeId": "mode_x_val", "typeId": "node.value", "handle": "mode_x_val", "title": "Mode X (card)",
-      "params": { "value": { "type": "Float", "value": 3.0 } } },
-    { "id": 15, "nodeId": "mode_y_val", "typeId": "node.value", "handle": "mode_y_val", "title": "Mode Y (card)",
-      "params": { "value": { "type": "Float", "value": 2.0 } } },
-    { "id": 16, "nodeId": "cycle_idx", "typeId": "node.clip_trigger_cycle", "handle": "cycle_idx", "title": "Mode Table Step",
-      "params": { "modulus": { "type": "Float", "value": 8.0 } } },
-    { "id": 17, "nodeId": "table_n", "typeId": "node.switch_value", "handle": "table_n", "title": "Curated n",
-      "params": { "in_0": { "type": "Float", "value": 1.0 }, "in_1": { "type": "Float", "value": 1.0 }, "in_2": { "type": "Float", "value": 2.0 }, "in_3": { "type": "Float", "value": 2.0 }, "in_4": { "type": "Float", "value": 3.0 }, "in_5": { "type": "Float", "value": 3.0 }, "in_6": { "type": "Float", "value": 4.0 }, "in_7": { "type": "Float", "value": 5.0 } } },
-    { "id": 18, "nodeId": "table_m", "typeId": "node.switch_value", "handle": "table_m", "title": "Curated m",
-      "params": { "in_0": { "type": "Float", "value": 2.0 }, "in_1": { "type": "Float", "value": 3.0 }, "in_2": { "type": "Float", "value": 3.0 }, "in_3": { "type": "Float", "value": 5.0 }, "in_4": { "type": "Float", "value": 4.0 }, "in_5": { "type": "Float", "value": 5.0 }, "in_6": { "type": "Float", "value": 5.0 }, "in_7": { "type": "Float", "value": 7.0 } } },
-    { "id": 19, "nodeId": "pick_n", "typeId": "node.switch_value", "handle": "pick_n", "title": "n: card | cycled",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-    { "id": 20, "nodeId": "pick_m", "typeId": "node.switch_value", "handle": "pick_m", "title": "m: card | cycled",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 21, "nodeId": "spawn", "typeId": "node.spawn_particles", "handle": "spawn", "title": "Pour Sand",
-      "params": { "max_capacity": { "type": "Int", "value": 524288 }, "active_count": { "type": "Int", "value": 120000 }, "seed_mode": { "type": "Enum", "value": 1 } } },
-    { "id": 22, "nodeId": "sand_state", "typeId": "node.array_feedback", "handle": "sand_state", "title": "Sand State" },
-    { "id": 23, "nodeId": "neg_field", "typeId": "node.scale_offset_image", "handle": "neg_field", "title": "−|Plate|",
-      "params": { "scale": { "type": "Float", "value": -1.0 } } },
-    { "id": 24, "nodeId": "slope", "typeId": "node.edge_slope", "handle": "slope", "title": "Force Toward Nodes" },
-    { "id": 25, "nodeId": "sample_forces", "typeId": "node.sample_image_at_particles", "handle": "sample_forces", "title": "Sample Force At Sand",
-      "params": { "active_count": { "type": "Int", "value": 120000 } } },
-    { "id": 26, "nodeId": "jiggle_kick", "typeId": "node.anti_clump_particles", "handle": "jiggle_kick", "title": "Plate Vibration",
-      "params": { "active_count": { "type": "Int", "value": 120000 }, "strength": { "type": "Float", "value": 0.015 } } },
-    { "id": 27, "nodeId": "euler", "typeId": "node.move_particles", "handle": "euler", "title": "Settle",
-      "params": { "active_count": { "type": "Int", "value": 120000 }, "speed": { "type": "Float", "value": 1.5 } } },
-    { "id": 28, "nodeId": "wrap", "typeId": "node.wrap_around", "handle": "wrap", "title": "Plate Bounds",
-      "params": { "active_count": { "type": "Int", "value": 120000 } } },
-
-    { "id": 29, "nodeId": "splat", "typeId": "node.draw_particles", "handle": "splat", "title": "Deposit Sand",
-      "params": { "active_count": { "type": "Int", "value": 120000 } } },
-    { "id": 30, "nodeId": "resolve", "typeId": "node.resolve_scatter", "handle": "resolve", "title": "Sand Density" },
-    { "id": 31, "nodeId": "grain_blur", "typeId": "node.gaussian_blur", "handle": "grain_blur", "title": "Grain Soften H",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius": { "type": "Float", "value": 1.0 }, "radius_mode": { "type": "Enum", "value": 1 } } },
-    { "id": 32, "nodeId": "grain_blur_v", "typeId": "node.gaussian_blur", "handle": "grain_blur_v", "title": "Grain Soften V",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 1.0 }, "radius_mode": { "type": "Enum", "value": 1 } } },
-
-    { "id": 33, "nodeId": "trail_fb", "typeId": "node.feedback", "handle": "trail_fb", "title": "Ink Memory" },
-    { "id": 34, "nodeId": "trail_decay", "typeId": "node.scale_offset_image", "handle": "trail_decay", "title": "Trail Decay",
-      "params": { "scale": { "type": "Float", "value": 0.6 } } },
-    { "id": 35, "nodeId": "accumulate", "typeId": "node.mix", "handle": "accumulate", "title": "Fresh + Trail (Max)",
-      "params": { "mode": { "type": "Enum", "value": 3 }, "amount": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 36, "nodeId": "tone", "typeId": "node.reinhard_tone_map", "handle": "tone", "title": "Log Grade",
-      "params": { "curve": { "type": "Enum", "value": 2 }, "intensity": { "type": "Float", "value": 24.0 } } },
-    { "id": 37, "nodeId": "sand_ramp", "typeId": "node.gradient", "handle": "sand_ramp", "title": "Sand Colors",
-      "params": { "stops": { "type": "Table", "rows": [ [0.0, 0.02, 0.015, 0.02], [0.35, 0.55, 0.33, 0.1], [0.75, 0.95, 0.78, 0.42], [1.0, 1.0, 0.98, 0.9] ] } } },
-    { "id": 38, "nodeId": "colored", "typeId": "node.color_lut", "handle": "colored", "title": "Apply Sand Colors",
-      "params": { "amount": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 39, "nodeId": "plate_glow", "typeId": "node.scale_offset_image", "handle": "plate_glow", "title": "Faint Plate",
-      "params": { "scale": { "type": "Float", "value": 0.05 } } },
-    { "id": 40, "nodeId": "over_plate", "typeId": "node.mix", "handle": "over_plate", "title": "Sand Over Plate",
-      "params": { "mode": { "type": "Enum", "value": 2 }, "amount": { "type": "Float", "value": 1.0 } } }
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 2,
+      "nodeId": "uv",
+      "typeId": "node.uv_field",
+      "handle": "uv",
+      "title": "Plate Coordinates"
+    },
+    {
+      "id": 3,
+      "nodeId": "sin_nu",
+      "typeId": "node.sine_wave",
+      "handle": "sin_nu",
+      "title": "sin(n\u03c0x)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "freq_scale": {
+          "type": "Float",
+          "value": 3.14159265
+        },
+        "time_scale": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "sin_mv",
+      "typeId": "node.sine_wave",
+      "handle": "sin_mv",
+      "title": "sin(m\u03c0y)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "freq_scale": {
+          "type": "Float",
+          "value": 3.14159265
+        },
+        "time_scale": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "sin_mu",
+      "typeId": "node.sine_wave",
+      "handle": "sin_mu",
+      "title": "sin(m\u03c0x)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "freq_scale": {
+          "type": "Float",
+          "value": 3.14159265
+        },
+        "time_scale": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "sin_nv",
+      "typeId": "node.sine_wave",
+      "handle": "sin_nv",
+      "title": "sin(n\u03c0y)",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "c": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "freq_scale": {
+          "type": "Float",
+          "value": 3.14159265
+        },
+        "time_scale": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "term_nm",
+      "typeId": "node.mix",
+      "handle": "term_nm",
+      "title": "sin(n\u03c0x)\u00b7sin(m\u03c0y)",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 4
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "term_mn",
+      "typeId": "node.mix",
+      "handle": "term_mn",
+      "title": "sin(m\u03c0x)\u00b7sin(n\u03c0y)",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 4
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "plate_plus",
+      "typeId": "node.mix",
+      "handle": "plate_plus",
+      "title": "Plate (+ family)",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "plate_minus",
+      "typeId": "node.mix",
+      "handle": "plate_minus",
+      "title": "Plate (\u2212 family)",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 5
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "abs_plus",
+      "typeId": "node.absolute_value",
+      "handle": "abs_plus",
+      "title": "|Plate +|"
+    },
+    {
+      "id": 12,
+      "nodeId": "abs_minus",
+      "typeId": "node.absolute_value",
+      "handle": "abs_minus",
+      "title": "|Plate \u2212|"
+    },
+    {
+      "id": 13,
+      "nodeId": "plate_pick",
+      "typeId": "node.switch_texture",
+      "handle": "plate_pick",
+      "title": "Symmetry Family",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 14,
+      "nodeId": "mode_x_val",
+      "typeId": "node.value",
+      "handle": "mode_x_val",
+      "title": "Mode X (card)",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "mode_y_val",
+      "typeId": "node.value",
+      "handle": "mode_y_val",
+      "title": "Mode Y (card)",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 2.0
+        }
+      }
+    },
+    {
+      "id": 16,
+      "nodeId": "cycle_idx",
+      "typeId": "node.clip_trigger_cycle",
+      "handle": "cycle_idx",
+      "title": "Mode Table Step",
+      "params": {
+        "modulus": {
+          "type": "Float",
+          "value": 8.0
+        }
+      }
+    },
+    {
+      "id": 17,
+      "nodeId": "table_n",
+      "typeId": "node.switch_value",
+      "handle": "table_n",
+      "title": "Curated n",
+      "params": {
+        "in_0": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "in_5": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "in_6": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "in_7": {
+          "type": "Float",
+          "value": 5.0
+        }
+      }
+    },
+    {
+      "id": 18,
+      "nodeId": "table_m",
+      "typeId": "node.switch_value",
+      "handle": "table_m",
+      "title": "Curated m",
+      "params": {
+        "in_0": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "in_5": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "in_6": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "in_7": {
+          "type": "Float",
+          "value": 7.0
+        }
+      }
+    },
+    {
+      "id": 19,
+      "nodeId": "pick_n",
+      "typeId": "node.switch_value",
+      "handle": "pick_n",
+      "title": "n: card | cycled",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "pick_m",
+      "typeId": "node.switch_value",
+      "handle": "pick_m",
+      "title": "m: card | cycled",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "spawn",
+      "typeId": "node.spawn_particles",
+      "handle": "spawn",
+      "title": "Pour Sand",
+      "params": {
+        "max_capacity": {
+          "type": "Int",
+          "value": 524288
+        },
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        },
+        "seed_mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 22,
+      "nodeId": "sand_state",
+      "typeId": "node.array_feedback",
+      "handle": "sand_state",
+      "title": "Sand State"
+    },
+    {
+      "id": 23,
+      "nodeId": "neg_field",
+      "typeId": "node.scale_offset_image",
+      "handle": "neg_field",
+      "title": "\u2212|Plate|",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": -1.0
+        }
+      }
+    },
+    {
+      "id": 24,
+      "nodeId": "slope",
+      "typeId": "node.edge_slope",
+      "handle": "slope",
+      "title": "Force Toward Nodes"
+    },
+    {
+      "id": 25,
+      "nodeId": "sample_forces",
+      "typeId": "node.sample_image_at_particles",
+      "handle": "sample_forces",
+      "title": "Sample Force At Sand",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        }
+      }
+    },
+    {
+      "id": 26,
+      "nodeId": "jiggle_kick",
+      "typeId": "node.anti_clump_particles",
+      "handle": "jiggle_kick",
+      "title": "Plate Vibration",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        },
+        "strength": {
+          "type": "Float",
+          "value": 0.008
+        }
+      }
+    },
+    {
+      "id": 27,
+      "nodeId": "euler",
+      "typeId": "node.move_particles",
+      "handle": "euler",
+      "title": "Settle",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        },
+        "speed": {
+          "type": "Float",
+          "value": 1.5
+        }
+      }
+    },
+    {
+      "id": 28,
+      "nodeId": "wrap",
+      "typeId": "node.wrap_around",
+      "handle": "wrap",
+      "title": "Plate Bounds",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        }
+      }
+    },
+    {
+      "id": 29,
+      "nodeId": "splat",
+      "typeId": "node.draw_particles",
+      "handle": "splat",
+      "title": "Deposit Sand",
+      "params": {
+        "active_count": {
+          "type": "Int",
+          "value": 250000
+        }
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "resolve",
+      "typeId": "node.resolve_scatter",
+      "handle": "resolve",
+      "title": "Sand Density"
+    },
+    {
+      "id": 31,
+      "nodeId": "grain_blur",
+      "typeId": "node.gaussian_blur",
+      "handle": "grain_blur",
+      "title": "Grain Soften H",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "radius": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 32,
+      "nodeId": "grain_blur_v",
+      "typeId": "node.gaussian_blur",
+      "handle": "grain_blur_v",
+      "title": "Grain Soften V",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 36,
+      "nodeId": "tone",
+      "typeId": "node.reinhard_tone_map",
+      "handle": "tone",
+      "title": "Log Grade",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 2
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 24.0
+        }
+      }
+    },
+    {
+      "id": 37,
+      "nodeId": "sand_ramp",
+      "typeId": "node.gradient",
+      "handle": "sand_ramp",
+      "title": "Sand Colors",
+      "params": {
+        "stops": {
+          "type": "Table",
+          "rows": [
+            [
+              0.0,
+              0.02,
+              0.015,
+              0.02
+            ],
+            [
+              0.35,
+              0.55,
+              0.33,
+              0.1
+            ],
+            [
+              0.75,
+              0.95,
+              0.78,
+              0.42
+            ],
+            [
+              1.0,
+              1.0,
+              0.98,
+              0.9
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": 38,
+      "nodeId": "colored",
+      "typeId": "node.color_lut",
+      "handle": "colored",
+      "title": "Apply Sand Colors",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 41,
+      "nodeId": "energy_calc",
+      "typeId": "node.scale_offset_value",
+      "handle": "energy_calc",
+      "title": "Energy Per Grain",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 250000.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.001024
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.5
+        }
+      }
+    }
   ],
   "wires": [
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "field" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "field" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "field" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "field" },
-
-    { "fromNode": 14, "fromPort": "out", "toNode": 19, "toPort": "in_0" },
-    { "fromNode": 17, "fromPort": "out", "toNode": 19, "toPort": "in_1" },
-    { "fromNode": 15, "fromPort": "out", "toNode": 20, "toPort": "in_0" },
-    { "fromNode": 18, "fromPort": "out", "toNode": 20, "toPort": "in_1" },
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 16, "toPort": "trigger_count" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "selector" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 18, "toPort": "selector" },
-
-    { "fromNode": 19, "fromPort": "out", "toNode": 3, "toPort": "freq" },
-    { "fromNode": 19, "fromPort": "out", "toNode": 6, "toPort": "freq" },
-    { "fromNode": 20, "fromPort": "out", "toNode": 4, "toPort": "freq" },
-    { "fromNode": 20, "fromPort": "out", "toNode": 5, "toPort": "freq" },
-
-    { "fromNode": 3, "fromPort": "out", "toNode": 7, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 7, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "b" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "b" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "b" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "in_0" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in_1" },
-
-    { "fromNode": 13, "fromPort": "out", "toNode": 23, "toPort": "in" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "in" },
-    { "fromNode": 21, "fromPort": "particles", "toNode": 22, "toPort": "seed" },
-    { "fromNode": 22, "fromPort": "out", "toNode": 25, "toPort": "particles" },
-    { "fromNode": 24, "fromPort": "out", "toNode": 25, "toPort": "in" },
-    { "fromNode": 22, "fromPort": "out", "toNode": 26, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 26, "toPort": "strength_modulator" },
-    { "fromNode": 26, "fromPort": "out", "toNode": 27, "toPort": "in" },
-    { "fromNode": 25, "fromPort": "out", "toNode": 27, "toPort": "forces" },
-    { "fromNode": 27, "fromPort": "out", "toNode": 28, "toPort": "in" },
-    { "fromNode": 28, "fromPort": "out", "toNode": 22, "toPort": "in" },
-
-    { "fromNode": 22, "fromPort": "out", "toNode": 29, "toPort": "particles" },
-    { "fromNode": 0, "fromPort": "output_width", "toNode": 29, "toPort": "width" },
-    { "fromNode": 0, "fromPort": "output_height", "toNode": 29, "toPort": "height" },
-    { "fromNode": 29, "fromPort": "accum", "toNode": 30, "toPort": "accum" },
-    { "fromNode": 30, "fromPort": "density", "toNode": 31, "toPort": "in" },
-    { "fromNode": 31, "fromPort": "out", "toNode": 32, "toPort": "in" },
-
-    { "fromNode": 35, "fromPort": "out", "toNode": 33, "toPort": "in" },
-    { "fromNode": 33, "fromPort": "out", "toNode": 34, "toPort": "in" },
-    { "fromNode": 34, "fromPort": "out", "toNode": 35, "toPort": "a" },
-    { "fromNode": 32, "fromPort": "out", "toNode": 35, "toPort": "b" },
-
-    { "fromNode": 35, "fromPort": "out", "toNode": 36, "toPort": "in" },
-    { "fromNode": 36, "fromPort": "out", "toNode": 38, "toPort": "in" },
-    { "fromNode": 37, "fromPort": "out", "toNode": 38, "toPort": "lut" },
-
-    { "fromNode": 13, "fromPort": "out", "toNode": 39, "toPort": "in" },
-    { "fromNode": 39, "fromPort": "out", "toNode": 40, "toPort": "a" },
-    { "fromNode": 38, "fromPort": "out", "toNode": 40, "toPort": "b" },
-    { "fromNode": 40, "fromPort": "out", "toNode": 1, "toPort": "in" }
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 16,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "freq"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "freq"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "freq"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "freq"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 23,
+      "fromPort": "out",
+      "toNode": 24,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "particles",
+      "toNode": 22,
+      "toPort": "seed"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "strength_modulator"
+    },
+    {
+      "fromNode": 26,
+      "fromPort": "out",
+      "toNode": 27,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 25,
+      "fromPort": "out",
+      "toNode": 27,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "out",
+      "toNode": 28,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 29,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 29,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "accum",
+      "toNode": 30,
+      "toPort": "accum"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "density",
+      "toNode": 31,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 32,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 36,
+      "fromPort": "out",
+      "toNode": 38,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 37,
+      "fromPort": "out",
+      "toNode": 38,
+      "toPort": "lut"
+    },
+    {
+      "fromNode": 32,
+      "fromPort": "out",
+      "toNode": 36,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 38,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 41,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "scaled_energy"
+    }
   ]
 }
