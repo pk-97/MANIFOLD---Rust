@@ -364,22 +364,18 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (56)
+### Effect & generator presets (48)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotBloom` | Apricot Bloom | generator | Geometry | 5 |
 | `ApricotWeather` | Apricot Weather | generator | Geometry | 5 |
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
-| `BlossomField` | Blossom Field | generator | Geometry | 5 |
 | `BlossomWire` | Blossom Wire | generator | Geometry | 11 |
-| `Breathe` | Breathe | generator | Geometry | 3 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
-| `CinematicScene` | Cinematic Scene | generator | Geometry | 6 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
@@ -393,13 +389,11 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Stylize | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 22 |
-| `Garden` | Garden | generator | Geometry | 3 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
-| `Lathe` | Lathe | generator | Geometry | 2 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 13 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
@@ -418,8 +412,6 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
-| `TwistColumn` | Twist Column | generator | Geometry | 2 |
-| `Vine` | Vine | generator | Geometry | 2 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |

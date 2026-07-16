@@ -664,10 +664,7 @@
         "ConcentricTunnel",
         "DigitalPlants",
         "Duocylinder",
-        "Garden",
-        "Lathe",
-        "Lissajous",
-        "Vine"
+        "Lissajous"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -1560,7 +1557,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather"
       ],
       "fusion": "pointwise",
@@ -1642,9 +1638,7 @@
         "ao denoise"
       ],
       "category": "Blur & Sharpen",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "multi_input_coincident",
       "inputs": [
         {
@@ -2165,9 +2159,7 @@
         "bokeh gather"
       ],
       "category": "Blur & Sharpen",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "multi_input_coincident",
       "inputs": [
         {
@@ -2259,9 +2251,7 @@
         "shutter angle"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "boundary:non_gpu",
       "inputs": [
         {
@@ -3273,9 +3263,7 @@
         "max filter"
       ],
       "category": "Mask",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -3308,9 +3296,7 @@
         "bokeh"
       ],
       "category": "Mask",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -3573,10 +3559,7 @@
       "category": "3D Geometry",
       "examples": [
         "ConcentricTunnel",
-        "Garden",
-        "Lathe",
-        "Lissajous",
-        "Vine"
+        "Lissajous"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -6452,10 +6435,7 @@
         "normal reset"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "Breathe",
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -7735,9 +7715,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
-        "BlossomField",
         "BlossomWire"
       ],
       "fusion": "boundary:io_bridge",
@@ -7833,9 +7811,7 @@
       ],
       "category": "Generate",
       "examples": [
-        "ApricotBloom",
-        "ApricotWeather",
-        "BlossomField"
+        "ApricotWeather"
       ],
       "fusion": "boundary:io_bridge",
       "inputs": [],
@@ -8058,12 +8034,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
-        "Garden",
-        "MetallicGlass",
-        "TwistColumn"
+        "MetallicGlass"
       ],
       "fusion": "source",
       "inputs": [
@@ -9217,9 +9188,7 @@
       "category": "Control",
       "examples": [
         "ApricotWeather",
-        "Breathe",
-        "Lissajous",
-        "TwistColumn"
+        "Lissajous"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [],
@@ -9346,16 +9315,8 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
-        "Garden",
-        "Lathe",
-        "MetallicGlass",
-        "TwistColumn",
-        "Vine"
+        "MetallicGlass"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -9940,14 +9901,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
-        "Garden",
-        "Lathe",
-        "MetallicGlass",
-        "TwistColumn",
-        "Vine"
+        "MetallicGlass"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -10143,7 +10097,6 @@
         "StrangeAttractor",
         "Strobe",
         "Tesseract",
-        "Vine",
         "VoronoiPrism",
         "Wireframe",
         "WireframeDepth"
@@ -10274,10 +10227,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotBloom",
-        "ApricotWeather",
-        "Breathe",
-        "TwistColumn"
+        "ApricotWeather"
       ],
       "fusion": "pointwise",
       "inputs": [
@@ -10489,7 +10439,6 @@
       "examples": [
         "Bloom",
         "ChromaticAberration",
-        "CinematicScene",
         "ColorGrade",
         "DigitalDrift",
         "EdgeStretch",
@@ -10639,9 +10588,7 @@
         "smear"
       ],
       "category": "Blur & Sharpen",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "multi_input_coincident",
       "inputs": [
         {
@@ -11370,18 +11317,10 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
         "DigitalPlants",
         "FluidSim3D",
-        "Garden",
-        "Lathe",
-        "MetallicGlass",
-        "TwistColumn",
-        "Vine"
+        "MetallicGlass"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -12640,15 +12579,7 @@
       ],
       "category": "Materials & Lighting",
       "examples": [
-        "ApricotBloom",
-        "ApricotWeather",
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
-        "Garden",
-        "Lathe",
-        "TwistColumn",
-        "Vine"
+        "ApricotWeather"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -13277,9 +13208,7 @@
         "bulge"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "Breathe"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -13437,8 +13366,6 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "BlossomField",
-        "Garden",
         "MetallicGlass"
       ],
       "fusion": "pointwise",
@@ -13601,10 +13528,7 @@
       "category": "Math & Convert",
       "examples": [
         "ConcentricTunnel",
-        "Garden",
-        "Lathe",
-        "Lissajous",
-        "Vine"
+        "Lissajous"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -14201,15 +14125,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotBloom",
-        "ApricotWeather",
-        "BlossomField",
-        "Breathe",
-        "CinematicScene",
-        "Garden",
-        "Lathe",
-        "TwistColumn",
-        "Vine"
+        "ApricotWeather"
       ],
       "fusion": "boundary:draw_call",
       "inputs": [
@@ -14761,10 +14677,7 @@
         "solid of revolution"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "Garden",
-        "Lathe"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -15577,7 +15490,6 @@
       ],
       "category": "Control",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
         "BlackHole",
         "BlobTracking",
@@ -15780,10 +15692,7 @@
         "populate mesh"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "BlossomField",
-        "Garden"
-      ],
+      "examples": [],
       "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
@@ -16104,8 +16013,6 @@
       ],
       "category": "Noise",
       "examples": [
-        "BlossomField",
-        "Garden",
         "MetallicGlass",
         "OilyFluid"
       ],
@@ -17401,9 +17308,7 @@
         "ao"
       ],
       "category": "Mask",
-      "examples": [
-        "CinematicScene"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -18083,9 +17988,7 @@
         "narrow"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "ApricotBloom"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -18771,8 +18674,7 @@
       ],
       "category": "3D Geometry",
       "examples": [
-        "ApricotWeather",
-        "BlossomField"
+        "ApricotWeather"
       ],
       "fusion": "boundary:non_gpu",
       "inputs": [
@@ -19040,9 +18942,7 @@
         "pipe"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "Vine"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -19343,10 +19243,7 @@
         "helix"
       ],
       "category": "3D Geometry",
-      "examples": [
-        "TwistColumn",
-        "Vine"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -19698,7 +19595,6 @@
       ],
       "category": "Control",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
         "ColorCompass",
         "DigitalDrift",
@@ -20499,18 +20395,14 @@
       ],
       "category": "Routing",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
         "AutoGain",
         "BasicShapes",
         "BlackHole",
         "BlobTracking",
         "Bloom",
-        "BlossomField",
         "BlossomWire",
-        "Breathe",
         "ChromaticAberration",
-        "CinematicScene",
         "ColorCompass",
         "ColorGrade",
         "ConcentricTunnel",
@@ -20524,13 +20416,11 @@
         "FilmGrain",
         "FluidSim2D",
         "FluidSim3D",
-        "Garden",
         "Glitch",
         "HighlightBoost",
         "Infrared",
         "Invert",
         "Kaleidoscope",
-        "Lathe",
         "Lissajous",
         "MetallicGlass",
         "Mirror",
@@ -20550,8 +20440,6 @@
         "Text",
         "Transform",
         "TrivialPassthrough",
-        "TwistColumn",
-        "Vine",
         "VoronoiPrism",
         "Watercolor",
         "Wireframe",
@@ -20582,14 +20470,10 @@
       ],
       "category": "Routing",
       "examples": [
-        "ApricotBloom",
         "ApricotWeather",
         "BasicShapes",
         "BlackHole",
-        "BlossomField",
         "BlossomWire",
-        "Breathe",
-        "CinematicScene",
         "ConcentricTunnel",
         "DigitalDrift",
         "DigitalPlants",
@@ -20597,8 +20481,6 @@
         "FilmGrain",
         "FluidSim2D",
         "FluidSim3D",
-        "Garden",
-        "Lathe",
         "Lissajous",
         "MetallicGlass",
         "MriVolume",
@@ -20612,8 +20494,6 @@
         "Tesseract",
         "Text",
         "TrivialPassthrough",
-        "TwistColumn",
-        "Vine",
         "VoronoiPrism",
         "Wireframe"
       ],
@@ -20760,52 +20640,8 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 56,
+  "preset_count": 48,
   "presets": [
-    {
-      "category": "Geometry",
-      "id": "ApricotBloom",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Apricot Bloom",
-      "params": [
-        {
-          "default": "1",
-          "id": "growPhase",
-          "max": "1",
-          "min": "0",
-          "name": "Grow Phase"
-        },
-        {
-          "default": "1",
-          "id": "cluster",
-          "max": "3",
-          "min": "1",
-          "name": "Cluster"
-        },
-        {
-          "default": "0.5",
-          "id": "camOrbit",
-          "max": "3.1415927",
-          "min": "-3.1415927",
-          "name": "Camera Orbit"
-        },
-        {
-          "default": "0.08",
-          "id": "camTilt",
-          "max": "1.5",
-          "min": "-1.5",
-          "name": "Camera Tilt"
-        },
-        {
-          "default": "2.4",
-          "id": "camDistance",
-          "max": "12",
-          "min": "1",
-          "name": "Camera Distance"
-        }
-      ]
-    },
     {
       "category": "Geometry",
       "id": "ApricotWeather",
@@ -21121,50 +20957,6 @@
     },
     {
       "category": "Geometry",
-      "id": "BlossomField",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Blossom Field",
-      "params": [
-        {
-          "default": "18",
-          "id": "density",
-          "max": "48",
-          "min": "0",
-          "name": "Density"
-        },
-        {
-          "default": "2.4",
-          "id": "flowerScale",
-          "max": "6",
-          "min": "0.5",
-          "name": "Flower Scale"
-        },
-        {
-          "default": "0.55",
-          "id": "camOrbit",
-          "max": "3.1415927",
-          "min": "-3.1415927",
-          "name": "Camera Orbit"
-        },
-        {
-          "default": "0.24",
-          "id": "camTilt",
-          "max": "1.5",
-          "min": "0.05",
-          "name": "Camera Tilt"
-        },
-        {
-          "default": "9.5",
-          "id": "camDistance",
-          "max": "40",
-          "min": "3",
-          "name": "Camera Distance"
-        }
-      ]
-    },
-    {
-      "category": "Geometry",
       "id": "BlossomWire",
       "is_line_based": true,
       "kind": "generator",
@@ -21250,36 +21042,6 @@
       ]
     },
     {
-      "category": "Geometry",
-      "id": "Breathe",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Breathe",
-      "params": [
-        {
-          "default": "0.2",
-          "id": "amount",
-          "max": "2",
-          "min": "0",
-          "name": "Amount"
-        },
-        {
-          "default": "0.5",
-          "id": "phase",
-          "max": "1",
-          "min": "0",
-          "name": "Phase"
-        },
-        {
-          "default": "0.3",
-          "id": "feather",
-          "max": "1",
-          "min": "0",
-          "name": "Feather"
-        }
-      ]
-    },
-    {
       "category": "Filmic",
       "id": "ChromaticAberration",
       "is_line_based": false,
@@ -21320,57 +21082,6 @@
           "max": "1",
           "min": "0",
           "name": "Falloff"
-        }
-      ]
-    },
-    {
-      "category": "Geometry",
-      "id": "CinematicScene",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Cinematic Scene",
-      "params": [
-        {
-          "default": "4",
-          "id": "focus_distance",
-          "max": "20",
-          "min": "0.1",
-          "name": "Focus Distance"
-        },
-        {
-          "default": "2.8",
-          "id": "f_stop",
-          "max": "32",
-          "min": "0.5",
-          "name": "F-Stop"
-        },
-        {
-          "default": "0",
-          "id": "shutter_angle",
-          "max": "360",
-          "min": "0",
-          "name": "Shutter Angle"
-        },
-        {
-          "default": "0",
-          "id": "exposure_ev",
-          "max": "8",
-          "min": "-8",
-          "name": "Exposure (EV)"
-        },
-        {
-          "default": "1",
-          "id": "ssao_intensity",
-          "max": "4",
-          "min": "0",
-          "name": "SSAO Intensity"
-        },
-        {
-          "default": "0.5",
-          "id": "ssao_radius",
-          "max": "5",
-          "min": "0.01",
-          "name": "SSAO Radius"
         }
       ]
     },
@@ -22178,36 +21889,6 @@
       ]
     },
     {
-      "category": "Geometry",
-      "id": "Garden",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Garden",
-      "params": [
-        {
-          "default": "140",
-          "id": "count",
-          "max": "400",
-          "min": "0",
-          "name": "Count"
-        },
-        {
-          "default": "1.3",
-          "id": "scale",
-          "max": "2",
-          "min": "0.2",
-          "name": "Scale"
-        },
-        {
-          "default": "1",
-          "id": "align",
-          "max": "1",
-          "min": "0",
-          "name": "Align To Normal"
-        }
-      ]
-    },
-    {
       "category": "Filmic",
       "id": "Glitch",
       "is_line_based": false,
@@ -22354,29 +22035,6 @@
           "max": "16",
           "min": "2",
           "name": "Segments"
-        }
-      ]
-    },
-    {
-      "category": "Geometry",
-      "id": "Lathe",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Lathe",
-      "params": [
-        {
-          "default": "6.2831855",
-          "id": "sweep",
-          "max": "12.566371",
-          "min": "0",
-          "name": "Sweep"
-        },
-        {
-          "default": "0.5",
-          "id": "orbit",
-          "max": "1",
-          "min": "0",
-          "name": "Orbit"
         }
       ]
     },
@@ -23449,52 +23107,6 @@
           "max": "180",
           "min": "-180",
           "name": "Rotation"
-        }
-      ]
-    },
-    {
-      "category": "Geometry",
-      "id": "TwistColumn",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Twist Column",
-      "params": [
-        {
-          "default": "1",
-          "id": "speed",
-          "max": "5",
-          "min": "0",
-          "name": "Speed"
-        },
-        {
-          "default": "0",
-          "id": "growth",
-          "max": "2",
-          "min": "-1",
-          "name": "Growth"
-        }
-      ]
-    },
-    {
-      "category": "Geometry",
-      "id": "Vine",
-      "is_line_based": false,
-      "kind": "generator",
-      "name": "Vine",
-      "params": [
-        {
-          "default": "0.3",
-          "id": "grow_phase",
-          "max": "1",
-          "min": "0",
-          "name": "Grow Phase"
-        },
-        {
-          "default": "0.5",
-          "id": "orbit",
-          "max": "4",
-          "min": "0",
-          "name": "Orbit"
         }
       ]
     },
