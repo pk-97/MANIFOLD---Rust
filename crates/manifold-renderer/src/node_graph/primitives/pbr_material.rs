@@ -20,11 +20,19 @@
 use std::borrow::Cow;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
+// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings, same
+// enum-param shape as `alpha_mode` above (no port-shadow scalar — these are
+// discrete glTF sampler enums, not continuous factors). Index 0 is each
+// enum's neutral/default value (Repeat, Linear) — `run()` maps these
+// indices to `manifold_gpu::GpuAddressMode`/`GpuFilterMode` explicitly, so
+// the two enums' own variant order is irrelevant here.
+const WRAP_MODES: &[&str] = &["Repeat", "ClampToEdge", "MirrorRepeat"];
+const FILTER_MODES: &[&str] = &["Linear", "Nearest"];
 
 crate::primitive! {
     name: PbrMaterial,
@@ -54,6 +62,27 @@ crate::primitive! {
         // report lines.
         clearcoat: ScalarF32 optional,
         clearcoat_roughness: ScalarF32 optional,
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume. Factor-only v1,
+        // same doctrine as clearcoat above — no shading math reads these
+        // yet (E2-E6), this phase only carries the values through.
+        sheen_color_r: ScalarF32 optional,
+        sheen_color_g: ScalarF32 optional,
+        sheen_color_b: ScalarF32 optional,
+        sheen_roughness: ScalarF32 optional,
+        iridescence: ScalarF32 optional,
+        iridescence_ior: ScalarF32 optional,
+        iridescence_thickness_min: ScalarF32 optional,
+        iridescence_thickness_max: ScalarF32 optional,
+        anisotropy_strength: ScalarF32 optional,
+        anisotropy_rotation: ScalarF32 optional,
+        dispersion: ScalarF32 optional,
+        transmission: ScalarF32 optional,
+        volume_thickness: ScalarF32 optional,
+        volume_attenuation_distance: ScalarF32 optional,
+        volume_attenuation_color_r: ScalarF32 optional,
+        volume_attenuation_color_g: ScalarF32 optional,
+        volume_attenuation_color_b: ScalarF32 optional,
         // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -254,6 +283,149 @@ crate::primitive! {
             label: "Clearcoat Roughness",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume. Every default is
+        // glTF's own implicit default (see `Material`'s field doc
+        // comments) — a material that never sets these is byte-identical
+        // to pre-E1.
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_r"),
+            label: "Sheen Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_g"),
+            label: "Sheen Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_color_b"),
+            label: "Sheen Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sheen_roughness"),
+            label: "Sheen Roughness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence"),
+            label: "Iridescence",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_ior"),
+            label: "Iridescence IOR",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.3),
+            range: Some((1.0, 3.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_thickness_min"),
+            label: "Iridescence Thickness Min (nm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(100.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("iridescence_thickness_max"),
+            label: "Iridescence Thickness Max (nm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(400.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("anisotropy_strength"),
+            label: "Anisotropy Strength",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("anisotropy_rotation"),
+            label: "Anisotropy Rotation",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("dispersion"),
+            label: "Dispersion",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("transmission"),
+            label: "Transmission",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_thickness"),
+            label: "Volume Thickness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_distance"),
+            label: "Volume Attenuation Distance",
+            ty: ParamType::Float,
+            default: ParamValue::Float(
+                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            ),
+            range: Some((0.001, 1.0e6)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_r"),
+            label: "Volume Attenuation Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_g"),
+            label: "Volume Attenuation Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_attenuation_color_b"),
+            label: "Volume Attenuation Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
@@ -497,6 +669,171 @@ crate::primitive! {
             range: Some((-128.0, 128.0)),
             enum_values: &[],
         },
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // Same 5-family fanout as the UV-transform block above; defaults
+        // (Repeat/Repeat/Linear/Linear) reproduce glTF's implicit
+        // no-sampler default AND the pre-D3 hardcoded `material_sampler`
+        // byte-for-byte.
+        ParamDef {
+            name: Cow::Borrowed("wrap_u"),
+            label: "Base Colour Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("wrap_v"),
+            label: "Base Colour Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mag_filter"),
+            label: "Base Colour Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("min_filter"),
+            label: "Base Colour Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_wrap_u"),
+            label: "Normal Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_wrap_v"),
+            label: "Normal Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_mag_filter"),
+            label: "Normal Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("nrm_min_filter"),
+            label: "Normal Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_wrap_u"),
+            label: "MR Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_wrap_v"),
+            label: "MR Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_mag_filter"),
+            label: "MR Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("mr_min_filter"),
+            label: "MR Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_wrap_u"),
+            label: "Occlusion Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_wrap_v"),
+            label: "Occlusion Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_mag_filter"),
+            label: "Occlusion Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("occ_min_filter"),
+            label: "Occlusion Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_wrap_u"),
+            label: "Emissive Wrap U",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_wrap_v"),
+            label: "Emissive Wrap V",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (WRAP_MODES.len() - 1) as f32)),
+            enum_values: WRAP_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_mag_filter"),
+            label: "Emissive Mag Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
+        ParamDef {
+            name: Cow::Borrowed("em_min_filter"),
+            label: "Emissive Min Filter",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (FILTER_MODES.len() - 1) as f32)),
+            enum_values: FILTER_MODES,
+        },
     ],
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
     examples: [],
@@ -546,6 +883,30 @@ impl Primitive for PbrMaterial {
         // GGX landmine in the coat lobe's own D/G terms too.
         let clearcoat = ctx.scalar_or_param("clearcoat", 0.0).clamp(0.0, 1.0);
         let clearcoat_roughness = ctx.scalar_or_param("clearcoat_roughness", 0.0).max(0.01);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume — read straight
+        // through, no clamping beyond each param's own declared range
+        // (no shading math consumes these yet).
+        let sheen_color_r = ctx.scalar_or_param("sheen_color_r", 0.0);
+        let sheen_color_g = ctx.scalar_or_param("sheen_color_g", 0.0);
+        let sheen_color_b = ctx.scalar_or_param("sheen_color_b", 0.0);
+        let sheen_roughness = ctx.scalar_or_param("sheen_roughness", 0.0);
+        let iridescence = ctx.scalar_or_param("iridescence", 0.0);
+        let iridescence_ior = ctx.scalar_or_param("iridescence_ior", 1.3);
+        let iridescence_thickness_min = ctx.scalar_or_param("iridescence_thickness_min", 100.0);
+        let iridescence_thickness_max = ctx.scalar_or_param("iridescence_thickness_max", 400.0);
+        let anisotropy_strength = ctx.scalar_or_param("anisotropy_strength", 0.0);
+        let anisotropy_rotation = ctx.scalar_or_param("anisotropy_rotation", 0.0);
+        let dispersion = ctx.scalar_or_param("dispersion", 0.0);
+        let transmission = ctx.scalar_or_param("transmission", 0.0);
+        let volume_thickness = ctx.scalar_or_param("volume_thickness", 0.0);
+        let volume_attenuation_distance = ctx.scalar_or_param(
+            "volume_attenuation_distance",
+            crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        );
+        let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
+        let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
+        let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
         // One folded per-map UV affine per family (G-P4). The closure keeps
         // the 30 reads mechanical; identity defaults are exactly inert.
         let uv_xf = |prefix: &str| -> [f32; 6] {
@@ -564,6 +925,45 @@ impl Primitive for PbrMaterial {
         let occlusion_uv_transform = uv_xf("occ_uv_");
         let emissive_uv_transform = uv_xf("em_uv_");
 
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings.
+        // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
+        // own dual-read above — a hand-authored graph JSON may carry either
+        // shape); anything out of range falls through to index 0 (Repeat /
+        // Linear), the glTF spec's own implicit no-sampler default.
+        let enum_or = |name: &str| -> u32 {
+            match ctx.params.get(name) {
+                Some(ParamValue::Enum(v)) => *v,
+                Some(ParamValue::Float(f)) => f.round().max(0.0) as u32,
+                _ => 0,
+            }
+        };
+        let wrap_mode = |v: u32| -> manifold_gpu::GpuAddressMode {
+            match v {
+                1 => manifold_gpu::GpuAddressMode::ClampToEdge,
+                2 => manifold_gpu::GpuAddressMode::MirrorRepeat,
+                _ => manifold_gpu::GpuAddressMode::Repeat,
+            }
+        };
+        let filter_mode = |v: u32| -> manifold_gpu::GpuFilterMode {
+            match v {
+                1 => manifold_gpu::GpuFilterMode::Nearest,
+                _ => manifold_gpu::GpuFilterMode::Linear,
+            }
+        };
+        let map_sampler = |prefix: &str| -> MapSamplerDesc {
+            MapSamplerDesc {
+                wrap_u: wrap_mode(enum_or(&format!("{prefix}wrap_u"))),
+                wrap_v: wrap_mode(enum_or(&format!("{prefix}wrap_v"))),
+                mag_filter: filter_mode(enum_or(&format!("{prefix}mag_filter"))),
+                min_filter: filter_mode(enum_or(&format!("{prefix}min_filter"))),
+            }
+        };
+        let base_color_sampler = map_sampler("");
+        let normal_sampler = map_sampler("nrm_");
+        let mr_sampler = map_sampler("mr_");
+        let occlusion_sampler = map_sampler("occ_");
+        let emissive_sampler = map_sampler("em_");
+
         let mut material = Material::pbr(
             [color_r, color_g, color_b, color_a],
             ambient,
@@ -579,11 +979,33 @@ impl Primitive for PbrMaterial {
         material.ior = ior;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
+        material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];
+        material.sheen_roughness_factor = sheen_roughness;
+        material.iridescence_factor = iridescence;
+        material.iridescence_ior = iridescence_ior;
+        material.iridescence_thickness_minimum = iridescence_thickness_min;
+        material.iridescence_thickness_maximum = iridescence_thickness_max;
+        material.anisotropy_strength = anisotropy_strength;
+        material.anisotropy_rotation = anisotropy_rotation;
+        material.dispersion = dispersion;
+        material.transmission_factor = transmission;
+        material.volume_thickness_factor = volume_thickness;
+        material.volume_attenuation_distance = volume_attenuation_distance;
+        material.volume_attenuation_color = [
+            volume_attenuation_color_r,
+            volume_attenuation_color_g,
+            volume_attenuation_color_b,
+        ];
         material.base_color_uv_transform = base_color_uv_transform;
         material.normal_uv_transform = normal_uv_transform;
         material.mr_uv_transform = mr_uv_transform;
         material.occlusion_uv_transform = occlusion_uv_transform;
         material.emissive_uv_transform = emissive_uv_transform;
+        material.base_color_sampler = base_color_sampler;
+        material.normal_sampler = normal_sampler;
+        material.mr_sampler = mr_sampler;
+        material.occlusion_sampler = occlusion_sampler;
+        material.emissive_sampler = emissive_sampler;
         ctx.outputs.set_material("out", material);
     }
 }

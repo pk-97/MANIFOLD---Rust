@@ -149,6 +149,7 @@ fn wire_map_texture(
     string_bindings: &mut Vec<StringBindingDef>,
     cache: &mut std::collections::HashMap<u32, (u32, String)>,
     out_id: u32,
+    channel_mode: u32,
 ) {
     let (node_numeric_id, _node_id_str) = if let Some(existing) = cache.get(&tex_index) {
         existing.clone()
@@ -158,6 +159,11 @@ fn wire_map_texture(
         let mut node = plain_node(tid, &node_id_str, "node.gltf_texture_source", &node_id_str);
         node.params.insert("texture_index".to_string(), int(tex_index as i32));
         node.params.insert("color_space".to_string(), enum_val(color_space));
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D2: 1 = gloss_to_roughness, wired
+        // only for a specularGlossinessTexture standing in for `mrMap`
+        // (see the mr_texture call site below); every other call passes 0
+        // (passthrough), byte-identical to before this param existed.
+        node.params.insert("mode".to_string(), enum_val(channel_mode));
         // Same v1 default the base-color wiring uses — see its TODO about
         // threading real per-texture dimensions through the summary.
         node.params.insert("width".to_string(), int(1024));
@@ -685,12 +691,22 @@ fn build_import_graph(
         }
         // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
         // KHR_materials_transmission both become a real `Blend` material.
-        // One formula covers both — `transmission_factor == 0.0` (plain
-        // BLEND, no transmission extension) reduces to the material's own
-        // base_color.a unchanged.
+        //
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b/D3: `effective_alpha` used
+        // to darken base_color.a by `(1 - transmission_factor)` — that WAS
+        // the D8/F-P5 alpha-blend approximation for transmission (fake
+        // see-through via low opacity). Real screen-space refraction ships
+        // in `fs_pbr` (render_scene.wgsl's `transmission_diffuse`) as of
+        // E2b, and D3 explicitly rejects keeping the approximation active
+        // once the real thing exists — the two must never both apply (that
+        // would double-darken: alpha-composited over the background AND
+        // shader-mixed with it). So `effective_alpha` is now just the
+        // material's own authored base_color.a — Blend/glass alpha keeps
+        // its normal meaning (author/performer-controlled fade via the
+        // Opacity card below), while transmission's see-through is carried
+        // entirely by the shader's diffuse substitution, not by alpha.
         let is_glass = m.was_blend || m.transmission_factor > 0.0;
-        let effective_alpha =
-            (m.base_color_factor[3] * (1.0 - m.transmission_factor)).clamp(0.0, 1.0);
+        let effective_alpha = m.base_color_factor[3].clamp(0.0, 1.0);
 
         // This object's producer nodes live INSIDE its group; only the group box
         // and the shared render / camera / lights / boundaries sit at the top
@@ -702,9 +718,20 @@ fn build_import_graph(
         let mesh_id = fresh_id();
         let mut mesh_node =
             plain_node(mesh_id, &mesh_node_id, "node.gltf_mesh_source", &mesh_node_id);
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D4/§3: `m.material_index ==
+        // DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks the synthetic
+        // default-material entry — never re-queried as a document material
+        // index. Translate it to `gltf_mesh_source`'s own reserved param
+        // sentinel instead (`u32::MAX as i32` would collide with -1, the
+        // param's pre-existing "unset" value).
+        let mesh_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
+            gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+        } else {
+            m.material_index as i32
+        };
         mesh_node
             .params
-            .insert("material_index".to_string(), int(m.material_index as i32));
+            .insert("material_index".to_string(), int(mesh_material_param));
         mesh_node
             .params
             .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
@@ -725,9 +752,9 @@ fn build_import_graph(
         mat_node
             .params
             .insert("color_b".to_string(), float(m.base_color_factor[2]));
-        // IMPORT_FIDELITY_DESIGN.md D8: `effective_alpha` folds the
-        // transmission formula in; for a plain opaque/mask material
-        // (transmission_factor == 0.0) this is exactly base_color.a.
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: `effective_alpha` is now
+        // exactly `base_color.a` (see its definition above for why the old
+        // transmission-darkening formula was removed).
         mat_node
             .params
             .insert("color_a".to_string(), float(effective_alpha));
@@ -803,6 +830,92 @@ fn build_import_graph(
             "clearcoat_roughness".to_string(),
             float(m.clearcoat_roughness_factor),
         );
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: sheen, iridescence,
+        // anisotropy, dispersion, transmission+volume factors → uniform
+        // slots on `node.pbr_material` (`render_scene.wgsl` declares the
+        // matching struct fields but reads none of them yet — E2-E6 wire
+        // the shading math). Every default reproduces glTF's own implicit
+        // default, so a material without these extensions wires
+        // byte-identical params to pre-E1.
+        mat_node
+            .params
+            .insert("sheen_color_r".to_string(), float(m.sheen_color_factor[0]));
+        mat_node
+            .params
+            .insert("sheen_color_g".to_string(), float(m.sheen_color_factor[1]));
+        mat_node
+            .params
+            .insert("sheen_color_b".to_string(), float(m.sheen_color_factor[2]));
+        mat_node
+            .params
+            .insert("sheen_roughness".to_string(), float(m.sheen_roughness_factor));
+        mat_node
+            .params
+            .insert("iridescence".to_string(), float(m.iridescence_factor));
+        mat_node
+            .params
+            .insert("iridescence_ior".to_string(), float(m.iridescence_ior));
+        mat_node.params.insert(
+            "iridescence_thickness_min".to_string(),
+            float(m.iridescence_thickness_minimum),
+        );
+        mat_node.params.insert(
+            "iridescence_thickness_max".to_string(),
+            float(m.iridescence_thickness_maximum),
+        );
+        mat_node
+            .params
+            .insert("anisotropy_strength".to_string(), float(m.anisotropy_strength));
+        mat_node
+            .params
+            .insert("anisotropy_rotation".to_string(), float(m.anisotropy_rotation));
+        mat_node
+            .params
+            .insert("dispersion".to_string(), float(m.dispersion));
+        mat_node
+            .params
+            .insert("transmission".to_string(), float(m.transmission_factor));
+        mat_node
+            .params
+            .insert("volume_thickness".to_string(), float(m.volume_thickness_factor));
+        mat_node.params.insert(
+            "volume_attenuation_distance".to_string(),
+            float(m.volume_attenuation_distance),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_r".to_string(),
+            float(m.volume_attenuation_color[0]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_g".to_string(),
+            float(m.volume_attenuation_color[1]),
+        );
+        mat_node.params.insert(
+            "volume_attenuation_color_b".to_string(),
+            float(m.volume_attenuation_color[2]),
+        );
+        // E1: textured variants of the four new families are report-only
+        // (factor-only v1), same doctrine as clearcoat/specular above.
+        if m.sheen_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_sheen has a sheenColorTexture/sheenRoughnessTexture — only the factors (sheenColorFactor/sheenRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.iridescence_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_iridescence has an iridescenceTexture/iridescenceThicknessTexture — only the factors are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        if m.anisotropy_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_anisotropy has an anisotropyTexture — only the factors (anisotropyStrength/anisotropyRotation) are imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
+        if m.volume_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_volume has a thicknessTexture — only the factor (thicknessFactor) is imported in v1, the texture is not sampled (report-only)"
+            ));
+        }
         // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
         // per map family, identity when the extension is absent.
         let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
@@ -818,6 +931,46 @@ fn build_import_graph(
                     .params
                     .insert(format!("{prefix}{part}"), float(*value));
             }
+        }
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): per-map-family sampler
+        // settings → `node.pbr_material`'s `{prefix}wrap_u/wrap_v/mag_filter/
+        // min_filter` enum params. Index order matches that primitive's
+        // `WRAP_MODES`/`FILTER_MODES` arrays (0 = Repeat / Linear, the
+        // default both sides agree on).
+        let wrap_idx = |w: gltf_load::GltfWrapMode| -> u32 {
+            match w {
+                gltf_load::GltfWrapMode::Repeat => 0,
+                gltf_load::GltfWrapMode::ClampToEdge => 1,
+                gltf_load::GltfWrapMode::MirrorRepeat => 2,
+            }
+        };
+        let filter_idx = |f: gltf_load::GltfFilterMode| -> u32 {
+            match f {
+                gltf_load::GltfFilterMode::Linear => 0,
+                gltf_load::GltfFilterMode::Nearest => 1,
+            }
+        };
+        for (prefix, s) in [
+            ("", &m.base_color_sampler),
+            ("nrm_", &m.normal_sampler),
+            ("mr_", &m.mr_sampler),
+            ("occ_", &m.occlusion_sampler),
+            ("em_", &m.emissive_sampler),
+        ] {
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_u"), enum_val(wrap_idx(s.wrap_u)));
+            mat_node
+                .params
+                .insert(format!("{prefix}wrap_v"), enum_val(wrap_idx(s.wrap_v)));
+            mat_node.params.insert(
+                format!("{prefix}mag_filter"),
+                enum_val(filter_idx(s.mag_filter)),
+            );
+            mat_node.params.insert(
+                format!("{prefix}min_filter"),
+                enum_val(filter_idx(s.min_filter)),
+            );
         }
         group_nodes.push(mat_node);
 
@@ -959,6 +1112,7 @@ fn build_import_graph(
                 &mut string_bindings,
                 &mut map_tex_cache,
                 out_id,
+                0,
             );
         }
         let has_mr = m.mr_texture.is_some();
@@ -977,6 +1131,11 @@ fn build_import_graph(
                 &mut string_bindings,
                 &mut map_tex_cache,
                 out_id,
+                // GLB_XFAIL_BURNDOWN_DESIGN.md D2: this is a spec-gloss
+                // specularGlossinessTexture standing in for mrMap — repack
+                // its alpha (gloss) into G=roughness/B=metallic at blit
+                // time so render_scene's mr_map read stays untouched.
+                if m.mr_texture_is_gloss_alpha { 1 } else { 0 },
             );
         }
         let has_occlusion = m.occlusion_texture.is_some();
@@ -995,6 +1154,7 @@ fn build_import_graph(
                 &mut string_bindings,
                 &mut map_tex_cache,
                 out_id,
+                0,
             );
         }
         let has_emissive = m.emissive_texture.is_some();
@@ -1013,6 +1173,7 @@ fn build_import_graph(
                 &mut string_bindings,
                 &mut map_tex_cache,
                 out_id,
+                0,
             );
         }
 
@@ -1612,6 +1773,122 @@ mod tests {
         );
     }
 
+    /// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
+    /// `material` key at all — glTF's implicit default material
+    /// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in
+    /// the document at all, matching a real asset like `BoxVertexColors.glb`
+    /// that carries geometry but declares zero materials. Same hand-rolled
+    /// binary-container shape as `write_synthetic_multimaterial_glb`.
+    fn write_synthetic_default_material_glb() -> std::path::PathBuf {
+        let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut bin = Vec::with_capacity(36);
+        for v in &tri {
+            for c in v {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            // No "material" key on the primitive — glTF's implicit default
+            // material. No "materials" array at all, matching a real asset
+            // that declares zero materials.
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+            "accessors": [{
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC3",
+                "min": [0.0, 0.0, 0.0],
+                "max": [1.0, 1.0, 0.0],
+            }],
+            "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+            "buffers": [{ "byteLength": bin.len() }],
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+        let mut json_padded = json_bytes;
+        while json_padded.len() % 4 != 0 {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while bin_padded.len() % 4 != 0 {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_defaultmat_{}_{}.glb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+        path
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171) / §4 invariant ("no silent
+    /// geometry drop"): a hand-rolled glb whose ONLY primitive has no
+    /// material must import as exactly ONE object — the synthetic
+    /// default-material entry — through the FULL production parse path
+    /// (`gltf_import_summary` → `assemble_import_graph`), not just the
+    /// graph-assembly half a synthetic `GltfImportSummary` would exercise.
+    /// Before D4 this asset errored "no materials with geometry — nothing
+    /// to import" (the geometry was silently uncounted).
+    #[test]
+    fn default_material_primitive_imports_as_one_object() {
+        let path = write_synthetic_default_material_glb();
+        let (def, report) = assemble_import_graph(&path).expect(
+            "a materialless-primitive glb must import via the D4 synthetic default material",
+        );
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(
+            report.object_count, 1,
+            "one materialless primitive must yield exactly one render_scene object (D4)"
+        );
+        assert_eq!(report.default_material_vertex_count, 3, "the one triangle's 3 vertices");
+
+        // The synthetic object's mesh source must carry the D4 sentinel
+        // param, not a real (or the colliding "unset") material_index.
+        // gltf_mesh_source lives inside the object's group box until load
+        // time flattening — same pattern every other nested-node assertion
+        // in this test module uses.
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import graph");
+        let mesh_node = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.gltf_mesh_source")
+            .expect("flattened graph has a gltf_mesh_source node");
+        assert_eq!(
+            mesh_node.params.get("material_index"),
+            Some(&int(super::gltf_load::DEFAULT_MATERIAL_MESH_PARAM)),
+            "the synthetic object's mesh source must select via the D4 sentinel, not a real \
+             material index or the -1 'unset' value"
+        );
+
+        // Structural gate: compiles through the real registry.
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry, None)
+            .expect("materialless-primitive import graph must compile through PresetRuntime::from_def");
+    }
+
     /// GLB_CONFORMANCE_DESIGN.md D4's card-curation half, plus the standard
     /// §5 round-trip rule (imports serialize — same pattern as
     /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`): 20
@@ -1979,12 +2256,34 @@ mod tests {
             occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
+            mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -2167,12 +2466,34 @@ mod tests {
             occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
+            mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         }
     }
 
@@ -2359,12 +2680,15 @@ mod tests {
             Some(&enum_val(2)),
             "transmission/BLEND material must map to alpha_mode Blend (2)"
         );
-        // base_color.a (1.0) * (1 - transmission_factor 0.9) = 0.1
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: color_a is base_color.a
+        // alone now (1.0) — transmission's see-through is carried by
+        // fs_pbr's shader-side diffuse substitution, not by darkened alpha
+        // (the old D8/F-P5 approximation this phase removes).
         let color_a = mat.params.get("color_a").expect("color_a set");
         match color_a {
             SerializedParamValue::Float { value } => assert!(
-                (value - 0.1).abs() < 1e-4,
-                "color_a must fold the transmission formula, got {value}"
+                (value - 1.0).abs() < 1e-4,
+                "color_a must equal base_color.a unchanged, got {value}"
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
@@ -2594,12 +2918,34 @@ mod tests {
             occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
             uv_tex_coord_override: false,
+            mr_texture_is_gloss_alpha: false,
             transmission_factor: 0.0,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             clearcoat_has_texture: false,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            sheen_has_texture: false,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            iridescence_has_texture: false,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            anisotropy_has_texture: false,
+            dispersion: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance: super::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_has_texture: false,
             was_blend: false,
             vertex_count: verts,
+            base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
+            emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],

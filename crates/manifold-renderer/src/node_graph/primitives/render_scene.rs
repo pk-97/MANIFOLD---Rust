@@ -74,7 +74,7 @@ use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
     EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
 };
-use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
+use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
@@ -341,16 +341,53 @@ struct RenderSceneUniforms {
     /// matrix. Same always-present / first-frame-seeded rule as
     /// `prev_view_proj`.
     prev_model: [[f32; 4]; 4],
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: single aligned block,
+    /// grown ONCE here, sized for ALL FIVE families the design phases in
+    /// (sheen, iridescence, anisotropy, dispersion, transmission+volume) —
+    /// E2-E6 only fill/read these fields, they never grow the struct
+    /// again. Every default reproduces glTF's own implicit default
+    /// (0.0/neutral), so every existing asset is byte-identical until a
+    /// later phase's shader change reads a non-default value.
+    /// `KHR_materials_sheen`: `xyz` = `sheenColorFactor` (default
+    /// `[0,0,0]`, inert), `w` = `sheenRoughnessFactor` (default `0.0`).
+    sheen_params: [f32; 4],
+    /// `KHR_materials_iridescence`: `x` = `iridescenceFactor` (default
+    /// `0.0`, inert), `y` = `iridescenceIor` (default `1.3`), `z` =
+    /// `iridescenceThicknessMinimum` (default `100.0` nm), `w` =
+    /// `iridescenceThicknessMaximum` (default `400.0` nm).
+    iridescence_params: [f32; 4],
+    /// `KHR_materials_anisotropy`'s `anisotropyStrength` (`x`, default
+    /// `0.0`) + `anisotropyRotation` (`y`, default `0.0` rad) — only 2 of
+    /// 4 floats, so `KHR_materials_dispersion`'s single factor (`z`,
+    /// default `0.0`) shares this vec4 rather than costing its own
+    /// (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1's explicit packing call).
+    /// `w` reserved.
+    anisotropy_dispersion_params: [f32; 4],
+    /// `KHR_materials_transmission`'s `transmissionFactor` (`x`, default
+    /// `0.0`) + `KHR_materials_volume`'s `thicknessFactor` (`y`, default
+    /// `0.0`) and `attenuationDistance` (`z`, default the finite
+    /// `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION` sentinel —
+    /// `gltf_load.rs`: glTF's own `+infinity` default isn't
+    /// `serde_json`-safe). `w` reserved.
+    transmission_volume_params: [f32; 4],
+    /// `KHR_materials_volume`'s `attenuationColor` (`xyz`, default
+    /// `[1,1,1]` — neutral). `w` reserved.
+    volume_attenuation_color: [f32; 4],
 }
 
-// 656 = 41 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
+// 736 = 46 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
 // GLB_CONFORMANCE_DESIGN.md G-P4/D5: `pbr_specular_tint` + five per-map
 // `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
 // `ior`/`specular_factor` rode existing reserved slots on
 // `pbr_metallic_roughness` instead of growing the struct). Still 656 after
 // G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
-// reserved slots — no struct growth.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 656);
+// reserved slots — no struct growth. Now 736 after
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2: five new vec4s
+// (`sheen_params`/`iridescence_params`/`anisotropy_dispersion_params`/
+// `transmission_volume_params`/`volume_attenuation_color`, +80 bytes) —
+// ONE migration sized for all five families this doc's phases add, per
+// D2 (never grown again per-family).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 736);
 
 /// Per-(caster, object) uniform for the shadow depth pass
 /// (`shaders/shadow_depth.wgsl`). The vertex shader composes
@@ -416,10 +453,17 @@ pub struct RenderScene {
     prev_view_proj: Option<[[f32; 4]; 4]>,
     dummy_texture: Option<manifold_gpu::GpuTexture>,
     sampler: Option<manifold_gpu::GpuSampler>,
-    /// Material-map sampler (binding 22) — REPEAT both axes, the glTF
-    /// default. See `ensure_sampler` for why it must not share the
-    /// envmap's clamp-V sampler.
-    material_sampler: Option<manifold_gpu::GpuSampler>,
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family material samplers
+    /// (bindings 22..26), keyed by [`sampler_cache_key`] — one entry per
+    /// DISTINCT `MapSamplerDesc` seen so far, not per object or per family
+    /// (most scenes share the same wrap/filter settings across every
+    /// object, so this stays a handful of entries even in a 53-object
+    /// scene). Metal sampler objects are trivially cheap to create; this
+    /// cache exists only to avoid re-creating the same one every frame.
+    /// Replaces the single hardcoded-REPEAT `material_sampler` (landed
+    /// `85b5bb9d` — fixed the striped-helmet smear; see `ensure_material_sampler`
+    /// for why the new per-family default still can't reintroduce it).
+    material_samplers: AHashMap<u32, manifold_gpu::GpuSampler>,
     /// Ring of per-frame light storage buffers (see [`FRAMES_IN_FLIGHT`]).
     /// Grown on demand; rotated each `evaluate` so a frame's write never
     /// lands on a buffer an in-flight frame is still reading.
@@ -496,6 +540,29 @@ pub struct RenderScene {
     ibl_prefilter_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_irradiance_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_brdf_lut_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: single-sample snapshot of the
+    /// fully-shaded opaque scene, blitted from `target` right after Pass A
+    /// ends — the seam a later transmissive Pass B (E2b) samples to see
+    /// "everything opaque behind this glass". `None` until a frame draws at
+    /// least one `Blend` object with `transmission_factor > 0` — a
+    /// zero-transmission scene never allocates this (same lazy-creation
+    /// contract as `shaft_inscatter` above).
+    opaque_scene_color: Option<manifold_gpu::GpuTexture>,
+    opaque_scene_color_width: u32,
+    opaque_scene_color_height: u32,
+    opaque_scene_color_format: manifold_gpu::GpuTextureFormat,
+    /// E2a: real single-sample `Depth32Float` snapshot of the opaque
+    /// group's depth, populated by a dedicated camera-space depth-only
+    /// prepass (reuses `shadow_pipeline`, fed the camera's `view_proj`
+    /// instead of a light's) so Pass B can depth-test against it as an
+    /// actual Metal depth ATTACHMENT. The existing MSAA pass's
+    /// `depth_resolve` mechanism (`R32Float`) can't serve this: `R32Float`
+    /// is a legal depth *resolve* destination but not a legal depth-
+    /// ATTACHMENT pixel format. `None` when no transmissive object is in
+    /// the scene this frame.
+    opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
+    opaque_depth_snapshot_width: u32,
+    opaque_depth_snapshot_height: u32,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -565,7 +632,7 @@ impl RenderScene {
             prev_view_proj: None,
             dummy_texture: None,
             sampler: None,
-            material_sampler: None,
+            material_samplers: AHashMap::default(),
             light_buffers: Vec::new(),
             light_frame: 0,
             light_capacity: 0,
@@ -585,6 +652,13 @@ impl RenderScene {
             shaft_downsample_pipeline: None,
             shaft_march_pipeline: None,
             shaft_composite_pipeline: None,
+            opaque_scene_color: None,
+            opaque_scene_color_width: 0,
+            opaque_scene_color_height: 0,
+            opaque_scene_color_format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            opaque_depth_snapshot: None,
+            opaque_depth_snapshot_width: 0,
+            opaque_depth_snapshot_height: 0,
             prefiltered_specular: None,
             irradiance_map: None,
             brdf_lut: None,
@@ -808,28 +882,61 @@ impl RenderScene {
                 ..Default::default()
             }));
         }
-        // Material-map sampler (binding 22): REPEAT on both axes — the glTF
-        // default sampler. Assets author UVs outside [0,1] freely (the
-        // DamagedHelmet fixture's V range is [1.0, 2.0]); clamping smears
-        // the texture's edge row across the whole mesh (the 2026-07-15
-        // striped-helmet bug — the five map resolves shared the envmap's
-        // clamp-V sampler, which is correct only for equirect poles).
-        if self.material_sampler.is_none() {
-            self.material_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: pack a `MapSamplerDesc` into a small
+    /// dense key for the `material_samplers` cache. `GpuAddressMode`/
+    /// `GpuFilterMode` don't derive `Hash` (foreign types in `manifold-gpu`,
+    /// not worth adding a derive there for one call site) — a hand-rolled
+    /// 4-variant/2-variant discriminant packs into 3 bits, well inside a u32.
+    fn sampler_cache_key(desc: MapSamplerDesc) -> u32 {
+        fn addr_code(a: manifold_gpu::GpuAddressMode) -> u32 {
+            match a {
+                manifold_gpu::GpuAddressMode::ClampToEdge => 0,
+                manifold_gpu::GpuAddressMode::Repeat => 1,
+                manifold_gpu::GpuAddressMode::MirrorRepeat => 2,
+                manifold_gpu::GpuAddressMode::ClampToZero => 3,
+            }
+        }
+        fn filter_code(f: manifold_gpu::GpuFilterMode) -> u32 {
+            match f {
+                manifold_gpu::GpuFilterMode::Nearest => 0,
+                manifold_gpu::GpuFilterMode::Linear => 1,
+            }
+        }
+        addr_code(desc.wrap_u)
+            | (addr_code(desc.wrap_v) << 2)
+            | (filter_code(desc.mag_filter) << 4)
+            | (filter_code(desc.min_filter) << 5)
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure a cached sampler exists for
+    /// `desc`, creating it on first sight. Replaces the single hardcoded
+    /// REPEAT material-map sampler (binding 22, landed `85b5bb9d`) — but
+    /// `MapSamplerDesc::default()` (an unwired map, or a glTF texture with
+    /// no explicit `sampler` index) still resolves to REPEAT+linear, so
+    /// every asset that never sets these fields (every pre-D3 passing
+    /// asset, plus DamagedHelmet's UV range [1.0, 2.0] that motivated the
+    /// original fix) gets byte-identical sampler behavior to before this
+    /// phase — the striped-helmet regression `85b5bb9d` fixed stays fixed.
+    fn ensure_material_sampler(&mut self, device: &manifold_gpu::GpuDevice, desc: MapSamplerDesc) {
+        let key = Self::sampler_cache_key(desc);
+        self.material_samplers.entry(key).or_insert_with(|| {
+            device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                mag_filter: desc.mag_filter,
+                min_filter: desc.min_filter,
                 mip_filter: manifold_gpu::GpuFilterMode::Linear,
-                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
-                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_u: desc.wrap_u,
+                address_mode_v: desc.wrap_v,
                 address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
                 compare: None,
                 // Anisotropic filtering (D7, GLB_CONFORMANCE G-P3): glancing-angle
                 // minification on grazing surfaces (floors, the AMG's paint) stays
-                // sharp instead of over-blurring. Material sampler only — every
+                // sharp instead of over-blurring. Material samplers only — every
                 // other sampler in this file keeps the field's default (1).
                 max_anisotropy: 8,
-            }));
-        }
+            })
+        });
     }
 
     fn ensure_dummy_texture(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -1003,6 +1110,74 @@ impl RenderScene {
         }));
         self.shaft_depth_internal_width = width;
         self.shaft_depth_internal_height = height;
+    }
+
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a/E2b: (re)allocate the opaque-
+    /// scene color snapshot when size or format changed. `SHADER_READ` only
+    /// — it is populated by a blit (`copy_texture_to_texture`, level 0 only)
+    /// then mip-generated (`GpuEncoder::generate_mipmaps`, the same hardware
+    /// blit-encoder path `node.gltf_texture_source` uses for its material
+    /// maps, F-P6 precedent) — never a render pass, so it needs no
+    /// `RENDER_TARGET` bit. `format` mirrors whatever the graph's own
+    /// `color` output texture is using this frame (read live from
+    /// `target.format` at the call site) so the blit's mandatory
+    /// same-format assert can never trip on a future output-format change.
+    /// E2b: full mip chain (`max_mip_levels`) so `fs_pbr`'s roughness-driven
+    /// refraction blur has levels to sample — level 0 alone (E2a) only
+    /// proved the pass seam, not the blur.
+    fn ensure_opaque_scene_color(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+        format: manifold_gpu::GpuTextureFormat,
+    ) {
+        if self.opaque_scene_color_width == width
+            && self.opaque_scene_color_height == height
+            && self.opaque_scene_color_format == format
+            && self.opaque_scene_color.is_some()
+        {
+            return;
+        }
+        self.opaque_scene_color = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "node.render_scene opaque scene color (E2b transmission snapshot)",
+            mip_levels: manifold_gpu::GpuTextureDesc::max_mip_levels(width, height),
+        }));
+        self.opaque_scene_color_width = width;
+        self.opaque_scene_color_height = height;
+        self.opaque_scene_color_format = format;
+    }
+
+    /// E2a: (re)allocate the real single-sample `Depth32Float` opaque-depth
+    /// snapshot Pass B depth-tests against. `RENDER_TARGET` only — it is
+    /// written by a depth-only render pass and never sampled (E2a proves
+    /// only the depth-test plumbing; nothing reads this texture in a
+    /// shader this phase).
+    fn ensure_opaque_depth_snapshot(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        if self.opaque_depth_snapshot_width == width
+            && self.opaque_depth_snapshot_height == height
+            && self.opaque_depth_snapshot.is_some()
+        {
+            return;
+        }
+        self.opaque_depth_snapshot = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Depth32Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
+            label: "node.render_scene opaque depth snapshot (E2a)",
+            mip_levels: 1,
+        }));
+        self.opaque_depth_snapshot_width = width;
+        self.opaque_depth_snapshot_height = height;
     }
 
     /// VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): ensure the three internal
@@ -1688,6 +1863,38 @@ fn build_uniforms(
         ],
         prev_view_proj,
         prev_model,
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1/D2 — see the struct's field
+        // doc comments for the packing rationale.
+        sheen_params: [
+            material.sheen_color_factor[0],
+            material.sheen_color_factor[1],
+            material.sheen_color_factor[2],
+            material.sheen_roughness_factor,
+        ],
+        iridescence_params: [
+            material.iridescence_factor,
+            material.iridescence_ior,
+            material.iridescence_thickness_minimum,
+            material.iridescence_thickness_maximum,
+        ],
+        anisotropy_dispersion_params: [
+            material.anisotropy_strength,
+            material.anisotropy_rotation,
+            material.dispersion,
+            0.0,
+        ],
+        transmission_volume_params: [
+            material.transmission_factor,
+            material.volume_thickness_factor,
+            material.volume_attenuation_distance,
+            0.0,
+        ],
+        volume_attenuation_color: [
+            material.volume_attenuation_color[0],
+            material.volume_attenuation_color[1],
+            material.volume_attenuation_color[2],
+            0.0,
+        ],
     }
 }
 
@@ -1914,6 +2121,14 @@ impl EffectNode for RenderScene {
             mr_map: Option<&'ctx manifold_gpu::GpuTexture>,
             occlusion_map: Option<&'ctx manifold_gpu::GpuTexture>,
             emissive_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
+            /// sampler settings, order `[base_color, normal, mr, occlusion,
+            /// emissive]` — matches `binding_sets`' 22..26 slot order below.
+            /// Resolved to actual `&GpuSampler`s in Pass 2 via
+            /// `ensure_material_sampler` (ensured for every draw in the
+            /// "Ensure cached GPU resources" block, so the Pass-2 cache
+            /// lookup can never miss).
+            sampler_descs: [MapSamplerDesc; 5],
             /// Wired `instances_n` buffer, or `None` (unwired — bind the
             /// identity stub at draw time; see `identity_instance_stub`).
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
@@ -1933,11 +2148,24 @@ impl EffectNode for RenderScene {
             /// the camera along its forward axis. Used only to order the
             /// Blend group back-to-front; unread for Opaque/Mask objects.
             sort_depth: f32,
+            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
+            /// Pass B AND wants the opaque-scene-color snapshot bound at
+            /// @binding(27) (`Blend` + `transmission_factor > 0`). Every
+            /// other draw binds the 1×1 dummy there instead — same always-
+            /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
+            is_transmissive: bool,
         }
 
         let instance_size = std::mem::size_of::<InstanceTransform>() as u64;
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(objects);
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the sole CPU gate for the
+        // Pass A/B split below. Only `Blend` objects ever reach Pass B
+        // (`is_glass` in `gltf_import.rs` always routes a nonzero
+        // `transmission_factor` to `Blend` alpha mode, so this condition and
+        // "blend_draw_calls is non-empty" are the same fact) — checking both
+        // here keeps that invariant explicit rather than assumed.
+        let mut has_transmission = false;
 
         for n in 0..objects {
             // Per-object port/param names, generated once (no static
@@ -2030,8 +2258,23 @@ impl EffectNode for RenderScene {
                 uniforms.texture_flags2[2] = 1.0; // z = emissive_map present (resolve_emissive's gate)
             }
 
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
+            // still in scope (it's consumed by `build_uniforms` above by
+            // reference, still live here).
+            let sampler_descs = [
+                material.base_color_sampler,
+                material.normal_sampler,
+                material.mr_sampler,
+                material.occlusion_sampler,
+                material.emissive_sampler,
+            ];
+
             let alpha_mode = material.alpha_mode;
             let is_blend = alpha_mode == AlphaMode::Blend;
+            let is_transmissive = is_blend && material.transmission_factor > 0.0;
+            if is_transmissive {
+                has_transmission = true;
+            }
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
                 self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
@@ -2064,16 +2307,27 @@ impl EffectNode for RenderScene {
                 mr_map,
                 occlusion_map,
                 emissive_map,
+                sampler_descs,
                 instances,
                 instance_count,
                 alpha_mode,
                 sort_depth,
+                is_transmissive,
             });
         }
 
         if draws.is_empty() {
             return;
         }
+
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: peek `color`'s format
+        // (idempotent lookup, already called multiple times elsewhere in
+        // this fn — see the magenta-clear error paths above) BEFORE the
+        // `gpu_encoder()` block below, whose live `&mut GpuEncoder` borrows
+        // `ctx` for the whole block and would conflict with a `ctx.outputs`
+        // access from inside it.
+        let opaque_scene_color_target_format =
+            has_transmission.then(|| ctx.outputs.texture_2d("color").map(|t| t.format)).flatten();
 
         // ---- Ensure cached GPU resources (mutable phase). ----
         let has_casters = !casters.is_empty();
@@ -2106,6 +2360,15 @@ impl EffectNode for RenderScene {
                 self.ensure_velocity_msaa_target(gpu.device, width, height);
             }
             self.ensure_sampler(gpu.device);
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D3: ensure every distinct
+            // per-map-family sampler this frame's draws need. Runs before
+            // Pass 2 builds `binding_sets`, so every lookup there is
+            // guaranteed a cache hit.
+            for draw in &draws {
+                for desc in draw.sampler_descs {
+                    self.ensure_material_sampler(gpu.device, desc);
+                }
+            }
             self.ensure_dummy_texture(gpu.device);
             // IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL resources —
             // always ensured (fixed size, allocated once) so
@@ -2125,6 +2388,25 @@ impl EffectNode for RenderScene {
                 self.ensure_shadow_pass(gpu.device);
                 for (slot, l) in casters.iter().enumerate() {
                     self.ensure_shadow_map(gpu.device, slot, l.shadow_resolution);
+                }
+            } else if has_transmission {
+                // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the transmissive
+                // opaque-depth prepass below reuses `shadow_pipeline` (a
+                // depth-only pipeline fed the camera's `view_proj` instead
+                // of a light's) even when there are zero shadow casters.
+                self.ensure_shadow_pass(gpu.device);
+            }
+            // E2a: allocate the Depth32Float snapshot Pass B depth-tests
+            // against, plus the opaque-scene-color snapshot itself. Both
+            // must happen HERE (this block's `{ let gpu = ... }` scope,
+            // before `identity_stub` and friends take long-lived immutable
+            // borrows of `self` below) — the same `&mut self` ensure calls
+            // deferred to right before Pass 2 fetches `target` (the natural
+            // place otherwise) would conflict with those borrows under NLL.
+            if has_transmission {
+                self.ensure_opaque_depth_snapshot(gpu.device, width, height);
+                if let Some(format) = opaque_scene_color_target_format {
+                    self.ensure_opaque_scene_color(gpu.device, width, height, format);
                 }
             }
             // VOLUMETRIC_LIGHT_DESIGN.md D1/D3 (P2): the whole feature's
@@ -2249,6 +2531,72 @@ impl EffectNode for RenderScene {
             }
         }
 
+        // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: opaque-only camera-
+        // space depth prepass into `opaque_depth_snapshot`, so Pass B (the
+        // transmissive/blend group, drawn after Pass A below resolves) can
+        // depth-test against Pass A's result as a real Metal depth
+        // ATTACHMENT. Reuses `shadow_pipeline`/`shadow_depth_stencil` (a
+        // depth-only pipeline + write-enabled-Less state), fed the CAMERA's
+        // `view_proj` instead of a light's — same draw set as Pass A's
+        // opaque/mask group (`shadow_caster_draws` already excludes Blend).
+        // Skipped entirely when the scene has no transmissive object
+        // (zero-transmission = zero extra passes, same lazy contract as the
+        // shaft/velocity features above). ----
+        if has_transmission {
+            let opaque_depth_pipeline = self.shadow_pipeline.as_ref().expect("ensured above").clone();
+            let opaque_depth_ds = self.shadow_depth_stencil.as_ref().expect("ensured above");
+            let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+            let cam_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
+                .iter()
+                .map(|d| ShadowUniforms {
+                    light_view_proj: view_proj,
+                    model: d.uniforms.model,
+                })
+                .collect();
+            let cam_bindings: Vec<[GpuBinding; 3]> = shadow_caster_draws
+                .iter()
+                .zip(&cam_uniforms)
+                .map(|(d, su)| {
+                    [
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(su),
+                        },
+                        GpuBinding::Buffer {
+                            binding: 1,
+                            buffer: d.vertices,
+                            offset: 0,
+                        },
+                        GpuBinding::Buffer {
+                            binding: 2,
+                            buffer: d.instances.unwrap_or(identity_stub),
+                            offset: 0,
+                        },
+                    ]
+                })
+                .collect();
+            let cam_draws: Vec<manifold_gpu::DepthMsaaDraw> = shadow_caster_draws
+                .iter()
+                .zip(&cam_bindings)
+                .map(|(d, b)| {
+                    manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        &opaque_depth_pipeline,
+                        b,
+                        vcount(d.vertices),
+                        d.instance_count,
+                    )
+                })
+                .collect();
+            ctx.gpu_encoder()
+                .native_enc
+                .draw_instanced_depth_only_batch(
+                    opaque_depth_snapshot,
+                    opaque_depth_ds,
+                    &cam_draws,
+                    "node.render_scene E2a opaque depth snapshot",
+                );
+        }
+
         // ---- Pass 2 (immutable phase): draw. Every object composites into
         // ONE 4x-MSAA color+depth pass (cleared once); the shared depth
         // buffer resolves inter-object occlusion, and the pass resolves out
@@ -2256,6 +2604,10 @@ impl EffectNode for RenderScene {
         let Some(target) = ctx.outputs.texture_2d("color") else {
             return;
         };
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `opaque_scene_color` was
+        // already (re)allocated above, sized to this exact `target`'s
+        // format — see `opaque_scene_color_target_format`'s doc comment for
+        // why that ensure call has to happen before this point.
         // GBUFFER_DESIGN.md §2 D1: `None` when unwired — the graph compiler
         // never assigns "depth" a step-output binding in that case (same
         // lazy mechanism as `render_mesh`'s G-buffer outputs), so this pass
@@ -2277,7 +2629,15 @@ impl EffectNode for RenderScene {
         let depth_tex = self.depth_texture.as_ref().expect("just inserted");
         let msaa_color = self.msaa_color.as_ref().expect("just inserted");
         let sampler = self.sampler.as_ref().expect("just inserted");
-        let material_sampler = self.material_sampler.as_ref().expect("just inserted");
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-draw, per-map-family sampler
+        // lookup — every descriptor was ensured into the cache above, so
+        // this is a guaranteed hit, never a fallback/dummy.
+        let material_samplers = &self.material_samplers;
+        let sampler_for = |desc: MapSamplerDesc| -> &manifold_gpu::GpuSampler {
+            material_samplers
+                .get(&Self::sampler_cache_key(desc))
+                .expect("ensured in the 'Ensure cached GPU resources' block above")
+        };
         let dummy = self.dummy_texture.as_ref().expect("just inserted");
         let shadow_sampler = self.shadow_sampler.as_ref().expect("stubs ensured");
         let dummy_depth = self.dummy_depth.as_ref().expect("stubs ensured");
@@ -2322,7 +2682,13 @@ impl EffectNode for RenderScene {
         let prefiltered_specular = self.prefiltered_specular.as_ref().expect("ensured");
         let irradiance_map = self.irradiance_map.as_ref().expect("ensured");
         let brdf_lut = self.brdf_lut.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 23]> = draws
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: `None` whenever
+        // `has_transmission` is false — nothing below reads it in that case
+        // (`draw.is_transmissive` can only be true when `has_transmission`
+        // is), but the option lets the same closure serve both cases
+        // without a branch on `has_transmission` itself.
+        let opaque_scene_color_snapshot = self.opaque_scene_color.as_ref();
+        let binding_sets: Vec<[GpuBinding; 29]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2440,11 +2806,48 @@ impl EffectNode for RenderScene {
                         binding: 21,
                         texture: draw.emissive_map.unwrap_or(dummy),
                     },
-                    // Material-map sampler — REPEAT both axes (glTF default);
-                    // see ensure_sampler.
+                    // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family
+                    // samplers, one per texture family — no longer one
+                    // scene-wide REPEAT sampler. Order matches
+                    // `ObjectDraw::sampler_descs` / `Material`'s field order.
                     GpuBinding::Sampler {
                         binding: 22,
-                        sampler: material_sampler,
+                        sampler: sampler_for(draw.sampler_descs[0]), // base_color
+                    },
+                    GpuBinding::Sampler {
+                        binding: 23,
+                        sampler: sampler_for(draw.sampler_descs[1]), // normal
+                    },
+                    GpuBinding::Sampler {
+                        binding: 24,
+                        sampler: sampler_for(draw.sampler_descs[2]), // mr
+                    },
+                    GpuBinding::Sampler {
+                        binding: 25,
+                        sampler: sampler_for(draw.sampler_descs[3]), // occlusion
+                    },
+                    GpuBinding::Sampler {
+                        binding: 26,
+                        sampler: sampler_for(draw.sampler_descs[4]), // emissive
+                    },
+                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: opaque-scene-
+                    // color snapshot — bound for real only on the object
+                    // that will actually sample it (E2b), the 1×1 dummy for
+                    // everything else. Declared in the WGSL (pipeline-layout
+                    // correctness) but not yet read by `fs_pbr` this phase —
+                    // no shading change.
+                    GpuBinding::Texture {
+                        binding: 27,
+                        texture: if draw.is_transmissive {
+                            opaque_scene_color_snapshot
+                                .expect("ensured above whenever any draw.is_transmissive is true")
+                        } else {
+                            dummy
+                        },
+                    },
+                    GpuBinding::Sampler {
+                        binding: 28,
+                        sampler,
                     },
                 ]
             })
@@ -2476,7 +2879,18 @@ impl EffectNode for RenderScene {
         blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         let blend_draw_calls: Vec<manifold_gpu::DepthMsaaDraw> =
             blend_entries.into_iter().map(|(_, call)| call).collect();
-        let second_pass = if blend_draw_calls.is_empty() {
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: when the scene has a
+        // transmissive object, the Blend group is pulled OUT of Pass A
+        // entirely and drawn as a separate Pass B below (after the opaque-
+        // color snapshot blit) instead of as Pass A's in-pass `second_pass`
+        // group — memoryless `msaa_color`/`msaa_depth` cannot survive past
+        // Pass A's end, so a transmissive fragment can only sample "the
+        // scene behind it" from a real resolved snapshot taken between the
+        // two passes. A zero-transmission scene (`has_transmission ==
+        // false`, the overwhelming common case) takes the exact `second_pass
+        // = Some(...)` path unchanged from before this phase — byte-
+        // identical single pass, same as today.
+        let second_pass = if has_transmission || blend_draw_calls.is_empty() {
             None
         } else {
             Some((
@@ -2519,6 +2933,50 @@ impl EffectNode for RenderScene {
         ctx.gpu_encoder()
             .native_enc
             .draw_instanced_depth_msaa_batch_desc(&pass_desc, &draw_calls, "node.render_scene");
+
+        // ---- GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the snapshot + Pass B
+        // seam. Pass A above just resolved the fully-shaded opaque scene
+        // into `target`; blit it into `opaque_scene_color` (the texture an
+        // E2b transmissive shader will sample), then draw the Blend group
+        // as its own single-sample pass, loading (not clearing) both
+        // `target`'s color and `opaque_depth_snapshot`'s depth so it
+        // composites onto Pass A's result and depth-tests against it. No
+        // MSAA on this pass (`docs/GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E2a
+        // brief D3/E2a note: memoryless MSAA color can't be re-loaded across
+        // a pass boundary, and a non-memoryless MSAA target would cost real
+        // VRAM gated only on this — see the confessed-shortcuts field in
+        // this phase's landing report for why single-sample was chosen).
+        // Entirely skipped when `has_transmission` is false — zero bytes,
+        // zero passes, zero behavior change for every scene without glass. ----
+        if has_transmission {
+            let opaque_scene_color = self.opaque_scene_color.as_ref().expect("ensured above");
+            let opaque_depth_snapshot = self.opaque_depth_snapshot.as_ref().expect("ensured above");
+            let blend_depth_stencil = self.blend_depth_stencil.as_ref().expect("ensured");
+            let gpu = ctx.gpu_encoder();
+            gpu.native_enc
+                .copy_texture_to_texture(target, opaque_scene_color, width, height, 1);
+            // E2b: level 0 is fresh from the blit above; levels 1.. are
+            // stale until regenerated (same "regen on every write" rule
+            // `node.gltf_texture_source` step 8 follows) — `fs_pbr`'s
+            // roughness-driven refraction blur samples this chain, so it
+            // must be current EVERY frame the snapshot is retaken (unlike a
+            // static imported texture, this content changes every frame the
+            // camera or scene moves).
+            if opaque_scene_color.mip_level_count() > 1 {
+                gpu.native_enc.generate_mipmaps(opaque_scene_color);
+            }
+            if !blend_draw_calls.is_empty() {
+                gpu.native_enc.draw_instanced_depth_batch(
+                    target,
+                    opaque_depth_snapshot,
+                    blend_depth_stencil,
+                    &blend_draw_calls,
+                    manifold_gpu::GpuLoadAction::Load,
+                    manifold_gpu::GpuLoadAction::Load,
+                    "node.render_scene E2a transmissive pass B",
+                );
+            }
+        }
 
         // ---- VOLUMETRIC_LIGHT_DESIGN.md D2/D3 (P2): light-shaft march +
         // depth-aware bilateral upsample + additive composite. Runs ONLY
