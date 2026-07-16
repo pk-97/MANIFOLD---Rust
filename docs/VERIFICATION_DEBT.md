@@ -52,36 +52,6 @@ at the value level and reachable headless or via a short manual run — none nee
 **Burn down:** the wave's own click-script (in the landing report) is exactly this — three short
 manual checks, ≤2 minutes total.
 
-### VD-026 — AUDIO_SETUP_DOCK P7: tap-follow + band dimming has no L3 flow and no live full-pipeline PNG
-Landed 2026-07-11 (`docs/landings/2026-07-11-audio-dock-p7.md`). The phase's own gate asked for an
-L3 ui-flow (expand a trigger drawer on send B while the panel shows send A ⇒ tap command for B;
-collapse ⇒ restored) and a headless PNG of the dimmed scope with a Low-band trigger open — neither
-is reachable in this sandbox. The L3 flow needs a `scripts/ui-flows/` interact verb for
-arming/expanding an audio-mod drawer, which doesn't exist yet (none of `select`/`collapse`/
-`collapse_effect` reach it). The live-dim PNG needs the VQT waterfall itself producing pixels
-(`content_num_bins > 0`, real audio), which is the same live-audio-device gap VD-025 already names
-for the waterfall's own render path — dimming rides the identical shader pass, so it inherits the
-identical gap. **What IS verified:** the selection logic (`open_fire_mode_drawer_send`/`_band`,
-`crates/manifold-ui/src/panels/param_card.rs` tests) at the value level, and the shader's actual
-darkening math on the real Metal pipeline (`spectrogram::gpu_tests::
-dim_range_darkens_outside_the_kept_band_only`, `gpu-proofs`) — a stronger proof of the pixel math
-than a PNG would be, just not of the click-to-pixel round trip. **Burn down:** build the harness
-interact verb (co-owned with VD-024's sibling gap — AudioTriggerSection has no test module either,
-which is what makes hand-rolling a drawer-open fixture there costly right now), and confirm the
-live crossing + dim on Peter's rig alongside VD-025's burn-down (same soundcheck session covers
-both).
-
-### VD-025 — AUDIO_SETUP_DOCK P3c: fire-meter content-thread work never run through the live MANIFOLD_RENDER_TRACE
-Landed 2026-07-10 (`12fbc37d`; `docs/landings/2026-07-10-audio-dock-p3c.md`). The §5/BUG-035
-content-thread-work gate (any per-tick content-thread work → live `MANIFOLD_RENDER_TRACE=1`, no
-frame >20ms) was **not run live**: it needs the app with an audio device + GPU, absent in the
-build sandbox. Substituted an honest isolated measurement of exactly the new capture work (worst
-case 128 configs × 2000 iters): **0.19 µs/tick release, 13.14 µs/tick debug** — ~1500× under the
-20ms budget, and the work is bounded stack writes on a `Copy` struct (no heap). **Burn down:**
-launch `manifold` on a project with both a `LayerClipTrigger` and an armed `is_trigger_gate` param
-mod, audio playing, `MANIFOLD_RENDER_TRACE=1`, and confirm no frame regression — an L4 run for
-Peter/a machine with a device. Risk assessed negligible; carried, not blocking.
-
 ### VD-024 — AUDIO_SETUP_DOCK P3b: AudioTriggerSection has no unit-test module
 Landed 2026-07-10 (`5c4fbcca`; `docs/landings/2026-07-10-audio-dock-p3b.md`). The new
 `crates/manifold-ui/src/panels/audio_trigger_section.rs` lacks the `#[cfg(test)]` collapse/click
@@ -161,6 +131,9 @@ strips off/on, asserts + PNGs), and the in-app symptom is root-caused as an EXPO
 a wiring break: no UI path creates a first lane (AUTOMATION_LANES §7 chooser unbuilt), so
 LANES on a lane-less project visibly does nothing. See `docs/TIMELINE_UX_AUDIT_2026-07-07.md`
 §1. Peter's L4 residue narrows to: confirm LANES lights live + ARM-record a first lane.
+**2026-07-16 (Peter):** automation lanes still need substantial UI/UX work (the §7
+first-lane chooser among it) before the L4 confirm is meaningful — stays open, blocked
+on that UI/UX pass, not on a rig session.
 
 ### VD-002 — Preset library + picker P0–P6: interactive GUI matrix — L2 reached / L3 target — **driver-reach blocker REMOVED 2026-07-07**
 **07-07 update:** option (c) below shipped on `fix/timeline-ux-pass` — the `--script` driver
@@ -202,52 +175,6 @@ no albedo — see the separate `gltf_textured_azalea…` proof for the textured 
 exercised. **Fixtures are large** (lowe 43 MB, apricot 85 MB) and remain untracked — committing
 127 MB of binaries is Peter's call (recommend git-lfs or keep them as local held-out assets).
 
-### VD-016 — OFFLINE_AUDIO_REACTIVE_EXPORT: real-track export feel — L2 reached / L4 target
-Landed 2026-07-07 (`docs/landings/2026-07-07-offline-audio-reactive-export.md`). Audio-bound
-params now move in exported video, proven L2 by the `journey-proofs` harness (click-track
-luma ratio ~6.9× click-vs-gap, save→reload survives, two runs bit-identical in extracted
-frames) — but only on a synthetic click track and one generator param. Unobserved: a real
-master through the full band/floor/crossover settings Peter actually performs with, and
-whether the offline capture-substitution (capture-fed sends hear the timeline mix) reads
-correctly on a real project. Burn-down: Peter exports one real track with his usual bindings
-and watches it — the design doc's stated milestone ("Peter exports a real track and sees the
-pump"). One deliberate `cargo test -p manifold-app --features journey-proofs` per audio-path
-wave keeps the harness honest (needs ffmpeg/ffprobe on PATH).
-
-### VD-017 — DRAG_CAPTURE P2: audio-panel-over-timeline seam demo — L1 reached / L2 target
-Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p2.md`). The z-aware seam guard
-(`overlay_contains_point` blocking the split-handle/inspector-edge press when the Audio Setup
-panel floats over the timeline) is proven only by unit tests, including one that asserts the
-panel and split-handle actually overlap at today's constants before checking the guard. No
-headless PNG exists because no `scripts/ui-flows/` scene or snapshot fixture opens the Audio
-Setup panel positioned over the timeline, and the brief forbade inventing one. Burn-down:
-this collapses into the P3 L4 feel pass — Peter grabs a crossover line sitting over the
-timeline-split zone and confirms the line moves while the panels don't resize (the P2
-performer gesture). If a repeatable artifact is wanted, add an audio-panel-over-timeline
-snapshot scene in a later UI-fixtures pass.
-
-### VD-018 — DRAG_CAPTURE P2: SelfManaged overlay rect fidelity in `overlay_contains_point` — L1 / structural note
-Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p2.md`). `overlay_contains_point`
-tests the rect each overlay was *placed* at (`overlay_rects`, recorded in `build_overlays`),
-which is exact for anchored/sized overlays like the Audio Setup panel (the BUG-059 case) but a
-placeholder for the three `SelfManaged` overlays that draw their own footprint — dropdown,
-browser popup, Ableton device picker. The dropdown is hit-tested accurately *upstream* in
-`window_input`'s dropdown-dismiss branch (runs before the seam checks), so it is unaffected;
-the residual exposure is only a browser popup or Ableton picker positioned directly over the
-6px split band or 4px inspector edge, an unlikely layout. Burn-down: if a press-through bug
-surfaces there in practice, give `SelfManaged` overlays a real footprint query (the D5-Deferred
-§7 handle→widget-routing conversion also closes it). Not observed; carried.
-
-### VD-019 — DRAG_CAPTURE P3: band-divider immediate-drag feel — L1 reached / L4 target
-Landed 2026-07-08 (`docs/landings/2026-07-08-drag-capture-p3.md`). The zero-threshold
-immediate-drag path for the audio panel's band dividers is proven L1 — a unit test drives a
-`PointerDown`+1px `Move` on a divider and asserts `DragBegin` then `AudioCrossoverChanged`, and
-a companion test proves a 3px wiggle on a normal surface still resolves to a `Click` (global
-threshold untouched). What no test can reach is the feel: whether a ~2px crossover nudge tracks
-naturally under Peter's hand with no sticky first-pixel lag. Owed as the design's stated L4 —
-Peter nudges a crossover by ~2px live and confirms it tracks (D6 / §5 P3 performer gesture).
-Burn-down: Peter's feel pass on the band dividers; no repeatable artifact substitutes for it.
-
 ### VD-006 — BUG-026 batch-2 popup entrance-tween fix: running-app confirmation — L2 reached / L4 target
 Fix landed 2026-07-05 (commit `01c15213`) for the "no popup background until mouseover" bug —
 root-caused as a missing animation-poll (see BUG-026). Gate green (clippy; `manifold-ui --lib`
@@ -256,45 +183,6 @@ wall-clock, so it **cannot** exercise this timing bug. Burn-down: open the Add E
 the running app and confirm the dark background panel is present immediately, before moving the
 mouse (and that the fade-in reads smoothly). Peter owns this L4 observation.
 
-### VD-007 — PARAM_STORAGE P2 storage swap: GPU value-parity + live-app behavioural confirmation — L2 reached / L3 target
-Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p2.md`). The id-keyed apply path
-(`apply_bindings` resolving by `source_id` instead of a positional index) is covered by 34
-`param_binding` unit tests and the gpu-proofs suite COMPILES, but the GPU value-parity suite was
-not run (P2 touches no shader/kernel/uniform). The three production behavioural fixes the test-pass
-surfaced — revert-prunes-orphaned-user-params, calibration-reaches-the-renderer (D6),
-gen-type-undo-restores-exact-arity — are unit/integration-tested but not exercised in a running app.
-Burn-down: (a) `cargo test -p manifold-renderer --features gpu-proofs` for the GPU parity run;
-(b) the running-app click-script in the landing report. Peter owns the L3 live observation.
-
-### VD-008 — PARAM_STORAGE P3 transport topology guard: running-app confirmation — L2 reached / L4 target
-Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p3.md`). The transport bridge now stamps
-each modulation block with `ParamManifest::topology()` and skips a block on apply when the live
-topology no longer matches — closing the same-length-reorder misroute the old `len == len` guard
-missed. Covered at unit level by the two `content_state::modulation_topology_guard_tests` (the exact
-reorder-skip case + a control), but the *live* behaviour — a modulation display staying on the
-correct slider when a neighbour param is deleted mid-modulation — is not exercised in a running app
-(headless tests have no modulation loop / live UI). Burn-down: the running-app click-script in the
-landing report (LFO on a slider, delete a neighbour, confirm the display stays put). Peter owns the
-L4 observation. This is the one P3 gate step headless tooling cannot reach.
-
-### VD-009 — PARAM_STORAGE P4 Ableton/OSC by-id resolution: real-hardware round-trip — L2 reached / L3 target
-Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p4.md`). Both live-hardware input paths
-now resolve param mappings by manifest id against the live manifest, so user-added / glb-imported
-params are mappable (Ableton) and addressable (OSC) instead of being silently dropped. Unit-proven:
-the two repros, dispatch-by-id, and a guard that bundled OSC addresses are byte-identical to the old
-positional derivation. Not exercised with real hardware. Burn-down: (a) map an Ableton macro to a
-user-added / glb-generator param in the running app and confirm it moves; (b) send OSC to
-`/master/{prefix}/{user_param_id}` and confirm the param moves, and that a bundled param's existing
-address still lands byte-for-byte. Peter owns the L3 live observation.
-
-### VD-010 — PARAM_STORAGE P5 inspector single-source: angle-card degree readout in a running app — L2 reached / L4 target
-Landed 2026-07-05 (`docs/landings/2026-07-05-param-storage-p5-inspector.md`). `is_angle` now has a
-single home on the manifest spec; an exposed angle param's card is proven to carry the flag through
-the manifest + synth + JSON round-trip by unit test. Not observed rendering. Burn-down: in the graph
-editor expose an inner `ParamType::Angle` param (or load a glTF and open its camera-orbit/tilt/FOV
-card), confirm the card slider reads out `NN°` (not radians), and that a text edit round-trips
-degrees↔radians without drift. Peter owns the L4 live observation.
-
 ### VD-011 — AUDIO_SENDS_UX P1 per-send gating: trace-count run with real audio — L1 reached / L2 target
 Landed 2026-07-06 (`docs/landings/2026-07-06-audio-sends-ux.md`). The consumed-set walk is
 unit-proven (4 tests on `Project::analysis_consumed_sends`) and the per-send skip is in the tick
@@ -302,13 +190,6 @@ path, but the doc's own P1 gate — `MANIFOLD_AUDIO_TRACE=1`, 16 sends, one boun
 "analyzed 1 send(s)" (2 with the scope open) — needs a running app with a capture device. The
 instrument is shipped and env-gated. Burn-down: Peter (or a future L3 flow) runs the trace launch
 per the landing report's click-script step 5. Peter owns the L2 observation.
-
-### VD-012 — AUDIO_SENDS_UX P3 calibration drags: live feel + undo-step + no-capture-restart — L1/L2 reached / L4 target
-Landed 2026-07-06 (same landing report). Drag arm/commit sequences and the dB/fraction math are
-unit-proven (3 on_event tests); the layout and non-dim anchoring are PNG-verified (L2). Not
-observed: meter following a gain drag against live audio, absence of capture-restart glitch, and
-exactly one undo step per drag gesture — all inherently running-app. Burn-down: click-script step 4.
-Peter owns the L4 feel-pass; it is the acceptance gate for the panel per the wave brief.
 
 ### VD-013 — ABLETON_TRANSPORT_SYNC: closed-loop transport against real Ableton — L1 reached / L4 target
 Landed 2026-07-07 (`docs/landings/2026-07-07-ableton-transport-sync.md`). The state machine is
@@ -388,36 +269,55 @@ Containment makes bottom-scroll safe by construction (the region clip is uncondi
 demonstration gap, not a correctness one. Burn-down: fix BUG-076 (scroll estimator under-counts
 drawer-open card height), then re-run the flow to a true bottom and re-capture.
 
-### VD-020 — CINEMATIC_POST P5/P6 (GTAO + AO denoise): Peter's look-pass not yet run — L1 reached / L2 target
-Landed 2026-07-13 (`3e774a36`, AO-quality lane). Both phases are numerically proven (I7/I8's
-named gpu_tests, generated-vs-hand parity, the negative `ssao_from_depth` deletion gate, a
-migration round-trip test) and the orchestrating session reviewed before/after PNGs of
-`CinematicScene` for gross defects (none found — see the landing report) — but per the doc's
-§4 amended demo rule, an orchestrator PNG review is not a substitute for Peter's own verdict,
-and the doc says so explicitly. Burn-down: Peter looks at the two PNG pairs named in the
-landing report (or the live app) and confirms/rejects the look, especially GTAO's stated
-honest cost (thin-object over-darkening) on a real scene rather than the demo's flat plane.
-
-### VD-021 — GLB_CONFORMANCE G-P1+G-P2: Peter's look-pass on the AMG livery fix and card-curation UI not yet run — L2 reached / L4 target
-Landed 2026-07-15 (`909976d2`). G-P1's conformance harness is numerically proven (4 `expect_pass`
-checks green, goldens pinned at 2/255) and the orchestrating session viewed the DamagedHelmet
-render, the held-out BoomBox/AntiqueCamera renders, and the AMG GT3 before/after (body livery now
-renders silver/NASA instead of black — BUG-163 closed on this evidence). Per the doc's L2/L4
-distinction, an orchestrator PNG review is not Peter's own verdict. Also unverified: the card
-curation's UI surface (D4 — "the card shows 16 sliders, not 78" performer gesture) was proven only
-at the `card_params`/round-trip level (`card_curation_caps_at_16_but_wiring_and_round_trip_stay_1_to_1`,
-L1) — nobody has looked at the actual inspector panel on a >16-material import. Burn-down: Peter
-drops the AMG (or another many-material glb) into a set live and confirms (a) the body livery looks
-right, (b) the card shows exactly 16 sliders. Separately tracked, not blocking: BUG-165 (BoomBox
-held-out asset never converges — a genuine gap found by G-P1's held-out gate, triage owed) and the
-`TextureTransformTest` fixture gap (no glTF-Binary variant at the pinned commit — G-P4's problem).
-
 *(VD-001–004 seeded 2026-07-05 from the memory corpus plus Peter's in-app findings; VD-006 added
 2026-07-05, VD-007 at P2 landing, VD-008 at P3 landing, VD-009 at P4 landing, VD-010 at P5-inspector
 landing. VD-005 closed at P2 landing. The full backfill pass over recent landings is still owed and
 will extend this list.)*
 
 ## Closed
+
+**2026-07-16 burn-down (Peter's direction)** — the following owed live/look passes were
+waived wholesale: the surfaces ship as-is and anything found in use is filed as a new bug
+in `docs/BUG_BACKLOG.md`, not reopened here.
+
+### VD-026 — AUDIO_SETUP_DOCK P7 tap-follow + band-dim live confirm — CLOSED 2026-07-16 (waived)
+The missing L3 interact-verb infrastructure stays tracked via VD-024 (open).
+
+### VD-025 — AUDIO_SETUP_DOCK P3c fire-meter live RENDER_TRACE run — CLOSED 2026-07-16 (waived)
+Risk was already assessed negligible (0.19 µs/tick measured vs 20 ms budget); the live trace requirement is dropped.
+
+### VD-016 — OFFLINE_AUDIO_REACTIVE_EXPORT real-track export feel — CLOSED 2026-07-16 (waived)
+Duplicate-ID note: the PARAM_STEP_ACTIONS VD-016 remains OPEN — this closure is the OFFLINE_AUDIO_REACTIVE_EXPORT entry only.
+
+### VD-017 — DRAG_CAPTURE P2 audio-panel-over-timeline seam demo — CLOSED 2026-07-16 (waived)
+Duplicate-ID note: the PARAM_STEP_ACTIONS VD-017 remains OPEN.
+
+### VD-018 — DRAG_CAPTURE P2 SelfManaged overlay rect fidelity — CLOSED 2026-07-16
+Its own burn-down was already "file a bug if a press-through ever surfaces" — that is now the standing rule, so the entry closes. Duplicate-ID note: the UI_CLIP_AND_Z VD-018 remains OPEN.
+
+### VD-019 — DRAG_CAPTURE P3 band-divider immediate-drag feel — CLOSED 2026-07-16 (waived)
+Duplicate-ID note: the UI_CLIP_AND_Z VD-019 remains OPEN.
+
+### VD-007 — PARAM_STORAGE P2 storage-swap live confirmation — CLOSED 2026-07-16 (waived)
+Subsumed into Peter's one-time V1.4 library re-save pass (his item, tracked in PARAM_STORAGE_DESIGN.md's closed status).
+
+### VD-008 — PARAM_STORAGE P3 transport topology guard live confirmation — CLOSED 2026-07-16 (waived)
+Same re-save-pass subsumption as VD-007.
+
+### VD-009 — PARAM_STORAGE P4 Ableton/OSC by-id hardware round-trip — CLOSED 2026-07-16 (waived)
+Same re-save-pass subsumption as VD-007; a mapping that fails at the rig is a bug, filed as one.
+
+### VD-010 — PARAM_STORAGE P5 angle-card degree readout — CLOSED 2026-07-16 (waived)
+Same re-save-pass subsumption as VD-007.
+
+### VD-012 — AUDIO_SENDS_UX P3 calibration-drag feel pass — CLOSED 2026-07-16 (waived)
+This was the panel's stated acceptance gate; Peter, who owns the gate, closed it.
+
+### VD-020 — CINEMATIC_POST P5/P6 (GTAO + AO denoise) look-pass — CLOSED 2026-07-16 (waived)
+Also waives the P4 dof-polish verdict; BUG-137/BUG-138's pending-confirmation notes resolved in the same pass (BUG-136's live-repro escalation stays open). Duplicate-ID note: the PARAM_STORAGE_BOUNDARIES VD-020 remains OPEN.
+
+### VD-021 — GLB_CONFORMANCE G-P1+G-P2 AMG-livery + card-curation look-pass — CLOSED 2026-07-16 (waived)
+BUG-165 and the TextureTransformTest fixture gap stay tracked in the backlog / design doc. No conflict with the in-flight GLTF_MATERIAL_EXTENSIONS or animation work — this covered the already-landed AMG livery fix and card curation. Duplicate-ID note: the PROJECT_FILE_INTEGRITY VD-021 remains OPEN.
 
 ### VD-004 — Audio layer export mixdown — CLOSED 2026-07-07 (L2 reached)
 `audio_mixdown.rs` offline mix was unverified on a real export since it shipped. **Closed by
@@ -436,4 +336,3 @@ zero *named* widgets (graph-editor chrome unnamed headless) — name points as f
 them, per §3 ("coverage grows organically"). Landing report:
 `docs/landings/2026-07-05-ui-automation-p2.md`.
 
-*(none yet)*

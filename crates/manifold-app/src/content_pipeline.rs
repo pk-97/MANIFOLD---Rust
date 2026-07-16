@@ -120,75 +120,6 @@ fn compute_occluded_layer_indices(
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
-/// TEMPORARY flicker probe (BUG-119 hunt, 2026-07-11). Env-gated counters,
-/// one summary line per second on stderr. Enable with MANIFOLD_FLICKER_PROBE=1.
-/// Remove this module and its call sites when BUG-119 closes.
-pub(crate) mod flicker_probe {
-    use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub static TICKS: AtomicU64 = AtomicU64::new(0);
-    pub static CAPTURES: AtomicU64 = AtomicU64::new(0);
-    pub static LAYOUT_REBUILDS: AtomicU64 = AtomicU64::new(0);
-    pub static ALLOC_FAILS: AtomicU64 = AtomicU64::new(0);
-    pub static SKIP_RT_ONLY: AtomicU64 = AtomicU64::new(0);
-    pub static NO_SOURCE: AtomicU64 = AtomicU64::new(0);
-    pub static SURFACE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
-
-    pub fn on() -> bool {
-        static ON: OnceLock<bool> = OnceLock::new();
-        *ON.get_or_init(|| std::env::var_os("MANIFOLD_FLICKER_PROBE").is_some())
-    }
-
-    #[inline]
-    pub fn bump(c: &AtomicU64) {
-        if on() {
-            c.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    pub static UI_FRAMES: AtomicU64 = AtomicU64::new(0);
-    pub static UI_THUMBPASS_SKIPS: AtomicU64 = AtomicU64::new(0);
-    pub static UI_STRIP_MISSES: AtomicU64 = AtomicU64::new(0);
-    pub static UI_EMPTY_LAYOUT: AtomicU64 = AtomicU64::new(0);
-
-    /// Called once per UI frame; prints + resets every 60 frames.
-    pub fn ui_tick() {
-        if !on() {
-            return;
-        }
-        let t = UI_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-        if t.is_multiple_of(60) {
-            eprintln!(
-                "[flicker-probe/ui] thumbpass_skips={} strip_misses={} empty_layout_frames={}",
-                UI_THUMBPASS_SKIPS.swap(0, Ordering::Relaxed),
-                UI_STRIP_MISSES.swap(0, Ordering::Relaxed),
-                UI_EMPTY_LAYOUT.swap(0, Ordering::Relaxed),
-            );
-        }
-    }
-
-    /// Called once per content tick; prints + resets every 60 ticks.
-    pub fn tick(fence_wait_ms: f64) {
-        if !on() {
-            return;
-        }
-        let t = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-        if t.is_multiple_of(60) {
-            eprintln!(
-                "[flicker-probe/content] captures={} layout_rebuilds={} alloc_fails={} skip_rt={} no_src={} surface_timeouts={} fence_wait_ms={:.2}",
-                CAPTURES.swap(0, Ordering::Relaxed),
-                LAYOUT_REBUILDS.swap(0, Ordering::Relaxed),
-                ALLOC_FAILS.swap(0, Ordering::Relaxed),
-                SKIP_RT_ONLY.swap(0, Ordering::Relaxed),
-                NO_SOURCE.swap(0, Ordering::Relaxed),
-                SURFACE_TIMEOUTS.swap(0, Ordering::Relaxed),
-                fence_wait_ms,
-            );
-        }
-    }
-}
-
 /// Per-node thumbnail atlas geometry. The atlas is one `ATLAS_W`×`ATLAS_H`
 /// texture packed as an `ATLAS_GRID`×`ATLAS_GRID` grid of **16:9** cells, so
 /// each thumbnail keeps a video aspect instead of being squashed into a square
@@ -509,12 +440,10 @@ fn fill_clip_atlas(
     for cid in visible {
         let Some(&tex) = sources.get(cid.as_str()) else {
             // Inactive clip with no live source: keeps its cached strip (persisted).
-            flicker_probe::bump(&flicker_probe::NO_SOURCE);
             continue;
         };
         // A render-target-only source can't be sampled — binding it crashes AGX.
         if !thumb_source_shader_readable(cid.as_str(), tex) {
-            flicker_probe::bump(&flicker_probe::SKIP_RT_ONLY);
             continue;
         }
         let (target_cell, is_active) = if let Some(&cell) = cell_override.get(cid.as_str()) {
@@ -558,9 +487,6 @@ fn fill_clip_atlas(
         if budget == 0 {
             break;
         }
-        if cache.get_or_alloc(cid, target_cell).is_none() {
-            flicker_probe::bump(&flicker_probe::ALLOC_FAILS);
-        }
         if let Some(cell) = cache.get_or_alloc(cid, target_cell) {
             last_snapshot.insert(cid.clone(), (target_cell, frame, current_beat));
             to_blit.push((cell, tex));
@@ -576,13 +502,9 @@ fn fill_clip_atlas(
     // Stashed as UNSTAMPED — `render_content` fills in the real GPU signal
     // value right after this frame's `signal_event`/commit.
     if allocated_new {
-        flicker_probe::bump(&flicker_probe::LAYOUT_REBUILDS);
         *pending_layout_out = Some((cache.layout(), CLIP_ATLAS_LAYOUT_UNSTAMPED));
     }
 
-    for _ in &to_blit {
-        flicker_probe::bump(&flicker_probe::CAPTURES);
-    }
     if to_blit.is_empty() {
         return false;
     }
@@ -1447,7 +1369,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             pending,
             signaled,
         );
-        flicker_probe::bump(&flicker_probe::SURFACE_TIMEOUTS);
         self.surface_signal_values[idx] = 0;
     }
 
@@ -2466,7 +2387,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     false
                 };
 
-                flicker_probe::tick(self.last_fence_wait_ms);
                 let published = fill_clip_atlas(
                     &mut native_enc,
                     &sources,
@@ -2528,12 +2448,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         && !self.last_clip_atlas_layout.is_empty()
                     {
                         self.clip_atlas_persist_due = 0;
-                        if flicker_probe::on() {
-                            eprintln!(
-                                "[flicker-probe/content] ATLAS SAVE READBACK submitted (75MB GPU->CPU) at frame {}",
-                                self.clip_atlas_frame
-                            );
-                        }
                         let mut gpu_rb = GpuEncoder::new(&mut native_enc, native_device);
                         if let Some(pt) = self.clip_atlas_persistent.as_ref() {
                             self.clip_atlas_readback.submit(
