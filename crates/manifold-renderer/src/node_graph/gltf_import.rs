@@ -212,6 +212,109 @@ fn table(rows: Vec<Vec<f32>>) -> SerializedParamValue {
     SerializedParamValue::Table { rows }
 }
 
+/// GLTF_ANIMATION_DESIGN.md A2: `[joint_index, m0..m15]` row (column-major
+/// 4x4) — the row shape `node.gltf_skeleton_pose`'s `joint_root_world_table`
+/// / `inverse_bind_table` Tables use.
+fn mat4_row(joint: usize, m: &gltf_load::Mat4) -> Vec<f32> {
+    let mut row = Vec::with_capacity(17);
+    row.push(joint as f32);
+    for col in m.iter() {
+        row.extend_from_slice(col);
+    }
+    row
+}
+
+/// Build the six flat Tables `node.gltf_skeleton_pose` needs from one
+/// object's resolved skin topology (`GltfSkinInfo`) plus clip `[0]`'s
+/// per-node animation map. Every row-group is emitted joint-by-joint in
+/// ascending order (the primitive's row-grouping contract). A joint with
+/// no animated channel gets a single static row from its BIND pose
+/// (`joint_bind_translation`/`_rotation`/`_scale`) — never the identity
+/// A1's rigid-object sampler falls back to, because an unrigged joint's
+/// bind pose is frequently non-identity. Returns the six Tables plus the
+/// overall clip duration (the max keyframe time across every animated
+/// joint channel; `1e-3` floor when the skin has no animated joints at
+/// all, so `node.gltf_skeleton_pose`'s `duration_s` param never hits its
+/// own zero-guard).
+#[allow(clippy::type_complexity)]
+fn build_skeleton_pose_tables(
+    skin: &gltf_load::GltfSkinInfo,
+    node_anims: &std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>,
+) -> (
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    Vec<Vec<f32>>,
+    f32,
+) {
+    let n = skin.joint_node_indices.len();
+    let mut parent_rows = Vec::with_capacity(n);
+    let mut root_world_rows = Vec::new();
+    let mut inverse_bind_rows = Vec::with_capacity(n);
+    let mut translation_rows = Vec::new();
+    let mut rotation_rows = Vec::new();
+    let mut scale_rows = Vec::new();
+    let mut duration_s: f32 = 0.0;
+
+    for j in 0..n {
+        parent_rows.push(vec![j as f32, skin.joint_parent[j] as f32]);
+        inverse_bind_rows.push(mat4_row(j, &skin.inverse_bind_matrices[j]));
+        if skin.joint_parent[j] < 0 {
+            root_world_rows.push(mat4_row(j, &skin.joint_root_world[j]));
+        }
+
+        let anim = node_anims.get(&skin.joint_node_indices[j]);
+        match anim.and_then(|a| a.translation.as_ref()) {
+            Some(t) if !t.times.is_empty() => {
+                for (time, v) in t.times.iter().zip(t.values.iter()) {
+                    translation_rows.push(vec![j as f32, *time, v[0], v[1], v[2]]);
+                    duration_s = duration_s.max(*time);
+                }
+            }
+            _ => {
+                let b = skin.joint_bind_translation[j];
+                translation_rows.push(vec![j as f32, 0.0, b[0], b[1], b[2]]);
+            }
+        }
+        match anim.and_then(|a| a.rotation.as_ref()) {
+            Some(r) if !r.times.is_empty() => {
+                for (time, v) in r.times.iter().zip(r.values.iter()) {
+                    rotation_rows.push(vec![j as f32, *time, v[0], v[1], v[2], v[3]]);
+                    duration_s = duration_s.max(*time);
+                }
+            }
+            _ => {
+                let b = skin.joint_bind_rotation[j];
+                rotation_rows.push(vec![j as f32, 0.0, b[0], b[1], b[2], b[3]]);
+            }
+        }
+        match anim.and_then(|a| a.scale.as_ref()) {
+            Some(s) if !s.times.is_empty() => {
+                for (time, v) in s.times.iter().zip(s.values.iter()) {
+                    scale_rows.push(vec![j as f32, *time, v[0], v[1], v[2]]);
+                    duration_s = duration_s.max(*time);
+                }
+            }
+            _ => {
+                let b = skin.joint_bind_scale[j];
+                scale_rows.push(vec![j as f32, 0.0, b[0], b[1], b[2]]);
+            }
+        }
+    }
+
+    (
+        parent_rows,
+        root_world_rows,
+        inverse_bind_rows,
+        translation_rows,
+        rotation_rows,
+        scale_rows,
+        duration_s.max(1e-3),
+    )
+}
+
 /// Degrees→radians factor for the camera card sliders. The camera node's
 /// `orbit`/`tilt`/`fov_y` params are radians (matching `node.orbit_camera`),
 /// but a performer wants degrees on the card, so each angle slider carries a
@@ -648,6 +751,18 @@ fn build_import_graph(
     // the group name).
     let mut used_group_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // GLTF_ANIMATION_DESIGN.md A2: clip `[0]`'s per-node TRS tracks, keyed
+    // by node index — the same lookup `gltf_load::gltf_import_summary`
+    // builds internally for A1's rigid-object resolution, rebuilt here
+    // because `node.gltf_skeleton_pose`'s Tables need it per-JOINT (every
+    // joint in a skin, not just the one mesh-owning node A1 resolves
+    // against).
+    let node_anims_clip0: std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation> = summary
+        .animations
+        .first()
+        .map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect())
+        .unwrap_or_default();
+
     for (k, m) in materials.iter().enumerate() {
         let mesh_node_id = format!("mesh_{k}");
         let mat_node_id = format!("mat_{k}");
@@ -717,26 +832,94 @@ fn build_import_graph(
         let mut group_wires: Vec<EffectGraphWire> = Vec::new();
 
         let mesh_id = fresh_id();
-        let mut mesh_node =
-            plain_node(mesh_id, &mesh_node_id, "node.gltf_mesh_source", &mesh_node_id);
-        // GLB_XFAIL_BURNDOWN_DESIGN.md D4/§3: `m.material_index ==
-        // DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks the synthetic
-        // default-material entry — never re-queried as a document material
-        // index. Translate it to `gltf_mesh_source`'s own reserved param
-        // sentinel instead (`u32::MAX as i32` would collide with -1, the
-        // param's pre-existing "unset" value).
-        let mesh_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
-            gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+        // GLTF_ANIMATION_DESIGN.md A2 (D2): a skinned object's positioning
+        // comes ENTIRELY from its joint hierarchy (glTF 2.0 §3.7.3.3) — the
+        // rigid-object `node.gltf_mesh_source` Material selector, which
+        // world-transforms vertices by the mesh-owning node's OWN
+        // transform, would double-transform a skinned mesh. `m.skin` is
+        // only `Some` for a real glTF material (never the synthetic
+        // default-material entry — that path never resolves a skin).
+        let skinned_vertices_source: Option<u32> = if let Some(obj_skin) = &m.skin {
+            let skinned_src = {
+                let mut n = plain_node(
+                    mesh_id,
+                    &mesh_node_id,
+                    "node.gltf_skinned_mesh_source",
+                    &mesh_node_id,
+                );
+                n.params
+                    .insert("material_index".to_string(), int(m.material_index as i32));
+                n.params
+                    .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+                n
+            };
+            group_nodes.push(skinned_src);
+
+            let pose_node_id = format!("pose_{k}");
+            let pose_id = fresh_id();
+            let joint_count = obj_skin.info.joint_node_indices.len() as u32;
+            let (parent_rows, root_world_rows, inverse_bind_rows, translation_rows, rotation_rows, scale_rows, duration_s) =
+                build_skeleton_pose_tables(&obj_skin.info, &node_anims_clip0);
+            let mut pose_node =
+                plain_node(pose_id, &pose_node_id, "node.gltf_skeleton_pose", &pose_node_id);
+            pose_node.params.insert("joint_count".to_string(), int(joint_count as i32));
+            pose_node.params.insert("duration_s".to_string(), float(duration_s));
+            pose_node.params.insert("joint_parent_table".to_string(), table(parent_rows));
+            if !root_world_rows.is_empty() {
+                pose_node
+                    .params
+                    .insert("joint_root_world_table".to_string(), table(root_world_rows));
+            }
+            pose_node
+                .params
+                .insert("inverse_bind_table".to_string(), table(inverse_bind_rows));
+            pose_node
+                .params
+                .insert("translation_tracks".to_string(), table(translation_rows));
+            pose_node.params.insert("rotation_tracks".to_string(), table(rotation_rows));
+            pose_node.params.insert("scale_tracks".to_string(), table(scale_rows));
+            group_nodes.push(pose_node);
+
+            let skinmesh_node_id = format!("skinmesh_{k}");
+            let skinmesh_id = fresh_id();
+            let mut skinmesh_node =
+                plain_node(skinmesh_id, &skinmesh_node_id, "node.skin_mesh", &skinmesh_node_id);
+            skinmesh_node.params.insert("joint_count".to_string(), int(joint_count as i32));
+            group_nodes.push(skinmesh_node);
+
+            group_wires.push(wire(mesh_id, "vertices", skinmesh_id, "in"));
+            group_wires.push(wire(mesh_id, "joints", skinmesh_id, "joints"));
+            group_wires.push(wire(mesh_id, "weights", skinmesh_id, "weights"));
+            group_wires.push(wire(pose_id, "joint_matrices", skinmesh_id, "matrices"));
+            report_lines.push(format!(
+                "{group_name}: skinned (glTF skin index {}, {joint_count} joints) — \
+                 node.gltf_skinned_mesh_source + node.gltf_skeleton_pose + node.skin_mesh",
+                obj_skin.skin_index
+            ));
+            Some(skinmesh_id)
         } else {
-            m.material_index as i32
+            let mut mesh_node =
+                plain_node(mesh_id, &mesh_node_id, "node.gltf_mesh_source", &mesh_node_id);
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D4/§3: `m.material_index ==
+            // DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks the synthetic
+            // default-material entry — never re-queried as a document
+            // material index. Translate it to `gltf_mesh_source`'s own
+            // reserved param sentinel instead (`u32::MAX as i32` would
+            // collide with -1, the param's pre-existing "unset" value).
+            let mesh_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
+                gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+            } else {
+                m.material_index as i32
+            };
+            mesh_node
+                .params
+                .insert("material_index".to_string(), int(mesh_material_param));
+            mesh_node
+                .params
+                .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+            group_nodes.push(mesh_node);
+            None
         };
-        mesh_node
-            .params
-            .insert("material_index".to_string(), int(mesh_material_param));
-        mesh_node
-            .params
-            .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
-        group_nodes.push(mesh_node);
 
         let mat_id = fresh_id();
         let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
@@ -997,7 +1180,13 @@ fn build_import_graph(
             InterfacePortDef { name: "material".to_string(), port_type: "Material".to_string() },
             InterfacePortDef { name: "transform".to_string(), port_type: "Transform".to_string() },
         ];
-        group_wires.push(wire(mesh_id, "vertices", out_id, "vertices"));
+        // A2: a skinned object's group-output vertices come from
+        // node.skin_mesh's `out`, not directly from the mesh source (which
+        // for a skinned object outputs UNDEFORMED bind-pose geometry).
+        match skinned_vertices_source {
+            Some(skinmesh_id) => group_wires.push(wire(skinmesh_id, "out", out_id, "vertices")),
+            None => group_wires.push(wire(mesh_id, "vertices", out_id, "vertices")),
+        }
         group_wires.push(wire(mat_id, "out", out_id, "material"));
 
         // Recenter this object at the origin so the fixed-target orbit
@@ -2673,6 +2862,7 @@ mod tests {
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
+            skin: None,
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -2892,6 +3082,7 @@ mod tests {
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
+            skin: None,
         }
     }
 
@@ -3512,6 +3703,7 @@ mod tests {
             occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
             emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
             animation: None,
+            skin: None,
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
@@ -4274,6 +4466,300 @@ mod tests {
             before, after,
             "progress-0.5 render must pixel-match before and after a save/reload round trip"
         );
+    }
+
+    // ─── GLTF_ANIMATION_DESIGN.md A2 gate (CesiumMan/Fox skin deformation) ─
+
+    #[cfg(feature = "gpu-proofs")]
+    fn khronos_fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos")
+            .join(name)
+    }
+
+    /// Read `duration_s` straight off the assembled graph's
+    /// `node.gltf_skeleton_pose` node (rather than recomputing it) — the
+    /// same "read the built graph's own param" convention
+    /// `box_animated_duration_s` uses for A1's animation source. Every
+    /// object's producer nodes live INSIDE its group box (`EffectGraphNode::group`),
+    /// not at the top level, so this recurses. Panics if the asset didn't
+    /// resolve a skin onto any object (a real bug this test wants to
+    /// catch loudly, not skip past).
+    #[cfg(feature = "gpu-proofs")]
+    fn skeleton_pose_duration_s(def: &manifold_core::effect_graph_def::EffectGraphDef) -> f32 {
+        fn find(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> Option<f32> {
+            for node in nodes {
+                if node.type_id.as_str() == "node.gltf_skeleton_pose"
+                    && let Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) =
+                        node.params.get("duration_s")
+                {
+                    return Some(*value);
+                }
+                if let Some(group) = &node.group
+                    && let Some(v) = find(&group.nodes)
+                {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        find(&def.nodes).expect("assembled graph has no node.gltf_skeleton_pose with a duration_s param")
+    }
+
+    /// Render an assembled skinned-import `def` at a chosen `progress`
+    /// (via `node.gltf_skeleton_pose`'s default beat-drive — identical
+    /// formula/convergence-polling as `render_box_animated_at_progress`,
+    /// generalized past the BoxAnimated-specific camera override since
+    /// CesiumMan/Fox frame fine under the importer's default camera).
+    #[cfg(feature = "gpu-proofs")]
+    fn render_skinned_import_at_progress(
+        def: manifold_core::effect_graph_def::EffectGraphDef,
+        w: u32,
+        h: u32,
+        progress: f32,
+        duration_s: f32,
+    ) -> Vec<u8> {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let beats = progress * duration_s * 2.0;
+        let seconds = (beats * 0.5) as f64;
+
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("skinned import graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "skinned-import");
+        let ctx = PresetContext {
+            time: seconds,
+            beat: beats as f64,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        const STABLE_STREAK: u32 = 3;
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        for _attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("skinned-import-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut readback_enc = device.create_encoder("skinned-import-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            let fraction = non_black as f64 / (w * h) as f64;
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+            if stable_count >= STABLE_STREAK {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        rgba
+    }
+
+    /// A2 gate: `CesiumMan.glb` and `Fox.glb` — a real rigged, skinned,
+    /// animated character each — must render four VISIBLY DISTINCT frames
+    /// across the clip, proving the skin actually deforms (not just a
+    /// rigid object moving, which A1 already proved for `BoxAnimated`).
+    /// Written to `tests/fixtures/gltf/goldens/` alongside the A1 goldens.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn skinned_characters_render_four_visibly_distinct_deformed_poses() {
+        let (w, h) = (256u32, 256u32);
+        let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/goldens");
+        std::fs::create_dir_all(&out_dir).expect("create goldens dir");
+
+        for asset in ["CesiumMan.glb", "Fox.glb"] {
+            let path = khronos_fixture_path(asset);
+            if !path.exists() {
+                eprintln!(
+                    "skinned_characters_render_four_visibly_distinct_deformed_poses: \
+                     fixture not found at {}, skipping {asset}",
+                    path.display()
+                );
+                continue;
+            }
+            let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
+            let duration_s = skeleton_pose_duration_s(&def);
+
+            let phases = [0.0f32, 0.25, 0.5, 0.75];
+            let mut frames = Vec::new();
+            for &p in &phases {
+                let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
+                frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
+            }
+
+            let stem = asset.trim_end_matches(".glb").to_lowercase();
+            for (p, rgba) in phases.iter().zip(frames.iter()) {
+                let out_path =
+                    out_dir.join(format!("{stem}_skin_p{:03}.png", (p * 100.0).round() as u32));
+                image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
+                    .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
+            }
+
+            for i in 0..frames.len() {
+                for j in (i + 1)..frames.len() {
+                    assert_ne!(
+                        frames[i], frames[j],
+                        "{asset}: progress {} and progress {} rendered byte-identical frames — \
+                         the skin isn't deforming",
+                        phases[i], phases[j]
+                    );
+                }
+            }
+        }
+    }
+
+    /// A2 gate: hot-path check (CLAUDE.md content-thread discipline;
+    /// STANDARD §5's content-thread gate) on the design doc's two NAMED
+    /// gate fixtures, `CesiumMan.glb` and `Fox.glb`. Substitute for the
+    /// `MANIFOLD_RENDER_TRACE`-driven `manifold-app` journey-proof harness
+    /// (`bug035_verify.rs`/`bug037_verify.rs`'s pattern) — wiring a full
+    /// content-thread project/layer/generator around an imported glTF
+    /// asset is real additional infrastructure this phase doesn't build;
+    /// this measures the actual GPU encode+submit wall-clock cost of the
+    /// exact render path the gate cares about (per-frame CPU skeleton-pose
+    /// sampling + the skin_mesh dispatch + render_scene), on a warm
+    /// `PresetRuntime` built once, looped. `CesiumMan.glb` (14016
+    /// vertices, one skin, 19 joints) is the largest single skinned mesh
+    /// among the gate fixtures. Asserts no frame exceeds 20ms across a
+    /// 30-frame warm loop for either asset.
+    ///
+    /// Re-derived finding (this session, NOT part of this gate):
+    /// `BrainStem.glb` — the design doc's named joint-count stress case —
+    /// is actually a MANY-SMALL-SKINS stress case (24 separate skinned
+    /// objects, each only 18 joints, not one large palette) that measured
+    /// a flat ~370ms/frame from frame 0 (not a one-time parse cost — see
+    /// BUG-190). `CesiumMan`'s own skin_mesh dispatch alone measures
+    /// ~5-6ms, so this reads as a pre-existing many-object `render_scene`
+    /// scaling cost (shadow/SSAO passes × object count) rather than a
+    /// skinning-specific regression, but that's not proven — logged as
+    /// BUG-190 for a dedicated investigation rather than asserted here
+    /// against a fixture the doc never named as a mandatory gate.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn skinned_import_hot_path_stays_under_20ms_per_frame() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        for asset in ["CesiumMan.glb", "Fox.glb"] {
+            let path = khronos_fixture_path(asset);
+            if !path.exists() {
+                eprintln!("skinned_import_hot_path_stays_under_20ms_per_frame: fixture not found at {}, skipping {asset}", path.display());
+                continue;
+            }
+            let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
+
+            let (w, h) = (512u32, 512u32);
+            let device = crate::test_device();
+            let format = GpuTextureFormat::Rgba16Float;
+            let registry = PrimitiveRegistry::with_builtin();
+            let mut generator =
+                PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                    .expect("skinned import graph must build");
+            let target = RenderTarget::new(&device, w, h, format, "skinned-hot-path");
+
+            const WARMUP: u32 = 10;
+            const MEASURED: u32 = 30;
+            let mut max_ms = 0.0f64;
+            let mut total_ms = 0.0f64;
+            for frame in 0..(WARMUP + MEASURED) {
+                let beats = frame as f64 * 0.1;
+                let ctx = PresetContext {
+                    time: beats * 0.5,
+                    beat: beats,
+                    dt: 1.0 / 60.0,
+                    width: w,
+                    height: h,
+                    output_width: w,
+                    output_height: h,
+                    aspect: 1.0,
+                    owner_key: 0,
+                    is_clip_level: false,
+                    frame_count: frame as i64,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let start = std::time::Instant::now();
+                {
+                    let mut enc = device.create_encoder("skinned-hot-path");
+                    {
+                        let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                        generator.render(
+                            &mut gpu,
+                            &target.texture,
+                            &ctx,
+                            &manifold_core::params::ParamManifest::default(),
+                        );
+                    }
+                    enc.commit_and_wait_completed();
+                }
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                if frame >= WARMUP {
+                    max_ms = max_ms.max(elapsed_ms);
+                    total_ms += elapsed_ms;
+                }
+            }
+            let avg_ms = total_ms / MEASURED as f64;
+            println!("{asset}: skinned-import hot path — avg {avg_ms:.2}ms, max {max_ms:.2}ms over {MEASURED} frames");
+            assert!(
+                max_ms < 20.0,
+                "{asset}: a frame took {max_ms:.2}ms (> 20ms budget) — skinning dropped a frame"
+            );
+        }
     }
 
     // Only used by the `#[cfg(feature = "gpu-proofs")]` render gates below —

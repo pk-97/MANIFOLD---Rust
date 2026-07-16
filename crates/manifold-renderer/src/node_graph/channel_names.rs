@@ -164,6 +164,15 @@ pub mod well_known {
         // for the standard mask-texture convention.
         MASK = "mask";
         DEPTH = "depth";
+
+        // ─── 4x4 matrix columns (joint palette buffers) ──────────────
+        // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's
+        // Array(JointMatrix) output — one skin matrix per joint, column-
+        // major (matches gltf_load::Mat4's own convention).
+        MAT_COL0 = "mat_col0";
+        MAT_COL1 = "mat_col1";
+        MAT_COL2 = "mat_col2";
+        MAT_COL3 = "mat_col3";
     }
 }
 

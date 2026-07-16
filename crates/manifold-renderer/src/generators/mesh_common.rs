@@ -111,6 +111,37 @@ impl KnownItem for InstanceTransform {
     const SPECS: &'static [ChannelSpec] = INSTANCE_TRANSFORM_SPECS;
 }
 
+/// One joint's skin matrix (`jointWorldMatrix * inverseBindMatrix`),
+/// column-major — GLTF_ANIMATION_DESIGN.md A2 (D2). Produced by
+/// `node.gltf_skeleton_pose` (CPU, one buffer write per frame from the
+/// sampled skeleton pose) and consumed by `node.skin_mesh` via a
+/// `BufferGather` input (joint-index lookup, not coincident with the
+/// per-vertex dispatch). 64 bytes — matches `gltf_load::Mat4`'s own
+/// `[[f32; 4]; 4]` column-major layout byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct JointMatrix {
+    pub c0: [f32; 4],
+    pub c1: [f32; 4],
+    pub c2: [f32; 4],
+    pub c3: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<JointMatrix>() == 64);
+
+/// Channels signature for [`JointMatrix`] — four Vec4F columns, std430
+/// stride 64, align 16.
+pub const JOINT_MATRIX_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::MAT_COL0, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::MAT_COL1, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::MAT_COL2, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::MAT_COL3, ty: ChannelElementType::Vec4F },
+];
+
+impl KnownItem for JointMatrix {
+    const SPECS: &'static [ChannelSpec] = JOINT_MATRIX_SPECS;
+}
+
 /// A 2D point in **origin-centered pre-aspect curve space** — the
 /// canonical wire type between every curve / wireframe producer
 /// (`pack_curve_xy`, `project_3d`, `project_4d`,

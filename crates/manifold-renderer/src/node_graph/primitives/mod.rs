@@ -102,6 +102,8 @@ mod generate_instance_transforms;
 mod generate_range;
 mod gltf_animation_source;
 mod gltf_mesh_source;
+mod gltf_skeleton_pose;
+mod gltf_skinned_mesh_source;
 mod gltf_texture_source;
 mod pack_vec4;
 mod gradient_central_diff;
@@ -142,6 +144,7 @@ mod cel_material;
 mod multi_blend;
 mod mesh_ramp;
 mod morph_mesh;
+mod skin_mesh;
 mod motion_blur;
 mod push_along_normals;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -346,6 +349,8 @@ pub use generate_instance_transforms::{
 pub use generate_range::GenerateRange;
 pub use gltf_animation_source::GltfAnimationSource;
 pub use gltf_mesh_source::GltfMeshSource;
+pub use gltf_skeleton_pose::GltfSkeletonPose;
+pub use gltf_skinned_mesh_source::GltfSkinnedMeshSource;
 pub use gltf_texture_source::GltfTextureSource;
 pub use pack_vec4::PackVec4;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
