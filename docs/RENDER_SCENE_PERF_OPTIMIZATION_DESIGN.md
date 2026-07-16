@@ -101,6 +101,34 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
   hand-editing the fixture or `gltf_import.rs` per ablation run — the import graph is assembled in
   code, so "hand-edit the .glb" was never real; rebuilding product source per measurement leg is
   unreproducible.
+- **D4b — amendment (2026-07-17, mid-P0): D4's `None`-arm fix was correct but aimed at the wrong
+  collapse site.** P0's executor found, by running the tool for real: `render_scene`'s internal
+  GPU passes (shadow, IBL prefilter, IBL irradiance, main) never call `set_profile_tag` — they all
+  share ONE tag (the node's), but each `reserve()` call site carries a distinct `label` (e.g.
+  `"node.render_scene shadow"`, `"… ibl prefiltered specular"`). `perf_soak_import.rs`'s existing
+  join groups by `tag` alone and never reads `span.label`, so these spans all land in the SAME
+  matched (`Some`) row — never in the `None`/unmatched arm D4 addressed — collapsing to one row at
+  `share_of_frame: 1.045`. Fix, corrected: **rows stay keyed by `tag` (one row per node, unchanged);
+  each row gains a nested `passes` map keyed by `span.label`**, accumulating GPU ms per pass —
+  NOT a flat `(tag, label)` row scheme (rejected: `label` alone would merge same-labeled passes
+  across multiple instances of the same node type in one graph; a flat combined key would smear or
+  duplicate the per-NODE-only `cpu_us` datum, which has no per-pass equivalent — `StepProfile`'s
+  CPU join is per node, confirmed by reading `execution.rs`). `type_id` stays node-level, appearing
+  once per tag row, never repeated per pass (a pass is not a node). Report shape: node row keeps
+  its five existing fields (`tag`, `type_id`, `gpu_ms` = sum of its passes, `cpu_us`, `share_of_frame`)
+  plus a new `"passes"` array — one `{label, gpu_ms, share_of_frame}` per distinct label under that
+  tag, sorted descending by `gpu_ms`, always emitted (even length 1, no conditional shape). The
+  `None` arm's key is corrected from `span.tag` to `span.label` to match its own comment's intent
+  (a genuinely unmatched/untagged span groups by its own label — this was a latent bug in the
+  just-written D4 code, not yet committed). No existing consumer breaks: PERF_BUDGET_GATE_DESIGN's
+  I4 means profiled JSON never gates or writes a baseline; BUG-189's backlog table is a hand
+  transcription of one past run, not a parser — do not rewrite it retroactively; `rg` over
+  `scripts/`+`docs/` found no machine consumer of the `"nodes"` array. Positive gate, corrected: the
+  `node.render_scene` row's `passes` array contains ≥3 distinct nonzero entries including one
+  labeled `shadow` and one labeled `ibl`, with pass rank order stable across two consecutive runs —
+  do NOT gate on shares summing to ≤1.0 (the observed 104% is D6's declared stage-boundary-sampling
+  inflation plus denominator skew; P2/P3's before/after claims use pass-level ms and rank, never
+  raw share-sum). Folded into P0, same phase, same file — not a re-scope.
 - **D5 — The dirty signal is per-slot write generations with a conservative default: the executor
   bumps every output slot's generation for every node that runs, UNLESS the node explicitly
   declares "outputs unchanged this frame".** A `u64` per slot, owned by the `Executor` alongside
