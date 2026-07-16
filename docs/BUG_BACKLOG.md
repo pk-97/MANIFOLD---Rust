@@ -1135,6 +1135,8 @@ clean).
 
 **Fix shape:** wire `ClearLaneCommand` (clear all points, keep the lane) and `RemoveLaneCommand` (delete the lane entirely) to a UI trigger — most likely a right-click/context-menu item on the lane header, per the lane-header re-enable click precedent already in the design doc (§7 "State affordances"). Design doc `docs/AUTOMATION_LANES_DESIGN.md` is otherwise implemented per its status board entry; this is a gap in that landing, not a new design.
 
+## Fixed
+
 ### BUG-183 (fusion-coverage-baseline-slipped) — `fusion_coverage_baseline` fails on main: 32 bundled presets fuse, floor asserts ≥33
 **Status:** FIXED 2026-07-17 (Sonnet, BUGFIX_WAVE_2026_07_17_DESIGN Lane 5) — floors lowered/raised to the new bundled reality (presets ≥32, regions ≥56, atoms ≥240) in `crates/manifold-renderer/src/node_graph/freeze/proof.rs`'s `fusion_coverage_baseline`, comment rewritten citing `a065dec4`. Measured at tip `1a161d91`: 32 presets / 56 regions / 243 atoms — matches the root-cause investigation below exactly. Test green.
 
@@ -1143,8 +1145,6 @@ clean).
 **Root cause (identified 2026-07-17, Fable, verified by running the test + `git show`):** NOT a partition regression — commit `a065dec4` (2026-07-16) unbundled eight 3D-infra presets to `assets/reference-presets/`, and CinematicScene (which fused — its fused-WGSL golden was deleted in that same commit) left the bundled set, dropping the bundled fused-preset count 33 → 32. Fusion itself RATCHETED UP across the same window: measured at tip `9a7a7fa2`, 32 presets / 56 regions / 243 atoms vs the P6 floors 33/55/225. The earlier "do NOT just lower the floor" instruction assumed a regression and is superseded by this evidence.
 
 **Fix shape:** update the floors to the new bundled reality (presets ≥32, regions ≥56, atoms ≥240 with the test's usual churn headroom) and rewrite the floor comment citing `a065dec4`. Directive: BUGFIX_WAVE_2026_07_17_DESIGN.md Lane 5.
-
-## Fixed
 
 ### BUG-166 (gltf-crate-vetoes-extensionsrequired-we-already-support) — `gltf::import` hard-fails any asset that lists a required extension the crate's own validator doesn't recognize, even when MANIFOLD's importer downstream already handles that extension — blocks otherwise-supported assets before our code ever runs
 **Status:** FIXED 2026-07-16 (parse layer, GLB_XFAIL_BURNDOWN_DESIGN P2; the residual unlit-material-fidelity gap is BUG-174's, not this bug's) — `import_glb()` (`gltf_load.rs`) replaces `gltf::import()` at all 3 production call sites + the azalea test harness; parses via `Gltf::from_slice_without_validation` + re-runs the crate's own structural validation directly (`json::Root: Validate`) with only the `extensionsRequired`-`Unsupported` errors filtered out, then checks `extensionsRequired` against MANIFOLD's own `MANIFOLD_SUPPORTED_EXTENSIONS` list. `UnlitTest.glb` now imports and renders (converges non-black, frame 4, fraction 0.1788); `ClearCoatCarPaint.glb` now imports (parse-layer only — its render correctness was already shipped by GLB_CONFORMANCE_DESIGN, unaffected). Caveat found during this fix, logged separately as BUG-174: `UnlitTest.glb`'s render is geometrically correct but NOT shaded unlit — `gltf_import.rs` never reads `KHR_materials_unlit` and always builds a lit (Phong-ish) material; the crate-level import veto (BUG-166's actual defect) is fixed, but full unlit material fidelity was never in this doc's D1 scope and remains open.
