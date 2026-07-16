@@ -1,0 +1,1021 @@
+{
+  "version": 2,
+  "name": "Reaction Diffusion",
+  "description": "Gray-Scott reaction-diffusion: two virtual chemicals feed, react, and diffuse, growing coral, fingerprint, and labyrinth patterns from a seeded dish. The update kernel is the classic Gray-Scott step (Sims 9-point weighted Laplacian, Du=1.0/Dv=0.5, fp32 field, U in the red channel, V in green) run four substeps per frame as chained JSON-editable WGSL nodes \u2014 the DECOMPOSING_GENERATORS \u00a75 sanctioned escape-hatch case for a domain-specific coupled kernel. The dish state lives in one feedback node seeded with U=1 everywhere and a V blob in the centre; clip triggers stamp fresh V at the Inject point through an attack/release envelope. Feed and Kill are the regime plane \u2014 sweeping them tours spots, stripes, and waves live (coral f=0.055/k=0.062 (default), waves f=0.014/k=0.045, mitosis around f=0.037/k=0.065). Develop extracts the V field, shapes it with levels, and grades through a gradient LUT on pure black.",
+  "presetMetadata": {
+    "id": "ReactionDiffusion",
+    "displayName": "Reaction Diffusion",
+    "category": "Pattern",
+    "oscPrefix": "reactionDiffusion",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "feed",
+        "name": "Feed",
+        "min": 0.01,
+        "max": 0.09,
+        "defaultValue": 0.055,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "oscSuffix": "feed"
+      },
+      {
+        "id": "kill",
+        "name": "Kill",
+        "min": 0.04,
+        "max": 0.075,
+        "defaultValue": 0.062,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3",
+        "oscSuffix": "kill"
+      },
+      {
+        "id": "diffusion",
+        "name": "Diffusion",
+        "min": 0.5,
+        "max": 1.4,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "diffusion"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.0,
+        "max": 1.6,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "speed"
+      },
+      {
+        "id": "inject_x",
+        "name": "Inject X",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "injectX"
+      },
+      {
+        "id": "inject_y",
+        "name": "Inject Y",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "injectY"
+      },
+      {
+        "id": "inject",
+        "name": "Inject",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.7,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "inject"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 0.5,
+        "max": 3.0,
+        "defaultValue": 1.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "contrast"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "feed",
+        "label": "Feed",
+        "defaultValue": 0.055,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_1",
+          "param": "feed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feed",
+        "label": "Feed",
+        "defaultValue": 0.055,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_2",
+          "param": "feed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feed",
+        "label": "Feed",
+        "defaultValue": 0.055,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_3",
+          "param": "feed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feed",
+        "label": "Feed",
+        "defaultValue": 0.055,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_4",
+          "param": "feed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "kill",
+        "label": "Kill",
+        "defaultValue": 0.062,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_1",
+          "param": "kill"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "kill",
+        "label": "Kill",
+        "defaultValue": 0.062,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_2",
+          "param": "kill"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "kill",
+        "label": "Kill",
+        "defaultValue": 0.062,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_3",
+          "param": "kill"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "kill",
+        "label": "Kill",
+        "defaultValue": 0.062,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_4",
+          "param": "kill"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_1",
+          "param": "diff_u"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 1.0
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_2",
+          "param": "diff_u"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 1.0
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_3",
+          "param": "diff_u"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 1.0
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_4",
+          "param": "diff_u"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 1.0
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_1",
+          "param": "diff_v"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 0.5
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_2",
+          "param": "diff_v"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 0.5
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_3",
+          "param": "diff_v"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 0.5
+      },
+      {
+        "id": "diffusion",
+        "label": "Diffusion",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_4",
+          "param": "diff_v"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "scale": 0.5
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_1",
+          "param": "dt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_2",
+          "param": "dt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_3",
+          "param": "dt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "react_4",
+          "param": "dt"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "inject_x",
+        "label": "Inject X",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "inject_blob",
+          "param": "cx"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "inject_y",
+        "label": "Inject Y",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "inject_blob",
+          "param": "cy"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "inject",
+        "label": "Inject",
+        "defaultValue": 0.7,
+        "target": {
+          "kind": "node",
+          "nodeId": "inject_amount",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 1.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "develop",
+          "param": "gamma"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 2,
+      "nodeId": "unit_field",
+      "typeId": "node.uv_field",
+      "handle": "unit_field",
+      "title": "Constant Builder"
+    },
+    {
+      "id": 3,
+      "nodeId": "dish_u",
+      "typeId": "node.channel_mixer",
+      "handle": "dish_u",
+      "title": "Dish: U = 1",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "first_blob",
+      "typeId": "node.circle_mask",
+      "handle": "first_blob",
+      "title": "First V Blob",
+      "params": {
+        "cx": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "cy": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "radius_x": {
+          "type": "Float",
+          "value": 0.06
+        },
+        "radius_y": {
+          "type": "Float",
+          "value": 0.06
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.15
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "first_blob_g",
+      "typeId": "node.channel_mixer",
+      "handle": "first_blob_g",
+      "title": "Blob Into V (green)",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            -0.5,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "dish_init",
+      "typeId": "node.mix",
+      "handle": "dish_init",
+      "title": "Initial Dish (U=1 + centre V)",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        },
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "dish",
+      "typeId": "node.feedback",
+      "handle": "dish",
+      "title": "Dish Memory",
+      "outputFormats": {
+        "out": "rgba32float"
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "inject_blob",
+      "typeId": "node.circle_mask",
+      "handle": "inject_blob",
+      "title": "Inject Blob",
+      "params": {
+        "cx": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "cy": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "radius_x": {
+          "type": "Float",
+          "value": 0.04
+        },
+        "radius_y": {
+          "type": "Float",
+          "value": 0.04
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.15
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "inject_g",
+      "typeId": "node.channel_mixer",
+      "handle": "inject_g",
+      "title": "Inject Into V (green)",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            -0.5,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "kick_gate",
+      "typeId": "node.trigger_gate",
+      "handle": "kick_gate",
+      "title": "Clip Trigger Gate"
+    },
+    {
+      "id": 11,
+      "nodeId": "kick_env",
+      "typeId": "node.envelope_follower_ar",
+      "handle": "kick_env",
+      "title": "Inject Envelope",
+      "params": {
+        "attack": {
+          "type": "Float",
+          "value": 0.005
+        },
+        "release": {
+          "type": "Float",
+          "value": 0.25
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "inject_amount",
+      "typeId": "node.value",
+      "handle": "inject_amount",
+      "title": "Inject (card)",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 0.7
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "inject_gain",
+      "typeId": "node.math",
+      "handle": "inject_gain",
+      "title": "Envelope \u00d7 Inject",
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "react_1",
+      "typeId": "node.wgsl_compute",
+      "handle": "react_1",
+      "title": "React 1",
+      "wgslSource": "// Gray-Scott reaction-diffusion substep \u2014 JSON-editable (DECOMPOSING \u00a75\n// escape-hatch case: domain-specific coupled kernel). Karl Sims'\n// formulation: 9-point weighted Laplacian (-1 centre, 0.2 edge, 0.05\n// diagonal) with Du=1.0 / Dv=0.5 \u2014 the 5-point unnormalized form with\n// Du=0.16 kills every pattern (verified against a NumPy ground truth,\n// 2026-07-16), and fp32 storage is load-bearing for the small increments.\n// U rides red, V rides green. Substep 1 of 4 also applies the inject\n// stamp in fp32: V = max(V, stamp.g*inject), U = min(U, 1 - 0.5*stamp.g*inject).\nstruct Params { feed: f32, kill: f32, diff_u: f32, diff_v: f32, dt: f32, inject: f32, };\n@group(0) @binding(0) var<uniform> u: Params;\n@group(0) @binding(1) var field: texture_2d<f32>;\n@group(0) @binding(2) var stamp: texture_2d<f32>;\n@group(0) @binding(3) var output_tex: texture_storage_2d<rgba32float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = vec2<i32>(textureDimensions(output_tex));\n    let p = vec2<i32>(id.xy);\n    if p.x >= dims.x || p.y >= dims.y { return; }\n    let c  = textureLoad(field, p, 0).rg;\n    let l  = textureLoad(field, vec2<i32>(max(p.x - 1, 0), p.y), 0).rg;\n    let r  = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), p.y), 0).rg;\n    let t  = textureLoad(field, vec2<i32>(p.x, max(p.y - 1, 0)), 0).rg;\n    let b  = textureLoad(field, vec2<i32>(p.x, min(p.y + 1, dims.y - 1)), 0).rg;\n    let tl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), max(p.y - 1, 0)), 0).rg;\n    let tr = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), max(p.y - 1, 0)), 0).rg;\n    let bl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), min(p.y + 1, dims.y - 1)), 0).rg;\n    let br = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), min(p.y + 1, dims.y - 1)), 0).rg;\n    let lap = -c + 0.2 * (l + r + t + b) + 0.05 * (tl + tr + bl + br);\n    var cc = c;\n    let s = textureLoad(stamp, p, 0).g * u.inject;\n    cc.y = max(cc.y, s);\n    cc.x = min(cc.x, 1.0 - 0.5 * s);\n    let uvv = cc.x * cc.y * cc.y;\n    let du = u.diff_u * lap.x - uvv + u.feed * (1.0 - cc.x);\n    let dv = u.diff_v * lap.y + uvv - (u.feed + u.kill) * cc.y;\n    let nu = clamp(cc.x + du * u.dt, 0.0, 1.0);\n    let nv = clamp(cc.y + dv * u.dt, 0.0, 1.0);\n    textureStore(output_tex, p, vec4<f32>(nu, nv, 0.0, 1.0));\n}\n"
+    },
+    {
+      "id": 16,
+      "nodeId": "react_2",
+      "typeId": "node.wgsl_compute",
+      "handle": "react_2",
+      "title": "React 2",
+      "wgslSource": "// Gray-Scott substep 2 of 4 \u2014 same kernel as React 1 minus the inject\n// stamp (see React 1's header; Sims 9-point Laplacian, fp32 load-bearing).\nstruct Params { feed: f32, kill: f32, diff_u: f32, diff_v: f32, dt: f32, };\n@group(0) @binding(0) var<uniform> u: Params;\n@group(0) @binding(1) var field: texture_2d<f32>;\n@group(0) @binding(2) var output_tex: texture_storage_2d<rgba32float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = vec2<i32>(textureDimensions(output_tex));\n    let p = vec2<i32>(id.xy);\n    if p.x >= dims.x || p.y >= dims.y { return; }\n    let c  = textureLoad(field, p, 0).rg;\n    let l  = textureLoad(field, vec2<i32>(max(p.x - 1, 0), p.y), 0).rg;\n    let r  = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), p.y), 0).rg;\n    let t  = textureLoad(field, vec2<i32>(p.x, max(p.y - 1, 0)), 0).rg;\n    let b  = textureLoad(field, vec2<i32>(p.x, min(p.y + 1, dims.y - 1)), 0).rg;\n    let tl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), max(p.y - 1, 0)), 0).rg;\n    let tr = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), max(p.y - 1, 0)), 0).rg;\n    let bl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), min(p.y + 1, dims.y - 1)), 0).rg;\n    let br = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), min(p.y + 1, dims.y - 1)), 0).rg;\n    let lap = -c + 0.2 * (l + r + t + b) + 0.05 * (tl + tr + bl + br);\n    let uvv = c.x * c.y * c.y;\n    let du = u.diff_u * lap.x - uvv + u.feed * (1.0 - c.x);\n    let dv = u.diff_v * lap.y + uvv - (u.feed + u.kill) * c.y;\n    let nu = clamp(c.x + du * u.dt, 0.0, 1.0);\n    let nv = clamp(c.y + dv * u.dt, 0.0, 1.0);\n    textureStore(output_tex, p, vec4<f32>(nu, nv, 0.0, 1.0));\n}\n"
+    },
+    {
+      "id": 17,
+      "nodeId": "react_3",
+      "typeId": "node.wgsl_compute",
+      "handle": "react_3",
+      "title": "React 3",
+      "wgslSource": "// Gray-Scott substep 3 of 4 \u2014 same kernel as React 1 minus the inject\n// stamp (see React 1's header; Sims 9-point Laplacian, fp32 load-bearing).\nstruct Params { feed: f32, kill: f32, diff_u: f32, diff_v: f32, dt: f32, };\n@group(0) @binding(0) var<uniform> u: Params;\n@group(0) @binding(1) var field: texture_2d<f32>;\n@group(0) @binding(2) var output_tex: texture_storage_2d<rgba32float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = vec2<i32>(textureDimensions(output_tex));\n    let p = vec2<i32>(id.xy);\n    if p.x >= dims.x || p.y >= dims.y { return; }\n    let c  = textureLoad(field, p, 0).rg;\n    let l  = textureLoad(field, vec2<i32>(max(p.x - 1, 0), p.y), 0).rg;\n    let r  = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), p.y), 0).rg;\n    let t  = textureLoad(field, vec2<i32>(p.x, max(p.y - 1, 0)), 0).rg;\n    let b  = textureLoad(field, vec2<i32>(p.x, min(p.y + 1, dims.y - 1)), 0).rg;\n    let tl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), max(p.y - 1, 0)), 0).rg;\n    let tr = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), max(p.y - 1, 0)), 0).rg;\n    let bl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), min(p.y + 1, dims.y - 1)), 0).rg;\n    let br = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), min(p.y + 1, dims.y - 1)), 0).rg;\n    let lap = -c + 0.2 * (l + r + t + b) + 0.05 * (tl + tr + bl + br);\n    let uvv = c.x * c.y * c.y;\n    let du = u.diff_u * lap.x - uvv + u.feed * (1.0 - c.x);\n    let dv = u.diff_v * lap.y + uvv - (u.feed + u.kill) * c.y;\n    let nu = clamp(c.x + du * u.dt, 0.0, 1.0);\n    let nv = clamp(c.y + dv * u.dt, 0.0, 1.0);\n    textureStore(output_tex, p, vec4<f32>(nu, nv, 0.0, 1.0));\n}\n"
+    },
+    {
+      "id": 18,
+      "nodeId": "react_4",
+      "typeId": "node.wgsl_compute",
+      "handle": "react_4",
+      "title": "React 4",
+      "wgslSource": "// Gray-Scott substep 4 of 4 \u2014 same kernel as React 1 minus the inject\n// stamp (see React 1's header; Sims 9-point Laplacian, fp32 load-bearing).\nstruct Params { feed: f32, kill: f32, diff_u: f32, diff_v: f32, dt: f32, };\n@group(0) @binding(0) var<uniform> u: Params;\n@group(0) @binding(1) var field: texture_2d<f32>;\n@group(0) @binding(2) var output_tex: texture_storage_2d<rgba32float, write>;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = vec2<i32>(textureDimensions(output_tex));\n    let p = vec2<i32>(id.xy);\n    if p.x >= dims.x || p.y >= dims.y { return; }\n    let c  = textureLoad(field, p, 0).rg;\n    let l  = textureLoad(field, vec2<i32>(max(p.x - 1, 0), p.y), 0).rg;\n    let r  = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), p.y), 0).rg;\n    let t  = textureLoad(field, vec2<i32>(p.x, max(p.y - 1, 0)), 0).rg;\n    let b  = textureLoad(field, vec2<i32>(p.x, min(p.y + 1, dims.y - 1)), 0).rg;\n    let tl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), max(p.y - 1, 0)), 0).rg;\n    let tr = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), max(p.y - 1, 0)), 0).rg;\n    let bl = textureLoad(field, vec2<i32>(max(p.x - 1, 0), min(p.y + 1, dims.y - 1)), 0).rg;\n    let br = textureLoad(field, vec2<i32>(min(p.x + 1, dims.x - 1), min(p.y + 1, dims.y - 1)), 0).rg;\n    let lap = -c + 0.2 * (l + r + t + b) + 0.05 * (tl + tr + bl + br);\n    let uvv = c.x * c.y * c.y;\n    let du = u.diff_u * lap.x - uvv + u.feed * (1.0 - c.x);\n    let dv = u.diff_v * lap.y + uvv - (u.feed + u.kill) * c.y;\n    let nu = clamp(c.x + du * u.dt, 0.0, 1.0);\n    let nv = clamp(c.y + dv * u.dt, 0.0, 1.0);\n    textureStore(output_tex, p, vec4<f32>(nu, nv, 0.0, 1.0));\n}\n"
+    },
+    {
+      "id": 19,
+      "nodeId": "v_broadcast",
+      "typeId": "node.channel_mixer",
+      "handle": "v_broadcast",
+      "title": "V \u2192 grayscale",
+      "params": {
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "develop",
+      "typeId": "node.levels",
+      "handle": "develop",
+      "title": "Develop",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 2.8
+        },
+        "offset": {
+          "type": "Float",
+          "value": -0.12
+        },
+        "lo": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "hi": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "gamma": {
+          "type": "Float",
+          "value": 1.2
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "rd_ramp",
+      "typeId": "node.gradient",
+      "handle": "rd_ramp",
+      "title": "Growth Colors",
+      "params": {
+        "stops": {
+          "type": "Table",
+          "rows": [
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.25,
+              0.06,
+              0.3,
+              0.32
+            ],
+            [
+              0.55,
+              0.12,
+              0.8,
+              0.6
+            ],
+            [
+              0.85,
+              0.7,
+              1.0,
+              0.85
+            ],
+            [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": 22,
+      "nodeId": "colored",
+      "typeId": "node.color_lut",
+      "handle": "colored",
+      "title": "Apply Growth Colors",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "seed"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 10,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "output_tex",
+      "toNode": 16,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "output_tex",
+      "toNode": 17,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "output_tex",
+      "toNode": 18,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "output_tex",
+      "toNode": 7,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "output_tex",
+      "toNode": 19,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "lut"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "field"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "stamp"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "inject"
+    }
+  ]
+}
