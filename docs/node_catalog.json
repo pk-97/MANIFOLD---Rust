@@ -6593,7 +6593,6 @@
       ],
       "category": "Composite",
       "examples": [
-        "Cymatics",
         "MetallicGlass",
         "OilyFluid",
         "StylizedFeedback",
@@ -15510,6 +15509,7 @@
         "ApricotWeather",
         "BlackHole",
         "BlobTracking",
+        "Cymatics",
         "DigitalPlants",
         "FluidSim2D",
         "FluidSim3D",
@@ -21287,7 +21287,7 @@
           "name": "Symmetry"
         },
         {
-          "default": "120000",
+          "default": "250000",
           "id": "sand",
           "max": "400000",
           "min": "10000",
@@ -21301,18 +21301,11 @@
           "name": "Settle"
         },
         {
-          "default": "0.015",
+          "default": "0.008",
           "id": "jiggle",
           "max": "0.08",
           "min": "0",
           "name": "Jiggle"
-        },
-        {
-          "default": "0.6",
-          "id": "trail",
-          "max": "0.98",
-          "min": "0",
-          "name": "Trail"
         },
         {
           "default": "1",
