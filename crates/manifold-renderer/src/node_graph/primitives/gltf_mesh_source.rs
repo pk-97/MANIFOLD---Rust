@@ -16,7 +16,7 @@ use std::sync::mpsc;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_load::{GltfMeshSelector, load_gltf_mesh};
+use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector, load_gltf_mesh};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -117,7 +117,13 @@ crate::primitive! {
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(-1.0),
-            range: Some((-1.0, 1024.0)),
+            // -1 (default) = unset, falls through to mesh_index/WholeScene
+            // below. -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
+            // the glTF default-material (materialless) geometry — real
+            // glTF material indices are always >= 0, so widening the range
+            // down to -2 costs nothing for every existing selection.
+            range: Some((-2.0, 1024.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -223,7 +229,12 @@ impl Primitive for GltfMeshSource {
                 // every primitive of that material across the scene
                 // (the importer's per-material object). Otherwise the
                 // mesh_index / primitive_index path applies.
-                let selector = if material_index >= 0 {
+                let selector = if material_index == DEFAULT_MATERIAL_MESH_PARAM {
+                    // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): the
+                    // synthetic default-material object — every primitive
+                    // with no glTF material, scene-wide.
+                    GltfMeshSelector::DefaultMaterial
+                } else if material_index >= 0 {
                     GltfMeshSelector::Material {
                         material_index: material_index as u32,
                     }

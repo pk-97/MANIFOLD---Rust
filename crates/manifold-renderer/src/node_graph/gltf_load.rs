@@ -280,6 +280,23 @@ pub(crate) enum GltfMeshSelector {
     /// distinct material). Walks the node tree exactly like `WholeScene`
     /// but keeps only matching primitives.
     Material { material_index: u32 },
+    /// Every primitive with NO material (`primitive.material().index() ==
+    /// None`, glTF's implicit default material) — GLB_XFAIL_BURNDOWN_DESIGN.md
+    /// D4 (BUG-171)'s synthetic-material object. Scene-wide, like
+    /// `Material`, since materialless primitives can be scattered across
+    /// any node.
+    DefaultMaterial,
+}
+
+/// Which primitives `walk_gltf_node` keeps, generalizing the old
+/// `Option<u32>` (`None` = every primitive, `Some(idx)` = one material) to
+/// also express "only the materialless (default-material) primitives" —
+/// GLB_XFAIL_BURNDOWN_DESIGN.md D4.
+#[derive(Clone, Copy)]
+enum MaterialFilter {
+    All,
+    Material(u32),
+    DefaultOnly,
 }
 
 /// Flatten one glTF primitive's indexed geometry into `out`, applying
@@ -366,7 +383,7 @@ fn walk_gltf_node(
     node: &gltf::Node,
     parent_world: Mat4,
     buffers: &[gltf::buffer::Data],
-    material_filter: Option<u32>,
+    material_filter: MaterialFilter,
     out: &mut Vec<MeshVertex>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
@@ -377,11 +394,19 @@ fn walk_gltf_node(
         // under non-uniform scale, not just rotation + uniform scale.
         let normal_mat = mat3_transpose(mat3_inverse(mat3_upper_row_major(&world)));
         for primitive in mesh.primitives() {
-            if let Some(want) = material_filter {
+            match material_filter {
+                MaterialFilter::All => {}
                 // `material().index()` is `None` for the glTF default
                 // material; a numeric filter never matches that.
-                if primitive.material().index() != Some(want as usize) {
-                    continue;
+                MaterialFilter::Material(want) => {
+                    if primitive.material().index() != Some(want as usize) {
+                        continue;
+                    }
+                }
+                MaterialFilter::DefaultOnly => {
+                    if primitive.material().index().is_some() {
+                        continue;
+                    }
                 }
             }
             flatten_primitive(&primitive, buffers, &world, &normal_mat, out)?;
@@ -412,12 +437,29 @@ pub(crate) fn load_gltf_mesh(
     match selector {
         GltfMeshSelector::WholeScene => {
             for node in resolve_import_nodes(&document) {
-                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, None, &mut out)?;
+                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, MaterialFilter::All, &mut out)?;
             }
         }
         GltfMeshSelector::Material { material_index } => {
             for node in resolve_import_nodes(&document) {
-                walk_gltf_node(&node, MAT4_IDENTITY, &buffers, Some(material_index), &mut out)?;
+                walk_gltf_node(
+                    &node,
+                    MAT4_IDENTITY,
+                    &buffers,
+                    MaterialFilter::Material(material_index),
+                    &mut out,
+                )?;
+            }
+        }
+        GltfMeshSelector::DefaultMaterial => {
+            for node in resolve_import_nodes(&document) {
+                walk_gltf_node(
+                    &node,
+                    MAT4_IDENTITY,
+                    &buffers,
+                    MaterialFilter::DefaultOnly,
+                    &mut out,
+                )?;
             }
         }
         GltfMeshSelector::Mesh { mesh_index } => {
@@ -639,8 +681,75 @@ pub(crate) struct GltfMaterialInfo {
     /// UV channel end to end (`MeshVertex` carries a single `uv`), so a
     /// texCoord override can't be honoured. Report-only.
     pub uv_tex_coord_override: bool,
+    /// `true` when `mr_texture` above actually points at a
+    /// `KHR_materials_pbrSpecularGlossiness` `specularGlossinessTexture`
+    /// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167) rather than a genuine
+    /// glTF metallic-roughness map — its usable channel is glossiness in
+    /// ALPHA, not roughness/metallic in G/B. `gltf_import.rs` wires the
+    /// `node.gltf_texture_source` feeding this map with `mode =
+    /// gloss_to_roughness`, which repacks `(0, 1-gloss, 0, 1)` at decode
+    /// time so `render_scene`'s existing G=roughness/B=metallic read stays
+    /// untouched — the shader sees only metal-rough, per D2. The texture's
+    /// RGB specular tint (vs. the scalar `specular_factor` above, which
+    /// IS converted) is Deferred (§8) — not read here at all.
+    pub mr_texture_is_gloss_alpha: bool,
     pub vertex_count: u32,
 }
+
+/// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
+/// scalar factors to MANIFOLD's metal-rough vocabulary
+/// (GLB_XFAIL_BURNDOWN_DESIGN.md D2, BUG-167). Pure/value-level so it's
+/// unit-testable without a parsed `Document` — see the `tests` module.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SpecGlossConversion {
+    pub roughness: f32,
+    pub metallic: f32,
+    pub specular_factor: f32,
+}
+
+/// Convert spec-gloss's `glossinessFactor` + `specularFactor` (RGB) to
+/// metal-rough's `roughness` + the existing scalar `specular_factor` F0
+/// slot (`KHR_materials_specular`'s own slot, GLB_CONFORMANCE_DESIGN.md
+/// G-P4 — reused here rather than adding a second one). `metallic` is
+/// pinned to `0.0`: spec-gloss has no metalness channel of its own, and
+/// 0.0 is the dielectric default under which `specular_factor` alone
+/// drives `fs_pbr`'s F0 term — matching the extension's own dielectric-
+/// first model (a "metal" under spec-gloss is modeled as near-black
+/// diffuse + near-white specular, not a metalness scalar). `specular_factor`
+/// folds the RGB factor to its mean — the per-channel RGB TINT is
+/// Deferred (§8); this only carries the scalar magnitude, same as
+/// `KHR_materials_specular` already does for factor-only materials.
+pub(crate) fn convert_spec_gloss(
+    glossiness_factor: f32,
+    specular_factor_rgb: [f32; 3],
+) -> SpecGlossConversion {
+    SpecGlossConversion {
+        roughness: (1.0 - glossiness_factor).clamp(0.0, 1.0),
+        metallic: 0.0,
+        specular_factor: ((specular_factor_rgb[0] + specular_factor_rgb[1] + specular_factor_rgb[2])
+            / 3.0)
+            .clamp(0.0, 1.0),
+    }
+}
+
+/// `node.gltf_mesh_source`'s `material_index` param sentinel selecting
+/// [`GltfMeshSelector::DefaultMaterial`] — distinct from the param's own
+/// "unset" default (`-1`, which falls through to the `mesh_index`/
+/// `WholeScene` path; see `gltf_mesh_source.rs::run`). Real glTF material
+/// indices are always `>= 0`, so `-2` never collides with a genuine
+/// selection. GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171).
+pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
+
+/// [`GltfImportSummary::materials`]' reserved sentinel for the synthetic
+/// glTF-default-material entry (D4) — pinned by
+/// `GLB_XFAIL_BURNDOWN_DESIGN.md` §3: real glTF material indices are
+/// always `< u32::MAX` (the format has no material anywhere near that
+/// count), so this can never collide with a genuine index.
+/// `gltf_import.rs` must treat it as "no glTF material to re-query" —
+/// see [`DEFAULT_MATERIAL_MESH_PARAM`], which is how it tells
+/// `node.gltf_mesh_source` to select this geometry without looking up
+/// material index `u32::MAX` in the document.
+pub(crate) const DEFAULT_MATERIAL_SENTINEL: u32 = u32::MAX;
 
 /// Fold glTF `KHR_texture_transform`'s `(offset, rotation, scale)` into the
 /// affine `[m00, m01, m10, m11, tx, ty]` `resolve_albedo` applies as
@@ -812,10 +921,50 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     None => IDENTITY_UV_TRANSFORM,
                 }
             };
-            let base_color_info = pbr.base_color_texture();
-            let base_color_uv_transform = fold_typed(pbr.base_color_texture());
-            let mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
+            let mut base_color_info = pbr.base_color_texture();
+            let mut base_color_uv_transform = fold_typed(pbr.base_color_texture());
+            let mut mr_texture_index = pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32);
+            let mut mr_uv_transform = fold_typed(pbr.metallic_roughness_texture());
+            let mut base_color_factor = pbr.base_color_factor();
+            let mut metallic = pbr.metallic_factor();
+            let mut roughness = pbr.roughness_factor();
+            let mut mr_texture_is_gloss_alpha = false;
             let emissive_uv_transform = fold_typed(m.emissive_texture());
+
+            // GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167):
+            // KHR_materials_pbrSpecularGlossiness converts to metal-rough
+            // HERE, at parse time — `gltf_import.rs`/`render_scene.wgsl`
+            // never see spec-gloss. A material can't carry both
+            // pbrMetallicRoughness's own textures/factors AND spec-gloss
+            // meaningfully (the extension REPLACES the base PBR model per
+            // spec), so this unconditionally overrides the metal-rough
+            // fields already computed above when present. `specular_factor`
+            // is declared here (rather than with the KHR_materials_specular
+            // block below) so both the direct-specular-extension path AND
+            // this spec-gloss override write the SAME variable — one slot,
+            // two possible sources, never both.
+            let mut specular_factor_override: Option<f32> = None;
+            if let Some(sg) = m.pbr_specular_glossiness() {
+                let conv = convert_spec_gloss(sg.glossiness_factor(), sg.specular_factor());
+                base_color_factor = sg.diffuse_factor();
+                base_color_info = sg.diffuse_texture();
+                base_color_uv_transform = fold_typed(sg.diffuse_texture());
+                roughness = conv.roughness;
+                metallic = conv.metallic;
+                specular_factor_override = Some(conv.specular_factor);
+                match sg.specular_glossiness_texture() {
+                    Some(tex) => {
+                        mr_texture_index = Some(tex.texture().index() as u32);
+                        mr_uv_transform = fold_typed(sg.specular_glossiness_texture());
+                        mr_texture_is_gloss_alpha = true;
+                    }
+                    None => {
+                        mr_texture_index = None;
+                        mr_uv_transform = IDENTITY_UV_TRANSFORM;
+                    }
+                }
+            }
+
             let mut fold_raw = |ext: Option<&serde_json::Value>| -> [f32; 6] {
                 match ext {
                     Some(v) => {
@@ -840,10 +989,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular +
             // KHR_materials_ior, mapped to F0 scale downstream
             // (gltf_import.rs). Defaults (1.5 / 1.0 / [1,1,1]) reproduce
-            // today's hardcoded F0=0.04 exactly — see `fs_pbr`.
+            // today's hardcoded F0=0.04 exactly — see `fs_pbr`. D2:
+            // `specular_factor_override` (set above, non-None only for a
+            // spec-gloss material) wins over the direct
+            // `KHR_materials_specular` extension — spec-gloss materials
+            // don't also carry that extension in practice, but if one did,
+            // D2's conversion is the more specific decision for this slot.
             let ior = m.ior().unwrap_or(1.5);
             let specular_ext = m.specular();
-            let specular_factor = specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0);
+            let specular_factor = specular_factor_override
+                .unwrap_or_else(|| specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0));
             let specular_color_factor = specular_ext
                 .as_ref()
                 .map(|s| s.specular_color_factor())
@@ -878,16 +1033,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             Some(GltfMaterialInfo {
                 material_index,
                 name: m.name().map(|s| s.to_string()),
-                base_color_factor: pbr.base_color_factor(),
-                metallic: pbr.metallic_factor(),
-                roughness: pbr.roughness_factor(),
+                base_color_factor,
+                metallic,
+                roughness,
                 emissive: m.emissive_factor(),
                 alpha_mask,
                 alpha_cutoff: m.alpha_cutoff().unwrap_or(0.5),
                 base_color_texture: base_color_info.map(|t| t.texture().index() as u32),
                 normal_texture: m.normal_texture().map(|t| t.texture().index() as u32),
                 normal_scale: m.normal_texture().map(|t| t.scale()).unwrap_or(1.0),
-                mr_texture: pbr.metallic_roughness_texture().map(|t| t.texture().index() as u32),
+                mr_texture: mr_texture_index,
                 occlusion_texture: m.occlusion_texture().map(|t| t.texture().index() as u32),
                 occlusion_strength: m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0),
                 emissive_texture: m.emissive_texture().map(|t| t.texture().index() as u32),
@@ -910,17 +1065,65 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 clearcoat_roughness_factor,
                 clearcoat_has_texture,
                 was_blend,
+                mr_texture_is_gloss_alpha,
                 vertex_count,
             })
         })
         .collect();
+
+    let default_material_vertex_count = per_material.get(&None).copied().unwrap_or(0);
+    let mut materials = materials;
+    if default_material_vertex_count > 0 {
+        // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): geometry with no
+        // material assigned gets the glTF spec's implicit default material
+        // (base color [1,1,1,1], metallic 1.0, roughness 1.0 — glTF spec
+        // §3.9.2) instead of being silently dropped. Sentinel
+        // `material_index = DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks
+        // this entry as synthetic — `gltf_import.rs` must never re-query
+        // material index u32::MAX in the document for it.
+        materials.push(GltfMaterialInfo {
+            material_index: DEFAULT_MATERIAL_SENTINEL,
+            name: None,
+            base_color_factor: [1.0, 1.0, 1.0, 1.0],
+            metallic: 1.0,
+            roughness: 1.0,
+            emissive: [0.0, 0.0, 0.0],
+            alpha_mask: false,
+            alpha_cutoff: 0.5,
+            base_color_texture: None,
+            normal_texture: None,
+            normal_scale: 1.0,
+            mr_texture: None,
+            occlusion_texture: None,
+            occlusion_strength: 1.0,
+            emissive_texture: None,
+            emissive_strength: 1.0,
+            transmission_factor: 0.0,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
+            was_blend: false,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
+            mr_texture_is_gloss_alpha: false,
+            vertex_count: default_material_vertex_count,
+        });
+    }
 
     Ok(GltfImportSummary {
         materials,
         bbox_min,
         bbox_max,
         camera_count: document.cameras().count(),
-        default_material_vertex_count: per_material.get(&None).copied().unwrap_or(0),
+        default_material_vertex_count,
     })
 }
 
@@ -1038,5 +1241,50 @@ mod tests {
             );
             assert_eq!(verts.len() % 3, 0, "triangle list");
         }
+    }
+
+    /// GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167) value-level gate: known
+    /// spec-gloss factors → expected metal-rough numbers. Full gloss (1.0)
+    /// is a mirror — roughness 0.0 (perfectly smooth, `glossiness_factor`'s
+    /// own documented meaning); full rough spec-gloss (glossiness 0.0) →
+    /// roughness 1.0. `specular_factor` folds the RGB factor to its mean
+    /// (the RGB tint itself is Deferred, §8) and `metallic` is always the
+    /// dielectric default 0.0 — spec-gloss has no metalness channel.
+    #[test]
+    fn convert_spec_gloss_maps_glossiness_and_specular_factor() {
+        let smooth = convert_spec_gloss(1.0, [0.5, 0.5, 0.5]);
+        assert_eq!(smooth.roughness, 0.0);
+        assert_eq!(smooth.metallic, 0.0);
+        assert!((smooth.specular_factor - 0.5).abs() < 1e-6);
+
+        let rough = convert_spec_gloss(0.0, [1.0, 1.0, 1.0]);
+        assert_eq!(rough.roughness, 1.0);
+        assert!((rough.specular_factor - 1.0).abs() < 1e-6);
+
+        // Non-uniform RGB specular factor folds to the mean.
+        let tinted = convert_spec_gloss(0.25, [0.2, 0.4, 0.6]);
+        assert!((tinted.roughness - 0.75).abs() < 1e-6);
+        assert!((tinted.specular_factor - 0.4).abs() < 1e-6);
+
+        // Out-of-[0,1] glossiness (spec-illegal, but defensive) still
+        // clamps to a valid roughness rather than producing a negative or
+        // >1 value that would corrupt `resolve_mr`'s `max(t.g, 0.01)`.
+        let over = convert_spec_gloss(1.5, [2.0, 2.0, 2.0]);
+        assert_eq!(over.roughness, 0.0);
+        assert_eq!(over.specular_factor, 1.0);
+    }
+
+    /// D4 (BUG-171): the synthetic default-material entry's sentinel and
+    /// spec-mandated neutral factors (glTF spec §3.9.2's implicit default
+    /// material: base color white, metallic 1.0, roughness 1.0).
+    #[test]
+    fn default_material_synthetic_entry_shape() {
+        // Exercised end-to-end (against a real parsed summary) by
+        // `gltf_import.rs`'s `default_material_primitive_imports_as_one_object`
+        // — this pins the sentinel + spec-default constants in isolation so
+        // a future edit to `gltf_import_summary`'s push-site can't silently
+        // drift them.
+        assert_eq!(DEFAULT_MATERIAL_SENTINEL, u32::MAX);
+        assert_eq!(DEFAULT_MATERIAL_MESH_PARAM, -2);
     }
 }

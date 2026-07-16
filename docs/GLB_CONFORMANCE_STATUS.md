@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 61 expect_pass, 87 xfail across 9 reasons, 0 unclassified.**
+**148 assets total — 63 expect_pass, 85 xfail across 7 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -21,6 +21,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `BoxInterleaved.glb` | non_black_fraction_min, golden |
 | `BoxTextured.glb` | non_black_fraction_min, golden |
 | `BoxTexturedNonPowerOfTwo.glb` | non_black_fraction_min, golden |
+| `BoxVertexColors.glb` | non_black_fraction_min, golden |
 | `BrainStem.glb` | non_black_fraction_min, golden |
 | `CesiumMan.glb` | non_black_fraction_min, golden |
 | `CesiumMilkTruck.glb` | non_black_fraction_min, golden |
@@ -60,6 +61,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `RecursiveSkeletons.glb` | non_black_fraction_min, golden |
 | `RiggedFigure.glb` | non_black_fraction_min, golden |
 | `RiggedSimple.glb` | non_black_fraction_min, golden |
+| `SpecGlossVsMetalRough.glb` | non_black_fraction_min, golden |
 | `SpecularTest.glb` | region_mean_luminance_below, golden |
 | `TextureCoordinateTest.glb` | non_black_fraction_min, golden |
 | `TextureEncodingTest.glb` | non_black_fraction_min, golden |
@@ -86,12 +88,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 - `VirtualCity.glb`
 
-### `xfail:BUG-167` — 1 asset(s)
-
-**Gap:** KHR_materials_pbrSpecularGlossiness entirely unhandled
-
-- `SpecGlossVsMetalRough.glb`
-
 ### `xfail:BUG-168` — 1 asset(s)
 
 **Gap:** EXT_mesh_gpu_instancing entirely unhandled
@@ -105,12 +101,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `AnimatedColorsCube.glb`
 - `CubeVisibility.glb`
 - `LightVisibility.glb`
-
-### `xfail:BUG-171` — 1 asset(s)
-
-**Gap:** materialless primitive skipped instead of using the glTF default material
-
-- `BoxVertexColors.glb`
 
 ### `xfail:BUG-173` — 1 asset(s)
 

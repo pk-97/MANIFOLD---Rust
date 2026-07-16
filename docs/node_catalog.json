@@ -7781,7 +7781,7 @@
           "label": "Material Index",
           "name": "material_index",
           "range": [
-            "-1",
+            "-2",
             "1024"
           ],
           "type": "int"
@@ -7896,6 +7896,20 @@
             "8192"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "passthrough",
+            "gloss_to_roughness"
+          ],
+          "label": "Repack Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
         }
       ],
       "purpose": "Read one embedded image out of a glTF/.glb file and emit it as a Texture2D wire, so an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. texture_index selects among document.textures(); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",

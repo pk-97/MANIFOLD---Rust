@@ -30,6 +30,7 @@ use crate::node_graph::primitive::Primitive;
 struct GltfTextureBlitUniforms {
     out_width: f32,
     out_height: f32,
+    mode: f32,
 }
 
 crate::primitive! {
@@ -81,8 +82,16 @@ crate::primitive! {
             range: Some((1.0, 8192.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("mode"),
+            label: "Repack Mode",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["passthrough", "gloss_to_roughness"],
+        },
     ],
-    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder` and node.gltf_mesh_source's `path`. texture_index selects among document.textures() (not the raw image index — the primitive resolves each texture's image source internally). color_space is the one param that isn't cosmetic: sRGB (default) is correct for anything the eye reads as color — base-color/albedo maps — so the hardware linearizes on sample; Linear is for data maps (normal, metallic-roughness, occlusion) where the raw bytes ARE the value and gamma-decoding them would corrupt the data. width/height set the output resolution — the glTF importer sets them to the source image's exact dimensions so the stretch-blit is a 1:1 copy; manual drops before a File is picked resample (stretch-fill, no aspect-fit) to the 1024² default. Wire `out` into node.render_scene's `base_color_map_N` input.",
+    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder` and node.gltf_mesh_source's `path`. texture_index selects among document.textures() (not the raw image index — the primitive resolves each texture's image source internally). color_space is the one param that isn't cosmetic: sRGB (default) is correct for anything the eye reads as color — base-color/albedo maps — so the hardware linearizes on sample; Linear is for data maps (normal, metallic-roughness, occlusion) where the raw bytes ARE the value and gamma-decoding them would corrupt the data. width/height set the output resolution — the glTF importer sets them to the source image's exact dimensions so the stretch-blit is a 1:1 copy; manual drops before a File is picked resample (stretch-fill, no aspect-fit) to the 1024² default. mode=gloss_to_roughness (GLB_XFAIL_BURNDOWN_DESIGN.md D2) repacks a KHR_materials_pbrSpecularGlossiness specularGlossinessTexture's alpha (glossiness) into render_scene's glTF metal-rough packing (G=roughness=1-gloss, B=metallic=0) at blit time, so a spec-gloss texture can wire into the same `mrMap` input a real metal-rough texture uses — passthrough (default) is a byte-identical plain copy. Wire `out` into node.render_scene's `base_color_map_N` input.",
     examples: [],
     picker: { label: "glTF Texture", category: Atom },
     summary: "Loads an embedded image from a glTF/.glb file as a texture, so an imported model's baked-in albedo/alpha map flows into the render pipeline like any other texture source.",
@@ -238,6 +247,17 @@ impl Primitive for GltfTextureSource {
             fresh_upload = true;
         }
 
+        // Read fresh every frame (like color_space at upload) rather than
+        // cached in `last_key` — `mode` affects the per-frame blit
+        // dispatch below, not the decode, so no re-decode is needed on
+        // change. Read before `ctx.gpu_encoder()`/`ctx.outputs` borrow
+        // `ctx` mutably below.
+        let mode = match ctx.params.get("mode") {
+            Some(ParamValue::Enum(v)) => *v as f32,
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+
         // 5. Output buffer.
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
@@ -282,6 +302,7 @@ impl Primitive for GltfTextureSource {
         let uniforms = GltfTextureBlitUniforms {
             out_width: w as f32,
             out_height: h as f32,
+            mode,
         };
 
         gpu.native_enc.dispatch_compute(
@@ -394,7 +415,7 @@ mod tests {
         let names: Vec<&str> = GltfTextureSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
         assert_eq!(
             names,
-            vec!["path", "texture_index", "color_space", "width", "height"]
+            vec!["path", "texture_index", "color_space", "width", "height", "mode"]
         );
     }
 
