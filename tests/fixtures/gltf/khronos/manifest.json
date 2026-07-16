@@ -979,9 +979,18 @@
   },
   {
     "asset": "CompareIridescence.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_iridescence.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CompareSheen.glb",
@@ -1108,7 +1117,7 @@
     "asset": "IridescenceAbalone.glb",
     "checks": [],
     "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to CompareIridescence/IridescenceSuzanne, not this showcase) \u2014 real iridescence math IS active on this asset (not unsupported), left xfail pending Peter's visual read"
   },
   {
     "asset": "IridescenceLamp.glb",
@@ -1118,9 +1127,18 @@
   },
   {
     "asset": "IridescenceSuzanne.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/iridescence_suzanne.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "IridescentDishWithOlives.glb",

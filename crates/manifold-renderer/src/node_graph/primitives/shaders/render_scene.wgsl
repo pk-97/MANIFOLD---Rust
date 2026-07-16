@@ -968,6 +968,104 @@ fn V_Ashikhmin(n_dot_v: f32, n_dot_l: f32) -> f32 {
     return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
 }
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: `KHR_materials_iridescence`'s
+// thin-film interference — the glTF spec's own reference "Airy summation"
+// algorithm (Belcour/Barla 2017, mirrored verbatim across every glTF
+// engine that implements this extension: the Khronos glTF-Sample-Viewer's
+// `iridescence.glsl`, Three.js, Babylon.js, Filament's docs appendix).
+// Ported term-for-term from that reference, not re-derived — see the XYZ
+// sensitivity-curve magic constants below, which are a fitted
+// approximation of the CIE color-matching functions and are NOT safe to
+// hand-simplify.
+const XYZ_TO_REC709_0: vec3<f32> = vec3<f32>(3.2404542, -1.5371385, -0.4985314);
+const XYZ_TO_REC709_1: vec3<f32> = vec3<f32>(-0.9692660, 1.8760108, 0.0415560);
+const XYZ_TO_REC709_2: vec3<f32> = vec3<f32>(0.0556434, -0.2040259, 1.0572252);
+
+fn iridescence_f0_to_ior(f0: vec3<f32>) -> vec3<f32> {
+    let sqrt_f0 = sqrt(clamp(f0, vec3<f32>(0.0), vec3<f32>(0.9999)));
+    return (vec3<f32>(1.0) + sqrt_f0) / (vec3<f32>(1.0) - sqrt_f0);
+}
+
+fn iridescence_ior_to_f0_v3(transmitted_ior: vec3<f32>, incident_ior: f32) -> vec3<f32> {
+    let d = (transmitted_ior - vec3<f32>(incident_ior)) / (transmitted_ior + vec3<f32>(incident_ior));
+    return d * d;
+}
+
+fn iridescence_ior_to_f0(transmitted_ior: f32, incident_ior: f32) -> f32 {
+    let d = (transmitted_ior - incident_ior) / (transmitted_ior + incident_ior);
+    return d * d;
+}
+
+fn iridescence_sensitivity(opd: f32, shift: vec3<f32>) -> vec3<f32> {
+    let phase = 2.0 * PI * opd * 1.0e-9;
+    let val = vec3<f32>(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    let pos = vec3<f32>(1.6810e+06, 1.7953e+06, 2.2084e+06);
+    let var_ = vec3<f32>(4.3278e+09, 9.3046e+09, 6.6121e+09);
+
+    var xyz = val * sqrt(2.0 * PI * var_) * cos(pos * phase + shift) * exp(-pow(phase, 2.0) * var_);
+    xyz.x = xyz.x + 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * pow(phase, 2.0));
+    xyz = xyz / 1.0685e-7;
+
+    return vec3<f32>(dot(XYZ_TO_REC709_0, xyz), dot(XYZ_TO_REC709_1, xyz), dot(XYZ_TO_REC709_2, xyz));
+}
+
+// Returns the thin-film reflectance (RGB) to mix into the base F0 by
+// `iridescenceFactor`. `outside_ior` is always 1.0 (air) in this shader —
+// no nested-medium tracking. `base_f0` is the base layer's OWN F0 (the
+// dielectric/metal Fresnel this doc's G-P4 phase already computes) — the
+// thin film sits between air and that base layer.
+fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32, base_f0: vec3<f32>) -> vec3<f32> {
+    // Force iridescence_ior -> outside_ior as thickness -> 0 (a vanishing
+    // film has no optical effect) — smoothstep, not a hard branch, per the
+    // reference.
+    let t = smoothstep(0.0, 0.03, thickness);
+    let iridescence_ior = mix(outside_ior, eta2, t);
+    let sin_theta2_sq = (outside_ior / iridescence_ior) * (outside_ior / iridescence_ior) * (1.0 - cos_theta1 * cos_theta1);
+    let cos_theta2_sq = 1.0 - sin_theta2_sq;
+    if cos_theta2_sq < 0.0 {
+        // Total internal reflection at the film's outer interface.
+        return vec3<f32>(1.0);
+    }
+    let cos_theta2 = sqrt(cos_theta2_sq);
+
+    // First interface (air -> film).
+    let r0 = iridescence_ior_to_f0(iridescence_ior, outside_ior);
+    let r12 = r0 + (1.0 - r0) * pow(clamp(1.0 - cos_theta1, 0.0, 1.0), 5.0);
+    let t121 = 1.0 - r12;
+    var phi12 = 0.0;
+    if iridescence_ior < outside_ior {
+        phi12 = PI;
+    }
+    let phi21 = PI - phi12;
+
+    // Second interface (film -> base layer).
+    let base_ior = iridescence_f0_to_ior(clamp(base_f0, vec3<f32>(0.0), vec3<f32>(0.9999)));
+    let r1 = iridescence_ior_to_f0_v3(base_ior, iridescence_ior);
+    let r23 = r1 + (vec3<f32>(1.0) - r1) * pow(clamp(1.0 - cos_theta2, 0.0, 1.0), 5.0);
+    var phi23 = vec3<f32>(0.0);
+    if base_ior.x < iridescence_ior { phi23.x = PI; }
+    if base_ior.y < iridescence_ior { phi23.y = PI; }
+    if base_ior.z < iridescence_ior { phi23.z = PI; }
+
+    // Phase shift + optical path difference.
+    let opd = 2.0 * iridescence_ior * thickness * cos_theta2;
+    let phi = vec3<f32>(phi21) + phi23;
+
+    // Compound terms — the Airy summation's geometric series.
+    let r123 = clamp(vec3<f32>(r12) * r23, vec3<f32>(1e-5), vec3<f32>(0.9999));
+    let sqrt_r123 = sqrt(r123);
+    let rs = (t121 * t121) * r23 / (vec3<f32>(1.0) - r123);
+
+    var i = vec3<f32>(r12) + rs;
+    var cm = rs - vec3<f32>(t121);
+    for (var m = 1; m <= 2; m = m + 1) {
+        cm = cm * sqrt_r123;
+        let sm = 2.0 * iridescence_sensitivity(f32(m) * opd, f32(m) * phi);
+        i = i + cm * sm;
+    }
+    return max(i, vec3<f32>(0.0));
+}
+
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse, summed over
 // every wired light (H/D/G/F/kd/diffuse are all light-dependent via H,
 // so they're recomputed per light); IBL reflection + ambient + emission
@@ -1020,7 +1118,20 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let specular_tint = u.pbr_specular_tint.rgb;
     let dielectric_reflectance = pow((ior - 1.0) / (ior + 1.0), 2.0);
     let dielectric_f0 = min(dielectric_reflectance * specular_tint, vec3<f32>(1.0)) * specular_factor;
-    let F0 = mix(dielectric_f0, albedo.rgb, metallic);
+    let base_f0 = mix(dielectric_f0, albedo.rgb, metallic);
+    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: `KHR_materials_iridescence`
+    // modifies the BASE layer's F0 (feeding both direct lighting and IBL
+    // below) — thin-film interference between air and the base
+    // dielectric/metal surface. `iridescence_factor == 0.0` (the default,
+    // no extension) makes `F0 == base_f0` exactly (mix at t=0), byte-
+    // identical to pre-E4 output for every material without the
+    // extension. Resolved once per fragment (not per light — the film's
+    // reflectance depends only on view angle, same "IBL's view-only
+    // Fresnel" reasoning this file already uses elsewhere).
+    let iridescence = resolve_iridescence(in.uv);
+    let iridescence_factor = iridescence.x;
+    let iridescence_fresnel = eval_iridescence(1.0, iridescence.y, n_dot_v, iridescence.z, base_f0);
+    let F0 = mix(base_f0, iridescence_fresnel, iridescence_factor);
     let a = roughness * roughness;
     let a2 = a * a;
     let r = roughness + 1.0;
