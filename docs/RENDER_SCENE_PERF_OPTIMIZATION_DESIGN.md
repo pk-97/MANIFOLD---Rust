@@ -384,6 +384,74 @@ keys (the documented trap); touching the BRDF LUT path (already build-once, corr
 Test scope: same as P2 (GPU feature run mandatory — shaders' callers changed). Dependencies (D9):
 P2 only.
 
+**Perf clause discharged by P3b** (2026-07-17, post-P3): the full-chain AMG before/after (bake
+→ switch_texture → render_scene) is owed by P3b, not this phase — BUG-193 found every glTF import
+routes through `node.switch_texture`, which broke the generation signal this phase's mechanism
+correctly relies on. This phase's own mechanism and correctness gates are unaffected and remain
+landed as-is.
+
+**P3b — BUG-193: pass-through generation gating on `node.switch_texture` (half session, Sonnet).**
+Entry: P3 landed with its perf clause undischarged (P3's own gate note) — the mechanism is correct
+but every glTF import wires `bake_environment → switch_texture → render_scene`, and the mux
+re-emits every frame, so render_scene's IBL cache key never hits on a real import (BUG-193).
+Read-back: this doc D5+D7+I1–I4 and the P3 brief; `mux_texture.rs` WHOLE file — especially the
+`latched_selector` doc (~119–132: wired selectors render with LAST frame's value by design; the
+gate keys on the effective value, so this is already solved, don't re-derive it),
+`selected_input_branch`, `skip_passthrough`, and `is_pure`; `execution.rs` alias-skip path
+(~1093–1160) + the D5 choke-point comment (~1296–1319) — it documents WHY aliased steps
+conservatively bump; after this phase it must document why the fenced propagation is safe
+(supersession discipline, in-file); `gltf_import.rs` ~687–718 (the D6 env wiring: selector is
+INLINE, `num_inputs = 2`); P2's `slot_generation` read-side API.
+Deliverables: (1) `mux_texture.rs` evaluate-path gate: after the existing selector-read/latch
+block (which must run unconditionally — the latch update is the wired-selector contract), compute
+key = (effective selector index actually rendered, selected source slot's `slot_generation`,
+selected source texture identity, output texture identity, rebuild epoch); on full-key match skip
+the dispatch (and the clear-fallback) and call `mark_outputs_unchanged()`; any mismatch → run +
+store key. The unwired-fallback (`in_0`) and all-unwired (clear-to-black) paths participate in the
+key like any other resolved source — same rule, no special cases. (2) `execution.rs` alias-path
+propagation, fenced: for a `performed_alias` step where `data_skip` is FALSE (param-driven
+`skip_passthrough` only — the empty-propagation data-skip path keeps its conservative bump
+untouched), set `node_declared_unchanged[idx]` when (same in-slot resource as this step's previous
+frame, same out slot, in-slot generation unchanged); per-step scratch in `Executor`, cleared on
+rebuild. (3) Update the choke-point comment and BUG-193's Status line; note in the commit message
+whether the AMG's mux took the evaluate path or the alias path (expected: evaluate — equirect
+dims ≠ canvas dims, so `compatible()` fails). (4) One recorded observation, no code: with
+`env_mode = HDRI` the chain routes through `node.exposure` (hdri_gain), which never declares
+unchanged — run the AMG once in HDRI mode after landing and record whether the floor drops there
+too; if not, extend BUG-189's residual note naming the exposure hop (fix is future R-class work,
+NOT this phase).
+Gate — positive: (a) full-chain perf, transferred verbatim from P3's undischarged clause:
+unprofiled perf-soak before/after on the AMG @4K (default import = softbox path), delta consistent
+with P0's measured IBL share — ~41% of render_scene GPU time, a multi-ms drop well above run
+noise (±30% tolerance stands); profiled sanity: `… ibl prefilter` / `… ibl irradiance` rows <2%
+on steady frames AND the `node.switch_texture` dispatch row gone from steady frames; (b)
+correctness, both selector populations: gpu-proofs — static inline selector + static source:
+frame N output bit-identical to fresh-executor frame 1 (I4 through the mux); static selector +
+CHANGED source (flip a bake param): next frame's lit output equals a fresh executor's (I2 through
+the mux — proves the generation term); CHANGING selector, inline: flip `selector` → output equals
+a fresh render with the new branch, next frame; CHANGING selector, WIRED: drive the selector wire
+across a change and assert output matches the LATCHED expectation (frame N+1 shows the new
+branch, exactly as pre-change — the latch is existing behavior, the test pins that the gate didn't
+break it and introduces no staleness beyond the designed one-frame lag); alias-path test: a
+dims-matched mux chain (canvas-sized source) proving the executor propagation — static input →
+downstream consumer's generation stable; input re-emits → generation bumps; negative:
+`rg -n 'node_declared_unchanged' crates/manifold-renderer/src/node_graph/execution.rs` shows the
+alias-path write is inside a `!data_skip` guard; the P3 brief's gate paragraph carries a one-line
+note "perf clause discharged by P3b" (this doc, in-file).
+Demo: before/after JSON + the wired-selector staleness test green — L2. Forbidden moves: touching
+the latch semantics or `selected_input_branch` pruning (the one-frame selector lag is designed,
+documented, and consumed by liveness — changing it is a different design); declaring unchanged on
+the `data_skip` alias path (empty-propagation chains keep the conservative bump); gating
+`node.exposure` or any other atom (recorded observation only — scope is the mux + the alias choke
+point); identity-only keys (P1's documented trap — the generation term is the point); removing
+the mux's `is_pure`/`skip_passthrough` declarations (they're orthogonal optimizations, not
+casualties).
+Test scope: `cargo test -p manifold-renderer --features gpu-proofs` (mux gpu_tests + render_scene
+suite + the new full-chain tests) + default workspace sweep; graph runtime touched → GPU feature
+run mandatory, on `cargo test`, never nextest. Dependencies (D9): P3 only. P4 remains
+data-independent (its entry clause is unchanged); D10 serial ordering in the same worktree still
+applies.
+
 **P4 — R5: CPU evaluate() repair (half–one session, Sonnet).**
 Entry: P3 landed (or P2 landed and P3 blocked-and-surfaced — P4 is data-independent of P3).
 Read-back: this doc §1's CPU row; `render_scene.rs` `evaluate()` region ~2264 onward and the
