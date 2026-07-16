@@ -1,6 +1,6 @@
 # Scene Setup Panel — compose, light, and dress a 3D scene without opening the graph
 
-**Status: IN PROGRESS — P1 (column + discovery + Environment/Fog) + P2 (Objects section) SHIPPED 2026-07-17; P3–P5 not implemented. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command) and BUG-194 (vertex count not computable from def) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter)**
+**Status: IN PROGRESS — P1 (column + discovery + Environment/Fog) + P2 (Objects section) + P3 (Lights + Camera sections) + P4 (Import Model merge, held-out warehouse+skull gate passed) SHIPPED 2026-07-17; P5 (modifier stack) not implemented. Sonnet-executable, orchestrated overnight. BUG-193 (no object/light remove command), BUG-194 (vertex count not computable from def), BUG-195 (merge scale-sanity has no stored object radius, defaulted proxy) opened as honest escalations, not blocking. · 2026-07-16 · Fable 5 (design session with Peter)**
 **Prerequisites:** none — every substrate this design consumes is SHIPPED and verified in-tree
 (SCENE_BUILD_AND_GROUP_PARAMS P1–P5, REALTIME_3D P1–P4/P8/P9, MATERIAL M1–M6, IMPORT_FIDELITY
 F-P1–F-P7, GLB_CONFORMANCE, the audio-dock `ScreenLayout` column, `ChangeGraphParamCommand`).

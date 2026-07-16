@@ -347,6 +347,69 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        // P4 "Import Model…" button (D5): a native file dialog picks a
+        // second `.glb`/`.gltf`, `merge_import_into_graph` (via the public
+        // `assemble_merge_plan` wrapper — the assembler's own summary type
+        // is crate-private, same constraint as `OBJECT_SAFETY_MAX`) builds
+        // a `MergePlan` against the layer's CURRENT effective def, and
+        // `ImportModelIntoSceneCommand` applies it as one undo unit. Loud
+        // failure (log + no-op), never a silent partial merge — same
+        // posture as `Application::import_model_file`'s own parse-failure
+        // branch.
+        PanelAction::SceneSetupImportModelClicked(layer_id, render_scene_node_id) => {
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            let effective_def = project
+                .timeline
+                .find_layer_by_id(layer_id)
+                .and_then(|(_, layer)| layer.generator_graph().cloned())
+                .unwrap_or_else(|| default.clone());
+
+            let Some(path) = rfd::FileDialog::new().add_filter("glTF", &["glb", "gltf"]).pick_file()
+            else {
+                return DispatchResult::handled();
+            };
+
+            let plan = match manifold_renderer::node_graph::gltf_import::assemble_merge_plan(
+                &effective_def,
+                &path,
+            ) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    log::warn!(
+                        "[Scene Setup] Import Model… merge failed for {}: {e}",
+                        path.display()
+                    );
+                    return DispatchResult::handled();
+                }
+            };
+            debug_assert_eq!(
+                plan.render_scene_node_id, *render_scene_node_id,
+                "the freshly-built plan must target the SAME render_scene the Vm/action carried"
+            );
+
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let cmd = manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
+                target,
+                Vec::new(),
+                plan.render_scene_node_id,
+                plan.new_nodes,
+                plan.new_wires,
+                plan.new_objects_count,
+                plan.new_card_params,
+                plan.new_card_bindings,
+                plan.new_string_bindings,
+                default,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            if !plan.report_lines.is_empty() {
+                log::info!("[Scene Setup] Import Model… report: {}", plan.report_lines.join("; "));
+            }
+            DispatchResult::structural()
+        }
         // D7 "New 3D Scene" empty-state action: assign the bundled Scene
         // Starter preset via the SAME `ChangeGeneratorTypeCommand` the
         // browser-popup generator picker's `SetGenType` dispatches (§1 VERIFY

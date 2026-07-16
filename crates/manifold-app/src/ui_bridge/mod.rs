@@ -574,6 +574,7 @@ pub fn dispatch(
         | PanelAction::SceneSetupAddFog(..)
         | PanelAction::SceneSetupAddObject(..)
         | PanelAction::SceneSetupAddLight(..)
+        | PanelAction::SceneSetupImportModelClicked(..)
         | PanelAction::SceneSetupNewScene(..) => project::dispatch_project(
             action,
             project,

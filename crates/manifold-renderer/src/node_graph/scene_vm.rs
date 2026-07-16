@@ -184,19 +184,47 @@ pub enum MaterialVm {
 
 /// Payload for [`SceneLightVm::Known`], boxed at the enum site so the enum's
 /// footprint tracks the small `Custom` variant instead of this one
-/// (clippy `large_enum_variant`).
+/// (clippy `large_enum_variant`). Carries both the write address AND the
+/// CURRENT value for every row (same convention as [`ImporterEnvironmentRow`]
+/// / [`AtmosphereRow`]) — the panel renders sliders/steppers, which need a
+/// live position, not just a target. `mode`/`shadow_softness` are the
+/// primitive's Enum-typed params (`node.light`'s `LIGHT_MODES` /
+/// `SHADOW_SOFTNESS_LABELS`); their value is the raw enum index — the panel
+/// owns the display-label mapping (it can't depend on this crate's
+/// constants, same DTO-boundary convention as `EnvironmentRowVm::mode_is_hdri`).
+/// `light_size` is P9's Contact-softness-only knob (REALTIME_3D_DESIGN.md) —
+/// always resolved and always writable (D4: "parameter dependency, not
+/// conditional UI"), regardless of the current `shadow_softness_value`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LightRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub mode_addr: ParamAddr,
+    pub mode_value: u32,
+    pub mode_driven: bool,
     pub color_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub color_value: (f32, f32, f32),
+    pub color_driven: (bool, bool, bool),
     pub intensity_addr: ParamAddr,
+    pub intensity_value: f32,
+    pub intensity_driven: bool,
     pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub pos_value: (f32, f32, f32),
+    pub pos_driven: (bool, bool, bool),
     pub aim_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub aim_value: (f32, f32, f32),
+    pub aim_driven: (bool, bool, bool),
     pub cast_shadows_addr: ParamAddr,
+    /// `true` when the raw [0,1] threshold is > 0.5 (`node.light`'s own
+    /// on/off convention, REALTIME_3D D4).
+    pub cast_shadows_value: bool,
+    pub cast_shadows_driven: bool,
     pub shadow_softness_addr: ParamAddr,
+    pub shadow_softness_value: u32,
+    pub shadow_softness_driven: bool,
     pub light_size_addr: ParamAddr,
+    pub light_size_value: f32,
+    pub light_size_driven: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,30 +233,92 @@ pub enum SceneLightVm {
     Custom { index: usize },
 }
 
+/// `node.camera_lens`'s four port-shadowed scalar params (D3: "the lens
+/// node's own row beneath"), with the same address+value+driven shape as
+/// every other editable row. `None` on a camera row means no lens node was
+/// traced between the camera atom and `render_scene`'s `camera` port — the
+/// importer's shape always inserts one, but a hand-wired camera may not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LensRow {
+    pub node_doc_id: u32,
+    pub focus_distance_addr: ParamAddr,
+    pub focus_distance_value: f32,
+    pub focus_distance_driven: bool,
+    pub f_stop_addr: ParamAddr,
+    pub f_stop_value: f32,
+    pub f_stop_driven: bool,
+    pub shutter_angle_addr: ParamAddr,
+    pub shutter_angle_value: f32,
+    pub shutter_angle_driven: bool,
+    pub exposure_ev_addr: ParamAddr,
+    pub exposure_ev_value: f32,
+    pub exposure_ev_driven: bool,
+}
+
 /// Payload for [`CameraVm::Orbit`], boxed for the same reason as
 /// [`LightRow`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct OrbitCameraRow {
     pub node_doc_id: u32,
-    pub lens_node_doc_id: Option<u32>,
+    pub lens: Option<LensRow>,
     pub orbit_addr: ParamAddr,
+    pub orbit_value: f32,
+    pub orbit_driven: bool,
     pub tilt_addr: ParamAddr,
+    pub tilt_value: f32,
+    pub tilt_driven: bool,
     pub distance_addr: ParamAddr,
+    pub distance_value: f32,
+    pub distance_driven: bool,
     pub fov_y_addr: ParamAddr,
+    pub fov_y_value: f32,
+    pub fov_y_driven: bool,
+}
+
+/// Payload for [`CameraVm::Free`] (D3: "free: pos/euler/fov rows").
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreeCameraRow {
+    pub node_doc_id: u32,
+    pub lens: Option<LensRow>,
+    pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub pos_value: (f32, f32, f32),
+    pub pos_driven: (bool, bool, bool),
+    pub yaw_addr: ParamAddr,
+    pub yaw_value: f32,
+    pub yaw_driven: bool,
+    pub pitch_addr: ParamAddr,
+    pub pitch_value: f32,
+    pub pitch_driven: bool,
+    pub roll_addr: ParamAddr,
+    pub roll_value: f32,
+    pub roll_driven: bool,
+    pub fov_y_addr: ParamAddr,
+    pub fov_y_value: f32,
+    pub fov_y_driven: bool,
+}
+
+/// Payload for [`CameraVm::LookAt`] (D3: "look-at: pos/target/fov rows").
+#[derive(Debug, Clone, PartialEq)]
+pub struct LookAtCameraRow {
+    pub node_doc_id: u32,
+    pub lens: Option<LensRow>,
+    pub pos_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub pos_value: (f32, f32, f32),
+    pub pos_driven: (bool, bool, bool),
+    pub target_addr: (ParamAddr, ParamAddr, ParamAddr),
+    pub target_value: (f32, f32, f32),
+    pub target_driven: (bool, bool, bool),
+    pub fov_y_addr: ParamAddr,
+    pub fov_y_value: f32,
+    pub fov_y_driven: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraVm {
     None,
     Orbit(Box<OrbitCameraRow>),
-    Free {
-        node_doc_id: u32,
-        lens_node_doc_id: Option<u32>,
-    },
-    LookAt {
-        node_doc_id: u32,
-        lens_node_doc_id: Option<u32>,
-    },
+    Free(Box<FreeCameraRow>),
+    LookAt(Box<LookAtCameraRow>),
     Custom { node_doc_id: u32 },
 }
 
@@ -578,35 +668,88 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
             let port = format!("light_{k}");
             match level.producer(scene_node.id, &port) {
                 Some((node_id, _)) if level.node(node_id).is_some_and(|n| n.type_id == LIGHT_TYPE_ID) => {
+                    let node = level.node(node_id).expect("checked above");
+                    let driven = |name: &str| level.producer(node_id, name).is_some();
                     SceneLightVm::Known(Box::new(LightRow {
                         index: k,
                         node_doc_id: node_id,
                         mode_addr: ParamAddr::root(node_id, "mode"),
+                        mode_value: param_f32(node, "mode", 0.0) as u32,
+                        mode_driven: driven("mode"),
                         color_addr: (
                             ParamAddr::root(node_id, "color_r"),
                             ParamAddr::root(node_id, "color_g"),
                             ParamAddr::root(node_id, "color_b"),
                         ),
+                        color_value: (
+                            param_f32(node, "color_r", 1.0),
+                            param_f32(node, "color_g", 1.0),
+                            param_f32(node, "color_b", 1.0),
+                        ),
+                        color_driven: (driven("color_r"), driven("color_g"), driven("color_b")),
                         intensity_addr: ParamAddr::root(node_id, "intensity"),
+                        intensity_value: param_f32(node, "intensity", 1.0),
+                        intensity_driven: driven("intensity"),
                         pos_addr: (
                             ParamAddr::root(node_id, "pos_x"),
                             ParamAddr::root(node_id, "pos_y"),
                             ParamAddr::root(node_id, "pos_z"),
                         ),
+                        pos_value: (
+                            param_f32(node, "pos_x", 0.0),
+                            param_f32(node, "pos_y", 30.0),
+                            param_f32(node, "pos_z", 0.0),
+                        ),
+                        pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
                         aim_addr: (
                             ParamAddr::root(node_id, "aim_x"),
                             ParamAddr::root(node_id, "aim_y"),
                             ParamAddr::root(node_id, "aim_z"),
                         ),
+                        aim_value: (
+                            param_f32(node, "aim_x", 0.0),
+                            param_f32(node, "aim_y", 0.0),
+                            param_f32(node, "aim_z", 0.0),
+                        ),
+                        aim_driven: (driven("aim_x"), driven("aim_y"), driven("aim_z")),
                         cast_shadows_addr: ParamAddr::root(node_id, "cast_shadows"),
+                        cast_shadows_value: param_f32(node, "cast_shadows", 1.0) > 0.5,
+                        cast_shadows_driven: driven("cast_shadows"),
                         shadow_softness_addr: ParamAddr::root(node_id, "shadow_softness"),
+                        shadow_softness_value: param_f32(node, "shadow_softness", 1.0) as u32,
+                        shadow_softness_driven: driven("shadow_softness"),
                         light_size_addr: ParamAddr::root(node_id, "light_size"),
+                        light_size_value: param_f32(node, "light_size", 1.0),
+                        light_size_driven: driven("light_size"),
                     }))
                 }
                 _ => SceneLightVm::Custom { index: k },
             }
         })
         .collect()
+}
+
+/// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — its four
+/// port-shadowed scalar params, addressed and valued (D3's "the lens node's
+/// own row beneath").
+fn trace_lens(level: &Level, node_id: u32) -> Option<LensRow> {
+    let node = level.node(node_id)?;
+    let driven = |name: &str| level.producer(node_id, name).is_some();
+    Some(LensRow {
+        node_doc_id: node_id,
+        focus_distance_addr: ParamAddr::root(node_id, "focus_distance"),
+        focus_distance_value: param_f32(node, "focus_distance", 0.0),
+        focus_distance_driven: driven("focus_distance"),
+        f_stop_addr: ParamAddr::root(node_id, "f_stop"),
+        f_stop_value: param_f32(node, "f_stop", 1000.0),
+        f_stop_driven: driven("f_stop"),
+        shutter_angle_addr: ParamAddr::root(node_id, "shutter_angle"),
+        shutter_angle_value: param_f32(node, "shutter_angle", 0.0),
+        shutter_angle_driven: driven("shutter_angle"),
+        exposure_ev_addr: ParamAddr::root(node_id, "exposure_ev"),
+        exposure_ev_value: param_f32(node, "exposure_ev", 0.0),
+        exposure_ev_driven: driven("exposure_ev"),
+    })
 }
 
 /// Trace THROUGH single-camera-in/camera-out nodes (the importer's
@@ -638,19 +781,81 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
         break;
     }
     let Some(node) = level.node(node_id) else { return CameraVm::None };
+    let lens = lens_node_doc_id.and_then(|id| trace_lens(level, id));
+    let driven = |name: &str| level.producer(node.id, name).is_some();
     match node.type_id.as_str() {
         t if t == ORBIT_CAMERA_TYPE_ID => CameraVm::Orbit(Box::new(OrbitCameraRow {
             node_doc_id: node.id,
-            lens_node_doc_id,
+            lens,
             orbit_addr: ParamAddr::root(node.id, "orbit"),
+            orbit_value: param_f32(node, "orbit", 0.7),
+            orbit_driven: driven("orbit"),
             tilt_addr: ParamAddr::root(node.id, "tilt"),
+            tilt_value: param_f32(node, "tilt", 0.3),
+            tilt_driven: driven("tilt"),
             distance_addr: ParamAddr::root(node.id, "distance"),
+            distance_value: param_f32(node, "distance", 4.0),
+            distance_driven: driven("distance"),
             fov_y_addr: ParamAddr::root(node.id, "fov_y"),
+            fov_y_value: param_f32(node, "fov_y", 0.9),
+            fov_y_driven: driven("fov_y"),
         })),
-        t if t == FREE_CAMERA_TYPE_ID => CameraVm::Free { node_doc_id: node.id, lens_node_doc_id },
-        t if t == LOOK_AT_CAMERA_TYPE_ID => {
-            CameraVm::LookAt { node_doc_id: node.id, lens_node_doc_id }
-        }
+        t if t == FREE_CAMERA_TYPE_ID => CameraVm::Free(Box::new(FreeCameraRow {
+            node_doc_id: node.id,
+            lens,
+            pos_addr: (
+                ParamAddr::root(node.id, "pos_x"),
+                ParamAddr::root(node.id, "pos_y"),
+                ParamAddr::root(node.id, "pos_z"),
+            ),
+            pos_value: (
+                param_f32(node, "pos_x", 0.0),
+                param_f32(node, "pos_y", 0.0),
+                param_f32(node, "pos_z", -3.0),
+            ),
+            pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
+            yaw_addr: ParamAddr::root(node.id, "yaw"),
+            yaw_value: param_f32(node, "yaw", 0.0),
+            yaw_driven: driven("yaw"),
+            pitch_addr: ParamAddr::root(node.id, "pitch"),
+            pitch_value: param_f32(node, "pitch", 0.0),
+            pitch_driven: driven("pitch"),
+            roll_addr: ParamAddr::root(node.id, "roll"),
+            roll_value: param_f32(node, "roll", 0.0),
+            roll_driven: driven("roll"),
+            fov_y_addr: ParamAddr::root(node.id, "fov_y"),
+            fov_y_value: param_f32(node, "fov_y", 0.9),
+            fov_y_driven: driven("fov_y"),
+        })),
+        t if t == LOOK_AT_CAMERA_TYPE_ID => CameraVm::LookAt(Box::new(LookAtCameraRow {
+            node_doc_id: node.id,
+            lens,
+            pos_addr: (
+                ParamAddr::root(node.id, "pos_x"),
+                ParamAddr::root(node.id, "pos_y"),
+                ParamAddr::root(node.id, "pos_z"),
+            ),
+            pos_value: (
+                param_f32(node, "pos_x", 0.0),
+                param_f32(node, "pos_y", 0.0),
+                param_f32(node, "pos_z", -3.0),
+            ),
+            pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
+            target_addr: (
+                ParamAddr::root(node.id, "target_x"),
+                ParamAddr::root(node.id, "target_y"),
+                ParamAddr::root(node.id, "target_z"),
+            ),
+            target_value: (
+                param_f32(node, "target_x", 0.0),
+                param_f32(node, "target_y", 0.0),
+                param_f32(node, "target_z", 0.0),
+            ),
+            target_driven: (driven("target_x"), driven("target_y"), driven("target_z")),
+            fov_y_addr: ParamAddr::root(node.id, "fov_y"),
+            fov_y_value: param_f32(node, "fov_y", 0.9),
+            fov_y_driven: driven("fov_y"),
+        })),
         _ => CameraVm::Custom { node_doc_id: node.id },
     }
 }
@@ -908,7 +1113,8 @@ mod tests {
         match vm.camera {
             CameraVm::Orbit(row) => {
                 assert_eq!(row.node_doc_id, 1);
-                assert_eq!(row.lens_node_doc_id, Some(2));
+                assert_eq!(row.lens.as_ref().map(|l| l.node_doc_id), Some(2));
+                assert_eq!(row.orbit_value, 0.7, "picks up the orbit atom's own default");
             }
             other => panic!("expected Orbit camera, got {other:?}"),
         }
@@ -1090,5 +1296,126 @@ mod tests {
         let vm1 = SceneVm::from_def(&d);
         let vm2 = SceneVm::from_def(&d);
         assert_eq!(vm1, vm2, "from_def must be a pure function of the def alone");
+    }
+
+    // ── P3: Lights + Camera sections ──
+
+    #[test]
+    fn known_light_row_resolves_full_param_addresses_and_values() {
+        let light = with_param(
+            with_param(
+                with_param(node(8, LIGHT_TYPE_ID, Some("sun")), "intensity", SerializedParamValue::Float { value: 2.5 }),
+                "cast_shadows",
+                SerializedParamValue::Float { value: 1.0 },
+            ),
+            "shadow_softness",
+            SerializedParamValue::Enum { value: 3 }, // Contact
+        );
+        let light = with_param(light, "light_size", SerializedParamValue::Float { value: 4.0 });
+        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "lights", SerializedParamValue::Float { value: 1.0 });
+        let out = node(20, "system.final_output", None);
+        let d = def(vec![light, scene, out], vec![wire(8, "out", 10, "light_0"), wire(10, "color", 20, "in")]);
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.lights.len(), 1);
+        match &vm.lights[0] {
+            SceneLightVm::Known(row) => {
+                assert_eq!(row.node_doc_id, 8);
+                assert_eq!(row.intensity_value, 2.5);
+                assert!(row.cast_shadows_value, "cast_shadows > 0.5 reads as on");
+                assert_eq!(row.shadow_softness_value, 3, "Contact");
+                assert_eq!(row.light_size_value, 4.0, "light_size resolves even though it's a Contact-only knob — parameter dependency, not conditional UI");
+                assert!(!row.intensity_driven);
+                assert_eq!(row.intensity_addr, ParamAddr::root(8, "intensity"));
+            }
+            other => panic!("expected Known light, got {other:?}"),
+        }
+        assert_eq!(vm.header.shadow_caster_count, 1);
+    }
+
+    #[test]
+    fn more_than_four_shadow_casters_all_resolve_no_panel_side_cap() {
+        // REALTIME_3D D4's K=4 shadow-caster cap is the RENDERER's job; the
+        // Vm/panel must never enforce or truncate it — a scene with 5
+        // casters still traces (and the panel would render) every light row.
+        let mut nodes = Vec::new();
+        let mut wires = Vec::new();
+        for i in 0..5u32 {
+            let id = 100 + i;
+            nodes.push(with_param(
+                node(id, LIGHT_TYPE_ID, Some(&format!("light{i}"))),
+                "cast_shadows",
+                SerializedParamValue::Float { value: 1.0 },
+            ));
+            wires.push(wire(id, "out", 10, &format!("light_{i}")));
+        }
+        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "lights", SerializedParamValue::Float { value: 5.0 });
+        nodes.push(scene);
+        nodes.push(node(20, "system.final_output", None));
+        wires.push(wire(10, "color", 20, "in"));
+        let d = def(nodes, wires);
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.lights.len(), 5, "all 5 lights resolve, no cap in the Vm");
+        assert_eq!(vm.header.shadow_caster_count, 5, "the header reports the true count, uncapped");
+        assert!(vm.lights.iter().all(|l| matches!(l, SceneLightVm::Known(_))));
+    }
+
+    #[test]
+    fn free_camera_with_lens_pass_through_traces_full_rows() {
+        let cam = with_param(node(1, FREE_CAMERA_TYPE_ID, Some("camera")), "yaw", SerializedParamValue::Float { value: 1.2 });
+        let lens = with_param(node(2, CAMERA_LENS_TYPE_ID, Some("lens")), "f_stop", SerializedParamValue::Float { value: 2.8 });
+        let scene = node(10, RENDER_SCENE_TYPE_ID, None);
+        let out = node(20, "system.final_output", None);
+        let d = def(
+            vec![cam, lens, scene, out],
+            vec![wire(1, "out", 2, "camera"), wire(2, "out", 10, "camera"), wire(10, "color", 20, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match vm.camera {
+            CameraVm::Free(row) => {
+                assert_eq!(row.node_doc_id, 1);
+                assert_eq!(row.yaw_value, 1.2);
+                let lens_row = row.lens.as_ref().expect("lens pass-through resolves");
+                assert_eq!(lens_row.node_doc_id, 2);
+                assert_eq!(lens_row.f_stop_value, 2.8);
+            }
+            other => panic!("expected Free camera, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn look_at_camera_shape_traces_pos_target_fov() {
+        let cam = with_param(
+            node(1, LOOK_AT_CAMERA_TYPE_ID, Some("camera")),
+            "target_y",
+            SerializedParamValue::Float { value: 1.5 },
+        );
+        let scene = node(10, RENDER_SCENE_TYPE_ID, None);
+        let out = node(20, "system.final_output", None);
+        let d = def(
+            vec![cam, scene, out],
+            vec![wire(1, "out", 10, "camera"), wire(10, "color", 20, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match vm.camera {
+            CameraVm::LookAt(row) => {
+                assert_eq!(row.node_doc_id, 1);
+                assert_eq!(row.target_value.1, 1.5);
+                assert!(row.lens.is_none(), "no lens node wired — no pass-through to trace");
+            }
+            other => panic!("expected LookAt camera, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn camera_producer_that_isnt_a_curated_atom_degrades_to_custom() {
+        let cam = node(1, "node.value", Some("weird"));
+        let scene = node(10, RENDER_SCENE_TYPE_ID, None);
+        let out = node(20, "system.final_output", None);
+        let d = def(
+            vec![cam, scene, out],
+            vec![wire(1, "out", 10, "camera"), wire(10, "color", 20, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert!(matches!(vm.camera, CameraVm::Custom { node_doc_id: 1 }));
     }
 }

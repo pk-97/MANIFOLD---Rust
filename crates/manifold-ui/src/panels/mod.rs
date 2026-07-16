@@ -247,6 +247,14 @@ pub enum PanelAction {
     /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
     /// SCENE_BUILD P3 rename-sweep command, unchanged).
     SceneSetupRenameObjectClicked(LayerId, u32, String),
+    /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
+    /// Opens a native file dialog (the app's existing open-file plumbing,
+    /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on
+    /// a picked `.glb`/`.gltf`, merges its objects into THIS scene via
+    /// `merge_import_into_graph` + `ImportModelIntoSceneCommand` (D5) — a
+    /// second (third, nth) model added to a scene the panel already shows,
+    /// no graph editor trip required.
+    SceneSetupImportModelClicked(LayerId, u32),
 
     // Footer
     CycleQuantize,

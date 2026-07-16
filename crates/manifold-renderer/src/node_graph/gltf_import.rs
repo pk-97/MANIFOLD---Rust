@@ -664,290 +664,66 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     build_import_graph(&summary, path)
 }
 
-/// Assemble the generator graph from an already-parsed [`GltfImportSummary`].
-/// Split from [`assemble_import_graph`] (which owns the single file parse) so the
-/// graph shape — including the per-object node **grouping** — is testable against
-/// a synthetic summary with no `.glb` fixture on disk.
-///
-/// Each distinct material becomes one node **group** (`GROUP_TYPE_ID`) named for
-/// the material: its `node.gltf_mesh_source` + `node.pbr_material` +
-/// `node.transform_3d` (+ optional `node.gltf_texture_source`) live inside,
-/// exposed through a `system.group_output` as `vertices` / `material` /
-/// `transform` / `baseColor`, and the group's outputs wire to the
-/// shared `node.render_scene`. Grouping is a pure presentation layer: it flattens
-/// away at load (`manifold_core::flatten::flatten_groups`, run inside
-/// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
-/// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
-/// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
-fn build_import_graph(
-    summary: &GltfImportSummary,
-    path: &Path,
-) -> Result<(EffectGraphDef, ImportReport), String> {
-    if summary.materials.is_empty() {
-        return Err(format!(
-            "{}: no materials with geometry — nothing to import",
-            path.display()
-        ));
-    }
 
-    // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — every material with
-    // geometry gets its own render_scene object, never a truncated prefix.
-    // `OBJECT_SAFETY_MAX` (1024) is a real GPU/port-list safety bound, not a
-    // curation cap: an asset beyond it errors loudly instead of silently
-    // dropping geometry (the AMG GT3's black body, BUG-163, was exactly
-    // this — 14 of 78 materials, including the livery, dropped over the old
-    // 64-object cap).
-    if summary.materials.len() > OBJECT_SAFETY_MAX as usize {
-        return Err(format!(
-            "{}: {} materials with geometry exceeds the {}-object safety bound — \
-             this asset cannot be imported 1:1 without risking a runaway port-list \
-             (raise OBJECT_SAFETY_MAX in render_scene.rs if a real asset legitimately \
-             needs more; never silently truncate)",
-            path.display(),
-            summary.materials.len(),
-            OBJECT_SAFETY_MAX,
-        ));
-    }
-    // Largest-by-vertex-count first: not a truncation boundary anymore
-    // (every material is wired), but it IS the ordering the card curation
-    // below relies on — the largest CARD_CURATION_MAX objects by vertex
-    // count get per-object sliders, everything after them still gets full
-    // geometry/material/texture wiring, just no card exposure.
-    let mut materials = summary.materials.clone();
-    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
-    let n = materials.len();
-    if summary.default_material_vertex_count > 0 {
-        log::warn!(
-            "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
-             default material — v1 does not import these",
-            path.display(),
-            summary.default_material_vertex_count,
-        );
-    }
-    if summary.camera_count > 0 {
-        log::info!(
-            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s) — v1 \
-             ignores them and synthesizes its own bbox-framed orbit camera",
-            path.display(),
-            summary.camera_count,
-        );
-    }
+/// Output of building one object's node group + its wiring into
+/// `render_scene` — the reusable core of the per-object loop, factored out
+/// of [`build_import_graph`] so [`merge_import_into_graph`] (D5) can build
+/// the SAME per-object shape against an EXISTING scene's `render_scene`
+/// node and object-index range, without re-running the whole assembler —
+/// no camera/envmap/lights/lens, chrome the merge path never touches.
+struct ObjectGroupOutput {
+    /// The named, tinted group node (`GROUP_TYPE_ID`) — push directly onto
+    /// the target level's `nodes`.
+    group_node: EffectGraphNode,
+    /// Top-level wires from this group's outputs to `render_scene`'s
+    /// `mesh_{port_index}` / `material_{port_index}` / … ports — push
+    /// directly onto the target level's `wires`.
+    wires_to_render: Vec<EffectGraphWire>,
+    card_params: Vec<ParamSpecDef>,
+    card_bindings: Vec<BindingDef>,
+    string_bindings: Vec<StringBindingDef>,
+    report_lines: Vec<String>,
+    textures_wired: usize,
+}
 
-    let center = [
-        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
-        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
-        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
-    ];
-    let dims = [
-        summary.bbox_max[0] - summary.bbox_min[0],
-        summary.bbox_max[1] - summary.bbox_min[1],
-        summary.bbox_max[2] - summary.bbox_min[2],
-    ];
-    let radius =
-        ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
-    let distance = 2.2 * radius;
-    // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
-    // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
-    // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
-    // the framed object's own size. `distance = 2.2 * radius` already
-    // scales with the object, so the object's front face sits at
-    // `distance - radius == 1.2 * radius` from the camera — for any object
-    // with `radius` below ~0.042 (BoomBox: 0.0172, MetalRoughSpheresNoTextures:
-    // 0.0056 — both real-world-scale Khronos assets authored in meters),
-    // the fixed near plane sits IN FRONT of the object and the whole frame
-    // clips to black every frame (confirmed via `--trace`: io_pending goes
-    // false almost immediately and the frame stays byte-stable-black from
-    // frame 0/1 — not a decode race, ruling out the BUG-165 (a) hypothesis;
-    // BUG-169's "lighting/material" hypothesis was also wrong — same
-    // mechanism, not a texture-less-material bug).
-    //
-    // Fix: `near` tracks the object's own front-face distance (with a 2x
-    // safety margin so the surface never grazes the plane), capped at the
-    // pre-existing 0.05 default so every currently-passing asset whose
-    // front face already clears 0.05 gets the IDENTICAL near value as
-    // before (front_margin = 1.2 * radius stays >= 0.05 whenever radius >=
-    // ~0.0417 — true for every other passing Khronos asset checked:
-    // WaterBottle radius 0.151, DamagedHelmet 1.64, MetalRoughSpheres 6.99,
-    // TextureSettingsTest 7.21, Duck 1.27, Box 0.87). Only genuinely
-    // sub-threshold objects get a smaller near plane.
-    let front_margin = (distance - radius).max(1e-4);
-    let near_clip = CAMERA_NEAR_DEFAULT.min(front_margin * 0.5);
-
-    let path_str = path.to_string_lossy().into_owned();
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "ImportedModel".to_string());
-    let sanitized = sanitize_identifier(&stem);
-    let osc_prefix = sanitized.to_lowercase();
-
-    let mut nodes = Vec::new();
-    let mut wires = Vec::new();
-    let mut next_id = 0u32;
-    let mut fresh_id = move || {
-        let v = next_id;
-        next_id += 1;
-        v
-    };
-
-    let input_id = fresh_id();
-    nodes.push(plain_node(input_id, "input", GENERATOR_INPUT_TYPE_ID, "input"));
-
-    // IMPORT_FIDELITY_DESIGN.md D7 (F-P4) — the default import look is the
-    // "black-void studio": `mode = softbox` (exact-zero black base + bright
-    // emitter strips, never the legacy gradient studio) at `intensity = 1.0`
-    // (the F-P1/F-P3 default already matches `mode`'s own primitive
-    // defaults — emitter_count/intensity/elevation/width — so nothing else
-    // needs stamping here). Superseded the old "intensity 0, lights-only"
-    // default; the Environment card below (`env_intensity`) now starts at
-    // 1.0 to match.
-    let envmap_id = fresh_id();
-    let mut envmap_node = plain_node(envmap_id, "envmap", "node.bake_environment", "envmap");
-    envmap_node.params.insert("intensity".to_string(), float(1.0));
-    envmap_node.params.insert("mode".to_string(), enum_val(1)); // Softbox
-    // F-P7 dome fill: metals are lit exclusively by the environment, so
-    // against D7's pure-black void every metallic import read as dark
-    // chrome regardless of its albedo (the 2026-07-15 helmet/AMG failure).
-    // A modest neutral dome gives metals a world to reflect while the
-    // background stays black (the envmap is never drawn as a backdrop).
-    // The Fill Light card slider below dials it, 0 = the original void.
-    envmap_node.params.insert("fill".to_string(), float(IMPORT_FILL_DEFAULT));
-    envmap_node
-        .params
-        .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
-    nodes.push(envmap_node);
-
-    // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
-    // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
-    // below) and `node.switch_texture` picks between it and the softbox
-    // bake above by the `env_mode` card enum (default 0 = Softbox, so the
-    // black-void aesthetic stays the import default — Peter, 2026-07-15:
-    // "I quite like the pure void and sunlight only look"). `render_scene`'s
-    // `envmap` input now wires from the switch's `out`, not the bake
-    // directly.
-    let hdri_id = fresh_id();
-    nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
-
-    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
-    // master (the Environment card fader's original target), but a decoded
-    // EXR arrives at the file's true radiance — a real daytime pure-sky
-    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
-    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
-    // an exposure stage the Environment fader would be dead in HDRI mode
-    // and the performer would have no way to bring a real sky up to stage
-    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
-    // card fader) restores symmetry: env_intensity fans out to BOTH
-    // envmap.intensity and this gain, so one fader is the environment
-    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
-    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
-    let hdri_gain_id = fresh_id();
-    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
-
-    let env_select_id = fresh_id();
-    let mut env_select_node =
-        plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
-    env_select_node.params.insert("num_inputs".to_string(), int(2));
-    env_select_node.params.insert("selector".to_string(), float(0.0)); // 0 = Softbox
-    nodes.push(env_select_node);
-
-    let camera_id = fresh_id();
-    let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
-    cam_node.params.insert("orbit".to_string(), float(0.7));
-    cam_node.params.insert("tilt".to_string(), float(0.3));
-    cam_node.params.insert("distance".to_string(), float(distance));
-    cam_node.params.insert("fov_y".to_string(), float(0.9));
-    cam_node.params.insert("look_y".to_string(), float(0.0));
-    // BUG-165/BUG-169 fix — see `near_clip` computation above.
-    cam_node.params.insert("near".to_string(), float(near_clip));
-    nodes.push(cam_node);
-
-    // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
-    // and render_scene/ao. No depth-of-field consumer wired anymore (the
-    // "dof" group was removed 2026-07-15 for buggy visuals) and no
-    // motion_blur consumer either (see the motion_blur removal note below),
-    // so `shutter_angle`/`focus_distance`/`f_stop` are along for the ride
-    // only insofar as `node.camera_lens` requires them — nothing downstream
-    // reads them today.
-    let lens_id = fresh_id();
-    let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
-    lens_node.params.insert("focus_distance".to_string(), float(distance));
-    lens_node.params.insert("f_stop".to_string(), float(32.0));
-    nodes.push(lens_node);
-
-    let sun_id = fresh_id();
-    let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
-    sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
-    sun_node.params.insert("pos_x".to_string(), float(5.0));
-    sun_node.params.insert("pos_y".to_string(), float(2.0));
-    sun_node.params.insert("pos_z".to_string(), float(3.0));
-    sun_node.params.insert("aim_x".to_string(), float(0.0));
-    sun_node.params.insert("aim_y".to_string(), float(0.0));
-    sun_node.params.insert("aim_z".to_string(), float(0.0));
-    // 3.5, not the primitive's 1.5 default: `node.pbr_material` divides diffuse
-    // by π (energy conservation), so a unit-intensity sun lands a fully-facing
-    // matte surface at ~0.32 — a dark subject then reads near-black. ~3.5
-    // offsets the /π so an imported model is legible under the default rig
-    // without the user having to touch the light. Aesthetic default; the light
-    // node is a normal graph node the user can dial down.
-    sun_node.params.insert("intensity".to_string(), float(3.5));
-    // Hard shadow softness: crisp, defined shadows suit the dramatic
-    // single-key "model on black" look. The Shadow Type card lets the user
-    // soften to Soft/Very Soft/Contact. `light_size` is inert for Hard (no
-    // penumbra), kept at 1.0 so a switch to a softer tier gives a sensible
-    // penumbra width.
-    sun_node.params.insert("cast_shadows".to_string(), float(1.0));
-    sun_node.params.insert("shadow_softness".to_string(), enum_val(0)); // Hard
-    sun_node.params.insert("light_size".to_string(), float(1.0));
-    // Shadow quality: the Sun's `range` is the shadow's orthographic
-    // half-extent, and the shadow map's texels spread across it. The default
-    // 30 wraps a huge area, so on a recentered hero mesh (spanning ±radius
-    // about the origin) almost none of the map's texels land on the subject —
-    // that's the blocky, texel-stepping look as the sun moves. Wrap the extent
-    // tightly to the model (radius × 1.5 for margin) and quadruple the map to
-    // 4096², so the shadow texels are fine enough that edges read crisp and
-    // per-frame motion stops stepping. Both are normal light-node params the
-    // user can still dial.
-    sun_node.params.insert("range".to_string(), float((radius * 1.5).max(0.01)));
-    sun_node.params.insert("shadow_resolution".to_string(), float(4096.0));
-    nodes.push(sun_node);
-
-    let render_id = fresh_id();
-    let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
-    render_node.params.insert("objects".to_string(), int(n as i32));
-    render_node.params.insert("lights".to_string(), int(1));
-
-    let mut string_bindings = Vec::new();
-    // Curated outer-card performance surface (D9 / P0). Camera + light +
-    // envmap are added once after the loop; per-object material knobs are
-    // pushed here so they interleave with the `mat_k` nodes they target.
+/// Build ONE object's group (mesh source + material + optional skin/morph/
+/// animation + texture maps + transform, wrapped in a named `GroupDef`)
+/// and its top-level wiring into `render_scene`. `local_k` numbers this
+/// object's INNER handles (`mesh_{local_k}`, `mat_{local_k}`, …) —
+/// purely cosmetic, namespaced away by the group-name-prefixing flattener
+/// (`docs/GROUPING_GRAPHS.md` §2), so it always starts at 0 for a fresh
+/// call — a merge's incoming materials get their own local numbering,
+/// never the target scene's. `port_index` is the render_scene OBJECT SLOT
+/// this group wires into (`mesh_{port_index}` etc. on `render_scene`
+/// itself) — for a single import these are the same number; for a merge,
+/// `port_index` is offset by the target scene's existing `objects` count
+/// while `local_k` restarts at 0.
+#[allow(clippy::too_many_arguments)]
+fn build_object_group(
+    local_k: usize,
+    port_index: usize,
+    render_id: u32,
+    m: &gltf_load::GltfMaterialInfo,
+    path_str: &str,
+    center: [f32; 3],
+    node_anims_by_clip: &[BTreeMap<usize, gltf_load::GltfNodeAnimation>],
+    used_group_names: &mut std::collections::HashSet<String>,
+    fresh_id: &mut impl FnMut() -> u32,
+) -> ObjectGroupOutput {
+    let k = local_k;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
     let mut card_bindings: Vec<BindingDef> = Vec::new();
-    let mut textures_wired = 0usize;
-    // D9 doctrine — see `ImportReport::report_lines`.
+    let mut string_bindings: Vec<StringBindingDef> = Vec::new();
     let mut report_lines: Vec<String> = Vec::new();
+    let mut textures_wired = 0usize;
 
-    // Group names, deduped so two identically-named glTF materials don't collide
-    // in the flattened handle map (the flattener prefixes every inner handle with
-    // the group name).
-    let mut used_group_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // GLTF_ANIMATION_DESIGN.md A2: clip `[0]`'s per-node TRS tracks, keyed
-    // by node index — the same lookup `gltf_load::gltf_import_summary`
-    // builds internally for A1's rigid-object resolution, rebuilt here
-    // because `node.gltf_skeleton_pose`'s Tables need it per-JOINT (every
-    // joint in a skin, not just the one mesh-owning node A1 resolves
-    // against). A4: ALL clips, not just clip 0 (D4 multi-clip selection).
-    let node_anims_by_clip: Vec<std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>> =
-        summary.animations.iter().map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect()).collect();
-
-    for (k, m) in materials.iter().enumerate() {
         let mesh_node_id = format!("mesh_{k}");
         let mat_node_id = format!("mat_{k}");
         // Computed up front (not just before the group box below) so the
         // per-object card knobs pushed further down can stamp it as their
         // `section` (D5/D9) — the section now carries the per-object
         // identity the old " 2"-style label suffix used to.
-        let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
+        let group_name = unique_group_name(m.name.as_deref(), k, used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
         // line, never a silent drop. GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
@@ -1044,7 +820,7 @@ fn build_import_graph(
                 scale_rows,
                 clip_durations_rows,
                 duration_s,
-            ) = build_skeleton_pose_tables(&obj_skin.info, &node_anims_by_clip);
+            ) = build_skeleton_pose_tables(&obj_skin.info, node_anims_by_clip);
             let mut pose_node =
                 plain_node(pose_id, &pose_node_id, "node.gltf_skeleton_pose", &pose_node_id);
             pose_node.params.insert("joint_count".to_string(), int(joint_count as i32));
@@ -1132,7 +908,7 @@ fn build_import_graph(
             let weights_node_id = format!("morphweights_{k}");
             let weights_id = fresh_id();
             let (weight_rows, weights_clip_durations_rows, weights_duration_s) =
-                build_morph_weight_table(morph, &node_anims_by_clip);
+                build_morph_weight_table(morph, node_anims_by_clip);
             let mut weights_node =
                 plain_node(weights_id, &weights_node_id, "node.gltf_morph_weights", &weights_node_id);
             weights_node
@@ -1172,7 +948,7 @@ fn build_import_graph(
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
                 label: "Model File".to_string(),
-                default_value: path_str.clone(),
+                default_value: path_str.to_string(),
                 target: BindingTarget::Node {
                     node_id: NodeId::new(&deltas_node_id),
                     param: "path".to_string(),
@@ -1582,7 +1358,7 @@ fn build_import_graph(
         string_bindings.push(StringBindingDef {
             id: MODEL_FILE_PARAM_ID.to_string(),
             label: "Model File".to_string(),
-            default_value: path_str.clone(),
+            default_value: path_str.to_string(),
             target: BindingTarget::Node {
                 node_id: NodeId::new(&mesh_node_id),
                 param: "path".to_string(),
@@ -1617,7 +1393,7 @@ fn build_import_graph(
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
                 label: "Model File".to_string(),
-                default_value: path_str.clone(),
+                default_value: path_str.to_string(),
                 target: BindingTarget::Node {
                     node_id: NodeId::new(&tex_node_id),
                     param: "path".to_string(),
@@ -1645,8 +1421,8 @@ fn build_import_graph(
                 "normal_tex",
                 "normalMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1664,8 +1440,8 @@ fn build_import_graph(
                 "mr_tex",
                 "mrMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1687,8 +1463,8 @@ fn build_import_graph(
                 "occlusion_tex",
                 "occlusionMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1706,8 +1482,8 @@ fn build_import_graph(
                 "emissive_tex",
                 "emissiveMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1731,8 +1507,8 @@ fn build_import_graph(
                 "sheen_color_tex",
                 "sheenColorMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1750,8 +1526,8 @@ fn build_import_graph(
                 "sheen_roughness_tex",
                 "sheenRoughnessMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1769,8 +1545,8 @@ fn build_import_graph(
                 "iridescence_tex",
                 "iridescenceMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1788,8 +1564,8 @@ fn build_import_graph(
                 "iridescence_thickness_tex",
                 "iridescenceThicknessMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1807,8 +1583,8 @@ fn build_import_graph(
                 "anisotropy_tex",
                 "anisotropyMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1834,8 +1610,8 @@ fn build_import_graph(
                 "clearcoat_tex",
                 "clearcoatMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1853,8 +1629,8 @@ fn build_import_graph(
                 "clearcoat_roughness_tex",
                 "clearcoatRoughnessMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1872,8 +1648,8 @@ fn build_import_graph(
                 "clearcoat_normal_tex",
                 "clearcoatNormalMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1891,8 +1667,8 @@ fn build_import_graph(
                 "specular_tex",
                 "specularMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1910,8 +1686,8 @@ fn build_import_graph(
                 "specular_color_tex",
                 "specularColorMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1929,8 +1705,8 @@ fn build_import_graph(
                 "transmission_tex",
                 "transmissionMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1948,8 +1724,8 @@ fn build_import_graph(
                 "volume_thickness_tex",
                 "volumeThicknessMap",
                 k,
-                &path_str,
-                &mut fresh_id,
+                path_str,
+                fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
                 &mut outputs,
@@ -1984,118 +1760,424 @@ fn build_import_graph(
             // import reads as a few colour-coded boxes at a glance.
             tint: Some(group_tint(k)),
         }));
-        nodes.push(group_node);
-
+    let mut wires_to_render: Vec<EffectGraphWire> = Vec::new();
         // Top-level wires: the group's outputs feed the shared render node —
         // after flattening these become the exact `mesh_k.vertices → render.mesh_k`
         // (etc.) wires the ungrouped assembler produced.
-        wires.push(wire(group_id, "vertices", render_id, &format!("mesh_{k}")));
-        wires.push(wire(group_id, "material", render_id, &format!("material_{k}")));
-        wires.push(wire(group_id, "transform", render_id, &format!("transform_{k}")));
+        wires_to_render.push(wire(group_id, "vertices", render_id, &format!("mesh_{port_index}")));
+        wires_to_render.push(wire(group_id, "material", render_id, &format!("material_{port_index}")));
+        wires_to_render.push(wire(group_id, "transform", render_id, &format!("transform_{port_index}")));
         if has_tex {
-            wires.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{k}")));
+            wires_to_render.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{port_index}")));
         }
         if has_normal {
-            wires.push(wire(group_id, "normalMap", render_id, &format!("normal_map_{k}")));
+            wires_to_render.push(wire(group_id, "normalMap", render_id, &format!("normal_map_{port_index}")));
         }
         if has_mr {
-            wires.push(wire(group_id, "mrMap", render_id, &format!("mr_map_{k}")));
+            wires_to_render.push(wire(group_id, "mrMap", render_id, &format!("mr_map_{port_index}")));
         }
         if has_occlusion {
-            wires.push(wire(group_id, "occlusionMap", render_id, &format!("occlusion_map_{k}")));
+            wires_to_render.push(wire(group_id, "occlusionMap", render_id, &format!("occlusion_map_{port_index}")));
         }
         if has_emissive {
-            wires.push(wire(group_id, "emissiveMap", render_id, &format!("emissive_map_{k}")));
+            wires_to_render.push(wire(group_id, "emissiveMap", render_id, &format!("emissive_map_{port_index}")));
         }
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
         if has_sheen_color_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "sheenColorMap",
                 render_id,
-                &format!("sheen_color_map_{k}"),
+                &format!("sheen_color_map_{port_index}"),
             ));
         }
         if has_sheen_roughness_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "sheenRoughnessMap",
                 render_id,
-                &format!("sheen_roughness_map_{k}"),
+                &format!("sheen_roughness_map_{port_index}"),
             ));
         }
         if has_iridescence_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "iridescenceMap",
                 render_id,
-                &format!("iridescence_map_{k}"),
+                &format!("iridescence_map_{port_index}"),
             ));
         }
         if has_iridescence_thickness_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "iridescenceThicknessMap",
                 render_id,
-                &format!("iridescence_thickness_map_{k}"),
+                &format!("iridescence_thickness_map_{port_index}"),
             ));
         }
         if has_anisotropy_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "anisotropyMap",
                 render_id,
-                &format!("anisotropy_map_{k}"),
+                &format!("anisotropy_map_{port_index}"),
             ));
         }
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised): texture-
         // completion sweep top-level wires.
         if has_clearcoat_tex {
-            wires.push(wire(group_id, "clearcoatMap", render_id, &format!("clearcoat_map_{k}")));
+            wires_to_render.push(wire(group_id, "clearcoatMap", render_id, &format!("clearcoat_map_{port_index}")));
         }
         if has_clearcoat_roughness_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "clearcoatRoughnessMap",
                 render_id,
-                &format!("clearcoat_roughness_map_{k}"),
+                &format!("clearcoat_roughness_map_{port_index}"),
             ));
         }
         if has_clearcoat_normal_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "clearcoatNormalMap",
                 render_id,
-                &format!("clearcoat_normal_map_{k}"),
+                &format!("clearcoat_normal_map_{port_index}"),
             ));
         }
         if has_specular_tex {
-            wires.push(wire(group_id, "specularMap", render_id, &format!("specular_map_{k}")));
+            wires_to_render.push(wire(group_id, "specularMap", render_id, &format!("specular_map_{port_index}")));
         }
         if has_specular_color_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "specularColorMap",
                 render_id,
-                &format!("specular_color_map_{k}"),
+                &format!("specular_color_map_{port_index}"),
             ));
         }
         if has_transmission_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "transmissionMap",
                 render_id,
-                &format!("transmission_map_{k}"),
+                &format!("transmission_map_{port_index}"),
             ));
         }
         if has_volume_thickness_tex {
-            wires.push(wire(
+            wires_to_render.push(wire(
                 group_id,
                 "volumeThicknessMap",
                 render_id,
-                &format!("volume_thickness_map_{k}"),
+                &format!("volume_thickness_map_{port_index}"),
             ));
         }
+
+    ObjectGroupOutput {
+        group_node,
+        wires_to_render,
+        card_params,
+        card_bindings,
+        string_bindings,
+        report_lines,
+        textures_wired,
+    }
+}
+
+/// Assemble the generator graph from an already-parsed [`GltfImportSummary`].
+/// Split from [`assemble_import_graph`] (which owns the single file parse) so the
+/// graph shape — including the per-object node **grouping** — is testable against
+/// a synthetic summary with no `.glb` fixture on disk.
+///
+/// Each distinct material becomes one node **group** (`GROUP_TYPE_ID`) named for
+/// the material: its `node.gltf_mesh_source` + `node.pbr_material` +
+/// `node.transform_3d` (+ optional `node.gltf_texture_source`) live inside,
+/// exposed through a `system.group_output` as `vertices` / `material` /
+/// `transform` / `baseColor`, and the group's outputs wire to the
+/// shared `node.render_scene`. Grouping is a pure presentation layer: it flattens
+/// away at load (`manifold_core::flatten::flatten_groups`, run inside
+/// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
+/// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
+/// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` §2).
+fn build_import_graph(
+    summary: &GltfImportSummary,
+    path: &Path,
+) -> Result<(EffectGraphDef, ImportReport), String> {
+    if summary.materials.is_empty() {
+        return Err(format!(
+            "{}: no materials with geometry — nothing to import",
+            path.display()
+        ));
+    }
+
+    // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — every material with
+    // geometry gets its own render_scene object, never a truncated prefix.
+    // `OBJECT_SAFETY_MAX` (1024) is a real GPU/port-list safety bound, not a
+    // curation cap: an asset beyond it errors loudly instead of silently
+    // dropping geometry (the AMG GT3's black body, BUG-163, was exactly
+    // this — 14 of 78 materials, including the livery, dropped over the old
+    // 64-object cap).
+    if summary.materials.len() > OBJECT_SAFETY_MAX as usize {
+        return Err(format!(
+            "{}: {} materials with geometry exceeds the {}-object safety bound — \
+             this asset cannot be imported 1:1 without risking a runaway port-list \
+             (raise OBJECT_SAFETY_MAX in render_scene.rs if a real asset legitimately \
+             needs more; never silently truncate)",
+            path.display(),
+            summary.materials.len(),
+            OBJECT_SAFETY_MAX,
+        ));
+    }
+    // Largest-by-vertex-count first: not a truncation boundary anymore
+    // (every material is wired), but it IS the ordering the card curation
+    // below relies on — the largest CARD_CURATION_MAX objects by vertex
+    // count get per-object sliders, everything after them still gets full
+    // geometry/material/texture wiring, just no card exposure.
+    let mut materials = summary.materials.clone();
+    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
+    let n = materials.len();
+    if summary.default_material_vertex_count > 0 {
+        log::warn!(
+            "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
+             default material — v1 does not import these",
+            path.display(),
+            summary.default_material_vertex_count,
+        );
+    }
+    if summary.camera_count > 0 {
+        log::info!(
+            "gltf_import::assemble_import_graph({}): glb carries {} embedded camera(s) — v1 \
+             ignores them and synthesizes its own bbox-framed orbit camera",
+            path.display(),
+            summary.camera_count,
+        );
+    }
+
+    let center = [
+        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+    ];
+    let dims = [
+        summary.bbox_max[0] - summary.bbox_min[0],
+        summary.bbox_max[1] - summary.bbox_min[1],
+        summary.bbox_max[2] - summary.bbox_min[2],
+    ];
+    let radius =
+        ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
+    let distance = 2.2 * radius;
+    // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
+    // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
+    // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
+    // the framed object's own size. `distance = 2.2 * radius` already
+    // scales with the object, so the object's front face sits at
+    // `distance - radius == 1.2 * radius` from the camera — for any object
+    // with `radius` below ~0.042 (BoomBox: 0.0172, MetalRoughSpheresNoTextures:
+    // 0.0056 — both real-world-scale Khronos assets authored in meters),
+    // the fixed near plane sits IN FRONT of the object and the whole frame
+    // clips to black every frame (confirmed via `--trace`: io_pending goes
+    // false almost immediately and the frame stays byte-stable-black from
+    // frame 0/1 — not a decode race, ruling out the BUG-165 (a) hypothesis;
+    // BUG-169's "lighting/material" hypothesis was also wrong — same
+    // mechanism, not a texture-less-material bug).
+    //
+    // Fix: `near` tracks the object's own front-face distance (with a 2x
+    // safety margin so the surface never grazes the plane), capped at the
+    // pre-existing 0.05 default so every currently-passing asset whose
+    // front face already clears 0.05 gets the IDENTICAL near value as
+    // before (front_margin = 1.2 * radius stays >= 0.05 whenever radius >=
+    // ~0.0417 — true for every other passing Khronos asset checked:
+    // WaterBottle radius 0.151, DamagedHelmet 1.64, MetalRoughSpheres 6.99,
+    // TextureSettingsTest 7.21, Duck 1.27, Box 0.87). Only genuinely
+    // sub-threshold objects get a smaller near plane.
+    let front_margin = (distance - radius).max(1e-4);
+    let near_clip = CAMERA_NEAR_DEFAULT.min(front_margin * 0.5);
+
+    let path_str = path.to_string_lossy().into_owned();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ImportedModel".to_string());
+    let sanitized = sanitize_identifier(&stem);
+    let osc_prefix = sanitized.to_lowercase();
+
+    let mut nodes = Vec::new();
+    let mut wires = Vec::new();
+    let mut next_id = 0u32;
+    let mut fresh_id = move || {
+        let v = next_id;
+        next_id += 1;
+        v
+    };
+
+    let input_id = fresh_id();
+    nodes.push(plain_node(input_id, "input", GENERATOR_INPUT_TYPE_ID, "input"));
+
+    // IMPORT_FIDELITY_DESIGN.md D7 (F-P4) — the default import look is the
+    // "black-void studio": `mode = softbox` (exact-zero black base + bright
+    // emitter strips, never the legacy gradient studio) at `intensity = 1.0`
+    // (the F-P1/F-P3 default already matches `mode`'s own primitive
+    // defaults — emitter_count/intensity/elevation/width — so nothing else
+    // needs stamping here). Superseded the old "intensity 0, lights-only"
+    // default; the Environment card below (`env_intensity`) now starts at
+    // 1.0 to match.
+    let envmap_id = fresh_id();
+    let mut envmap_node = plain_node(envmap_id, "envmap", "node.bake_environment", "envmap");
+    envmap_node.params.insert("intensity".to_string(), float(1.0));
+    envmap_node.params.insert("mode".to_string(), enum_val(1)); // Softbox
+    // F-P7 dome fill: metals are lit exclusively by the environment, so
+    // against D7's pure-black void every metallic import read as dark
+    // chrome regardless of its albedo (the 2026-07-15 helmet/AMG failure).
+    // A modest neutral dome gives metals a world to reflect while the
+    // background stays black (the envmap is never drawn as a backdrop).
+    // The Fill Light card slider below dials it, 0 = the original void.
+    envmap_node.params.insert("fill".to_string(), float(IMPORT_FILL_DEFAULT));
+    envmap_node
+        .params
+        .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
+    nodes.push(envmap_node);
+
+    // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
+    // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
+    // below) and `node.switch_texture` picks between it and the softbox
+    // bake above by the `env_mode` card enum (default 0 = Softbox, so the
+    // black-void aesthetic stays the import default — Peter, 2026-07-15:
+    // "I quite like the pure void and sunlight only look"). `render_scene`'s
+    // `envmap` input now wires from the switch's `out`, not the bake
+    // directly.
+    let hdri_id = fresh_id();
+    nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
+
+    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
+    // master (the Environment card fader's original target), but a decoded
+    // EXR arrives at the file's true radiance — a real daytime pure-sky
+    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
+    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
+    // an exposure stage the Environment fader would be dead in HDRI mode
+    // and the performer would have no way to bring a real sky up to stage
+    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
+    // card fader) restores symmetry: env_intensity fans out to BOTH
+    // envmap.intensity and this gain, so one fader is the environment
+    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
+    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
+    let hdri_gain_id = fresh_id();
+    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
+
+    let env_select_id = fresh_id();
+    let mut env_select_node =
+        plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
+    env_select_node.params.insert("num_inputs".to_string(), int(2));
+    env_select_node.params.insert("selector".to_string(), float(0.0)); // 0 = Softbox
+    nodes.push(env_select_node);
+
+    let camera_id = fresh_id();
+    let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
+    cam_node.params.insert("orbit".to_string(), float(0.7));
+    cam_node.params.insert("tilt".to_string(), float(0.3));
+    cam_node.params.insert("distance".to_string(), float(distance));
+    cam_node.params.insert("fov_y".to_string(), float(0.9));
+    cam_node.params.insert("look_y".to_string(), float(0.0));
+    // BUG-165/BUG-169 fix — see `near_clip` computation above.
+    cam_node.params.insert("near".to_string(), float(near_clip));
+    nodes.push(cam_node);
+
+    // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
+    // and render_scene/ao. No depth-of-field consumer wired anymore (the
+    // "dof" group was removed 2026-07-15 for buggy visuals) and no
+    // motion_blur consumer either (see the motion_blur removal note below),
+    // so `shutter_angle`/`focus_distance`/`f_stop` are along for the ride
+    // only insofar as `node.camera_lens` requires them — nothing downstream
+    // reads them today.
+    let lens_id = fresh_id();
+    let mut lens_node = plain_node(lens_id, "lens", "node.camera_lens", "lens");
+    lens_node.params.insert("focus_distance".to_string(), float(distance));
+    lens_node.params.insert("f_stop".to_string(), float(32.0));
+    nodes.push(lens_node);
+
+    let sun_id = fresh_id();
+    let mut sun_node = plain_node(sun_id, "sun", "node.light", "sun");
+    sun_node.params.insert("mode".to_string(), enum_val(0)); // Sun
+    sun_node.params.insert("pos_x".to_string(), float(5.0));
+    sun_node.params.insert("pos_y".to_string(), float(2.0));
+    sun_node.params.insert("pos_z".to_string(), float(3.0));
+    sun_node.params.insert("aim_x".to_string(), float(0.0));
+    sun_node.params.insert("aim_y".to_string(), float(0.0));
+    sun_node.params.insert("aim_z".to_string(), float(0.0));
+    // 3.5, not the primitive's 1.5 default: `node.pbr_material` divides diffuse
+    // by π (energy conservation), so a unit-intensity sun lands a fully-facing
+    // matte surface at ~0.32 — a dark subject then reads near-black. ~3.5
+    // offsets the /π so an imported model is legible under the default rig
+    // without the user having to touch the light. Aesthetic default; the light
+    // node is a normal graph node the user can dial down.
+    sun_node.params.insert("intensity".to_string(), float(3.5));
+    // Hard shadow softness: crisp, defined shadows suit the dramatic
+    // single-key "model on black" look. The Shadow Type card lets the user
+    // soften to Soft/Very Soft/Contact. `light_size` is inert for Hard (no
+    // penumbra), kept at 1.0 so a switch to a softer tier gives a sensible
+    // penumbra width.
+    sun_node.params.insert("cast_shadows".to_string(), float(1.0));
+    sun_node.params.insert("shadow_softness".to_string(), enum_val(0)); // Hard
+    sun_node.params.insert("light_size".to_string(), float(1.0));
+    // Shadow quality: the Sun's `range` is the shadow's orthographic
+    // half-extent, and the shadow map's texels spread across it. The default
+    // 30 wraps a huge area, so on a recentered hero mesh (spanning ±radius
+    // about the origin) almost none of the map's texels land on the subject —
+    // that's the blocky, texel-stepping look as the sun moves. Wrap the extent
+    // tightly to the model (radius × 1.5 for margin) and quadruple the map to
+    // 4096², so the shadow texels are fine enough that edges read crisp and
+    // per-frame motion stops stepping. Both are normal light-node params the
+    // user can still dial.
+    sun_node.params.insert("range".to_string(), float((radius * 1.5).max(0.01)));
+    sun_node.params.insert("shadow_resolution".to_string(), float(4096.0));
+    nodes.push(sun_node);
+
+    let render_id = fresh_id();
+    let mut render_node = plain_node(render_id, "render", "node.render_scene", "render");
+    render_node.params.insert("objects".to_string(), int(n as i32));
+    render_node.params.insert("lights".to_string(), int(1));
+
+    let mut string_bindings = Vec::new();
+    // Curated outer-card performance surface (D9 / P0). Camera + light +
+    // envmap are added once after the loop; per-object material knobs are
+    // pushed here so they interleave with the `mat_k` nodes they target.
+    let mut card_params: Vec<ParamSpecDef> = Vec::new();
+    let mut card_bindings: Vec<BindingDef> = Vec::new();
+    let mut textures_wired = 0usize;
+    // D9 doctrine — see `ImportReport::report_lines`.
+    let mut report_lines: Vec<String> = Vec::new();
+
+    // Group names, deduped so two identically-named glTF materials don't collide
+    // in the flattened handle map (the flattener prefixes every inner handle with
+    // the group name).
+    let mut used_group_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // GLTF_ANIMATION_DESIGN.md A2: clip `[0]`'s per-node TRS tracks, keyed
+    // by node index — the same lookup `gltf_load::gltf_import_summary`
+    // builds internally for A1's rigid-object resolution, rebuilt here
+    // because `node.gltf_skeleton_pose`'s Tables need it per-JOINT (every
+    // joint in a skin, not just the one mesh-owning node A1 resolves
+    // against). A4: ALL clips, not just clip 0 (D4 multi-clip selection).
+    let node_anims_by_clip: Vec<std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>> =
+        summary.animations.iter().map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect()).collect();
+
+    for (k, m) in materials.iter().enumerate() {
+        let mut out = build_object_group(
+            k,
+            k,
+            render_id,
+            m,
+            &path_str,
+            center,
+            &node_anims_by_clip,
+            &mut used_group_names,
+            &mut fresh_id,
+        );
+        nodes.push(out.group_node);
+        wires.append(&mut out.wires_to_render);
+        card_params.append(&mut out.card_params);
+        card_bindings.append(&mut out.card_bindings);
+        string_bindings.append(&mut out.string_bindings);
+        report_lines.append(&mut out.report_lines);
+        textures_wired += out.textures_wired;
     }
 
     nodes.push(render_node);
@@ -2463,6 +2545,291 @@ fn build_import_graph(
     };
 
     Ok((def, report))
+}
+
+/// Recursively find the largest node `id` anywhere in `nodes`, including
+/// inside group bodies. Node ids only need to be unique WITHIN the level
+/// (`Vec<EffectGraphNode>`) that holds them — `descend_level` looks a group
+/// id up in its own sibling list, and the flattener assigns every node a
+/// brand-new global id at load time (`manifold_core::flatten::flatten_groups`
+/// — `clone.id = new_id`) — so a merge only strictly needs to avoid
+/// colliding with the TOP-LEVEL ids `render_scene`'s siblings use. Walking
+/// every nesting level anyway costs nothing and is the simplest thing that
+/// is obviously correct for every level at once.
+fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
+    nodes
+        .iter()
+        .map(|n| {
+            let inner = n.group.as_ref().map(|g| max_node_id_recursive(&g.nodes)).unwrap_or(0);
+            n.id.max(inner)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// D5's merge plan: everything `ImportModelIntoSceneCommand`
+/// (`manifold-editing`) needs to splice a SECOND (third, nth) glTF's object
+/// groups into an EXISTING scene's `render_scene`, without touching that
+/// scene's own chrome (camera/envmap/lights/lens — the target scene keeps
+/// its own). Every field is a plain `manifold_core` type so the editing
+/// crate — which cannot depend on `manifold-renderer` (see
+/// `AddSceneObjectCommand`'s own doc comment for the same constraint) —
+/// can consume it without a dependency-direction violation: the caller
+/// (`manifold-app`, which depends on both) builds this plan here, then
+/// hands its fields to `ImportModelIntoSceneCommand::new`.
+#[derive(Debug, Clone)]
+pub struct MergePlan {
+    /// The target scene's `node.render_scene` node id — informational, so
+    /// the command doesn't have to re-search `def` for it.
+    pub render_scene_node_id: u32,
+    /// New top-level nodes: one `GROUP_TYPE_ID` group per incoming
+    /// material, same shape [`build_import_graph`] emits per object. NO
+    /// camera, NO envmap, NO lights, NO lens — the target scene's chrome is
+    /// never touched or duplicated.
+    pub new_nodes: Vec<EffectGraphNode>,
+    /// New top-level wires: each new group's outputs into `render_scene`'s
+    /// `mesh_{k}` / `material_{k}` / `transform_{k}` / … ports, `k`
+    /// continuing from the target's existing `objects` count.
+    pub new_wires: Vec<EffectGraphWire>,
+    /// `render_scene`'s new `objects` param value (existing + incoming).
+    pub new_objects_count: u32,
+    /// Card-spec additions (per-object knobs, sectioned by object/group
+    /// name — same shape the importer's own outer card carries).
+    pub new_card_params: Vec<ParamSpecDef>,
+    pub new_card_bindings: Vec<BindingDef>,
+    pub new_string_bindings: Vec<StringBindingDef>,
+    /// D9 doctrine ("every import produces a report") applied to the merge:
+    /// unmapped per-material features (same as [`ImportReport::report_lines`])
+    /// plus, when the D5 scale-sanity rule fired, one line naming the
+    /// normalize factor applied. Never a silent adjustment.
+    pub report_lines: Vec<String>,
+}
+
+/// D5 — merge a second (third, nth) glTF's objects into `def`'s EXISTING
+/// `node.render_scene`, reusing [`build_object_group`] (the SAME per-object
+/// shape [`build_import_graph`] emits) for every incoming material. Never
+/// calls [`assemble_import_graph`] / [`build_import_graph`] — this function
+/// builds ONLY object groups, no chrome, so there is nothing to filter back
+/// out and no chrome-duplication risk (the rejected "splice the whole
+/// assembled def" alternative, D5).
+///
+/// New node ids are allocated above `def`'s current max id (see
+/// [`max_node_id_recursive`]) — a merge twin of [`build_import_graph`]'s own
+/// `fresh_id`. Group names that collide with an existing top-level handle
+/// get suffixed by [`unique_group_name`] (the importer's own dedup helper,
+/// reused verbatim) — `used_group_names` is seeded with every existing
+/// top-level handle, not just names from this merge, so a merged object
+/// can never silently share a namespace root with the scene's own chrome
+/// or another object.
+///
+/// **Scale sanity (D5):** the incoming asset keeps its native units; each
+/// new object's `transform_3d` is seeded with `pos = -center` (the
+/// importer's own recenter convention). A uniform `scale` is ALSO seeded,
+/// but only when the incoming bbox radius differs from a "scene reference
+/// radius" by more than 10× in either direction. **Escalated, not guessed:**
+/// the def stores no per-object bbox/vertex metadata (BUG-193/194 found the
+/// identical gap for object counts and vertex counts — geometry simply
+/// isn't tracked in the graph def), so there is no literal "largest existing
+/// object's radius" to read back. Logged as BUG-195
+/// (`docs/BUG_BACKLOG.md`); the proxy used here — defaulted, not
+/// invented from nothing — is the target's own synthesized
+/// `node.orbit_camera`'s `distance` param, inverted through the EXACT
+/// formula [`build_import_graph`] used to seed it (`distance = 2.2 *
+/// radius`), since that value already encodes "how big is everything in
+/// this scene" as of the last import/creation that mattered. No top-level
+/// `node.orbit_camera` found → normalization is skipped entirely (native
+/// units), never guessed. Revisit trigger: BUG-195's real fix (a stored
+/// per-object size signal).
+fn merge_import_into_graph(
+    def: &EffectGraphDef,
+    summary: &GltfImportSummary,
+    path: &Path,
+) -> Result<MergePlan, String> {
+    if summary.materials.is_empty() {
+        return Err(format!(
+            "{}: no materials with geometry — nothing to import",
+            path.display()
+        ));
+    }
+
+    let Some(render_scene_node) =
+        def.nodes.iter().find(|n| n.type_id == super::scene_vm::RENDER_SCENE_TYPE_ID)
+    else {
+        return Err(
+            "target scene graph has no top-level node.render_scene — cannot merge an import \
+             into it"
+                .to_string(),
+        );
+    };
+    let render_scene_node_id = render_scene_node.id;
+    let existing_objects: u32 = match render_scene_node.params.get("objects") {
+        Some(SerializedParamValue::Float { value }) => value.round().max(0.0) as u32,
+        Some(SerializedParamValue::Int { value }) => (*value).max(0) as u32,
+        _ => 0,
+    };
+
+    let mut materials = summary.materials.clone();
+    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
+    let incoming = materials.len();
+
+    // GLB_CONFORMANCE_DESIGN.md D4 / OBJECT_SAFETY_MAX — enforced on the
+    // POST-MERGE total (P4), same loud-error posture as the importer's own
+    // over-bound reject. Never a silent partial merge.
+    if incoming > OBJECT_SAFETY_MAX as usize {
+        return Err(format!(
+            "{}: {incoming} materials with geometry exceeds the {OBJECT_SAFETY_MAX}-object \
+             safety bound on its own — this asset cannot be imported 1:1 without risking a \
+             runaway port-list (raise OBJECT_SAFETY_MAX in render_scene.rs if a real asset \
+             legitimately needs more; never silently truncate)",
+            path.display(),
+        ));
+    }
+    let post_merge_total = existing_objects as usize + incoming;
+    if post_merge_total > OBJECT_SAFETY_MAX as usize {
+        return Err(format!(
+            "{}: merging {incoming} object(s) into a scene that already has {existing_objects} \
+             would total {post_merge_total}, exceeding the {OBJECT_SAFETY_MAX}-object safety \
+             bound — this merge cannot proceed without risking a runaway port-list on \
+             render_scene (raise OBJECT_SAFETY_MAX in render_scene.rs if a real scene \
+             legitimately needs more; never silently drop objects)",
+            path.display(),
+        ));
+    }
+
+    let center = [
+        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+    ];
+    let dims = [
+        summary.bbox_max[0] - summary.bbox_min[0],
+        summary.bbox_max[1] - summary.bbox_min[1],
+        summary.bbox_max[2] - summary.bbox_min[2],
+    ];
+    let incoming_radius =
+        ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
+
+    // See the doc comment above for why this is a proxy, not a stored fact.
+    let scene_reference_radius: Option<f32> = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.orbit_camera")
+        .and_then(|n| match n.params.get("distance") {
+            Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
+            _ => None,
+        })
+        .filter(|r| *r > 1e-6);
+
+    let normalize_scale: Option<f32> = scene_reference_radius.and_then(|ref_radius| {
+        let ratio = incoming_radius / ref_radius;
+        if (0.1..=10.0).contains(&ratio) { None } else { Some(ref_radius / incoming_radius) }
+    });
+
+    let mut next_id = max_node_id_recursive(&def.nodes) + 1;
+    let mut fresh_id = move || {
+        let v = next_id;
+        next_id += 1;
+        v
+    };
+
+    // Seeded with every existing top-level handle (not just group names) —
+    // conservative, and cheap, so a merged object can never silently share
+    // a namespace root with existing scene chrome or another object.
+    let mut used_group_names: std::collections::HashSet<String> =
+        def.nodes.iter().filter_map(|n| n.handle.clone()).collect();
+
+    let node_anims_by_clip: Vec<std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>> =
+        summary
+            .animations
+            .iter()
+            .map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect())
+            .collect();
+
+    let path_str = path.to_string_lossy().into_owned();
+
+    let mut new_nodes = Vec::new();
+    let mut new_wires = Vec::new();
+    let mut new_card_params = Vec::new();
+    let mut new_card_bindings = Vec::new();
+    let mut new_string_bindings = Vec::new();
+    let mut report_lines = Vec::new();
+
+    for (local_k, m) in materials.iter().enumerate() {
+        let port_index = existing_objects as usize + local_k;
+        let mut out = build_object_group(
+            local_k,
+            port_index,
+            render_scene_node_id,
+            m,
+            &path_str,
+            center,
+            &node_anims_by_clip,
+            &mut used_group_names,
+            &mut fresh_id,
+        );
+        // D5 scale sanity: seeded on THIS object's own transform_3d — an
+        // ordinary, visible, undoable value, never hidden state. Every
+        // object in one incoming asset shares the same normalize factor
+        // (it's the whole asset's scale, not a per-material one).
+        //
+        // Confessed shortcut: an object whose glTF animation ALSO drives
+        // scale (`node.gltf_animation_source`'s `scale_x/y/z` wired as
+        // port-shadows onto this SAME transform_3d, unconditionally, by
+        // `build_object_group`) has this static seed overridden at runtime
+        // by that wire — a port-shadow always wins over the static param
+        // regardless of value. Normalizing a >10x-mismatched asset whose
+        // objects are ALSO scale-animated is therefore a known gap, not
+        // silently wrong: logged in BUG_BACKLOG (BUG-195 addendum) rather
+        // than fixed here.
+        if let Some(scale) = normalize_scale
+            && let Some(transform_node) = out
+                .group_node
+                .group
+                .as_mut()
+                .and_then(|g| g.nodes.iter_mut().find(|n| n.type_id == "node.transform_3d"))
+        {
+            transform_node.params.insert("scale_x".to_string(), float(scale));
+            transform_node.params.insert("scale_y".to_string(), float(scale));
+            transform_node.params.insert("scale_z".to_string(), float(scale));
+        }
+        new_nodes.push(out.group_node);
+        new_wires.append(&mut out.wires_to_render);
+        new_card_params.append(&mut out.card_params);
+        new_card_bindings.append(&mut out.card_bindings);
+        new_string_bindings.append(&mut out.string_bindings);
+        report_lines.append(&mut out.report_lines);
+    }
+
+    if let Some(scale) = normalize_scale {
+        report_lines.push(format!(
+            "merged import scaled ×{scale:.4} to match the scene (incoming radius \
+             {incoming_radius:.4} vs scene reference {:.4})",
+            scene_reference_radius.unwrap_or(0.0),
+        ));
+    }
+
+    Ok(MergePlan {
+        render_scene_node_id,
+        new_nodes,
+        new_wires,
+        new_objects_count: (existing_objects as usize + incoming) as u32,
+        new_card_params,
+        new_card_bindings,
+        new_string_bindings,
+        report_lines,
+    })
+}
+
+/// Public entry point for the "Import Model…" merge gesture
+/// (`manifold-app`'s dispatch calls this — never [`merge_import_into_graph`]
+/// directly, since that function takes a [`GltfImportSummary`], which is
+/// `pub(crate)` to `manifold-renderer` and so cannot appear in a public
+/// signature; the exact same constraint [`assemble_import_graph`] resolves
+/// for [`build_import_graph`]). One CPU parse via
+/// [`gltf_load::gltf_import_summary`], then the pure merge.
+pub fn assemble_merge_plan(def: &EffectGraphDef, path: &Path) -> Result<MergePlan, String> {
+    let summary = gltf_load::gltf_import_summary(path)?;
+    merge_import_into_graph(def, &summary, path)
 }
 
 #[cfg(test)]
@@ -3395,6 +3762,478 @@ mod tests {
             skin: None,
             morph: None,
         }
+    }
+
+    // -----------------------------------------------------------------
+    // SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
+    // -----------------------------------------------------------------
+
+    /// Build a target scene `EffectGraphDef` (as if produced by a PRIOR
+    /// import) whose bbox is a cube of half-extent `half_extent` centered
+    /// at the origin, and whose `objects` count on `render_scene` is
+    /// whatever a single-material summary produces (1). Its synthesized
+    /// `node.orbit_camera`'s `distance` param is `2.2 * radius` — the exact
+    /// value [`merge_import_into_graph`]'s scene-reference-radius proxy
+    /// inverts back out.
+    fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Existing", 500)],
+            bbox_min: [-half_extent, -half_extent, -half_extent],
+            bbox_max: [half_extent, half_extent, half_extent],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
+        def
+    }
+
+    fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent: f32) -> GltfImportSummary {
+        GltfImportSummary {
+            materials,
+            bbox_min: [-half_extent, -half_extent, -half_extent],
+            bbox_max: [half_extent, half_extent, half_extent],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        }
+    }
+
+    /// The scene's own render_scene node id + its `objects` count, read the
+    /// same way a caller would before building the merge summary's expected
+    /// port range.
+    fn render_scene_objects(def: &EffectGraphDef) -> (u32, u32) {
+        let node = def.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+        let objects = match node.params.get("objects") {
+            Some(SerializedParamValue::Int { value }) => *value as u32,
+            Some(SerializedParamValue::Float { value }) => *value as u32,
+            _ => 0,
+        };
+        (node.id, objects)
+    }
+
+    /// Id offsetting: new nodes must be allocated ABOVE the target def's
+    /// current max id (recursively, including inside existing object
+    /// groups) — never colliding with an existing node anywhere in the def.
+    #[test]
+    fn merge_allocates_ids_above_the_targets_current_max() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let existing_max = max_node_id_recursive(&def.nodes);
+
+        let summary = merge_summary(vec![full_material(0, "Incoming", 300)], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_incoming.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge one object");
+
+        assert!(!plan.new_nodes.is_empty(), "merge must produce at least the one incoming object group");
+        for n in &plan.new_nodes {
+            assert!(
+                n.id > existing_max,
+                "new top-level node id {} must be above the target's existing max id {existing_max}",
+                n.id
+            );
+            if let Some(group) = &n.group {
+                assert!(max_node_id_recursive(&group.nodes) > existing_max || group.nodes.is_empty());
+            }
+        }
+    }
+
+    /// Chrome skipped: a `MergePlan`'s `new_nodes` must NEVER contain a
+    /// camera / envmap / hdri / light / lens node — the target scene keeps
+    /// its own chrome untouched, D5's core rejection ("splice the whole
+    /// assembled def" duplicates chrome).
+    #[test]
+    fn merge_plan_never_contains_chrome_nodes() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let summary = merge_summary(
+            vec![full_material(0, "A", 100), full_material(1, "B", 200)],
+            1.0,
+        );
+        let path = std::path::Path::new("/tmp/synthetic_merge_chrome_check.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge two objects");
+
+        const CHROME_TYPE_IDS: &[&str] = &[
+            "node.orbit_camera",
+            "node.free_camera",
+            "node.look_at_camera",
+            "node.camera_lens",
+            "node.bake_environment",
+            "node.hdri_source",
+            "node.exposure",
+            "node.switch_texture",
+            "node.light",
+            "node.render_scene",
+            "node.ssao_gtao",
+            "node.bilateral_blur",
+            "node.mix",
+        ];
+        fn assert_no_chrome(nodes: &[EffectGraphNode]) {
+            for n in nodes {
+                assert!(
+                    !CHROME_TYPE_IDS.contains(&n.type_id.as_str()),
+                    "merge plan must never contain chrome node type_id `{}` — the target scene \
+                     keeps its own chrome",
+                    n.type_id
+                );
+                if let Some(group) = &n.group {
+                    assert_no_chrome(&group.nodes);
+                }
+            }
+        }
+        assert_no_chrome(&plan.new_nodes);
+        // Every new node is a top-level GROUP_TYPE_ID box (one per object) —
+        // never a bare chrome-shaped node at the top level either.
+        for n in &plan.new_nodes {
+            assert_eq!(n.type_id, GROUP_TYPE_ID, "merge only ever adds object groups at the top level");
+        }
+    }
+
+    /// Name-collision suffixing: an incoming material named the same as an
+    /// existing top-level handle gets suffixed by `unique_group_name` (the
+    /// importer's own dedup helper, reused verbatim — not reimplemented),
+    /// never a silent duplicate name. `used_group_names` is seeded with the
+    /// target's existing handles, so the very first colliding local object
+    /// (whose own local index restarts at 0 for a merge) gets "Existing 1"
+    /// — the same helper a single import would produce "Name 2" from ONLY
+    /// when "Name 1" was already taken too; the exact numeral isn't the
+    /// contract, uniqueness is.
+    #[test]
+    fn merge_suffixes_a_colliding_group_name() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        // The target scene's one object group is named "Existing" (full_material's name).
+        assert!(def.nodes.iter().any(|n| n.handle.as_deref() == Some("Existing")));
+
+        let summary = merge_summary(vec![full_material(0, "Existing", 300)], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_name_collision.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge colliding name");
+
+        let new_group = plan.new_nodes.first().expect("one merged object group");
+        assert_ne!(
+            new_group.handle.as_deref(),
+            Some("Existing"),
+            "a colliding incoming group name must never collide with an existing top-level handle"
+        );
+        assert_eq!(
+            new_group.handle.as_deref(),
+            Some("Existing 1"),
+            "unique_group_name's own dedup convention, reused verbatim"
+        );
+    }
+
+    /// Objects count bumps correctly: merging N materials into a scene that
+    /// already has M objects produces `new_objects_count == M + N`, and the
+    /// new wires target ports `mesh_M..mesh_{M+N-1}` (continuing, never
+    /// restarting at 0).
+    #[test]
+    fn merge_bumps_objects_count_and_continues_port_indices() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let (render_id, existing_objects) = render_scene_objects(&def);
+        assert_eq!(existing_objects, 1, "scene_def_with_bbox_half_extent seeds exactly one object");
+
+        let summary = merge_summary(
+            vec![full_material(0, "A", 100), full_material(1, "B", 200), full_material(2, "C", 50)],
+            1.0,
+        );
+        let path = std::path::Path::new("/tmp/synthetic_merge_objects_count.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge three objects");
+
+        assert_eq!(plan.render_scene_node_id, render_id);
+        assert_eq!(plan.new_objects_count, existing_objects + 3);
+        assert_eq!(plan.new_nodes.len(), 3, "one group per incoming material");
+
+        for k in existing_objects..(existing_objects + 3) {
+            assert!(
+                plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == format!("mesh_{k}")),
+                "new wires must target mesh_{k} (continuing from the existing {existing_objects} objects), not restart at mesh_0"
+            );
+        }
+        // Never re-targets an already-occupied port.
+        assert!(
+            !plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == "mesh_0"),
+            "merge must not re-wire the scene's EXISTING mesh_0 port"
+        );
+    }
+
+    /// Card-spec sections extend: a glass incoming material gets an Opacity
+    /// card slider sectioned under its OWN group name (same as a fresh
+    /// import), appended to the plan's card additions — never dropped,
+    /// never colliding with the target's existing card params.
+    #[test]
+    fn merge_extends_card_spec_sections_for_new_objects() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let mut glass = full_material(0, "GlassPane", 400);
+        glass.was_blend = true;
+        glass.transmission_factor = 0.0;
+        let summary = merge_summary(vec![glass], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_card_spec.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge one glass object");
+
+        assert!(
+            plan.new_card_params.iter().any(|p| p.name == "Opacity" && p.section.as_deref() == Some("GlassPane")),
+            "the merged glass object must get its own Opacity slider sectioned under its group name"
+        );
+        assert!(
+            plan.new_card_bindings.iter().any(|b| b.id.starts_with("opacity_")),
+            "the merged Opacity slider must carry a binding"
+        );
+        // The shared Ambient binding still fans out for the new material too.
+        assert!(
+            plan.new_card_bindings.iter().any(|b| b.id == "scene_ambient"),
+            "the merged object's material still gets the shared Ambient binding"
+        );
+    }
+
+    /// D5 scale sanity, no-op case: an incoming asset within 10x of the
+    /// scene's reference radius gets NO seeded scale (native units).
+    #[test]
+    fn merge_within_10x_never_normalizes() {
+        let def = scene_def_with_bbox_half_extent(1.0); // scene reference radius ~= sqrt(3)
+        let summary = merge_summary(vec![full_material(0, "Same", 100)], 1.0); // identical bbox, ratio 1.0
+        let path = std::path::Path::new("/tmp/synthetic_merge_no_normalize.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge same-scale object");
+
+        let group = plan.new_nodes.first().unwrap();
+        let transform = group
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .expect("object group has a transform_3d");
+        assert!(
+            !transform.params.contains_key("scale_x"),
+            "within 10x, no scale should be seeded at all — native units"
+        );
+        assert!(
+            !plan.report_lines.iter().any(|l| l.contains("scaled ×")),
+            "no normalize report line when the ratio is within bounds"
+        );
+    }
+
+    /// D5 scale sanity, too-big boundary: an incoming asset >10x LARGER
+    /// than the scene's reference radius gets a seeded scale < 1.0 that
+    /// brings it back down to the reference size.
+    #[test]
+    fn merge_over_10x_too_big_normalizes_down() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        // 20x the scene's half-extent -> incoming radius ~20x the scene's.
+        let summary = merge_summary(vec![full_material(0, "Giant", 100)], 20.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_too_big.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge oversized object");
+
+        let group = plan.new_nodes.first().unwrap();
+        let transform = group
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .unwrap();
+        let scale = match transform.params.get("scale_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("expected a seeded scale_x float param, got {other:?}"),
+        };
+        assert!(scale < 1.0, "an oversized incoming asset must be scaled DOWN, got {scale}");
+        assert!(
+            plan.report_lines.iter().any(|l| l.contains("scaled ×")),
+            "a normalize report line must be present"
+        );
+    }
+
+    /// D5 scale sanity, too-small boundary: an incoming asset >10x SMALLER
+    /// than the scene's reference radius gets a seeded scale > 1.0 that
+    /// brings it back up to the reference size.
+    #[test]
+    fn merge_over_10x_too_small_normalizes_up() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        // 1/20th the scene's half-extent -> incoming radius ~1/20th the scene's.
+        let summary = merge_summary(vec![full_material(0, "Tiny", 100)], 0.05);
+        let path = std::path::Path::new("/tmp/synthetic_merge_too_small.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge undersized object");
+
+        let group = plan.new_nodes.first().unwrap();
+        let transform = group
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .unwrap();
+        let scale = match transform.params.get("scale_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!("expected a seeded scale_x float param, got {other:?}"),
+        };
+        assert!(scale > 1.0, "an undersized incoming asset must be scaled UP, got {scale}");
+        assert!(
+            plan.report_lines.iter().any(|l| l.contains("scaled ×")),
+            "a normalize report line must be present"
+        );
+    }
+
+    /// Negative gate: OBJECT_SAFETY_MAX is enforced on the POST-MERGE total
+    /// (existing + incoming), never silently truncated.
+    #[test]
+    fn merge_over_object_safety_max_post_merge_errors_loudly() {
+        let def = scene_def_with_bbox_half_extent(1.0); // 1 existing object
+        let n = OBJECT_SAFETY_MAX as usize; // exactly at the max on its own; +1 existing pushes it over
+        let materials: Vec<_> = (0..n).map(|k| full_material(k as u32, &format!("M{k}"), 10)).collect();
+        let summary = merge_summary(materials, 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_over_cap.glb");
+        let err = merge_import_into_graph(&def, &summary, path)
+            .expect_err("existing (1) + incoming (OBJECT_SAFETY_MAX) must exceed the bound");
+        assert!(err.contains(&OBJECT_SAFETY_MAX.to_string()), "error must name the safety bound: {err}");
+    }
+
+    /// `graph_tool`-equivalent structural gate: a merged def (target scene +
+    /// the plan's new nodes/wires spliced onto the target's own nodes/
+    /// wires, `objects` bumped) flattens cleanly and compiles through the
+    /// real registry — the same proof every import graph gets.
+    #[test]
+    fn merged_def_flattens_and_compiles_through_registry() {
+        let def = scene_def_with_bbox_half_extent(1.0);
+        let (render_id, existing_objects) = render_scene_objects(&def);
+        let summary = merge_summary(
+            vec![full_material(0, "Merged1", 150), full_material(1, "Merged2", 250)],
+            1.0,
+        );
+        let path = std::path::Path::new("/tmp/synthetic_merge_flatten_compile.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge two objects");
+
+        let mut merged = def.clone();
+        merged.nodes.extend(plan.new_nodes.clone());
+        merged.wires.extend(plan.new_wires.clone());
+        if let Some(node) = merged.nodes.iter_mut().find(|n| n.id == render_id) {
+            node.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+            );
+        }
+        if let Some(meta) = merged.preset_metadata.as_mut() {
+            meta.params.extend(plan.new_card_params.clone());
+            meta.bindings.extend(plan.new_card_bindings.clone());
+            meta.string_bindings.extend(plan.new_string_bindings.clone());
+        }
+
+        let flat = manifold_core::flatten::flatten_groups(&merged)
+            .unwrap_or_else(|e| panic!("merged def must flatten cleanly: {e}"));
+        // The flattener reassigns EVERY ordinary node (including top-level
+        // ones like render_scene) a fresh id (`flatten.rs`'s `clone.id =
+        // new_id`) — the pre-flatten `render_id` no longer resolves, so
+        // re-find render_scene by type_id in the flattened output.
+        let flat_render_id = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("flattened def keeps its render_scene node")
+            .id;
+        for k in existing_objects..(existing_objects + 2) {
+            assert!(
+                flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == format!("mesh_{k}")),
+                "flattened merged def must wire mesh_{k}"
+            );
+        }
+
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(merged, &registry, None)
+            .expect("merged import graph must compile through PresetRuntime::from_def");
+    }
+
+    /// Real-asset merge, using two SMALL fixtures already in this worktree
+    /// (not the held-out warehouse/skull/rosetta trio, which only exist in
+    /// the main checkout) — `cc0__oomurasaki_azalea_r._x_pulchrum.glb` as
+    /// the target scene, Khronos's tiny `Box.glb` merged into it. Writes
+    /// the merged def to a JSON file so `graph_tool validate`/`fusion` can
+    /// run against it as a real file, per the phase gate, and doubles as a
+    /// regression test against real (not hand-built) glTF data.
+    #[test]
+    fn merges_a_real_asset_and_writes_merged_def_for_graph_tool() {
+        let target_path = azalea_fixture_path();
+        let box_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/Box.glb");
+        if !target_path.exists() || !box_path.exists() {
+            println!(
+                "merges_a_real_asset_and_writes_merged_def_for_graph_tool: fixture(s) missing, skipping"
+            );
+            return;
+        }
+
+        let (target_def, target_report) =
+            assemble_import_graph(&target_path).expect("assemble azalea target scene");
+        assert_eq!(target_report.object_count, 2, "azalea has 2 materials with geometry");
+
+        let box_summary =
+            gltf_load::gltf_import_summary(&box_path).expect("parse Box.glb summary");
+        let plan = merge_import_into_graph(&target_def, &box_summary, &box_path)
+            .expect("merge Box.glb into the azalea scene");
+        assert_eq!(plan.new_objects_count, 3, "2 azalea objects + 1 Box object");
+        assert_eq!(plan.new_nodes.len(), 1, "Box.glb has exactly one material with geometry");
+
+        let mut merged = target_def.clone();
+        merged.nodes.extend(plan.new_nodes.clone());
+        merged.wires.extend(plan.new_wires.clone());
+        if let Some(node) =
+            merged.nodes.iter_mut().find(|n| n.id == plan.render_scene_node_id)
+        {
+            node.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+            );
+        }
+        if let Some(meta) = merged.preset_metadata.as_mut() {
+            meta.params.extend(plan.new_card_params.clone());
+            meta.bindings.extend(plan.new_card_bindings.clone());
+            meta.string_bindings.extend(plan.new_string_bindings.clone());
+        }
+
+        // Structural proof, same as the synthetic test above.
+        let flat = manifold_core::flatten::flatten_groups(&merged)
+            .unwrap_or_else(|e| panic!("real-asset merged def must flatten cleanly: {e}"));
+        let flat_render_id = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("flattened def keeps its render_scene node")
+            .id;
+        assert!(
+            flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == "mesh_2"),
+            "flattened merged def must wire the new Box object at mesh_2"
+        );
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(merged.clone(), &registry, None)
+            .expect("real-asset merged import graph must compile through PresetRuntime::from_def");
+
+        let json = serde_json::to_string_pretty(&merged).expect("serialize merged def");
+        let out_path = std::env::temp_dir().join("scene_setup_p4_merged_azalea_box.json");
+        std::fs::write(&out_path, json).expect("write merged def JSON for graph_tool");
+        println!(
+            "merges_a_real_asset_and_writes_merged_def_for_graph_tool: wrote {}",
+            out_path.display()
+        );
+    }
+
+    /// A target `def` with no top-level `node.render_scene` at all is a
+    /// named escalation, not a guess — merging into a graph the panel would
+    /// never show as a scene must error loudly.
+    #[test]
+    fn merge_into_a_def_without_render_scene_errors() {
+        let def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        };
+        let summary = merge_summary(vec![full_material(0, "Orphan", 100)], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_no_render_scene.glb");
+        let err = merge_import_into_graph(&def, &summary, path)
+            .expect_err("a def with no render_scene must error, never silently no-op");
+        assert!(err.contains("render_scene"));
     }
 
     /// D6 colour-space pinning + D3 port-wiring: a synthetic material
