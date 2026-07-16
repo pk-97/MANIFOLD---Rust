@@ -931,6 +931,92 @@ impl GpuEncoder {
         }
     }
 
+    /// Draw a batch of meshes into ONE single-sample colour+depth pass with
+    /// independently controlled load actions per attachment
+    /// (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E2a). The non-MSAA sibling of
+    /// [`Self::draw_instanced_depth_msaa_batch_desc`]: no memoryless
+    /// multisample scratch, no resolve — `target`/`depth_target` are real,
+    /// already-populated single-sample textures. `Load` on both lets the
+    /// caller composite a sorted transparent group onto a prior opaque
+    /// pass's already-resolved colour AND depth-test against that pass's
+    /// depth, without re-clearing either attachment. Depth `StoreAction` is
+    /// always `DontCare` — unlike [`Self::draw_instanced_depth_only_batch`]
+    /// (the shadow-map primitive, whose Store IS the useful output),
+    /// nothing reads this pass's depth afterward.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced_depth_batch(
+        &mut self,
+        target: &GpuTexture,
+        depth_target: &GpuTexture,
+        depth_stencil_state: &GpuDepthStencilState,
+        draws: &[DepthMsaaDraw],
+        color_load: crate::GpuLoadAction,
+        depth_load: crate::GpuLoadAction,
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = new_render_pass_descriptor();
+
+        let color = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        unsafe {
+            color.setTexture(Some(&target.raw));
+            color.setLoadAction(convert_load_action(color_load));
+            color.setStoreAction(MTLStoreAction::Store);
+            color.setClearColor(objc2_metal::MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            });
+        }
+
+        let depth = unsafe { desc.depthAttachment() };
+        unsafe {
+            depth.setTexture(Some(&depth_target.raw));
+            depth.setLoadAction(convert_load_action(depth_load));
+            depth.setStoreAction(MTLStoreAction::DontCare);
+            depth.setClearDepth(1.0);
+        }
+
+        let enc = self.make_render_encoder(&desc, label);
+        unsafe {
+            enc.pushDebugGroup(&NSString::from_str(label));
+            enc.setDepthStencilState(Some(&depth_stencil_state.raw));
+            enc.setViewport(MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: target.width as f64,
+                height: target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        for draw in draws {
+            if draw.vertex_count == 0 || draw.instance_count == 0 {
+                continue;
+            }
+            unsafe {
+                enc.setRenderPipelineState(&draw.pipeline.state);
+            }
+            apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
+            unsafe {
+                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                    MTLPrimitiveType::Triangle,
+                    0,
+                    draw.vertex_count as usize,
+                    draw.instance_count as usize,
+                );
+            }
+        }
+
+        unsafe {
+            enc.popDebugGroup();
+            enc.endEncoding();
+        }
+    }
+
     /// Draw instanced geometry with depth testing.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced_depth(

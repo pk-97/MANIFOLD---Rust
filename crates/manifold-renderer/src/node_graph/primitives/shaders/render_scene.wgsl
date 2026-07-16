@@ -285,6 +285,16 @@ const PREFILTER_MAX_MIP: f32 = 5.0;
 @group(0) @binding(20) var occlusion_map: texture_2d<f32>;
 @group(0) @binding(21) var emissive_map: texture_2d<f32>;
 
+// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: the opaque-scene-color snapshot
+// (Pass A's fully-shaded opaque result, blitted between Pass A and Pass B) a
+// transmissive fragment will sample for screen-space refraction — E2b's
+// work. Declared here now so the pipeline layout is correct and stable
+// across E2a/E2b; NOT read anywhere in `fs_pbr` yet (pipeline-layout-only
+// this phase, per the E2a/E2b split — see render_scene.rs's `is_transmissive`
+// always-bind-or-dummy comment for the CPU side of this same rule).
+@group(0) @binding(27) var opaque_scene_color: texture_2d<f32>;
+@group(0) @binding(28) var opaque_scene_color_sampler: sampler;
+
 // Build a 3×3 rotation matrix from XYZ Euler angles (XYZ order).
 // Bit-for-bit the same as render_instanced_3d_mesh.wgsl's euler_xyz —
 // forked, not shared, per this file's header convention.
