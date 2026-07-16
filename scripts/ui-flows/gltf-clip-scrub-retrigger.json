@@ -1,0 +1,43 @@
+[
+  "Snapshot",
+  "Dump",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Rate" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Clip" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Loop Mode" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Retrigger" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Widget": 11040593046049842679 },
+      "gesture": { "Drag": { "to": { "Point": { "x": 1300.0, "y": 241.0 } }, "steps": 6 } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "▶", "nth": 1 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  { "Step": { "frames": 3 } },
+  "Snapshot",
+  "Dump"
+]
