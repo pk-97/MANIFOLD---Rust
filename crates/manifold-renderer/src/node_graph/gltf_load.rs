@@ -1058,6 +1058,13 @@ pub(crate) struct GltfMaterialInfo {
     /// this material's geometry (the documented multi-node-per-material
     /// scope boundary — never partially or incorrectly animated).
     pub animation: Option<GltfObjectAnimation>,
+    /// GLTF_ANIMATION_DESIGN.md A2 (D2): this object's resolved skin
+    /// topology, when its geometry is contributed by exactly one
+    /// mesh-owning node (the SAME single-node scope boundary `animation`
+    /// above uses) whose `node.skin()` is present. `None` for a static or
+    /// rigid-animated object, for the synthetic default-material entry,
+    /// or when more than one node contributes this material's geometry.
+    pub skin: Option<GltfObjectSkin>,
 }
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
@@ -1201,11 +1208,12 @@ pub(crate) struct GltfImportSummary {
     /// this list). Kept on the summary so a parse-only smoke test can
     /// assert the parser sees the right channels on an asset it was never
     /// wired against, independent of the per-material resolution step.
-    /// Read only from `#[cfg(test)]` code today (`cargo clippy` without
-    /// `--tests` doesn't see that) — un-suppression trigger: A4's clip
-    /// selector (D4, deferred) will read `animations[1..]` directly to
-    /// expose multi-clip glbs (`Fox` ships three) beyond clip `[0]`.
-    #[allow(dead_code)]
+    /// GLTF_ANIMATION_DESIGN.md A2: also read directly by `gltf_import.rs`
+    /// to build `node.gltf_skeleton_pose`'s per-joint Table params (a
+    /// joint's animated TRS track, looked up by node index against clip
+    /// `[0]`'s per-node map) — no longer test-only. A4's clip selector
+    /// (D4, deferred) will read `animations[1..]` the same way to expose
+    /// multi-clip glbs (`Fox` ships three) beyond clip `[0]`.
     pub animations: Vec<GltfAnimationInfo>,
     /// Non-fatal animation parse findings — a non-LINEAR interpolation
     /// channel (STEP/CUBICSPLINE, Deferred past A1), a morph-weight
@@ -1450,6 +1458,278 @@ fn resolve_object_animation(
     Some(GltfObjectAnimation { duration_s, translation, rotation, scale })
 }
 
+// ─── GLTF_ANIMATION_DESIGN.md A2 — skinning (D2) ───────────────────────
+
+/// One glTF `skins[]` entry's PARSE-TIME-STATIC topology — which node is
+/// which joint (palette index = position in `joint_node_indices`, the
+/// same order JOINTS_0 accessor values index into), each joint's parent
+/// WITHIN the joint list (or -1), and the inverse-bind matrices. Per-frame
+/// joint LOCAL poses (bind or animated) are resolved separately by
+/// `node.gltf_skeleton_pose` from `GltfObjectSkin`'s bind-pose + Table
+/// tracks — this struct carries only what parsing can fix once.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfSkinInfo {
+    pub joint_node_indices: Vec<usize>,
+    /// Index (into THIS skin's own joint list) of each joint's parent, or
+    /// `-1` when the joint's real scene-graph parent is not itself a
+    /// joint in this skin (the common case for joint 0, the skeleton
+    /// root).
+    pub joint_parent: Vec<i32>,
+    /// Static world transform of the node chain ABOVE the joint tree, for
+    /// joints whose `joint_parent == -1` — composed once at parse time
+    /// from that ancestor chain's own node transforms (glTF's `matrix()`/
+    /// TRS, whichever the node specifies). A real asset whose
+    /// ancestor-of-root is ITSELF animated is a scope boundary A2 does
+    /// not resolve (not exercised by CesiumMan/Fox/BrainStem — re-derive
+    /// if a future asset needs it): that animation is silently not
+    /// applied here, never a crash.
+    pub joint_root_world: Vec<Mat4>,
+    pub inverse_bind_matrices: Vec<Mat4>,
+    /// Each joint's static BIND-pose local TRS (`node.transform().decomposed()`),
+    /// the fallback `node.gltf_skeleton_pose` uses for any joint this
+    /// animation clip doesn't touch — never the identity default A1's
+    /// rigid-object sampler uses, because an unanimated joint's bind pose
+    /// is very often NOT the identity (a resting arm bend, a T-pose
+    /// offset) and skinning (unlike A1's baked-static-transform objects)
+    /// never gets that offset from anywhere else.
+    pub joint_bind_translation: Vec<[f32; 3]>,
+    pub joint_bind_rotation: Vec<[f32; 4]>,
+    pub joint_bind_scale: Vec<[f32; 3]>,
+}
+
+/// Every node's parent, indexed by node index (`None` = root). Built once
+/// per document parse — O(N) over the node tree.
+fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> {
+    let mut parent_of: Vec<Option<usize>> = vec![None; document.nodes().len()];
+    for node in document.nodes() {
+        for child in node.children() {
+            parent_of[child.index()] = Some(node.index());
+        }
+    }
+    parent_of
+}
+
+/// Static (non-animated) world matrix of `node_index`, composed by
+/// walking UP via `parent_of` to the scene root and multiplying
+/// `node.transform().matrix()` root-first. Used only for the (rare)
+/// ancestor chain ABOVE a skin's joint tree — see
+/// `GltfSkinInfo::joint_root_world`.
+fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: &[Option<usize>]) -> Mat4 {
+    let mut chain = vec![node_index];
+    let mut cur = node_index;
+    while let Some(p) = parent_of.get(cur).copied().flatten() {
+        chain.push(p);
+        cur = p;
+    }
+    chain.reverse(); // root-first
+    let mut world = MAT4_IDENTITY;
+    for idx in chain {
+        if let Some(node) = document.nodes().nth(idx) {
+            world = mat4_mul(&world, &node.transform().matrix());
+        }
+    }
+    world
+}
+
+/// Parse every `document.skins()` entry, indexed by glTF skin index. A
+/// skin with no `inverseBindMatrices` accessor (spec-legal — implies
+/// identity per joint) falls back to `MAT4_IDENTITY` for every joint.
+fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<GltfSkinInfo> {
+    let parent_of = build_parent_map(document);
+    document
+        .skins()
+        .map(|skin| {
+            let joint_node_indices: Vec<usize> = skin.joints().map(|n| n.index()).collect();
+            let joint_position: std::collections::HashMap<usize, usize> = joint_node_indices
+                .iter()
+                .enumerate()
+                .map(|(pos, &node_idx)| (node_idx, pos))
+                .collect();
+            let mut joint_parent = Vec::with_capacity(joint_node_indices.len());
+            let mut joint_root_world = Vec::with_capacity(joint_node_indices.len());
+            let mut joint_bind_translation = Vec::with_capacity(joint_node_indices.len());
+            let mut joint_bind_rotation = Vec::with_capacity(joint_node_indices.len());
+            let mut joint_bind_scale = Vec::with_capacity(joint_node_indices.len());
+            for &node_idx in &joint_node_indices {
+                let parent_node = parent_of.get(node_idx).copied().flatten();
+                match parent_node.and_then(|p| joint_position.get(&p)) {
+                    Some(&pos) => {
+                        joint_parent.push(pos as i32);
+                        joint_root_world.push(MAT4_IDENTITY);
+                    }
+                    None => {
+                        joint_parent.push(-1);
+                        let root_world = match parent_node {
+                            Some(p) => static_world_matrix(document, p, &parent_of),
+                            None => MAT4_IDENTITY,
+                        };
+                        joint_root_world.push(root_world);
+                    }
+                }
+                let node = document.nodes().nth(node_idx);
+                let (t, r, s) = node
+                    .map(|n| n.transform().decomposed())
+                    .unwrap_or(([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]));
+                joint_bind_translation.push(t);
+                joint_bind_rotation.push(r);
+                joint_bind_scale.push(s);
+            }
+            let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+            let inverse_bind_matrices: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
+                Some(it) => it.collect(),
+                None => vec![MAT4_IDENTITY; joint_node_indices.len()],
+            };
+            GltfSkinInfo {
+                joint_node_indices,
+                joint_parent,
+                joint_root_world,
+                inverse_bind_matrices,
+                joint_bind_translation,
+                joint_bind_rotation,
+                joint_bind_scale,
+            }
+        })
+        .collect()
+}
+
+/// This render object's (= one material's) resolved skin topology —
+/// `GltfSkinInfo` plus which skin index it came from (for report
+/// messages). `gltf_import.rs` reads this to build `node.gltf_skeleton_pose`'s
+/// Table params; per-vertex JOINTS_0/WEIGHTS_0 live separately, read at
+/// RUNTIME by `node.gltf_skinned_mesh_source` from the same file.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfObjectSkin {
+    pub skin_index: u32,
+    pub info: GltfSkinInfo,
+}
+
+/// (vertices, per-vertex joint indices as f32, per-vertex weights) — the
+/// coincident triple `node.gltf_skinned_mesh_source` uploads as its three
+/// array outputs.
+pub(crate) type SkinnedMeshData = (Vec<MeshVertex>, Vec<[f32; 4]>, Vec<[f32; 4]>);
+
+/// Flatten ONE skinned mesh-owning node's primitives (filtered to
+/// `material_index`) into a triangle-list `MeshVertex` buffer plus
+/// coincident per-vertex joint indices (as f32 — exact for the spec's
+/// joint-count range) and weights. LOCAL space, NO node-transform applied:
+/// per glTF 2.0 §3.7.3.3, a skinned mesh's positioning comes ENTIRELY from
+/// the joint hierarchy — the mesh-owning node's own transform is ignored,
+/// unlike every static/rigid object this importer otherwise
+/// world-transforms via `walk_gltf_node`. A vertex missing JOINTS_0/
+/// WEIGHTS_0 on an otherwise-skinned primitive gets the neutral
+/// `[0,0,0,0]` / `[1,0,0,0]` pair (100% weight on joint 0) — never
+/// silently zero-weighted, which would collapse it to the origin under
+/// `node.skin_mesh`'s weighted-sum formula.
+pub(crate) fn flatten_skinned_node(
+    node: &gltf::Node,
+    buffers: &[gltf::buffer::Data],
+    material_index: u32,
+) -> Result<SkinnedMeshData, String> {
+    let mesh = node
+        .mesh()
+        .ok_or_else(|| format!("node {}: expected a skinned mesh, found none", node.index()))?;
+    let mut verts = Vec::new();
+    let mut joints = Vec::new();
+    let mut weights = Vec::new();
+    for primitive in mesh.primitives() {
+        if primitive.material().index() != Some(material_index as usize) {
+            continue;
+        }
+        if primitive.mode() != gltf::mesh::Mode::Triangles {
+            return Err(format!(
+                "primitive uses non-Triangles mode {:?} — unsupported by node.skin_mesh import",
+                primitive.mode()
+            ));
+        }
+        let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+        let positions: Vec<[f32; 3]> = reader
+            .read_positions()
+            .ok_or_else(|| "skinned primitive missing required POSITION accessor".to_string())?
+            .collect();
+        let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
+        let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+        let vjoints: Option<Vec<[u16; 4]>> = reader.read_joints(0).map(|it| it.into_u16().collect());
+        let vweights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|it| it.into_f32().collect());
+        let indices: Vec<u32> = match reader.read_indices() {
+            Some(idx) => idx.into_u32().collect(),
+            None => (0..positions.len() as u32).collect(),
+        };
+        for tri in indices.chunks_exact(3) {
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+                return Err(format!(
+                    "triangle index ({i0}, {i1}, {i2}) out of range for {} positions",
+                    positions.len()
+                ));
+            }
+            let p0 = positions[i0];
+            let p1 = positions[i1];
+            let p2 = positions[i2];
+            let face_normal = normalize3(cross3(sub3(p1, p0), sub3(p2, p0)));
+            for &i in &[i0, i1, i2] {
+                let normal = normals.as_ref().map_or(face_normal, |ns| ns[i]);
+                let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                verts.push(MeshVertex {
+                    position: positions[i],
+                    _pad0: 0.0,
+                    normal,
+                    _pad1: 0.0,
+                    uv,
+                    _pad2: [0.0, 0.0],
+                });
+                joints.push(match &vjoints {
+                    Some(j) => [j[i][0] as f32, j[i][1] as f32, j[i][2] as f32, j[i][3] as f32],
+                    None => [0.0, 0.0, 0.0, 0.0],
+                });
+                weights.push(match &vweights {
+                    Some(w) => w[i],
+                    None => [1.0, 0.0, 0.0, 0.0],
+                });
+            }
+        }
+    }
+    Ok((verts, joints, weights))
+}
+
+fn find_skinned_node_for_material<'a>(
+    node: &gltf::Node<'a>,
+    material_index: u32,
+) -> Option<gltf::Node<'a>> {
+    if node.skin().is_some()
+        && let Some(mesh) = node.mesh()
+        && mesh.primitives().any(|p| p.material().index() == Some(material_index as usize))
+    {
+        return Some(node.clone());
+    }
+    for child in node.children() {
+        if let Some(found) = find_skinned_node_for_material(&child, material_index) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Load a `.glb`'s skinned geometry for `material_index`'s sole
+/// contributing node — the same single-node-per-material scope boundary
+/// A1 uses for rigid animation. `gltf_import.rs` only calls this when
+/// exactly one mesh-owning node with a `skin()` contributes that
+/// material.
+pub(crate) fn load_gltf_skinned_mesh(
+    path: &std::path::Path,
+    material_index: u32,
+) -> Result<SkinnedMeshData, String> {
+    let (document, buffers, _images) = import_glb(path)?;
+    for node in resolve_import_nodes(&document) {
+        if let Some(found) = find_skinned_node_for_material(&node, material_index) {
+            return flatten_skinned_node(&found, &buffers, material_index);
+        }
+    }
+    Err(format!(
+        "{}: no skinned mesh-owning node found contributing material {material_index}",
+        path.display()
+    ))
+}
+
 /// Recursively accumulate per-material world-combined vertex counts and a
 /// world-space bounding box over a node subtree. Keyed by
 /// `material().index()` (`None` = glTF default material).
@@ -1544,6 +1824,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // `resolve_object_animation` for why the chain (not just the leaf
     // node) is required.
     let animations = parse_animations(&document, &buffers);
+    // GLTF_ANIMATION_DESIGN.md A2: parsed once per skin index — resolved
+    // against a material below only when that material's geometry comes
+    // from exactly one skinned node (same boundary as `animation`).
+    let skins = parse_skins(&document, &buffers);
     let mut animation_report_lines: Vec<String> = Vec::new();
     for anim in &animations {
         for line in &anim.skipped_channels {
@@ -1605,6 +1889,33 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                          A1 scope, this object is left static",
                         nodes.len()
                     ));
+                    None
+                }
+                _ => None,
+            };
+            // A2 (D2): resolve this material's skin the same way — exactly
+            // one contributing node, and that node carries a `skin()`.
+            let skin = match nodes_by_material.get(&Some(material_index as usize)) {
+                Some(nodes) if nodes.len() == 1 => {
+                    let node_index = *nodes.iter().next().unwrap();
+                    document.nodes().nth(node_index).and_then(|node| {
+                        node.skin().map(|s| GltfObjectSkin {
+                            skin_index: s.index() as u32,
+                            info: skins[s.index()].clone(),
+                        })
+                    })
+                }
+                Some(nodes) if nodes.len() > 1 => {
+                    if nodes.iter().any(|n| {
+                        document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false)
+                    }) {
+                        animation_report_lines.push(format!(
+                            "material {material_index}: geometry contributed by {} nodes, at \
+                             least one of which is skinned — multi-node-per-material skinning is \
+                             out of A2 scope, this object is left unskinned",
+                            nodes.len()
+                        ));
+                    }
                     None
                 }
                 _ => None,
@@ -1939,6 +2250,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 occlusion_sampler,
                 emissive_sampler,
                 animation,
+                skin,
             })
         })
         .collect();
@@ -2018,6 +2330,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // material index to resolve animation against — never
             // animated.
             animation: None,
+            skin: None,
         });
     }
 
@@ -2302,4 +2615,6 @@ mod tests {
         assert_eq!(DEFAULT_MATERIAL_MESH_PARAM, -2);
     }
 }
+
+
 
