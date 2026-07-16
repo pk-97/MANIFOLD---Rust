@@ -125,6 +125,12 @@ origin main` (allow + reminder present); `merge <branch>` while on main
   reflow and design-doc status lines land in the same merge as the code. The
   post-merge housekeeper on main is a backstop, not the workflow — its
   remedies are worktree-shaped, never in-place edits to main.
+- **Perf gate for content-thread/render-path waves** (PERF_BUDGET_GATE_DESIGN.md
+  P3): if the wave touched content-thread or render-path code, the gate list
+  above also includes `cargo xtask perf-soak <project|glb> [--seconds N]
+  [--start beats] [--size WxH] [--profile] [--frames N] [--update-baseline]`
+  against the Liveschool fixture before the merge — same deliberate-run
+  posture as `gpu-proofs`, run once per landing wave, not per commit.
 - **Supersession sweep (part of the gate when a landing completes/supersedes
   a design phase, bug, or named plan):** update the design doc status header
   and the backlog `**Status:` line, then `rg` the plan's name AND its stage

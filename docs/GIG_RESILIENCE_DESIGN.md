@@ -403,8 +403,9 @@ surface.
 **This is the single named pre-gig checklist (coherence audit F17, 2026-07-10) —
 three other docs each add a pre-show ritual with no shared home; this section is now
 where they're named so nobody re-derives a fourth list:** the `kill -9` drill below
-(this doc, §9 P3) · **the perf soak** (`PERF_BUDGET_GATE_DESIGN.md` P2 — frame-budget
-regression check before a show) · **the recorder soak** (`LIVE_RECORDING_PROOFS_DESIGN.md`
+(this doc, §9 P3) · **the perf soak** — `cargo xtask perf-soak` against the Liveschool
+fixture (`PERF_BUDGET_GATE_DESIGN.md` P1–P3 — frame-budget regression check before a
+show) · **the recorder soak** (`LIVE_RECORDING_PROOFS_DESIGN.md`
 Tier 2 — manual pre-gig recording rehearsal). Run all three at soundcheck, not just this
 list's items.
 
