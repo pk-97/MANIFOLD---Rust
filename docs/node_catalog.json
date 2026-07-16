@@ -15014,6 +15014,41 @@
           "type": "Texture2D"
         },
         {
+          "name": "clearcoat_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_roughness_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_normal_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_color_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "transmission_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "volume_thickness_map_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
           "name": "transform_0",
           "required": false,
           "type": "Transform"
@@ -15080,6 +15115,41 @@
         },
         {
           "name": "anisotropy_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_roughness_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_normal_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_color_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "transmission_map_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "volume_thickness_map_1",
           "required": false,
           "type": "Texture2D"
         },

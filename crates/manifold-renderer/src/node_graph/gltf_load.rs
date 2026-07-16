@@ -865,6 +865,12 @@ pub(crate) struct GltfMaterialInfo {
     /// the importer map this material to `Blend`, with
     /// `alpha = base_color.a * (1 - transmission_factor)`.
     pub transmission_factor: f32,
+    /// `KHR_materials_transmission`'s `transmissionTexture` index, if any
+    /// (R channel scales `transmissionFactor`).
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+    /// surface): typed accessor, `gltf` 1.4.1 has the transmission
+    /// feature (see `transmission_factor` above).
+    pub transmission_texture: Option<u32>,
     /// `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0` — glTF's
     /// own implicit default, and the value that makes G-P5's coat lobe
     /// exactly inert). GLB_CONFORMANCE_DESIGN.md G-P5/D5: parsed by raw
@@ -873,17 +879,25 @@ pub(crate) struct GltfMaterialInfo {
     /// crate's own `Cargo.toml`/source this session: no such feature name
     /// exists in either `gltf` or `gltf-json` 1.4.1, unlike `specular`/
     /// `ior` in G-P4 — see the G-P5 execution report). Same raw-JSON-sniff
-    /// doctrine `specular_has_texture` already uses for map presence.
+    /// doctrine `specular_texture` already uses for map presence.
     pub clearcoat_factor: f32,
     /// `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
     /// `0.0`).
     pub clearcoat_roughness_factor: f32,
-    /// `true` when `KHR_materials_clearcoat` carries a `clearcoatTexture`,
-    /// `clearcoatRoughnessTexture`, and/or `clearcoatNormalTexture` — v1
-    /// maps the FACTORS only (D5); a textured coat is unmapped and
-    /// reported rather than silently dropped (Deferred #2 in
-    /// GLB_CONFORMANCE_DESIGN.md owns map-driven coat).
-    pub clearcoat_has_texture: bool,
+    /// `clearcoatTexture` index, if any (R channel scales
+    /// `clearcoatFactor`). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
+    /// revised — full spec surface): E1/G-P5 mapped factors only; the
+    /// texture-completion sweep closes this gap the same way E3/E4/E5
+    /// closed sheen/iridescence/anisotropy.
+    pub clearcoat_texture: Option<u32>,
+    /// `clearcoatRoughnessTexture` index, if any (G channel scales
+    /// `clearcoatRoughnessFactor`).
+    pub clearcoat_roughness_texture: Option<u32>,
+    /// `clearcoatNormalTexture` index, if any — a standard tangent-space
+    /// normal map (same RGB convention as the base `normalTexture`)
+    /// perturbing ONLY the clearcoat lobe's normal; absent falls back to
+    /// the base shading normal (the Khronos-documented default).
+    pub clearcoat_normal_texture: Option<u32>,
     /// `KHR_materials_sheen`'s `sheenColorFactor` (default `[0,0,0]` —
     /// glTF's own implicit default, and the value that makes E1's sheen
     /// lobe exactly inert). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1:
@@ -957,9 +971,11 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]` —
     /// neutral, no tint).
     pub volume_attenuation_color: [f32; 3],
-    /// `true` when `KHR_materials_volume` carries a `thicknessTexture` —
-    /// factor-only v1 (E2's family; textured volume is out of scope here).
-    pub volume_has_texture: bool,
+    /// `thicknessTexture` index, if any (G channel scales
+    /// `thicknessFactor`). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1
+    /// revised — full spec surface): E1/E2 mapped the factor only; the
+    /// texture-completion sweep closes this gap.
+    pub volume_thickness_texture: Option<u32>,
     /// glTF `alphaMode == BLEND` on the source material. F-P4 downgrades
     /// these to `alpha_mask` cutout (the F-P5 stopgap — `alpha_mask` above
     /// is already `true` when this is) and the importer emits a report
@@ -972,15 +988,16 @@ pub(crate) struct GltfMaterialInfo {
     /// `KHR_materials_specular`'s `specularFactor` (default 1.0).
     pub specular_factor: f32,
     /// `KHR_materials_specular`'s `specularColorFactor` (default
-    /// `[1,1,1]`). `specular_texture`/`specular_color_texture` (map
-    /// variants of the same extension) are report-only in v1 — factor
-    /// only, same doctrine as clearcoat — see `specular_has_texture`.
+    /// `[1,1,1]`).
     pub specular_color_factor: [f32; 3],
-    /// `true` when `KHR_materials_specular` carries a `specularTexture`
-    /// and/or `specularColorTexture` — v1 maps the FACTOR only (see
-    /// `specular_factor`/`specular_color_factor`), so a textured specular
-    /// map is unmapped and reported rather than silently dropped.
-    pub specular_has_texture: bool,
+    /// `specularTexture` index, if any (ALPHA channel scales
+    /// `specularFactor` per spec). GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6
+    /// (D1 revised — full spec surface): G-P4 mapped factors only; the
+    /// texture-completion sweep closes this gap.
+    pub specular_texture: Option<u32>,
+    /// `specularColorTexture` index, if any (RGB, sRGB — tints
+    /// `specularColorFactor`).
+    pub specular_color_texture: Option<u32>,
     /// `KHR_texture_transform` on the base-color texture reference, folded
     /// ONCE here (not per frame — CLAUDE.md hot-path discipline) into a
     /// 2×3 affine `[m00, m01, m10, m11, tx, ty]` s.t.
@@ -1368,6 +1385,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // don't also carry that extension in practice, but if one did,
             // D2's conversion is the more specific decision for this slot.
             let ior = m.ior().unwrap_or(1.5);
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: raw-JSON texture-index
+            // helper, hoisted above its original sheen/iridescence/
+            // anisotropy use so clearcoat/specular (parsed below, before
+            // that block) can share it too.
+            let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
+                v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
+            };
             let specular_ext = m.specular();
             let specular_factor = specular_factor_override
                 .unwrap_or_else(|| specular_ext.as_ref().map(|s| s.specular_factor()).unwrap_or(1.0));
@@ -1375,9 +1399,15 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .as_ref()
                 .map(|s| s.specular_color_factor())
                 .unwrap_or([1.0, 1.0, 1.0]);
-            let specular_has_texture = specular_ext.as_ref().is_some_and(|s| {
-                s.specular_texture().is_some() || s.specular_color_texture().is_some()
-            });
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+            // surface): specularTexture/specularColorTexture, typed
+            // accessors on `Specular<'_>` (gltf 1.4.1 has the feature).
+            let specular_texture =
+                specular_ext.as_ref().and_then(|s| s.specular_texture()).map(|t| t.texture().index() as u32);
+            let specular_color_texture = specular_ext
+                .as_ref()
+                .and_then(|s| s.specular_color_texture())
+                .map(|t| t.texture().index() as u32);
 
             // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat.
             // No typed accessor in gltf 1.4.1 (verified: no
@@ -1396,11 +1426,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .and_then(|v| v.get("clearcoatRoughnessFactor"))
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0) as f32;
-            let clearcoat_has_texture = clearcoat_ext.is_some_and(|v| {
-                v.get("clearcoatTexture").is_some()
-                    || v.get("clearcoatRoughnessTexture").is_some()
-                    || v.get("clearcoatNormalTexture").is_some()
-            });
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+            // surface): clearcoatTexture/clearcoatRoughnessTexture/
+            // clearcoatNormalTexture, raw-JSON sniff (same `tex_idx`
+            // doctrine sheen/iridescence/anisotropy already use — no typed
+            // accessor exists for this extension at 1.4.1).
+            let clearcoat_texture = clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatTexture"));
+            let clearcoat_roughness_texture =
+                clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatRoughnessTexture"));
+            let clearcoat_normal_texture =
+                clearcoat_ext.and_then(|v| tex_idx(v, "clearcoatNormalTexture"));
 
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_sheen.
             // Same raw-JSON-sniff doctrine as clearcoat above — no typed
@@ -1427,9 +1462,6 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .unwrap_or([0.0, 0.0, 0.0]);
             let sheen_roughness_factor =
                 sheen_ext.map(|v| f1(v, "sheenRoughnessFactor", 0.0)).unwrap_or(0.0);
-            let tex_idx = |v: &serde_json::Value, key: &str| -> Option<u32> {
-                v.get(key)?.get("index")?.as_u64().map(|i| i as u32)
-            };
             let sheen_color_texture = sheen_ext.and_then(|v| tex_idx(v, "sheenColorTexture"));
             let sheen_roughness_texture =
                 sheen_ext.and_then(|v| tex_idx(v, "sheenRoughnessTexture"));
@@ -1494,8 +1526,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 .as_ref()
                 .map(|v| v.attenuation_color())
                 .unwrap_or([1.0, 1.0, 1.0]);
-            let volume_has_texture =
-                volume_ext.as_ref().is_some_and(|v| v.thickness_texture().is_some());
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — full spec
+            // surface): thicknessTexture, typed accessor (Volume has crate
+            // support at 1.4.1, same as thickness_factor above).
+            let volume_thickness_texture = volume_ext
+                .as_ref()
+                .and_then(|v| v.thickness_texture())
+                .map(|t| t.texture().index() as u32);
 
             let base_color_texture = base_color_info.map(|t| t.texture().index() as u32);
             let normal_texture = m.normal_texture().map(|t| t.texture().index() as u32);
@@ -1531,7 +1568,8 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 ior,
                 specular_factor,
                 specular_color_factor,
-                specular_has_texture,
+                specular_texture,
+                specular_color_texture,
                 base_color_uv_transform,
                 normal_uv_transform,
                 mr_uv_transform,
@@ -1542,9 +1580,15 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                     .transmission()
                     .map(|t| t.transmission_factor())
                     .unwrap_or(0.0),
+                transmission_texture: m
+                    .transmission()
+                    .and_then(|t| t.transmission_texture())
+                    .map(|t| t.texture().index() as u32),
                 clearcoat_factor,
                 clearcoat_roughness_factor,
-                clearcoat_has_texture,
+                clearcoat_texture,
+                clearcoat_roughness_texture,
+                clearcoat_normal_texture,
                 sheen_color_factor,
                 sheen_roughness_factor,
                 sheen_color_texture,
@@ -1562,7 +1606,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 volume_thickness_factor,
                 volume_attenuation_distance,
                 volume_attenuation_color,
-                volume_has_texture,
+                volume_thickness_texture,
                 was_blend,
                 mr_texture_is_gloss_alpha,
                 vertex_count,
@@ -1603,9 +1647,12 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             emissive_texture: None,
             emissive_strength: 1.0,
             transmission_factor: 0.0,
+            transmission_texture: None,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
-            clearcoat_has_texture: false,
+            clearcoat_texture: None,
+            clearcoat_roughness_texture: None,
+            clearcoat_normal_texture: None,
             sheen_color_factor: [0.0, 0.0, 0.0],
             sheen_roughness_factor: 0.0,
             sheen_color_texture: None,
@@ -1623,12 +1670,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             volume_thickness_factor: 0.0,
             volume_attenuation_distance: VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
-            volume_has_texture: false,
+            volume_thickness_texture: None,
             was_blend: false,
             ior: 1.5,
             specular_factor: 1.0,
             specular_color_factor: [1.0, 1.0, 1.0],
-            specular_has_texture: false,
+            specular_texture: None,
+            specular_color_texture: None,
             base_color_uv_transform: IDENTITY_UV_TRANSFORM,
             normal_uv_transform: IDENTITY_UV_TRANSFORM,
             mr_uv_transform: IDENTITY_UV_TRANSFORM,

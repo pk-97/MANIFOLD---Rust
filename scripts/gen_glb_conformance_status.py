@@ -35,6 +35,15 @@ GAP_TEXT = {
                "to root nodes",
     "BUG-173": "10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) "
                "— not a defect",
+    "BUG-186": "EXT_texture_webp is extensionsRequired and unsupported (no "
+               "webp decoder) — correctly rejected, but the crate's raw "
+               "textures[].source validation error surfaces instead of our "
+               "own clean extensionsRequired veto message",
+    "diffuse-transmission-deferred": "KHR_materials_diffuse_transmission "
+               "full BTDF (and, for ScatteringSkull, "
+               "KHR_materials_volume_scatter) explicitly deferred per "
+               "GLTF_MATERIAL_EXTENSIONS_DESIGN.md §5 — renders as a plain "
+               "opaque material, no crash",
     "G-P7": "no glTF-Binary variant in the pinned Khronos commit — not "
             "fetched (TextureTransformTest's sidecar-fetch exception, G-P4, "
             "is not extended to this set)",

@@ -872,27 +872,39 @@
   },
   {
     "asset": "ABeautifulGame.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "AnimationPointerUVs.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:BUG-170",
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6"
   },
   {
     "asset": "AnisotropyBarnLamp.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to CompareAnisotropy/AnisotropyRotationTest, not this showcase) \u2014 real anisotropy math IS active on this asset (not unsupported), left xfail pending Peter's visual read"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "AnisotropyDiscTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "AnisotropyRotationTest.glb",
@@ -911,9 +923,13 @@
   },
   {
     "asset": "AnisotropyStrengthTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "AttenuationTest.glb",
@@ -940,33 +956,53 @@
   },
   {
     "asset": "CarConcept.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CarbonFibre.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "ChairDamaskPurplegold.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "ChronographWatch.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CommercialRefrigerator.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CompareAnisotropy.glb",
@@ -985,15 +1021,23 @@
   },
   {
     "asset": "CompareDispersion.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CompareIor.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "CompareIridescence.glb",
@@ -1068,80 +1112,120 @@
   {
     "asset": "DiffuseTransmissionPlant.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:diffuse-transmission-deferred",
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DiffuseTransmissionTeacup.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:diffuse-transmission-deferred",
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DiffuseTransmissionTest.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:diffuse-transmission-deferred",
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "DispersionTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "DragonAttenuation.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "DragonDispersion.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "GlamVelvetSofa.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "GlassBrokenWindow.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "GlassHurricaneCandleHolder.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "GlassVaseFlowers.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to the 4 Compare/synthetic assets above, not this showcase) -- real transmission math IS active on this asset (not unsupported), left xfail pending Peter's visual read"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "IORTestGrid.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "IridescenceAbalone.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E4: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to CompareIridescence/IridescenceSuzanne, not this showcase) \u2014 real iridescence math IS active on this asset (not unsupported), left xfail pending Peter's visual read"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "IridescenceLamp.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "IridescenceSuzanne.glb",
@@ -1160,39 +1244,55 @@
   },
   {
     "asset": "IridescentDishWithOlives.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "LightsPunctualLamp.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "MosquitoInAmber.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "PotOfCoalsAnimationPointer.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:BUG-170",
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer) \u2014 same root cause as AnimatedColorsCube/CubeVisibility/LightVisibility, extended 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6"
   },
   {
     "asset": "ScatteringSkull.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:diffuse-transmission-deferred",
+    "note": "KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md \u00a75 \u2014 renders as a plain opaque material (extension silently unsupported, no crash), verified 2026-07-16 during E6"
   },
   {
     "asset": "SheenChair.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3: held-out demo asset, reviewed as PNG by the orchestrator rather than gated numerically (D5's Compare-asset-is-the-mechanical-gate rule applies to CompareSheen/SheenTestGrid, not this showcase) \u2014 real sheen math IS active on this asset (not unsupported), left xfail pending Peter's visual read. No fetched sheen asset in this manifest carries a sheenColorTexture/sheenRoughnessTexture (verified this session by scanning every KHR_materials_sheen material's extension keys) \u2014 the texture path (sheen_color_map_n/sheen_roughness_map_n) is wired and shader-validated but unverified against a real textured-sheen asset, per the phase brief's own contingency for this case"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "SheenTestGrid.glb",
@@ -1212,32 +1312,48 @@
   {
     "asset": "SheenWoodLeatherSofa.glb",
     "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "status": "xfail:BUG-186",
+    "note": "EXT_texture_webp is extensionsRequired and MANIFOLD does not decode webp images \u2014 correctly rejected (no webp decoder), but the crate's raw textures[].source-Missing validation errors surface instead of our clean extensionsRequired veto message; see BUG-186 for the message-clarity gap"
   },
   {
     "asset": "SpecularSilkPouf.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "SunglassesKhronos.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "ToyCar.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "TransmissionOrderTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "TransmissionRoughnessTest.glb",
@@ -1264,21 +1380,33 @@
   },
   {
     "asset": "TransmissionTest.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "TransmissionThinwallTestGrid.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "USDShaderBallForGltf.glb",
-    "checks": [],
-    "status": "xfail:deferred-3",
-    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping \u2014 GLB_CONFORMANCE_DESIGN.md deferred item 3"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      }
+    ],
+    "status": "expect_pass"
   },
   {
     "asset": "BoomBox.glb",

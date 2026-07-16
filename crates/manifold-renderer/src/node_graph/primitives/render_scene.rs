@@ -790,6 +790,51 @@ impl RenderScene {
                 kind: PortKind::Input,
                 required: false,
             });
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            // completion sweep): clearcoat/specular/transmission/volume-
+            // thickness extension textures, same always-bind-stub pattern.
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("clearcoat_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("clearcoat_roughness_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("clearcoat_normal_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("specular_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("specular_color_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("transmission_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
+            inputs.push(NodePort {
+                name: std::borrow::Cow::Owned(format!("volume_thickness_map_{i}")),
+                ty: PortType::Texture2D,
+                kind: PortKind::Input,
+                required: false,
+            });
             inputs.push(NodePort {
                 name: std::borrow::Cow::Owned(format!("transform_{i}")),
                 ty: PortType::Transform,
@@ -2161,6 +2206,15 @@ impl EffectNode for RenderScene {
             iridescence_map: Option<&'ctx manifold_gpu::GpuTexture>,
             iridescence_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
             anisotropy_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            /// completion sweep): same "None = unwired" shape.
+            clearcoat_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            clearcoat_roughness_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            clearcoat_normal_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            specular_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            specular_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
+            volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
             /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: this object's per-map-family
             /// sampler settings, order `[base_color, normal, mr, occlusion,
             /// emissive]` — matches `binding_sets`' 22..26 slot order below.
@@ -2257,6 +2311,16 @@ impl EffectNode for RenderScene {
             let iridescence_thickness_map =
                 ctx.inputs.texture_2d(&format!("iridescence_thickness_map_{n}"));
             let anisotropy_map = ctx.inputs.texture_2d(&format!("anisotropy_map_{n}"));
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            // completion sweep).
+            let clearcoat_map = ctx.inputs.texture_2d(&format!("clearcoat_map_{n}"));
+            let clearcoat_roughness_map =
+                ctx.inputs.texture_2d(&format!("clearcoat_roughness_map_{n}"));
+            let clearcoat_normal_map = ctx.inputs.texture_2d(&format!("clearcoat_normal_map_{n}"));
+            let specular_map = ctx.inputs.texture_2d(&format!("specular_map_{n}"));
+            let specular_color_map = ctx.inputs.texture_2d(&format!("specular_color_map_{n}"));
+            let transmission_map = ctx.inputs.texture_2d(&format!("transmission_map_{n}"));
+            let volume_thickness_map = ctx.inputs.texture_2d(&format!("volume_thickness_map_{n}"));
 
             // Unwired `transform_n` = identity (`Transform::default()`) —
             // matches the old scattered params' defaults exactly (pos 0,
@@ -2324,6 +2388,40 @@ impl EffectNode for RenderScene {
             if anisotropy_map.is_some() {
                 uniforms.transmission_volume_params[3] = 1.0; // w = anisotropy_map present
             }
+            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
+            // completion sweep): every reserved single-flag `w` slot the E1
+            // migration left is now spent (see the five ifs above), so
+            // these seven new presence bits are packed as a bitmask into
+            // the LAST two reserved `w` slots (`pbr_specular_tint.w`,
+            // `volume_attenuation_color.w`) rather than growing the
+            // uniform again — `fs_pbr`'s decode does
+            // `u32(round(w)) & (1u << bit)`. Default 0.0 (no bits set) is
+            // byte-identical to before this bitmask existed.
+            let mut specular_family_flags: u32 = 0;
+            if specular_map.is_some() {
+                specular_family_flags |= 1; // bit 0 = specular_map present
+            }
+            if specular_color_map.is_some() {
+                specular_family_flags |= 2; // bit 1 = specular_color_map present
+            }
+            if transmission_map.is_some() {
+                specular_family_flags |= 4; // bit 2 = transmission_map present
+            }
+            if volume_thickness_map.is_some() {
+                specular_family_flags |= 8; // bit 3 = volume_thickness_map present
+            }
+            uniforms.pbr_specular_tint[3] = specular_family_flags as f32;
+            let mut clearcoat_family_flags: u32 = 0;
+            if clearcoat_map.is_some() {
+                clearcoat_family_flags |= 1; // bit 0 = clearcoat_map present
+            }
+            if clearcoat_roughness_map.is_some() {
+                clearcoat_family_flags |= 2; // bit 1 = clearcoat_roughness_map present
+            }
+            if clearcoat_normal_map.is_some() {
+                clearcoat_family_flags |= 4; // bit 2 = clearcoat_normal_map present
+            }
+            uniforms.volume_attenuation_color[3] = clearcoat_family_flags as f32;
 
             // GLB_XFAIL_BURNDOWN_DESIGN.md D3: read while `material` is
             // still in scope (it's consumed by `build_uniforms` above by
@@ -2379,6 +2477,13 @@ impl EffectNode for RenderScene {
                 iridescence_map,
                 iridescence_thickness_map,
                 anisotropy_map,
+                clearcoat_map,
+                clearcoat_roughness_map,
+                clearcoat_normal_map,
+                specular_map,
+                specular_color_map,
+                transmission_map,
+                volume_thickness_map,
                 sampler_descs,
                 instances,
                 instance_count,
@@ -2760,7 +2865,7 @@ impl EffectNode for RenderScene {
         // is), but the option lets the same closure serve both cases
         // without a branch on `has_transmission` itself.
         let opaque_scene_color_snapshot = self.opaque_scene_color.as_ref();
-        let binding_sets: Vec<[GpuBinding; 34]> = draws
+        let binding_sets: Vec<[GpuBinding; 41]> = draws
             .iter()
             .map(|draw| {
                 [
@@ -2950,6 +3055,39 @@ impl EffectNode for RenderScene {
                     GpuBinding::Texture {
                         binding: 33,
                         texture: draw.anisotropy_map.unwrap_or(dummy),
+                    },
+                    // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised —
+                    // texture-completion sweep): clearcoat/specular/
+                    // transmission/volume-thickness extension textures,
+                    // same always-bind ABI-stub discipline + shared-sampler
+                    // simplification as 29-33 above.
+                    GpuBinding::Texture {
+                        binding: 34,
+                        texture: draw.clearcoat_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 35,
+                        texture: draw.clearcoat_roughness_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 36,
+                        texture: draw.clearcoat_normal_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 37,
+                        texture: draw.specular_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 38,
+                        texture: draw.specular_color_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 39,
+                        texture: draw.transmission_map.unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 40,
+                        texture: draw.volume_thickness_map.unwrap_or(dummy),
                     },
                 ]
             })
@@ -3393,10 +3531,15 @@ mod tests {
         // (mesh_0,material_0,base_color_map_0,normal_map_0,mr_map_0,
         //  occlusion_map_0,emissive_map_0,sheen_color_map_0,
         //  sheen_roughness_map_0,iridescence_map_0,
-        //  iridescence_thickness_map_0,anisotropy_map_0,transform_0,
-        //  instances_0) × 2 objects — GLTF_MATERIAL_EXTENSIONS_DESIGN.md
-        // E3/E4/E5 (D1 revised) added five new per-object texture ports.
-        assert_eq!(s.inputs().len(), 3 + 1 + 28);
+        //  iridescence_thickness_map_0,anisotropy_map_0,clearcoat_map_0,
+        //  clearcoat_roughness_map_0,clearcoat_normal_map_0,specular_map_0,
+        //  specular_color_map_0,transmission_map_0,volume_thickness_map_0,
+        //  transform_0,instances_0) × 2 objects — 21 ports/object.
+        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised) added
+        // five new per-object texture ports; E6 (D1 revised — texture-
+        // completion sweep) added seven more (clearcoat×3, specular×2,
+        // transmission×1, volume-thickness×1).
+        assert_eq!(s.inputs().len(), 3 + 1 + 42);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
