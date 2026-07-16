@@ -5,6 +5,8 @@ as session baseline" while §5's own status says BUILT; `SEGMENT_CACHE`/`Segment
 `StateStore::migrate_node` are live in-tree). **`docs/FREEZE_COMPILER_MAP.md` is the
 authoritative current-state map — read it first.** v1 scope as built: adjacent-card
 pointwise seams, single-input single-output cards, per-region gate on every cross-card region.
+(Note 2026-07-16: the per-region *measurement* gate described here was later removed — the
+fuse decision is structural now, no measurement; see the map's stale-docs list.)
 
 **Branch:** `chain-fusion`. Campaign context: `project_graph_perf_campaign_2026_06`
 (roadmap #3). Target: the ~8ms effect-chain slice of the Liveschool 4K frame — a layer

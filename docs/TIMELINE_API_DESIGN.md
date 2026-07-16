@@ -1,5 +1,7 @@
 # Timeline API — Phase 3 Design
 
+**Status:** SHIPPED 2026-06-22 — as-built record (parseable status line added 2026-07-16; the banner below was invisible to the design status board).
+
 > **SHIPPED 2026-06-22.** All six tasks landed behaviour-preserving, one commit
 > each; manifold-ui 333 + manifold-app 103 + manifold-editing 59 tests green,
 > clippy clean. This doc is the as-built record (the order/decisions below match

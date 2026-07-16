@@ -1,6 +1,6 @@
 # Feedback ping-pong: zero-copy state for `node.feedback` / `node.array_feedback`
 
-Status: **design for review** (not yet implemented). Author pass 2026-06-09.
+Status: **SHIPPED** — landed in `22e02f6e` (zero-copy persistent-slot ping-pong + direct bridge; kill switch `MANIFOLD_FEEDBACK_PINGPONG`, default on). **`docs/FREEZE_COMPILER_MAP.md` is the authoritative current state.** Header corrected 2026-07-16 — it still read "design for review" a month after landing. Author pass 2026-06-09.
 
 ## The problem
 

@@ -1,7 +1,7 @@
 # render_scene Unbounded Lights — lights move from a fixed uniform array to a storage buffer
 
-**Status:** BUILT + LANDED 2026-07-10 (Opus) — P1 complete on `feat/render-scene-unbounded-lights`,
-merged to main. Lights now ride `@binding(8) var<storage, read>`; `MAX_LIGHTS` deleted;
+**Status:** SHIPPED 2026-07-10 (Opus) — P1 complete, merged to main @ `310800ed`
+(ancestry verified against origin/main 2026-07-16). Lights now ride `@binding(8) var<storage, read>`; `MAX_LIGHTS` deleted;
 `LIGHT_SLIDER_MAX = 64` soft bound; uniform 400→272. Proven: 12/12 render_scene unit tests
 (incl. `lights_generalize_well_past_the_old_cap_of_4`), naga validates the shader across all three
 lit entry points, gpu-proofs `fragment_storage` (D7) green, and a NEW gpu-proofs

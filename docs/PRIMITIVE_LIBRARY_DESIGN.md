@@ -1,6 +1,6 @@
 # Primitive Library Design — Phase 4a
 
-**Status:** Draft 1, 2026-05-11. Implements §0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
+**Status:** SHIPPED / HISTORICAL — the primitive library is built (~185 primitives in-tree; current inventory lives in [NODE_CATALOG.md](NODE_CATALOG.md), never here). This doc is kept as design rationale + historical context per the CLAUDE.md reference table; the per-section update notes below track what was superseded. Header corrected 2026-07-16 — it still read "Draft 1" two months after the library shipped. Draft 1 was 2026-05-11, implementing §0 of [`EFFECT_RUNTIME_UNIFICATION.md`](EFFECT_RUNTIME_UNIFICATION.md).
 
 > **Update 2026-05-26:** Principles 1, 3, and 4 below are partially superseded by the no-fused-monolith rule. The original plan tolerated fused composites and monolithic remainders pending a future fusion compiler; the post-migration inventory revealed that this carve-out produced the bundle-as-primitive anti-pattern at scale, and the rule has been tightened. The authoritative spec is now `CLAUDE.md` (hard rules) + `DECOMPOSING_GENERATORS.md` §1.1 + [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md). This doc is kept as historical record of the Phase 4a thinking; per-principle deltas inlined below.
 >
