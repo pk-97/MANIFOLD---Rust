@@ -584,6 +584,47 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
+    /// names, generated once in [`Self::rebuild`] instead of re-formatted
+    /// every `evaluate()` call. §1's CPU row measured ~22 `format!`
+    /// allocations per object per frame plus a linear `NodeInputs::slot`
+    /// scan per lookup (`bindings.rs`) — together O(objects × wired_ports)
+    /// ≈ O(objects²). `evaluate()` now indexes this `Vec` by object number
+    /// and resolves each name through a per-frame [`bindings::Slot`] index
+    /// (built once via `NodeInputs::build_index`) instead.
+    object_port_names: Vec<ObjectPortNames>,
+    /// Same treatment for `light_{i}` port names.
+    light_port_names: Vec<Box<str>>,
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4: one object's pre-formatted
+/// port names (mesh/material/every optional map/transform/instances),
+/// rebuilt only when `objects` changes. Field order matches the push order
+/// in [`RenderScene::rebuild`] — cosmetic only, nothing depends on it (each
+/// field is looked up by name through the frame's port index, never by
+/// position).
+struct ObjectPortNames {
+    mesh: Box<str>,
+    material: Box<str>,
+    base_color_map: Box<str>,
+    normal_map: Box<str>,
+    mr_map: Box<str>,
+    occlusion_map: Box<str>,
+    emissive_map: Box<str>,
+    sheen_color_map: Box<str>,
+    sheen_roughness_map: Box<str>,
+    iridescence_map: Box<str>,
+    iridescence_thickness_map: Box<str>,
+    anisotropy_map: Box<str>,
+    clearcoat_map: Box<str>,
+    clearcoat_roughness_map: Box<str>,
+    clearcoat_normal_map: Box<str>,
+    specular_map: Box<str>,
+    specular_color_map: Box<str>,
+    transmission_map: Box<str>,
+    volume_thickness_map: Box<str>,
+    transform: Box<str>,
+    instances: Box<str>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -689,6 +730,8 @@ impl RenderScene {
             ibl_prefilter_pipeline: None,
             ibl_irradiance_pipeline: None,
             ibl_brdf_lut_pipeline: None,
+            object_port_names: Vec::new(),
+            light_port_names: Vec::new(),
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -912,6 +955,40 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_view_proj = None;
+
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
+        // port name exactly once, here, at rebuild time (only reached on an
+        // `objects`/`lights` param change — never per frame). `evaluate()`
+        // indexes these by object/light number instead of calling `format!`
+        // itself.
+        self.object_port_names = (0..n_obj)
+            .map(|i| ObjectPortNames {
+                mesh: format!("mesh_{i}").into_boxed_str(),
+                material: format!("material_{i}").into_boxed_str(),
+                base_color_map: format!("base_color_map_{i}").into_boxed_str(),
+                normal_map: format!("normal_map_{i}").into_boxed_str(),
+                mr_map: format!("mr_map_{i}").into_boxed_str(),
+                occlusion_map: format!("occlusion_map_{i}").into_boxed_str(),
+                emissive_map: format!("emissive_map_{i}").into_boxed_str(),
+                sheen_color_map: format!("sheen_color_map_{i}").into_boxed_str(),
+                sheen_roughness_map: format!("sheen_roughness_map_{i}").into_boxed_str(),
+                iridescence_map: format!("iridescence_map_{i}").into_boxed_str(),
+                iridescence_thickness_map: format!("iridescence_thickness_map_{i}")
+                    .into_boxed_str(),
+                anisotropy_map: format!("anisotropy_map_{i}").into_boxed_str(),
+                clearcoat_map: format!("clearcoat_map_{i}").into_boxed_str(),
+                clearcoat_roughness_map: format!("clearcoat_roughness_map_{i}").into_boxed_str(),
+                clearcoat_normal_map: format!("clearcoat_normal_map_{i}").into_boxed_str(),
+                specular_map: format!("specular_map_{i}").into_boxed_str(),
+                specular_color_map: format!("specular_color_map_{i}").into_boxed_str(),
+                transmission_map: format!("transmission_map_{i}").into_boxed_str(),
+                volume_thickness_map: format!("volume_thickness_map_{i}").into_boxed_str(),
+                transform: format!("transform_{i}").into_boxed_str(),
+                instances: format!("instances_{i}").into_boxed_str(),
+            })
+            .collect();
+        self.light_port_names =
+            (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
     }
 
     /// Ensure the memoryless MSAA color + depth targets match the render
@@ -2103,6 +2180,16 @@ impl EffectNode for RenderScene {
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
+        // frame from this frame's wired ports (`bindings.rs`'s
+        // `NodeInputs::build_index`), then every per-light/per-object port
+        // lookup below resolves through it in O(1) instead of the
+        // `format!` + linear `iter().find` scan §1's CPU row measured as
+        // O(objects × wired_ports) ≈ O(objects²). Port NAMES themselves are
+        // pre-formatted once in `rebuild()` (`object_port_names` /
+        // `light_port_names`) — nothing here calls `format!`.
+        let port_index = ctx.inputs.build_index();
+
         let cam = ctx
             .inputs
             .camera("camera")
@@ -2142,7 +2229,8 @@ impl EffectNode for RenderScene {
         let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
         let mut shaft_light_count: u32 = 0;
         for i in 0..lights_n {
-            if let Some(l) = ctx.inputs.light(&format!("light_{i}")) {
+            let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
+            if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
                 let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
                     let s = casters.len() as f32;
                     casters.push(l);
@@ -2338,13 +2426,18 @@ impl EffectNode for RenderScene {
         let mut has_transmission = false;
 
         for n in 0..objects {
-            // Per-object port/param names, generated once (no static
-            // name tables — object count is unbounded).
-            let mesh_name = format!("mesh_{n}");
-            let material_name = format!("material_{n}");
-            let Some(vertices) = ctx.inputs.array(&mesh_name) else {
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): port names
+            // are pre-formatted once in `rebuild()` (no static name tables —
+            // object count is unbounded, but the per-object names ARE sized
+            // to the instance and cached there); every lookup below resolves
+            // through `port_index` (built once per frame, above) instead of
+            // a per-lookup `NodeInputs::slot` scan.
+            let names = &self.object_port_names[n];
+            let mesh_slot = port_index.get(names.mesh.as_ref()).copied();
+            let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.error(format!(
-                    "missing required `{mesh_name}` input; renderer fell back to magenta clear"
+                    "missing required `{}` input; renderer fell back to magenta clear",
+                    names.mesh
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2352,13 +2445,14 @@ impl EffectNode for RenderScene {
                 }
                 return;
             };
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: captured before
-            // `mesh_name` is consumed further below, feeds the shadow cache
-            // key for this object.
-            let vertices_generation = ctx.inputs.slot_generation(&mesh_name);
-            let Some(material) = ctx.inputs.material(&material_name) else {
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            // `mesh_n` write generation, feeds the shadow cache key below.
+            let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
+            let material_slot = port_index.get(names.material.as_ref()).copied();
+            let Some(material) = material_slot.and_then(|s| ctx.inputs.material_slot(s)) else {
                 ctx.error(format!(
-                    "missing required `{material_name}` input; renderer fell back to magenta clear"
+                    "missing required `{}` input; renderer fell back to magenta clear",
+                    names.material
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2368,8 +2462,8 @@ impl EffectNode for RenderScene {
             };
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.error(format!(
-                    "{:?} material on `{material_name}` requires `envmap` input but it is unwired; renderer fell back to magenta",
-                    material.kind
+                    "{:?} material on `{}` requires `envmap` input but it is unwired; renderer fell back to magenta",
+                    material.kind, names.material
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2377,39 +2471,44 @@ impl EffectNode for RenderScene {
                 }
                 return;
             }
-            let base_color_map = ctx.inputs.texture_2d(&format!("base_color_map_{n}"));
+            // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
+            // this closure doesn't borrow `ctx` (which `ctx.error`/
+            // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
+            let inputs = ctx.inputs;
+            let tex =
+                |name: &str| port_index.get(name).copied().and_then(|s| inputs.texture_2d_slot(s));
+            let base_color_map = tex(&names.base_color_map);
             // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
             // per-object texture ports.
-            let normal_map = ctx.inputs.texture_2d(&format!("normal_map_{n}"));
-            let mr_map = ctx.inputs.texture_2d(&format!("mr_map_{n}"));
-            let occlusion_map = ctx.inputs.texture_2d(&format!("occlusion_map_{n}"));
-            let emissive_map = ctx.inputs.texture_2d(&format!("emissive_map_{n}"));
+            let normal_map = tex(&names.normal_map);
+            let mr_map = tex(&names.mr_map);
+            let occlusion_map = tex(&names.occlusion_map);
+            let emissive_map = tex(&names.emissive_map);
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-            let sheen_color_map = ctx.inputs.texture_2d(&format!("sheen_color_map_{n}"));
-            let sheen_roughness_map = ctx.inputs.texture_2d(&format!("sheen_roughness_map_{n}"));
-            let iridescence_map = ctx.inputs.texture_2d(&format!("iridescence_map_{n}"));
-            let iridescence_thickness_map =
-                ctx.inputs.texture_2d(&format!("iridescence_thickness_map_{n}"));
-            let anisotropy_map = ctx.inputs.texture_2d(&format!("anisotropy_map_{n}"));
+            let sheen_color_map = tex(&names.sheen_color_map);
+            let sheen_roughness_map = tex(&names.sheen_roughness_map);
+            let iridescence_map = tex(&names.iridescence_map);
+            let iridescence_thickness_map = tex(&names.iridescence_thickness_map);
+            let anisotropy_map = tex(&names.anisotropy_map);
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
             // completion sweep).
-            let clearcoat_map = ctx.inputs.texture_2d(&format!("clearcoat_map_{n}"));
-            let clearcoat_roughness_map =
-                ctx.inputs.texture_2d(&format!("clearcoat_roughness_map_{n}"));
-            let clearcoat_normal_map = ctx.inputs.texture_2d(&format!("clearcoat_normal_map_{n}"));
-            let specular_map = ctx.inputs.texture_2d(&format!("specular_map_{n}"));
-            let specular_color_map = ctx.inputs.texture_2d(&format!("specular_color_map_{n}"));
-            let transmission_map = ctx.inputs.texture_2d(&format!("transmission_map_{n}"));
-            let volume_thickness_map = ctx.inputs.texture_2d(&format!("volume_thickness_map_{n}"));
+            let clearcoat_map = tex(&names.clearcoat_map);
+            let clearcoat_roughness_map = tex(&names.clearcoat_roughness_map);
+            let clearcoat_normal_map = tex(&names.clearcoat_normal_map);
+            let specular_map = tex(&names.specular_map);
+            let specular_color_map = tex(&names.specular_color_map);
+            let transmission_map = tex(&names.transmission_map);
+            let volume_thickness_map = tex(&names.volume_thickness_map);
 
             // Unwired `transform_n` = identity (`Transform::default()`) —
             // matches the old scattered params' defaults exactly (pos 0,
             // rot 0, scale 1). See SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
             // D3: no per-object param fallback — `node.transform_3d` is the
             // only producer now.
-            let t = ctx
-                .inputs
-                .transform(&format!("transform_{n}"))
+            let t = port_index
+                .get(names.transform.as_ref())
+                .copied()
+                .and_then(|s| ctx.inputs.transform_slot(s))
                 .unwrap_or_default();
             let model = model_matrix(t.pos, t.rot_euler, t.scale);
             // GBUFFER_DESIGN.md §2 D5 (P2): `None` at this slot (no history
@@ -2520,22 +2619,26 @@ impl EffectNode for RenderScene {
             if is_transmissive {
                 has_transmission = true;
             }
-            let pipeline = {
-                let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
-                    .clone()
-            };
 
             // D11: wired instances_n draws instance_count = buffer_size / 32
             // copies (0 → that object's draw becomes a legal instance-count-0
             // no-op); unwired draws once via the identity stub (bound at
             // Pass 2 — this object carries no self-owned buffer reference).
-            let instances_name = format!("instances_{n}");
-            let instances = ctx.inputs.array(&instances_name);
-            let instances_generation = ctx.inputs.slot_generation(&instances_name);
+            // Resolved BEFORE `pipeline_for` below: `names` borrows
+            // `self.object_port_names`, which the `&mut self` pipeline call
+            // can't coexist with.
+            let instances_slot = port_index.get(names.instances.as_ref()).copied();
+            let instances = instances_slot.and_then(|s| inputs.array_slot(s));
+            let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
             let instance_count = match instances {
                 Some(buf) => (buf.size / instance_size) as u32,
                 None => 1,
+            };
+
+            let pipeline = {
+                let gpu = ctx.gpu_encoder();
+                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
+                    .clone()
             };
 
             // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this

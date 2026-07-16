@@ -114,6 +114,20 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         None => DEFAULT_FRAMES,
     };
     let profile_mode = args.iter().any(|a| a == "--profile");
+    // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D3b/P4: a continuously-
+    // animated fixture (e.g. BrainStem.glb) never emits a byte-stable frame,
+    // so the io_pending/stability convergence loop below spins to
+    // `WARMUP_CAP` and errors on every run. `--warmup-frames N` bypasses the
+    // convergence gate entirely with a fixed unconditional warmup — report-
+    // only (import mode carries no baseline to interact with), and it does
+    // not change behavior for any run that omits the flag.
+    let fixed_warmup: Option<u32> = match arg_value(args, "--warmup-frames") {
+        Some(s) => Some(
+            s.parse()
+                .map_err(|e| format!("--warmup-frames must be a positive integer: {e}"))?,
+        ),
+        None => None,
+    };
 
     // EXACT render_import.rs construction — never a wrapper project, never
     // through the loader/content thread (D7).
@@ -150,42 +164,65 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
     // background decode thread gets wall time between polls during warmup,
     // same reasoning as render_import.rs's module doc; it stays confined to
     // warmup and never leaks into the measured window below).
-    let mut prev_raw: Option<Vec<u8>> = None;
-    let mut stable_count = 0u32;
-    let mut warmup_frame = 0u32;
-    let mut converged = false;
-    while warmup_frame < WARMUP_CAP {
-        let ctx = mk_ctx(warmup_frame, width, height);
-        let mut enc = device.create_encoder("perf-soak-import-warmup");
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+    let warmup_frame = if let Some(n) = fixed_warmup {
+        // D3b: fixed-warmup override — render exactly `n` frames
+        // unconditionally, no io_pending/byte-stability check at all. Never
+        // taken unless the flag is passed; the convergence loop below is
+        // untouched for every other run.
+        for i in 0..n {
+            let ctx = mk_ctx(i, width, height);
+            let mut enc = device.create_encoder("perf-soak-import-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+            }
+            enc.commit_and_wait_completed();
         }
-        enc.commit_and_wait_completed();
+        eprintln!(
+            "perf-soak (import): fixed warmup of {n} frames (--warmup-frames, convergence gate \
+             bypassed)"
+        );
+        n
+    } else {
+        let mut prev_raw: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        let mut warmup_frame = 0u32;
+        let mut converged = false;
+        while warmup_frame < WARMUP_CAP {
+            let ctx = mk_ctx(warmup_frame, width, height);
+            let mut enc = device.create_encoder("perf-soak-import-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+            }
+            enc.commit_and_wait_completed();
 
-        let io_pending = runtime.io_pending();
-        let raw = readback_raw_halves(&device, &target.texture, width, height);
-        let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
-        prev_raw = Some(raw);
-        if byte_stable && !io_pending {
-            stable_count += 1;
-        } else {
-            stable_count = 0;
+            let io_pending = runtime.io_pending();
+            let raw = readback_raw_halves(&device, &target.texture, width, height);
+            let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
+            prev_raw = Some(raw);
+            if byte_stable && !io_pending {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            warmup_frame += 1;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if stable_count >= STABLE_STREAK {
+                converged = true;
+                break;
+            }
         }
-        warmup_frame += 1;
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        if stable_count >= STABLE_STREAK {
-            converged = true;
-            break;
+        if !converged {
+            return Err(format!(
+                "convergence failed after {WARMUP_CAP} warmup frames ({width}x{height}) — a \
+                 background texture decode may be stuck (render-import's WARNING case), or the \
+                 fixture never stabilizes (a continuously-animated asset) — use --warmup-frames N"
+            ));
         }
-    }
-    if !converged {
-        return Err(format!(
-            "convergence failed after {WARMUP_CAP} warmup frames ({width}x{height}) — a \
-             background texture decode may be stuck (render-import's WARNING case)"
-        ));
-    }
-    eprintln!("perf-soak (import): converged after {warmup_frame} warmup frames");
+        eprintln!("perf-soak (import): converged after {warmup_frame} warmup frames");
+        warmup_frame
+    };
 
     let stats_json = if profile_mode {
         run_profiled(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
