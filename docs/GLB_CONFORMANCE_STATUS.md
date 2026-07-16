@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 65 expect_pass, 83 xfail across 5 reasons, 0 unclassified.**
+**148 assets total — 69 expect_pass, 79 xfail across 5 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -13,6 +13,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `AlphaBlendModeTest.glb` | non_black_fraction_min, golden |
 | `AnimatedMorphCube.glb` | non_black_fraction_min, golden |
 | `AntiqueCamera.glb` | non_black_fraction_min, golden |
+| `AttenuationTest.glb` | region_mean_luminance_below |
 | `Avocado.glb` | non_black_fraction_min, golden |
 | `BarramundiFish.glb` | non_black_fraction_min, golden |
 | `BoomBox.glb` | non_black_fraction_min, golden |
@@ -37,6 +38,8 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `CompareNormal.glb` | non_black_fraction_min, golden |
 | `CompareRoughness.glb` | non_black_fraction_min, golden |
 | `CompareSpecular.glb` | non_black_fraction_min, golden |
+| `CompareTransmission.glb` | region_stddev_above |
+| `CompareVolume.glb` | region_green_minus_red_above |
 | `Corset.glb` | non_black_fraction_min, golden |
 | `DamagedHelmet.glb` | non_black_fraction_min, golden |
 | `DirectionalLight.glb` | non_black_fraction_min, golden |
@@ -70,6 +73,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `TextureSettingsTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformMultiTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformTest/TextureTransformTest.gltf` | region_green_minus_red_above, golden |
+| `TransmissionRoughnessTest.glb` | region_mean_luminance_below |
 | `Unicode❤♻Test.glb` | non_black_fraction_min, golden |
 | `UnlitTest.glb` | non_black_fraction_min, golden |
 | `VertexColorTest.glb` | non_black_fraction_min, golden |
@@ -132,7 +136,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `TriangleWithoutIndices (no glTF-Binary variant at pin)`
 - `TwoSidedPlane (no glTF-Binary variant at pin)`
 
-### `xfail:deferred-3` — 49 asset(s)
+### `xfail:deferred-3` — 45 asset(s)
 
 **Gap:** unsupported material extension (sheen / iridescence / volume / transmission-family / anisotropy-the-extension) — GLB_CONFORMANCE_DESIGN.md §7 deferred item 3
 
@@ -142,7 +146,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `AnisotropyDiscTest.glb`
 - `AnisotropyRotationTest.glb`
 - `AnisotropyStrengthTest.glb`
-- `AttenuationTest.glb`
 - `CarConcept.glb`
 - `CarbonFibre.glb`
 - `ChairDamaskPurplegold.glb`
@@ -153,8 +156,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `CompareIor.glb`
 - `CompareIridescence.glb`
 - `CompareSheen.glb`
-- `CompareTransmission.glb`
-- `CompareVolume.glb`
 - `DiffuseTransmissionPlant.glb`
 - `DiffuseTransmissionTeacup.glb`
 - `DiffuseTransmissionTest.glb`
@@ -181,7 +182,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `SunglassesKhronos.glb`
 - `ToyCar.glb`
 - `TransmissionOrderTest.glb`
-- `TransmissionRoughnessTest.glb`
 - `TransmissionTest.glb`
 - `TransmissionThinwallTestGrid.glb`
 - `USDShaderBallForGltf.glb`
