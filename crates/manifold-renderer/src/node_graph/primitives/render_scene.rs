@@ -537,9 +537,10 @@ pub struct RenderScene {
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered
     /// specular mip chain (`PREFILTER_BASE_WIDTH`×`PREFILTER_BASE_HEIGHT`,
     /// `PREFILTER_MIP_COUNT` mips) — allocated ONCE (fixed size, never
-    /// resized) and re-convolved every frame `envmap` is wired (see
-    /// `run_ibl_convolution`'s doc comment for why "skip when unchanged"
-    /// isn't implemented this phase).
+    /// resized). RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):
+    /// re-convolved only when `ibl_cache_key` misses (see
+    /// `run_ibl_convolution`'s doc comment for the generation-signal safety
+    /// argument).
     prefiltered_specular: Option<manifold_gpu::GpuTexture>,
     /// Diffuse irradiance map (`IRRADIANCE_WIDTH`×`IRRADIANCE_HEIGHT`).
     irradiance_map: Option<manifold_gpu::GpuTexture>,
@@ -547,6 +548,16 @@ pub struct RenderScene {
     /// computed ONCE per device, gated by `brdf_lut_built`, never rebuilt.
     brdf_lut: Option<manifold_gpu::GpuTexture>,
     brdf_lut_built: bool,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3): the IBL dirty-check
+    /// key the prefiltered-specular/irradiance convolution last ran with —
+    /// a hash of (envmap slot write generation, envmap texture identity,
+    /// executor rebuild epoch). `Some(key) == this frame's freshly computed
+    /// key` means the persisted `prefiltered_specular`/`irradiance_map`
+    /// textures already hold this exact envmap's convolution, so both
+    /// dispatches are skipped. I2: never served on ANY mismatch, including
+    /// `None` on first use or an unwired-to-wired transition (see
+    /// `run_ibl_convolution`'s doc comment for the full safety argument).
+    ibl_cache_key: Option<u64>,
     ibl_prefilter_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_irradiance_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_brdf_lut_pipeline: Option<manifold_gpu::GpuComputePipeline>,
@@ -674,6 +685,7 @@ impl RenderScene {
             irradiance_map: None,
             brdf_lut: None,
             brdf_lut_built: false,
+            ibl_cache_key: None,
             ibl_prefilter_pipeline: None,
             ibl_irradiance_pipeline: None,
             ibl_brdf_lut_pipeline: None,
@@ -1422,25 +1434,43 @@ impl RenderScene {
     /// hit every frame after the first (see the `ibl_brdf_lut_builds_once`
     /// gpu-proofs test).
     ///
-    /// The prefiltered specular chain and irradiance map are NOT
-    /// content-cached — they re-convolve every call this function is
-    /// invoked with `envmap = Some(_)`, matching D2's own stated
-    /// consequence ("an animated envmap re-prefilters every frame — a
-    /// fixed, small cost, not a correctness hazard") rather than the
-    /// alternative of skipping on an unchanged (texture identity, size)
-    /// key: `bake_equirect_envmap`'s `run()` mutates the SAME persistent
-    /// output texture in place every frame regardless of whether its
-    /// params changed (confirmed by reading that primitive — no internal
-    /// caching), so a pointer/size-based skip would silently treat every
-    /// animated envmap (including the D7 sun-coherence gesture this design
-    /// exists to support) as "unchanged" and go stale — worse than the
-    /// fixed per-frame cost. See `ESCALATION_FP1.md` for the full
-    /// reasoning and the open question this leaves for a future phase.
+    /// **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):**
+    /// the prefiltered specular chain and irradiance map used to be
+    /// re-convolved on EVERY call this function was invoked with `envmap =
+    /// Some(_)` — this section used to warn that a pointer/size-identity
+    /// skip would silently serve outdated convolution output, because
+    /// `bake_equirect_envmap::run()` mutated its SAME persistent output
+    /// texture in place every frame regardless of whether its params
+    /// changed, so identity alone could never tell "unchanged" from
+    /// "rewritten with different content." That hazard is closed now, at
+    /// the root: `bake_equirect_envmap` (and `hdri_source`)
+    /// no longer rewrite unconditionally — each skips its own dispatch and
+    /// calls `ctx.mark_outputs_unchanged()` only when its full param set
+    /// (or decoded file) AND its output texture's physical identity are
+    /// both unchanged since the last frame it actually wrote (P3's producer
+    /// gate, landed and parity-tested before this consumer gate was
+    /// enabled — D7's load-bearing ordering). That declaration is what
+    /// bumps (or doesn't bump) the envmap slot's write generation (D5): a
+    /// truthful "unchanged" is the ONLY way the generation can fail to
+    /// bump, and a false declaration is a per-node-tested property (I3),
+    /// not this call site's concern. So convolution below is skipped only
+    /// when `ibl_cache_key` — a hash of (envmap generation, envmap texture
+    /// identity, executor rebuild epoch) — matches this frame's freshly
+    /// computed key; any mismatch (including first use, an
+    /// unwired-to-wired transition, or the D7 sun-coherence animated-envmap
+    /// gesture actually changing the bake) falls through to a real
+    /// re-convolution (I2: never served on a partial match). The identity
+    /// term stays in the key as the same belt-and-suspenders precedent
+    /// `shadow_cache_keys` uses, and the rebuild-epoch term is required by
+    /// `NodeInputs::slot_generation`'s own doc comment (never compare a
+    /// generation number alone across executor lifetimes).
     fn run_ibl_convolution(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
         sampler: &manifold_gpu::GpuSampler,
         envmap: Option<&manifold_gpu::GpuTexture>,
+        envmap_generation: Option<u64>,
+        rebuild_epoch: u64,
     ) {
         if !self.brdf_lut_built {
             let lut = self.brdf_lut.as_ref().expect("ensured");
@@ -1466,7 +1496,26 @@ impl RenderScene {
             self.brdf_lut_built = true;
         }
 
-        let Some(envmap) = envmap else { return };
+        let Some(envmap) = envmap else {
+            // Unwired ⇒ next wire-up must re-convolve unconditionally, per
+            // I2 (never serve a stale key across an unwired gap).
+            self.ibl_cache_key = None;
+            return;
+        };
+
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        envmap_generation.hash(&mut hasher);
+        hasher.write_usize(envmap.identity_key());
+        hasher.write_u64(rebuild_epoch);
+        let ibl_key = hasher.finish();
+        if self.ibl_cache_key == Some(ibl_key) {
+            // I2: cache hit — the persisted prefiltered-specular/irradiance
+            // textures already hold this exact envmap's convolution.
+            return;
+        }
+        self.ibl_cache_key = Some(ibl_key);
+
         let src_width = envmap.width;
         let src_height = envmap.height;
 
@@ -2661,9 +2710,12 @@ impl EffectNode for RenderScene {
         // comment for the cache-vs-correctness tradeoff on the two
         // envmap-dependent resources. ----
         {
+            // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
+            let envmap_generation = ctx.inputs.slot_generation("envmap");
+            let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, envmap_wired);
+            self.run_ibl_convolution(gpu, &sampler, envmap_wired, envmap_generation, rebuild_epoch);
         }
 
         // ---- Shadow depth pre-passes. One depth-only pass per caster

@@ -11,6 +11,20 @@ permission to make decisions yourself unadvised").
 is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
 waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+**P3 amendment (2026-07-17, post-P3):** the mechanism landed exactly as specified and every
+phase-local correctness gate passes (I2 animated-envmap parity, I4 static bit-identity, per-producer
+gpu-proofs tests on `bake_equirect_envmap`/`hdri_source`/`render_scene`, all on real GPU hardware) —
+but the phase's OWN perf gate (a multi-ms AMG @4K delta matching P0's measured ~41% IBL share) FAILS
+on a real glTF import: measured p50 13.554ms → 13.333ms, ~0.22ms/1.6%, not multi-ms. Root cause is
+outside this phase's file scope: every glTF import wires
+`node.bake_environment → node.switch_texture (env_mode select) → node.render_scene`, never a direct
+wire, and `node.switch_texture` copies its selected branch into its own output every frame without
+ever declaring `mark_outputs_unchanged` — so `render_scene`'s envmap generation never stabilizes on
+a real import and P3's `ibl_cache_key` misses every frame. Filed as BUG-193 (`docs/BUG_BACKLOG.md`),
+which also updates BUG-189's fix-shape note. P3's code is safe and correct to keep (any DIRECTLY-
+wired envmap — a hand-authored generator preset, or `switch_texture` once BUG-193 lands — gets the
+full benefit today), but BUG-189's floor is NOT closed by P3 alone; do not treat this phase as having
+delivered its headline number without BUG-193 landing first.
 
 BUG-189: the glb import graph burns ~10 ms of true GPU time per frame *regardless of resolution*
 (9.8 ms @1080p, 13.5 ms median / 22.7 ms p95 @4K, AMG GT3, 302k tris / 78 materials, M4 Max).

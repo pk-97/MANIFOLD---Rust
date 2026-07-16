@@ -156,6 +156,143 @@ fn peak_spread_fraction(luma: &[f32]) -> f32 {
     count as f32 / luma.len() as f32
 }
 
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate (I2 + I4). Reuses
+/// `ibl_scene_json` (above) for a scene whose ONLY light is the envmap, so
+/// any output delta is attributable to the IBL convolution path this phase
+/// re-convolution-gates. `apply_inner_param_overrides` is the SAME live-edit
+/// mechanism the generator-renderer sweep uses for a value-only param tweak
+/// (`generator_renderer.rs`: "no rebuild, so sim/particle state survives")
+/// — it pushes new literal param values into the running graph without
+/// touching topology, exactly the "a hand animates an envmap param
+/// mid-performance" gesture D7 names.
+mod gating_gpu_tests {
+    use super::*;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+
+    fn frame_ctx(frame_count: i64, h: &harness::ParityHarness) -> PresetContext {
+        PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        }
+    }
+
+    fn render_one_frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, frame_count: i64) -> Vec<u8> {
+        let target = h.make_target("render-scene-ibl-gate");
+        let ctx = frame_ctx(frame_count, h);
+        let mut enc = h.device.create_encoder("render-scene-ibl-gate-enc");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+        }
+        enc.commit_and_wait_completed();
+        h.readback(&target.texture)
+    }
+
+    fn build_runtime(json: &str, h: &harness::ParityHarness) -> PresetRuntime {
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_json_str_with_device(
+            json,
+            &registry,
+            std::sync::Arc::clone(&h.device),
+            h.width,
+            h.height,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("IBL gate scene graph must build")
+    }
+
+    /// I4 extension: on a static envmap, frame 30 of a live executor is
+    /// bit-identical to frame 1 of a FRESH executor built with the same
+    /// scene — the re-convolution gate never drifts the steady-state image.
+    #[test]
+    fn static_envmap_frame30_matches_fresh_executor_frame1() {
+        let h = harness::shared();
+        let json = ibl_scene_json(0.4);
+
+        let mut live = build_runtime(&json, h);
+        let mut last = Vec::new();
+        for frame in 0..30 {
+            last = render_one_frame(&mut live, h, frame);
+        }
+
+        let mut fresh = build_runtime(&json, h);
+        let fresh_frame1 = render_one_frame(&mut fresh, h, 0);
+
+        assert_eq!(
+            last, fresh_frame1,
+            "frame 30 of a live executor on a static envmap must be bit-identical to a fresh executor's frame 1"
+        );
+    }
+
+    /// I2: an envmap param change on a LIVE executor (via
+    /// `apply_inner_param_overrides`, the real no-rebuild live-edit path)
+    /// must NOT be served stale — the next frame's lit output must equal a
+    /// FRESH executor built with that changed param from the start.
+    #[test]
+    fn envmap_param_change_on_live_executor_matches_fresh_executor() {
+        let h = harness::shared();
+        let json_before = ibl_scene_json(0.4);
+        let json_after = json_before.replace(
+            r#"{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{
+            "width":{"type":"Int","value":512},
+            "height":{"type":"Int","value":256},
+            "intensity":{"type":"Float","value":1.0}}}"#,
+            r#"{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{
+            "width":{"type":"Int","value":512},
+            "height":{"type":"Int","value":256},
+            "intensity":{"type":"Float","value":1.0},
+            "horizon_strength":{"type":"Float","value":3.0}}}"#,
+        );
+        assert_ne!(json_before, json_after, "the replace must actually change the JSON");
+
+        // Live executor: settle a few frames at the original params, then
+        // push the changed params in place (no rebuild) and render one more
+        // frame.
+        let mut live = build_runtime(&json_before, h);
+        for frame in 0..3 {
+            render_one_frame(&mut live, h, frame);
+        }
+        let def_after: EffectGraphDef =
+            serde_json::from_str(&json_after).expect("changed graph def must parse");
+        live.apply_inner_param_overrides(&def_after);
+        let live_after_change = render_one_frame(&mut live, h, 3);
+
+        // Fresh executor: the changed param baked in from construction.
+        let mut fresh = build_runtime(&json_after, h);
+        let fresh_output = render_one_frame(&mut fresh, h, 0);
+
+        assert_eq!(
+            live_after_change, fresh_output,
+            "an envmap param change pushed into a live executor must match a fresh executor built with that param"
+        );
+
+        // Sanity: the change must have actually done something (otherwise
+        // the equality above would be vacuous — both renders happening to
+        // ignore horizon_strength).
+        let mut unchanged_baseline = build_runtime(&json_before, h);
+        for frame in 0..3 {
+            render_one_frame(&mut unchanged_baseline, h, frame);
+        }
+        let baseline_output = render_one_frame(&mut unchanged_baseline, h, 3);
+        assert_ne!(
+            baseline_output, live_after_change,
+            "horizon_strength=3.0 must actually change the rendered output vs the unmodified baseline"
+        );
+    }
+}
+
 const LOW_ROUGHNESS: f32 = 0.02;
 const HIGH_ROUGHNESS: f32 = 0.95;
 
