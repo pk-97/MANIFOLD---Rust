@@ -1,0 +1,11 @@
+{
+  "machine": "Peters-MacBook-Pro.local",
+  "max_ms": 9.230792,
+  "min_ms": 0.049,
+  "p50_ms": 0.311959,
+  "p95_ms": 0.425084,
+  "project": "tests/fixtures/Liveschool Live Show V6 LEDS.manifold",
+  "recorded_at": "unix:1784202945",
+  "seconds": 10.0,
+  "start_beats": null
+}

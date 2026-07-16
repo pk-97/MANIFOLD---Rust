@@ -36,7 +36,14 @@ pub struct SessionMetadata {
 // ─── Per-Frame Data ────────────────────────────────────────────────
 
 /// One frame's worth of profiling data.
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` (PERF_BUDGET_GATE_DESIGN.md P1): `cargo xtask perf-soak`
+// reads `frames.jsonl` back to find the worst frame's own per-section
+// breakdown (`SessionSummary.worst_frame.index` only names an index —
+// the per-section ms for THAT frame lives in its `FrameRecord`, not in the
+// aggregated `phase_aggregates` percentiles). Purely additive — no new
+// counters, no change to what's recorded, just round-trip capability on an
+// already-serialized shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameRecord {
     pub index: u64,
     pub beat: f32,
@@ -45,12 +52,12 @@ pub struct FrameRecord {
     pub budget_exceeded: bool,
     pub content_thread: ContentTimings,
     /// Per-pass GPU timing from timestamp queries (empty if unavailable).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpu_passes: Vec<GpuPassRecord>,
     /// Active clips this frame with generator type info.
     pub active_clips: Vec<ActiveClipInfo>,
     /// Active effects this frame with type and parameter info.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_effects: Vec<ActiveEffectInfo>,
     pub active_layer_count: usize,
     /// Total GPU passes this frame.
@@ -58,10 +65,10 @@ pub struct FrameRecord {
     /// Sum of all GPU pass durations (ms).
     pub gpu_total_ms: f64,
     /// Per-layer state (opacity, mute, solo).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_states: Vec<LayerState>,
     /// Number of content thread ticks missed (frame drops).
-    #[serde(skip_serializing_if = "is_zero_u64")]
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub missed_frames: u64,
     /// Profiler buffer readback overhead in ms.
     pub profiler_overhead_ms: f64,
@@ -74,7 +81,7 @@ fn is_zero_u64(v: &u64) -> bool {
 }
 
 /// GPU pass timing from timestamp queries.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuPassRecord {
     pub name: String,
     pub ms: f64,
@@ -83,25 +90,25 @@ pub struct GpuPassRecord {
     /// Absolute end timestamp in nanoseconds (frame-relative GPU clock).
     pub end_ns: f64,
     /// Output texture width (0 if unknown).
-    #[serde(skip_serializing_if = "is_zero_u32")]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub width: u32,
     /// Output texture height (0 if unknown).
-    #[serde(skip_serializing_if = "is_zero_u32")]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub height: u32,
     /// Whether this is a compute pass (vs render).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_compute: bool,
 }
 
 /// Named parameter with human-readable name.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedParam {
     pub name: String,
     pub value: f32,
 }
 
 /// Info about an active clip in this frame.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveClipInfo {
     pub clip_id: String,
     pub generator_type: String,
@@ -109,26 +116,26 @@ pub struct ActiveClipInfo {
     /// Animation progress [0..1] within the clip.
     pub anim_progress: f32,
     /// Live modulated generator parameters with names.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gen_params: Vec<NamedParam>,
 }
 
 /// Info about an active effect in this frame.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveEffectInfo {
     pub effect_type: String,
     /// "clip:<clip_id>", "layer:<index>", or "master"
     pub scope: String,
     /// Effect group ID (for wet/dry grouping).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
     /// Live modulated parameters with names.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<NamedParam>,
 }
 
 /// Per-layer state snapshot for a single frame.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerState {
     pub index: i32,
     pub opacity: f32,
@@ -181,14 +188,14 @@ pub struct EffectSnapshot {
 }
 
 /// GPU memory snapshot for a frame.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemorySnapshot {
     pub estimated_texture_bytes: u64,
     pub render_target_count: u32,
 }
 
 /// CPU timing breakdown for a single content thread tick.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContentTimings {
     pub total_ms: f64,
     pub midi_input_ms: f64,
@@ -212,7 +219,7 @@ pub struct SessionSummary {
     pub max_frame_ms: f64,
     pub phase_aggregates: PhaseAggregates,
     /// Per-GPU-pass aggregated stats (e.g. "generator:fluid_sim" → mean/p95/max).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpu_pass_aggregates: Vec<GpuPassAggregate>,
     pub hotspots: Vec<Hotspot>,
 
@@ -220,15 +227,15 @@ pub struct SessionSummary {
     /// Frame pacing / jitter analysis.
     pub jitter: JitterAnalysis,
     /// First-use spike detection (shader compilation).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub first_use_spikes: Vec<FirstUseSpike>,
     /// Idle (0 clips) vs active (1+ clips) comparison.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_vs_active: Option<IdleActiveComparison>,
     /// GPU pass count stats.
     pub pass_count: PassCountStats,
     /// Automated actionable recommendations.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommendations: Vec<String>,
 }
 

@@ -75,6 +75,12 @@ ui-snapshot = ["dep:image"]
 # Deliberate-run only, like gpu-proofs — GPU + video encode, minutes-long.
 # `dep:image` for PNG luma decode, same optional dep `ui-snapshot` uses.
 journey-proofs = ["dep:image"]
+# `cargo xtask perf-soak` (docs/PERF_BUDGET_GATE_DESIGN.md P1): headless
+# frame-budget soak of a real project. Needs `profiling` for
+# `manifold-profiler`'s per-frame section-timing collector (min/p50/p95/max +
+# worst-frame breakdown come from its FrameRecord/SessionSummary, not a new
+# timing framework).
+perf-soak = ["profiling"]
 
 [lints]
 workspace = true
