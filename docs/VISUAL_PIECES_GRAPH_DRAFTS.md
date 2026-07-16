@@ -54,6 +54,55 @@
 - **Determinism:** every stochastic atom takes a `seed` param and derives per-frame randomness from `(seed, frame/beat)` — never wall-clock — so exports reproduce.
 - **Executor-readiness (added 2026-07-08, Peter's requirement):** these drafts will be built by Opus/Sonnet sessions with no Fable in the loop, so **no acceptance criterion may be a pure taste judgment.** Every "looks right" has a scripted numeric proxy stated in the piece's Verify step (convergence deltas, autocorrelation, topology counts, IoU against a reference map) — the executor builds to the proxy, and Peter's look-pass (headless PNG or live) is a separate, explicitly-owed L4 gate, never the executor's job. Where a piece's quality genuinely lives in tuning (palettes, default card values), the draft says so and marks the tuning Peter-owed.
 
+## Particle-density display recipe (learned building A2 Cymatics, 2026-07-16 — READ BEFORE BUILDING A1/A4/A10/A11)
+
+Every lesson below was paid for in look-pass iterations against Peter's live runs.
+The recipe is "copy FluidSim2D exactly," but the load-bearing details are easy to
+copy wrong:
+
+1. **Blur belongs on the FORCE FIELD only, never the display path.** FluidSim's
+   crisp look: `draw_particles → resolve_scatter → reinhard_tone_map`, nothing
+   between. Its gaussian blurs smooth the *force* texture that particles sample.
+   Copying blur onto the display path reads as "weird blur all over it" (Peter,
+   verbatim, on the first Cymatics build).
+2. **The display tone chain is `reinhard_tone_map(Extended, contrast 3)` with
+   `intensity = canvas_area_scale × 3`** — wire `output_width/height` into
+   `node.canvas_area_scale` → `scale_offset_value(scale 3)` → the tone node's
+   port-shadowed `intensity`. Without the area wire, brightness silently changes
+   with project resolution.
+3. **Grain energy: bind the count card into a `scale_offset_value` feeding
+   `draw_particles.scaled_energy`** (FluidSim pattern). Density value per texel =
+   `grains × energy / resolve.fixed_point_scale(4096)`. Tune energy so a LONE
+   grain reads as visible gray post-tone and small piles cross 1.0 into HDR
+   (Extended preserves >1 — that's where the "expensive" glow lives). Don't tune
+   by estimate: render, zoom the actual pixels (single grain must be ONE texel),
+   adjust.
+4. **Pure black background: no LUT unless the piece truly needs colour** — Peter
+   killed both the amber gradient and the Color card; white-hot on black à la
+   FluidSim is the default register. If a piece does colour, the gradient's stop-0
+   must be exactly (0,0,0) or the whole frame lifts off black.
+5. **Convergent sims need a jiggle floor.** Any force field with zero-crossings
+   freezes particles into quantized beads exactly where the audience looks (the
+   modulated Brownian kick goes to 0 there). `scale_offset_image(offset ≈ 0.12)`
+   on the modulator keeps grains alive on the attractor lines.
+6. **Stills undersell jiggling particles.** Per-frame Brownian motion integrates
+   perceptually at 60fps — a static PNG reads dimmer and more clumped than live
+   playback. Tune structure/energy on PNGs, but final brightness judgment is
+   Peter's live pass; say so in the commit.
+7. **Counts: FluidSim runs 2M particles; don't be shy.** Sand-class presets want
+   500k+ default, 1M cap (64 B/particle → 64 MB, fine). Fan the count card to
+   every node's `active_count` param AND the energy `scale_offset_value`.
+
+**Stateful-loop precision (from the shelved A3 — applies to ANY wgsl_compute
+feedback loop):** small per-frame increments (reaction terms, decay, integration)
+UNDERFLOW f16 storage — increments ~1e-4 quantize to zero at field values ~0.3
+and the sim starves. The loop must be fp32 END-TO-END: `outputFormats: {"out":
+"rgba32float"}` on the feedback node, `rgba32float` storage in every kernel, and
+no f16-locked atom (mix/levels/…) inside the loop — fold stamps/injections into
+the first kernel instead. And verify formulation constants against a 20-line
+NumPy ground truth BEFORE debugging the graph: textbook Gray-Scott params belong
+to a differently-scaled PDE and die silently (the graph was never the bug).
+
 ---
 
 ## L1. Log curve on `node.reinhard_tone_map` (lever)
@@ -148,7 +197,14 @@ monolith, it's graph routing).
 
 **Verify.** `gpu_tests` on `flock_force` (3-particle hand-computed cohesion/separation cases); headless PNG sequence — flock must read as murmuration, not sprite cloud, before shipping.
 
-## A2. Cymatics (generator)
+## A2. Cymatics (generator) — BUILT 2026-07-16, Peter look-passed ("looks good")
+
+**As shipped** (differs from the draft below): no trails, no LUT/palette, no display
+blur — single-texel white grains through the FluidSim display recipe (see the
+particle-density recipe section above, which this build wrote). Cards: Mode X/Y,
+Symmetry, Sand (500k default / 1M cap), Settle, Jiggle, Cycle Modes. Vibration-floor
+node keeps sand alive on the nodal lines. Analytic Chladni gate passed on three
+(n,m,±) figures. Draft below retained for the graph shape + verify recipe.
 
 **Intent.** Chladni plate: sand settles onto the nodal lines of a standing wave; pitch changes physically rearrange the sand. Sound shaping matter — the thesis statement, for quiet sections.
 
@@ -199,6 +255,13 @@ Inputs → Seed → [Field Memory: temporal] → React ×4 → Field Memory ↩
 **Verify.** check-presets; PNG time-series at three canonical regimes (spots f=.035/k=.065, stripes f=.045/k=.060, waves f=.014/k=.045) — patterns must match the known Gray-Scott morphology.
 
 ## A4. Caustics (generator)
+
+**Build note (2026-07-16):** start from the particle-density display recipe section
+above — photons are the same draw/resolve/tone spine as Cymatics, and every display
+decision there (no display blur, Extended+area-scale tone, energy law, black
+background, count scale) transfers directly. The draft's Log-curve grade and
+palette references predate the recipe; the fold-line brightening must come from
+photon CONCENTRATION through the tone chain, not from grading.
 
 **Intent.** Light through water onto a floor — the universally-liked one. Doubles as a light layer over video (effect-side variant is the same graph with `compose(Add)` onto `system.source`).
 
