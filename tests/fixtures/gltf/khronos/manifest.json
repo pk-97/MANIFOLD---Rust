@@ -1,0 +1,1423 @@
+[
+  {
+    "asset": "MetalRoughSpheres.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.05
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/metal_rough_spheres.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "EmissiveStrengthTest.glb",
+    "checks": [
+      {
+        "kind": "lights_off_nonblack_min",
+        "value": 0.002
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/emissive_strength.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "AlphaBlendModeTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.05
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/alpha_blend_mode.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "NormalTangentMirrorTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.05
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/normal_tangent_mirror.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureTransformTest/TextureTransformTest.gltf",
+    "checks": [
+      {
+        "kind": "region_green_minus_red_above",
+        "region": [
+          0.3906,
+          0.2292,
+          0.4453,
+          0.4028
+        ],
+        "value": 40.0
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_transform.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "ClearCoatTest.glb",
+    "checks": [
+      {
+        "kind": "region_max_luminance_above",
+        "region": [
+          0.5453,
+          0.1639,
+          0.5875,
+          0.2056
+        ],
+        "reference_region": [
+          0.4953,
+          0.1639,
+          0.5328,
+          0.2056
+        ],
+        "value": 1.3
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/clearcoat_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "SpecularTest.glb",
+    "checks": [
+      {
+        "kind": "region_mean_luminance_below",
+        "region": [
+          0.5039,
+          0.2292,
+          0.5391,
+          0.2986
+        ],
+        "reference_region": [
+          0.6602,
+          0.2292,
+          0.7148,
+          0.3264
+        ],
+        "value": 0.75
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/specular_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureSettingsTest.glb",
+    "checks": [],
+    "status": "xfail:BUG-164"
+  },
+  {
+    "asset": "AnimatedMorphCube.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/animated_morph_cube.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "AntiqueCamera.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/antique_camera.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Avocado.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/avocado.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BarramundiFish.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/barramundi_fish.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Box.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BoxAnimated.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_animated.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BoxInterleaved.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_interleaved.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BoxTextured.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_textured.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BoxTexturedNonPowerOfTwo.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/box_textured_non_power_of_two.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "BrainStem.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/brain_stem.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CesiumMan.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/cesium_man.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CesiumMilkTruck.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/cesium_milk_truck.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "ClearcoatWicker.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/clearcoat_wicker.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareAlphaCoverage.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_alpha_coverage.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareAmbientOcclusion.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_ambient_occlusion.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareBaseColor.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_base_color.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareClearcoat.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_clearcoat.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareEmissiveStrength.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_emissive_strength.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareMetallic.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_metallic.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareNormal.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_normal.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareRoughness.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_roughness.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "CompareSpecular.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/compare_specular.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Corset.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/corset.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "DamagedHelmet.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/damaged_helmet.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "DirectionalLight.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/directional_light.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Duck.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/duck.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Fox.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/fox.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "InterpolationTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/interpolation_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "Lantern.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/lantern.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "MaterialsVariantsShoe.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/materials_variants_shoe.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "MorphPrimitivesTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/morph_primitives_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "MorphStressTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/morph_stress_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "MultiUVTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/multi_uvtest.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "NegativeScaleTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/negative_scale_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "NormalTangentTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/normal_tangent_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "OrientationTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/orientation_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "PlaysetLightTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/playset_light_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "PointLightIntensityTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/point_light_intensity_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "PotOfCoals.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/pot_of_coals.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "RiggedFigure.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/rigged_figure.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "RiggedSimple.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/rigged_simple.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureCoordinateTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_coordinate_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureEncodingTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_encoding_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureLinearInterpolationTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_linear_interpolation_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "TextureTransformMultiTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/texture_transform_multi_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "VertexColorTest.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/vertex_color_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "WaterBottle.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/water_bottle.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "XmpMetadataRoundedCube.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/xmp_metadata_rounded_cube.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "ABeautifulGame.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AnimationPointerUVs.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AnisotropyBarnLamp.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AnisotropyDiscTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AnisotropyRotationTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AnisotropyStrengthTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "AttenuationTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CarConcept.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CarbonFibre.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "ChairDamaskPurplegold.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "ChronographWatch.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CommercialRefrigerator.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareAnisotropy.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareDispersion.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareIor.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareIridescence.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareSheen.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareTransmission.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "CompareVolume.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DiffuseTransmissionPlant.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DiffuseTransmissionTeacup.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DiffuseTransmissionTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DispersionTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DragonAttenuation.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "DragonDispersion.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "GlamVelvetSofa.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "GlassBrokenWindow.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "GlassHurricaneCandleHolder.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "GlassVaseFlowers.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "IORTestGrid.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "IridescenceAbalone.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "IridescenceLamp.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "IridescenceSuzanne.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "IridescentDishWithOlives.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "LightsPunctualLamp.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "MosquitoInAmber.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "PotOfCoalsAnimationPointer.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "ScatteringSkull.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "SheenChair.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "SheenTestGrid.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "SheenWoodLeatherSofa.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "SpecularSilkPouf.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "SunglassesKhronos.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "ToyCar.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "TransmissionOrderTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "TransmissionRoughnessTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "TransmissionTest.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "TransmissionThinwallTestGrid.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "USDShaderBallForGltf.glb",
+    "checks": [],
+    "status": "xfail:deferred-3",
+    "note": "unsupported material extension (sheen/iridescence/volume/transmission-family/anisotropy-the-extension) per D5's grouping — GLB_CONFORMANCE_DESIGN.md deferred item 3"
+  },
+  {
+    "asset": "BoomBox.glb",
+    "checks": [],
+    "status": "xfail:BUG-165",
+    "note": "same never-converges class as BoomBox (BUG-165)"
+  },
+  {
+    "asset": "VirtualCity.glb",
+    "checks": [],
+    "status": "xfail:BUG-165",
+    "note": "same never-converges class as BoomBox (BUG-165)"
+  },
+  {
+    "asset": "ClearCoatCarPaint.glb",
+    "checks": [],
+    "status": "xfail:BUG-166",
+    "note": "gltf crate vetoes extensionsRequired entries we already support downstream (clearcoat/unlit)"
+  },
+  {
+    "asset": "UnlitTest.glb",
+    "checks": [],
+    "status": "xfail:BUG-166",
+    "note": "gltf crate vetoes extensionsRequired entries we already support downstream (clearcoat/unlit)"
+  },
+  {
+    "asset": "SpecGlossVsMetalRough.glb",
+    "checks": [],
+    "status": "xfail:BUG-167",
+    "note": "KHR_materials_pbrSpecularGlossiness entirely unhandled"
+  },
+  {
+    "asset": "SimpleInstancing.glb",
+    "checks": [],
+    "status": "xfail:BUG-168",
+    "note": "EXT_mesh_gpu_instancing entirely unhandled"
+  },
+  {
+    "asset": "MetalRoughSpheresNoTextures.glb",
+    "checks": [],
+    "status": "xfail:BUG-169",
+    "note": "98 texture-less PBR materials render fully black"
+  },
+  {
+    "asset": "AnimatedColorsCube.glb",
+    "checks": [],
+    "status": "xfail:BUG-170",
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer/KHR_node_visibility)"
+  },
+  {
+    "asset": "CubeVisibility.glb",
+    "checks": [],
+    "status": "xfail:BUG-170",
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer/KHR_node_visibility)"
+  },
+  {
+    "asset": "LightVisibility.glb",
+    "checks": [],
+    "status": "xfail:BUG-170",
+    "note": "gltf crate 'missing field node' parse failure (KHR_animation_pointer/KHR_node_visibility)"
+  },
+  {
+    "asset": "BoxVertexColors.glb",
+    "checks": [],
+    "status": "xfail:BUG-171",
+    "note": "materialless primitive skipped entirely instead of using glTF default material"
+  },
+  {
+    "asset": "RecursiveSkeletons.glb",
+    "checks": [],
+    "status": "xfail:BUG-172",
+    "note": "glb with no default scene rejected instead of falling back to root nodes"
+  },
+  {
+    "asset": "NodePerformanceTest.glb",
+    "checks": [],
+    "status": "xfail:BUG-173",
+    "note": "10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) — not a defect"
+  },
+  {
+    "asset": "Unicode❤♻Test.glb",
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/unicode_heart_recycle_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass"
+  },
+  {
+    "asset": "AnimatedCube (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "AnimatedTriangle (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "BoomBoxWithAxes (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Box With Spaces (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Cameras (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Cube (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "EnvironmentTest (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "FlightHelmet (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "IridescenceDielectricSpheres (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "IridescenceMetallicSpheres (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "MandarinOrange (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "MeshPrimitiveModes (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "MeshoptCubeTest (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "MultipleScenes (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "PrimitiveModeNormalsTest (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SciFiHelmet (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SheenCloth (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleMaterial (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleMeshes (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleMorph (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleSkin (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleSparseAccessor (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "SimpleTexture (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Sponza (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "StainedGlassLamp (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Suzanne (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "Triangle (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "TriangleWithoutIndices (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  },
+  {
+    "asset": "TwoSidedPlane (no glTF-Binary variant at pin)",
+    "checks": [],
+    "status": "xfail:G-P7",
+    "note": "no glTF-Binary variant in the pinned Khronos commit (only 'glTF' JSON+sidecar); not fetched — TextureTransformTest's sidecar-fetch exception (G-P4) is not extended to this set in G-P7"
+  }
+]

@@ -130,6 +130,56 @@ pub struct Material {
     pub alpha_mode: AlphaMode,
     /// Cutout threshold in `[0, 1]`, used only when `alpha_mode == Mask`.
     pub alpha_cutoff: f32,
+
+    // ---- PBR dielectric F0 (GLB_CONFORMANCE_DESIGN.md G-P4/D5). Inert
+    // when `kind != Pbr` — same "unread by other kinds" pattern as
+    // `metallic`/`roughness` above. Defaults reproduce the pre-G-P4
+    // hardcoded F0 = 0.04 exactly: `((1.5-1)/(1.5+1))^2 * 1.0 * [1,1,1] =
+    // [0.04, 0.04, 0.04]`. ----
+    /// glTF `KHR_materials_ior`'s `ior` (default `1.5`, glTF's implicit
+    /// default when the extension is absent).
+    pub ior: f32,
+    /// glTF `KHR_materials_specular`'s `specularFactor` (default `1.0`) —
+    /// scales the dielectric F0 term.
+    pub specular_factor: f32,
+    /// glTF `KHR_materials_specular`'s `specularColorFactor` (default
+    /// `[1,1,1]`) — tints the dielectric F0 term.
+    pub specular_tint: [f32; 3],
+
+    // ---- Per-map UV transforms (GLB_CONFORMANCE_DESIGN.md G-P4/D5).
+    // `KHR_texture_transform`, one folded 2×3 affine per map family —
+    // `[m00, m01, m10, m11, tx, ty]` s.t. `uv' = (m00*u + m01*v + tx,
+    // m10*u + m11*v + ty)`, folded ONCE at import (never per frame).
+    // Default identity (`[1,0,0,1,0,0]`) is exactly inert. Per-map (not
+    // one shared transform) because real assets differ per slot: the AMG
+    // GT3 carries transforms on 9 normalTexture infos and only 1
+    // baseColorTexture. base-color applies in every kind's
+    // `resolve_albedo`; the other four apply in their dedicated resolve
+    // fns (PBR-path maps). ----
+    pub base_color_uv_transform: [f32; 6],
+    pub normal_uv_transform: [f32; 6],
+    pub mr_uv_transform: [f32; 6],
+    pub occlusion_uv_transform: [f32; 6],
+    pub emissive_uv_transform: [f32; 6],
+
+    // ---- Clearcoat second specular lobe (GLB_CONFORMANCE_DESIGN.md
+    // G-P5/D5). Inert when `kind != Pbr` — same "unread by other kinds"
+    // pattern as `metallic`/`roughness`. Both default to `0.0`, which is
+    // glTF `KHR_materials_clearcoat`'s own implicit default AND makes the
+    // shader's energy-compensation weight `Fc = clearcoat * fresnel` exactly
+    // zero — byte-identical to pre-G-P5 output on every material without
+    // the extension. Factor-only v1 (D5): clearcoatTexture /
+    // clearcoatRoughnessTexture / clearcoatNormalTexture stay report lines
+    // (Deferred #2 owns map-driven coat). ----
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0`)
+    /// — the coat layer's intensity, `[0, 1]`.
+    pub clearcoat: f32,
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
+    /// `0.0`) — the coat layer's own microfacet roughness, independent of
+    /// the base layer's `roughness`. Clamped to the same `0.01` numerical
+    /// floor as `roughness` wherever it's constructed (a GGX landmine at
+    /// exactly zero).
+    pub clearcoat_roughness: f32,
 }
 
 impl Material {
@@ -153,6 +203,16 @@ impl Material {
             band_high: 1.0,
             alpha_mode: AlphaMode::Opaque,
             alpha_cutoff: 0.5,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_tint: [1.0, 1.0, 1.0],
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            occlusion_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            emissive_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
         }
     }
 
@@ -381,10 +441,12 @@ mod tests {
     #[test]
     fn material_is_copy_and_cheap_to_clone() {
         // Trip-wire on the size — the per-frame copy cost matters because
-        // every wire carries one. ~96 bytes is the ceiling we're designing
-        // for (a couple of struct lines of growth headroom).
+        // every wire carries one. Ceiling raised 128 → 256 for
+        // GLB_CONFORMANCE_DESIGN.md G-P4's five per-map UV transforms
+        // (5 × 24 B) — a ~224-byte Copy per wire per frame is still far
+        // below anything measurable next to a single texture bind.
         let sz = std::mem::size_of::<Material>();
-        assert!(sz <= 128, "Material grew unexpectedly large: {sz} bytes");
+        assert!(sz <= 256, "Material grew unexpectedly large: {sz} bytes");
         let m = Material::default_unlit_white();
         let _copy = m;
         let _another = m;

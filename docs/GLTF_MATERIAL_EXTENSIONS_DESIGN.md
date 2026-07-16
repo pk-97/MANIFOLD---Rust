@@ -1,0 +1,56 @@
+# glTF Material Extensions — transmission, volume, sheen, iridescence, anisotropy, dispersion
+
+**Status:** APPROVED direction, conformance treatment (STANDARD §9 — deeper in the build order; re-derive inventories at execution) · 2026-07-16 · Fable 5 (Peter in the room)
+**Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (slice-based import with our extension gate) — the gate's supported-list grows per phase here. MATERIAL_SYSTEM_DESIGN.md (SHIPPED M1–M6) is the material contract this extends.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+
+Peter's directive (2026-07-16): *"a third doc for all the extensions would be useful too."* This owns the **49 material-extension xfails** in `docs/GLB_CONFORMANCE_STATUS.md` — the largest remaining block between 69/148 and full certification. It is real shading work (new BRDF lobes and a transmission pass), not import plumbing.
+
+Instrument frame: these extensions are the difference between "store-page preview" and "grey approximation" for exactly the asset classes Peter's EP aesthetic uses — **glass and translucency (vases, broken windows, amber, plants in glass) are transmission+volume; fabric and velvet are sheen; petrol-sheen and abalone are iridescence**. The flowers/nature Interim-EP direction makes transmission the highest-value family by a wide margin.
+
+## 1. Audit — current shading state (verified 2026-07-16; RE-DERIVE at execution — this section WILL be stale)
+
+Re-derivation commands, run before any phase:
+```
+rg -n 'clearcoat|specular_factor|ior|transmission' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs | head -40
+rg -n 'transmission|sheen|iridescence|volume|anisotrop|dispersion' crates/manifold-renderer/src/node_graph/gltf_load.rs
+python3 - <<'EOF'  # current xfail families
+import re; t=open('docs/GLB_CONFORMANCE_STATUS.md').read()
+print(re.findall(r'\*\*Gap:\*\* unsupported material extension.*?(?=\*\*Gap|\Z)', t, re.S)[0][:2000])
+EOF
+```
+
+Snapshot (2026-07-16): the PBR shader is single-scatter GGX metal-rough + a second GGX clearcoat lobe (G-P5), `specular_factor`/`ior` in reserved uniform slots (`render_scene.rs:263,307` — G-P4). Transmission is parsed (`gltf_load.rs:443-447`) but approximated as alpha: `alpha = base_color.a * (1 - transmission_factor)` (`gltf_import.rs:664`) — report-only fidelity, no refraction, no roughness blur. Environment: `node.hdri_source` + softbox dome fill (G-P6 / F-P7). No sheen, iridescence, volume, anisotropy, or dispersion parsing anywhere (`rg` above returns zero hits for those terms in the import path today).
+
+The 49 assets by family (from the status doc; counts overlap — many assets use several extensions; re-derive at execution):
+transmission/diffuse-transmission/volume/attenuation ≈ 16 · sheen ≈ 5 · iridescence ≈ 5 · anisotropy ≈ 6 · dispersion ≈ 3 · IOR-grid ≈ 2 · showcase multi-extension (ToyCar, CarConcept, ABeautifulGame, SunglassesKhronos, USDShaderBall, ChronographWatch, …) ≈ 12 — the showcases only pass once ALL their extensions land, so they gate the final phase, not the per-family ones.
+
+## 2. Decisions
+
+- **D1 — One shader, additive lobes, factor-first.** Each family lands as an addition to the existing render_scene fragment shading, gated per-object by its uniform factors (zero factor = today's code path bit-exact). Factor-only support first, extension textures second — the clearcoat precedent (G-P5 landed factors-only and certified). Rejected: a separate "advanced PBR" shader variant, because two shading paths for one material model is the parallel-old-path forbidden move at shader scale.
+- **D2 — Uniform growth is a real layout change, done once.** Clearcoat rode the last reserved slots; there are none left (⚠ VERIFY-AT-IMPL via the re-derivation rg). Phase E1 grows the per-object material uniform by one aligned block sized for ALL families in this doc (sheen color+roughness, iridescence ior/thickness, anisotropy strength+rotation, transmission+volume params, dispersion) in a single migration, so later phases only fill fields. Respect `feedback_naga_uniform_size_rule` + `feedback_wgsl_vec3_alignment` (memories); GPU parity tests are the gate. Rejected: growing the uniform per phase, because five layout migrations × golden re-baselines is five times the regression risk.
+- **D3 — Transmission is a screen-space refraction pass, not ray tracing.** The house-standard real-time approach: opaque pass renders to an intermediate; transmissive objects sample it (roughness-blurred via the existing mip chain infra from F-P6) with IOR-based refraction offset; volume/attenuation (Beer–Lambert from `attenuationColor`/`attenuationDistance`/`thicknessFactor`) tints it; dispersion = per-channel IOR spread on the same sample. This reuses the G-Buffer/CINEMATIC_POST infra (⚠ VERIFY-AT-IMPL: whether render_scene's pass structure exposes an opaque-resolved texture — re-derive from `docs/FREEZE_COMPILER_MAP.md` + render_scene's pass code; if not, the intermediate is this phase's real work and the phase brief must be split by the executor's orchestrator, not improvised). Rejected: alpha-blend approximation kept permanently, because glass that doesn't refract or blur reads as cellophane on stage — the current approximation is explicitly the thing this doc removes.
+- **D4 — Family order is EP-value order: transmission+volume → sheen → iridescence → anisotropy → dispersion.** Peter's release focus decides this, not spec completeness.
+- **D5 — Each family's acceptance is its Khronos Compare asset.** `CompareTransmission`, `CompareSheen`, `CompareIridescence`, `CompareAnisotropy`, `CompareDispersion`, `CompareIor` are side-by-side fixtures designed for exactly this; the golden + a region check (extension half must differ from the base half in the documented direction) is the mechanical gate. Showcase assets certify only in the final phase.
+
+## 3. Phasing (briefs at conformance level — each phase re-derives its inventory; one phase = one session)
+
+- **E1 — Uniform layout growth + parse plumbing.** All families' factors parsed in `gltf_load.rs` (typed accessors where 1.4.1 has them, raw-JSON sniff per the clearcoat precedent where not — ⚠ VERIFY-AT-IMPL per family), carried through `GltfMaterialInfo` → uniform block. Gate: GPU parity suite green; all 56+ passing goldens byte-stable (zero-factor = bit-exact is D1's promise, this gate proves it); no visual change anywhere.
+- **E2 — Transmission + volume + attenuation (the glass phase).** D3's refraction pass, factor-first then `transmissionTexture`. Gate: `CompareTransmission`, `CompareVolume`, `AttenuationTest`, `TransmissionRoughnessTest` flip to expect_pass; held-out: `GlassVaseFlowers.glb` (EP-adjacent: flowers in glass) reviewed as PNG by the orchestrator. Instrument line: a glass object over a live video layer must show the layer through it, refracted — that's the stage payoff and the demo.
+- **E3 — Sheen.** Charlie/Ashikhmin sheen lobe per the glTF spec reference. Gate: `CompareSheen`, `SheenTestGrid` + goldens; held-out `SheenChair` or `GlamVelvetSofa`.
+- **E4 — Iridescence.** Thin-film Fresnel modulation per spec. Gate: `CompareIridescence`, `IridescenceSuzanne` + held-out `IridescenceAbalone`.
+- **E5 — Anisotropy.** Tangent-space GGX stretch; needs tangents (⚠ VERIFY-AT-IMPL: whether imported meshes carry/derive tangents today — normal mapping suggests yes; re-derive). Gate: `CompareAnisotropy`, `AnisotropyStrengthTest`/`RotationTest`; held-out `AnisotropyBarnLamp`.
+- **E6 — Dispersion + certification sweep.** Per-channel IOR on E2's pass; then the multi-extension showcases (`ToyCar`, `ABeautifulGame`, `SunglassesKhronos`, …) certified, manifest re-classified, `scripts/gen_glb_conformance_status.py` regenerated, and the final pass/xfail arithmetic written into the status doc. Any showcase still failing gets a named xfail reason or a BUG entry — zero unclassified, same bar as G-P7.
+
+Each phase: clippy scoped per CLAUDE.md; GPU suite (`cargo test -p manifold-renderer --features gpu-proofs`, render_scene-scoped) because every one touches the shader; landing batches 2–3 phases per GIT_TREE_DISCIPLINE §2c; every landing reruns the status generator and updates this doc's Status line.
+
+## 4. Decided — do not reopen
+1. One shader, additive zero-default lobes; no advanced-PBR fork (D1).
+2. One uniform migration up front, not per family (D2).
+3. Transmission = screen-space refraction + Beer–Lambert volume; no ray tracing, no permanent alpha approximation (D3).
+4. Family order is D4's; re-ordering requires Peter.
+
+## 5. Deferred
+- `KHR_materials_diffuse_transmission` full BTDF (the three DiffuseTransmission assets) → fold into E2 if the factor path covers the Compare asset; else its own follow-up phase — decided by E2's gate result, recorded there.
+- Extension **textures** beyond each family's factor path where the Compare asset passes factor-only → trigger: a real asset where the texture visibly matters (same rule that served clearcoat).
+- Spec-gloss specular tint (inherited pointer from GLB_XFAIL_BURNDOWN D2).

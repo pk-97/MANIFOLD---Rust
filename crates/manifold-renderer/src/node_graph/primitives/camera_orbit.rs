@@ -58,7 +58,7 @@ crate::primitive! {
             label: "Tilt",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.3),
-            range: Some((-1.5, 1.5)),
+            range: Some((-std::f32::consts::TAU, std::f32::consts::TAU)),
             enum_values: &[],
         },
         ParamDef {

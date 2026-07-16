@@ -23,7 +23,7 @@ tiff = "0.9"
 # Still-image decode for node.image_folder. TIFF stays on the dedicated
 # `tiff` path above (bit-exact u16/f32 grayscale for MRI scans); `image`
 # covers the everyday formats. Lean feature set, no default decoders.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # glTF/.glb parse for node.gltf_mesh_source (node_graph::gltf_load) — a
 # production import primitive, not test-only. mesh_snapshot's azalea proof
@@ -33,11 +33,25 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 # KHR_materials_clearcoat, which this crate version has no typed support
 # for) + KHR_lights_punctual (IMPORT_DESIGN P1's light mapping needs it;
 # enabling here costs nothing — no lights/cameras work happens in F-P4).
+# GLB_CONFORMANCE_DESIGN.md G-P4: KHR_texture_transform (typed
+# `texture::Info::texture_transform()`) + KHR_materials_specular (typed
+# `Material::specular()`) + KHR_materials_ior (typed `Material::ior()`).
+# GLB_CONFORMANCE_DESIGN.md G-P5: KHR_materials_clearcoat's factors
+# (clearcoatFactor/clearcoatRoughnessFactor) are now MAPPED (second GGX
+# lobe) but STILL via the raw-JSON `extension_value` sniff above, not a
+# feature flag — VERIFIED this session against both `gltf` and
+# `gltf-json` 1.4.1's own `Cargo.toml` (and full source grep): neither
+# crate has a `KHR_materials_clearcoat` feature or any typed accessor at
+# this pinned version, unlike specular/ior in G-P4. No feature added; no
+# new dependency.
 gltf = { version = "1", features = [
     "KHR_materials_emissive_strength",
     "KHR_materials_transmission",
     "extensions",
     "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -77,6 +91,10 @@ path = "src/bin/graph_tool.rs"
 name = "render-generator-preset"
 path = "src/bin/render_generator_preset.rs"
 
+[[bin]]
+name = "render-import"
+path = "src/bin/render_import.rs"
+
 # GPU-proof integration binary: the alpha-contract sweep + generator smoke.
 # Gated behind `gpu-proofs` (see [features]) so it's excluded from the
 # default `cargo test` / `cargo nextest` sweep — run it deliberately with
@@ -84,6 +102,15 @@ path = "src/bin/render_generator_preset.rs"
 [[test]]
 name = "gpu_proofs"
 path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
+# glTF conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1): renders each
+# Khronos sample asset through the production import path and gates it with
+# numeric asserts + self-goldens. Needs a real GPU device, same reasons as
+# `gpu_proofs` above — off by default, run with `--features gpu-proofs`.
+[[test]]
+name = "glb_conformance"
+path = "tests/glb_conformance.rs"
 required-features = ["gpu-proofs"]
 
 [features]

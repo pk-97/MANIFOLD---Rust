@@ -302,6 +302,19 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    /// Background file IO still in flight — mirror of
+    /// [`EffectNode::io_pending`](crate::node_graph::effect_node::EffectNode::io_pending).
+    /// Override on IoBridge file sources whose `run()` spawns a background
+    /// decode thread (`node.gltf_texture_source`, `node.hdri_source`):
+    /// return `true` while a decode is in flight or decoded-but-not-yet-
+    /// uploaded, so headless convergence loops (`render-import`) can tell
+    /// "byte-stable because settled" from "byte-stable because the decode
+    /// hasn't landed yet" (G-P6 gate-review fix: a 74 MB EXR's decode dead
+    /// time outlasts any byte-stability window). Default `false`.
+    fn io_pending(&self) -> bool {
+        false
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -595,6 +608,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn output_mipmapped(&self, port: &str) -> bool {
         Primitive::output_mipmapped(self, port)
+    }
+    fn io_pending(&self) -> bool {
+        Primitive::io_pending(self)
     }
     fn fused_gather_sampler_mode(
         &self,

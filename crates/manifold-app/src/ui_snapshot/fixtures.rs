@@ -150,7 +150,7 @@ fn arm_lfo(fx: &mut PresetInstance) {
     use manifold_core::effects::ParameterDriver;
     use manifold_core::types::{BeatDivision, DriverWaveform};
     let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()));
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()));
     if let Some(param_id) = param_id {
         fx.drivers = Some(vec![ParameterDriver::new(
             param_id,
@@ -294,7 +294,7 @@ fn automation_scene() -> SceneData {
 
     let mut mirror = effect("Mirror");
     let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
         .expect("Mirror has at least one automatable param");
     mirror.automation_lanes = Some(vec![AutomationLane {
         param_id: mirror_param.into(),
@@ -308,7 +308,7 @@ fn automation_scene() -> SceneData {
 
     let mut bloom = effect("Bloom");
     let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
         .expect("Bloom has at least one automatable param");
     // Bloom's `amount` registers 0..5 (not 0..1 like Mirror's) — pick values
     // far apart in that range (not just 0.2/0.8) so the Hold-then-jump reads
@@ -353,7 +353,7 @@ fn automation_placeholder_scene() -> SceneData {
     let mirror = effect("Mirror");
     let mirror_id = mirror.id.clone();
     let mirror_param = manifold_core::preset_definition_registry::try_get(mirror.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
         .expect("Mirror has at least one automatable param");
     // No `automation_lanes` set — this param has never been automated. The
     // placeholder is what makes it choosable/drawable anyway.
@@ -424,7 +424,7 @@ fn audio_sends_scene() -> SceneData {
 
     let mut bloom = effect("Bloom");
     let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
         .expect("Bloom has at least one param");
     // `ParameterAudioMod::new` defaults `enabled: true` (audio_mod.rs) — no
     // separate enable step needed.
@@ -565,7 +565,7 @@ fn inspector_scene() -> SceneData {
             def.param_defs
                 .get(1)
                 .or_else(|| def.param_defs.first())
-                .map(|pd| pd.id.clone())
+                .map(|pd| pd.spec.id.clone())
         })
         .expect("Mirror has at least one automatable param");
     mirror.automation_lanes = Some(vec![AutomationLane {
@@ -580,7 +580,7 @@ fn inspector_scene() -> SceneData {
 
     let mut bloom = effect("Bloom");
     let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-        .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+        .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
         .expect("Bloom has at least one automatable param");
     bloom.automation_lanes = Some(vec![AutomationLane {
         param_id: bloom_param.clone().into(),
@@ -705,7 +705,7 @@ fn bug060_scene() -> SceneData {
     for i in 0..7 {
         let mut bloom = effect("Bloom");
         let bloom_param = manifold_core::preset_definition_registry::try_get(bloom.effect_type())
-            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()))
+            .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()))
             .expect("Bloom has at least one param");
         let bloom_mod = ParameterAudioMod::new(
             bloom_param.into(),
@@ -758,7 +758,7 @@ fn bug060heavy_scene() -> SceneData {
     // standard drawer at build time (mirrors `inspector_scene`'s Bloom).
     let arm_audio_mod = |fx: &mut PresetInstance, kick_send_id: &manifold_core::AudioSendId| {
         let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
-            .and_then(|def| def.param_defs.first().map(|pd| pd.id.clone()));
+            .and_then(|def| def.param_defs.first().map(|pd| pd.spec.id.clone()));
         if let Some(param_id) = param_id {
             let am = ParameterAudioMod::new(
                 param_id.into(),

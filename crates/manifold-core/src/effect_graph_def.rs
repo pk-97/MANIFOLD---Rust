@@ -445,7 +445,7 @@ fn default_available() -> bool {
 /// Differs in using owned `String` for compatibility with serde
 /// deserialization (the renderer-side `ParamSpec` uses `&'static str`
 /// for compile-time inventory submissions).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamSpecDef {
     pub id: String,

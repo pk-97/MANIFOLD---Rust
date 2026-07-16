@@ -14,7 +14,7 @@
 //! keying stay separate; only the value type unified here.
 
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
-use crate::effects::ParamDef;
+use crate::effects::RegistryParamDef;
 use crate::preset_definition_registry::StringParamDef;
 
 /// Which kind of preset this is. The one word that carries every real
@@ -49,7 +49,7 @@ impl PresetKind {
 pub struct PresetDef {
     pub kind: PresetKind,
     pub display_name: String,
-    pub param_defs: Vec<ParamDef>,
+    pub param_defs: Vec<RegistryParamDef>,
     /// Generator string params today; effects gain these as the
     /// string-binding capability gap closes. Empty when unused.
     pub string_param_defs: Vec<StringParamDef>,

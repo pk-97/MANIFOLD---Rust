@@ -30,10 +30,10 @@ use std::sync::{Arc, LazyLock, OnceLock};
 
 use arc_swap::ArcSwap;
 
-use crate::effect_graph_def::{AliasEntry, ParamSpecDef, PresetMetadata, ValueAliasEntry};
+use crate::effect_graph_def::{AliasEntry, PresetMetadata, ValueAliasEntry};
 use crate::effect_registration::{ParamAlias, ParamValueAlias};
 use crate::preset_type_id::PresetTypeId;
-use crate::effects::ParamDef;
+use crate::effects::RegistryParamDef;
 use crate::preset_def::{PresetDef, PresetKind};
 
 // ─── StringParamDef ───
@@ -330,7 +330,7 @@ pub fn create_default(type_id: &PresetTypeId) -> crate::effects::PresetInstance 
             inst.params = crate::params::ParamManifest::from_params(
                 def.param_defs
                     .iter()
-                    .map(|pd| crate::params::Param::bundled(pd.to_spec()))
+                    .map(|pd| crate::params::Param::bundled(pd.spec.clone()))
                     .collect(),
             );
             inst.base_tracked = true;
@@ -348,14 +348,14 @@ pub fn format_value(type_id: &PresetTypeId, param_index: usize, value: f32) -> S
         _ => return format!("{:.2}", value),
     };
     let pd = &def.param_defs[param_index];
-    if let Some(ref labels) = pd.value_labels {
-        let idx = (value.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
-        return labels[idx].clone();
+    if !pd.spec.value_labels.is_empty() {
+        let idx = (value.round() as i32).clamp(0, pd.spec.value_labels.len() as i32 - 1) as usize;
+        return pd.spec.value_labels[idx].clone();
     }
-    if pd.whole_numbers {
+    if pd.spec.whole_numbers {
         return format!("{}", value.round() as i32);
     }
-    if let Some(ref fmt) = pd.format_string {
+    if let Some(ref fmt) = pd.spec.format_string {
         return format_float_with_format_string(value, fmt);
     }
     format!("{:.2}", value)
@@ -393,7 +393,7 @@ pub fn get_defaults(type_id: &PresetTypeId) -> Vec<crate::params::Param> {
     let def = get(type_id);
     def.param_defs
         .iter()
-        .map(|pd| crate::params::Param::bundled(pd.to_spec()))
+        .map(|pd| crate::params::Param::bundled(pd.spec.clone()))
         .collect()
 }
 
@@ -513,7 +513,16 @@ fn format_float_with_format_string(value: f32, fmt: &str) -> String {
 /// `Box::leak`, bounded by the (finite) shipping preset count, done once
 /// at startup when the registries initialise.
 pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> PresetDef {
-    let param_defs: Vec<ParamDef> = meta.params.iter().map(param_spec_def_to_param_def).collect();
+    let param_defs: Vec<RegistryParamDef> = meta
+        .params
+        .iter()
+        .map(|spec| RegistryParamDef {
+            spec: spec.clone(),
+            // `ParamSpecDef` (the card manifest) carries no contract — see
+            // `RegistryParamDef::contract`'s doc comment in effects.rs.
+            contract: None,
+        })
+        .collect();
     let (is_line_based, legacy_value_aliases): (
         bool,
         &'static [(&'static str, &'static [ParamValueAlias])],
@@ -547,45 +556,6 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
         is_line_based,
         legacy_param_aliases: leak_alias_table(&meta.param_aliases),
         legacy_value_aliases,
-    }
-}
-
-fn param_spec_def_to_param_def(p: &ParamSpecDef) -> ParamDef {
-    ParamDef {
-        id: p.id.clone(),
-        name: p.name.clone(),
-        min: p.min,
-        max: p.max,
-        default_value: p.default_value,
-        whole_numbers: p.whole_numbers,
-        is_toggle: p.is_toggle,
-        is_trigger: p.is_trigger,
-        value_labels: if p.value_labels.is_empty() {
-            None
-        } else {
-            Some(p.value_labels.clone())
-        },
-        format_string: p.format_string.clone(),
-        osc_suffix: if p.osc_suffix.is_empty() {
-            None
-        } else {
-            Some(p.osc_suffix.clone())
-        },
-        curve: p.curve,
-        invert: p.invert,
-        // §8 D6: the trigger-gate flag flows through the registry now too
-        // (not just the graph-metadata `ParamSpecDef`) — see `ParamDef::
-        // is_trigger_gate`'s doc comment for why a stock, never-forked
-        // instance needs it here.
-        is_trigger_gate: p.is_trigger_gate,
-        // D5 (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2), same reasoning as
-        // `is_trigger_gate` above: a glTF-imported generator's card sections
-        // ride the JSON catalog through here, not a per-instance graph
-        // override (it deliberately has none — D9/BUG-016).
-        section: p.section.clone(),
-        // `ParamSpecDef` (the card manifest) carries no contract — see
-        // `param_def_from_spec`'s identical comment in effects.rs.
-        contract: None,
     }
 }
 
@@ -736,6 +706,45 @@ mod tests {
         }
     }
 
+    /// The registry seeding must preserve every card-surface flag a
+    /// glTF-imported generator depends on: it TRACKS its embedded preset
+    /// (`graph: None`, D9/BUG-016), so the `RegistryParamDef` built from a
+    /// JSON `ParamSpecDef` in `preset_metadata_to_def` is the ONLY path its
+    /// card descriptors travel. Before the descriptor unification, this
+    /// went through a hand-written converter and `section` was silently
+    /// dropped once (D5 fix), then `is_angle`/`wraps` the same way
+    /// (radians-on-card bug, Peter 2026-07-15). Now the registry wraps the
+    /// spec directly, so preservation holds BY CONSTRUCTION — this asserts
+    /// whole-struct equality rather than picking individual flags, which is
+    /// the stronger claim.
+    #[test]
+    fn registry_seeding_preserves_the_authored_spec() {
+        let spec = ParamSpecDef {
+            id: "cam_tilt".to_string(),
+            name: "Camera Tilt".to_string(),
+            min: -std::f32::consts::PI,
+            max: std::f32::consts::PI,
+            default_value: 0.3,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: crate::macro_bank::MacroCurve::default(),
+            invert: false,
+            is_angle: true,
+            is_trigger_gate: true,
+            wraps: true,
+            section: Some("Camera".to_string()),
+        };
+        let seeded = RegistryParamDef {
+            spec: spec.clone(),
+            contract: None,
+        };
+        assert_eq!(seeded.spec, spec, "the spec must survive the registry wrap whole");
+    }
+
     // ── ParamAlias resolution (step 15) ────────────────────────────
 
     #[test]
@@ -877,9 +886,9 @@ mod tests {
         assert_eq!(def.display_name, "Bloom (from JSON)");
         assert_eq!(def.osc_prefix.as_deref(), Some("bloom_from_json"));
         assert_eq!(def.param_defs.len(), 1);
-        assert_eq!(def.param_defs[0].id, "amount");
-        assert_eq!(def.param_defs[0].name, "Amount");
-        assert!((def.param_defs[0].default_value - 0.5).abs() < 1e-6);
+        assert_eq!(def.param_defs[0].spec.id, "amount");
+        assert_eq!(def.param_defs[0].spec.name, "Amount");
+        assert!((def.param_defs[0].spec.default_value - 0.5).abs() < 1e-6);
 
         assert_eq!(def.legacy_param_aliases.len(), 1);
         assert_eq!(def.legacy_param_aliases[0].0, "intensity");
@@ -947,15 +956,15 @@ mod tests {
         assert_eq!(inv_def.osc_prefix, json_def.osc_prefix);
         assert_eq!(inv_def.param_defs.len(), json_def.param_defs.len());
         for (a, b) in inv_def.param_defs.iter().zip(json_def.param_defs.iter()) {
-            assert_eq!(a.id, b.id);
-            assert_eq!(a.name, b.name);
-            assert!((a.min - b.min).abs() < 1e-6);
-            assert!((a.max - b.max).abs() < 1e-6);
-            assert!((a.default_value - b.default_value).abs() < 1e-6);
-            assert_eq!(a.whole_numbers, b.whole_numbers);
-            assert_eq!(a.is_toggle, b.is_toggle);
-            assert_eq!(a.format_string, b.format_string);
-            assert_eq!(a.osc_suffix, b.osc_suffix);
+            assert_eq!(a.spec.id, b.spec.id);
+            assert_eq!(a.spec.name, b.spec.name);
+            assert!((a.spec.min - b.spec.min).abs() < 1e-6);
+            assert!((a.spec.max - b.spec.max).abs() < 1e-6);
+            assert!((a.spec.default_value - b.spec.default_value).abs() < 1e-6);
+            assert_eq!(a.spec.whole_numbers, b.spec.whole_numbers);
+            assert_eq!(a.spec.is_toggle, b.spec.is_toggle);
+            assert_eq!(a.spec.format_string, b.spec.format_string);
+            assert_eq!(a.spec.osc_suffix, b.spec.osc_suffix);
         }
     }
 
@@ -982,7 +991,7 @@ mod tests {
         assert_eq!(
             def.param_defs
                 .iter()
-                .position(|pd| pd.id == resolved.unwrap()),
+                .position(|pd| pd.spec.id == resolved.unwrap()),
             Some(5),
         );
     }

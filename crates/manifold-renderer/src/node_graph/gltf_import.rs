@@ -43,27 +43,37 @@ use super::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use super::gltf_load;
 use super::gltf_load::GltfImportSummary;
 
-use crate::node_graph::primitives::render_scene::OBJECT_SLIDER_MAX;
+use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
+
+/// How many of the largest (by vertex count) objects get a per-object card
+/// slider (currently just glass's Opacity knob). GLB_CONFORMANCE_DESIGN.md
+/// D4: the graph wires EVERY material 1:1 — this cap is pure UI curation on
+/// top of a fully-imported graph, never a reason to drop geometry. Distinct
+/// from [`OBJECT_SAFETY_MAX`], which bounds the graph itself.
+const CARD_CURATION_MAX: usize = 16;
 
 /// Stable identity for the one outer-card text config every imported
 /// preset carries: the source `.glb`/`.gltf` path.
 const MODEL_FILE_PARAM_ID: &str = "model_file";
+/// GLB_CONFORMANCE_DESIGN.md D6 — the HDRI environment's own Browse field,
+/// a distinct string param from [`MODEL_FILE_PARAM_ID`] (the imported
+/// .glb's path). Empty by default; `node.hdri_source` reads an empty path
+/// as "nothing decoded" and clears its output to black.
+const HDRI_FILE_PARAM_ID: &str = "hdri_file";
 
 /// What the assembler did, for the caller (importer UI, tests) to report
 /// or warn on. Not part of the graph itself.
 #[derive(Debug, Clone)]
 pub struct ImportReport {
-    /// Distinct materials with geometry, as parsed (before the
-    /// [`OBJECT_SLIDER_MAX`] truncation threshold).
+    /// Distinct materials with geometry, as parsed. Import is 1:1
+    /// (GLB_CONFORMANCE_DESIGN.md D4) — always equal to `object_count`.
     pub material_count: usize,
-    /// Objects actually wired into `node.render_scene` — `min(material_count, OBJECT_SLIDER_MAX)`.
+    /// Objects wired into `node.render_scene` — always equal to
+    /// `material_count`; nothing is ever dropped for exceeding a count
+    /// (`assemble_import_graph` errors instead, see [`OBJECT_SAFETY_MAX`]).
     pub object_count: usize,
     /// How many objects got a `node.gltf_texture_source` → `base_color_map_N` wire.
     pub textures_wired: usize,
-    /// Materials dropped because the glb has more than `OBJECT_SLIDER_MAX`
-    /// (the smallest by vertex count, so the most visually significant
-    /// objects survive).
-    pub dropped_over_cap: usize,
     /// Triangle-list vertices belonging to glTF's unassigned default
     /// material — v1 does not import these (mirrors
     /// [`gltf_load::GltfImportSummary::default_material_vertex_count`]).
@@ -334,15 +344,17 @@ fn group_tint(index: usize) -> [f32; 4] {
 }
 
 /// Parse `path` and assemble a generator [`EffectGraphDef`] that renders it
-/// faithfully: one `node.render_scene` object per distinct material
-/// (capped at [`OBJECT_SLIDER_MAX`], largest-by-vertex-count first),
-/// each fed its material-filtered geometry + base-color texture (if any) +
-/// a PBR material, framed by a synthesized orbit camera sized to the glb's
+/// faithfully: one `node.render_scene` object per distinct material — 1:1,
+/// no truncation (GLB_CONFORMANCE_DESIGN.md D4) — each fed its
+/// material-filtered geometry + base-color texture (if any) + a PBR
+/// material, framed by a synthesized orbit camera sized to the glb's
 /// bounding box, lit by one sun light, under a baked IBL envmap (required —
 /// `node.pbr_material` is degenerate without one). Pure function: one CPU
 /// parse via [`gltf_load::gltf_import_summary`], no GPU, no other I/O.
 ///
-/// Errors when the glb has no materials with geometry (nothing to import) —
+/// Errors when the glb has no materials with geometry (nothing to import),
+/// or when it has more than [`OBJECT_SAFETY_MAX`] materials with geometry
+/// (a real GPU/port-list safety bound, D4 — never silently truncated) —
 /// propagated from [`gltf_load::gltf_import_summary`] or raised here.
 pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportReport), String> {
     let summary = gltf_load::gltf_import_summary(path)?;
@@ -375,24 +387,32 @@ fn build_import_graph(
         ));
     }
 
-    // Largest-by-vertex-count first, so a >OBJECT_SLIDER_MAX-material glb
-    // keeps its most visually significant objects when capped, not an
-    // arbitrary prefix.
-    let object_cap = OBJECT_SLIDER_MAX as usize;
-    let mut materials = summary.materials.clone();
-    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
-    let dropped_over_cap = materials.len().saturating_sub(object_cap);
-    materials.truncate(object_cap);
-    let n = materials.len();
-    if dropped_over_cap > 0 {
-        log::warn!(
-            "gltf_import::assemble_import_graph({}): {} materials with geometry, \
-             node.render_scene caps at {object_cap} objects — dropping the \
-             {dropped_over_cap} smallest by vertex count",
+    // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — every material with
+    // geometry gets its own render_scene object, never a truncated prefix.
+    // `OBJECT_SAFETY_MAX` (1024) is a real GPU/port-list safety bound, not a
+    // curation cap: an asset beyond it errors loudly instead of silently
+    // dropping geometry (the AMG GT3's black body, BUG-163, was exactly
+    // this — 14 of 78 materials, including the livery, dropped over the old
+    // 64-object cap).
+    if summary.materials.len() > OBJECT_SAFETY_MAX as usize {
+        return Err(format!(
+            "{}: {} materials with geometry exceeds the {}-object safety bound — \
+             this asset cannot be imported 1:1 without risking a runaway port-list \
+             (raise OBJECT_SAFETY_MAX in render_scene.rs if a real asset legitimately \
+             needs more; never silently truncate)",
             path.display(),
             summary.materials.len(),
-        );
+            OBJECT_SAFETY_MAX,
+        ));
     }
+    // Largest-by-vertex-count first: not a truncation boundary anymore
+    // (every material is wired), but it IS the ordering the card curation
+    // below relies on — the largest CARD_CURATION_MAX objects by vertex
+    // count get per-object sliders, everything after them still gets full
+    // geometry/material/texture wiring, just no card exposure.
+    let mut materials = summary.materials.clone();
+    materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
+    let n = materials.len();
     if summary.default_material_vertex_count > 0 {
         log::warn!(
             "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
@@ -467,6 +487,39 @@ fn build_import_graph(
         .params
         .insert("emitter_intensity".to_string(), float(IMPORT_STRIPS_DEFAULT));
     nodes.push(envmap_node);
+
+    // GLB_CONFORMANCE_DESIGN.md D6 — `node.hdri_source` decodes a real-world
+    // linear-HDR .exr (Browse-wired via the `hdri_file` string binding
+    // below) and `node.switch_texture` picks between it and the softbox
+    // bake above by the `env_mode` card enum (default 0 = Softbox, so the
+    // black-void aesthetic stays the import default — Peter, 2026-07-15:
+    // "I quite like the pure void and sunlight only look"). `render_scene`'s
+    // `envmap` input now wires from the switch's `out`, not the bake
+    // directly.
+    let hdri_id = fresh_id();
+    nodes.push(plain_node(hdri_id, "hdri", "node.hdri_source", "hdri"));
+
+    // HDRI exposure stage: `node.bake_environment` has its own `intensity`
+    // master (the Environment card fader's original target), but a decoded
+    // EXR arrives at the file's true radiance — a real daytime pure-sky
+    // HDRI averages ~0.2–0.4 linear (measured on kloppenheim_07: mean 0.24,
+    // sky half 0.34), roughly 4× dimmer than the softbox default. Without
+    // an exposure stage the Environment fader would be dead in HDRI mode
+    // and the performer would have no way to bring a real sky up to stage
+    // brightness. `node.gain` on the HDRI branch (range 0–4, matching the
+    // card fader) restores symmetry: env_intensity fans out to BOTH
+    // envmap.intensity and this gain, so one fader is the environment
+    // master in either mode — same fan-out pattern as the sun_x/y/z macros.
+    // (`node.exposure` is the gain atom's type id; its param is `gain`.)
+    let hdri_gain_id = fresh_id();
+    nodes.push(plain_node(hdri_gain_id, "hdri_gain", "node.exposure", "hdri_gain"));
+
+    let env_select_id = fresh_id();
+    let mut env_select_node =
+        plain_node(env_select_id, "env_select", "node.switch_texture", "env_select");
+    env_select_node.params.insert("num_inputs".to_string(), int(2));
+    env_select_node.params.insert("selector".to_string(), float(0.0)); // 0 = Softbox
+    nodes.push(env_select_node);
 
     let camera_id = fresh_id();
     let mut cam_node = plain_node(camera_id, "camera", "node.orbit_camera", "camera");
@@ -557,13 +610,31 @@ fn build_import_graph(
         let group_name = unique_group_name(m.name.as_deref(), k, &mut used_group_names);
 
         // D9 — every unmapped feature this material carries is a report
-        // line, never a silent drop. clearcoat stays report-only
-        // (Deferred #1); transmission and BLEND are no longer report-only —
+        // line, never a silent drop. GLB_CONFORMANCE_DESIGN.md G-P5/D5:
+        // clearcoatFactor/clearcoatRoughnessFactor are now REAL mappings
+        // (below, on `node.pbr_material`) — only a TEXTURED coat
+        // (clearcoatTexture/clearcoatRoughnessTexture/
+        // clearcoatNormalTexture, factor-only v1) stays report-only
+        // (Deferred #2). Transmission and BLEND are also real mappings —
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5 maps both to a real `Blend`
         // material below, so they produce no line here.
-        if m.clearcoat {
+        if m.clearcoat_has_texture {
             report_lines.push(format!(
-                "{group_name}: KHR_materials_clearcoat present — clearcoat coat layer not imported (report-only, no clear-coat lobe in v1)"
+                "{group_name}: KHR_materials_clearcoat has a clearcoatTexture/clearcoatRoughnessTexture/clearcoatNormalTexture — only the factors (clearcoatFactor/clearcoatRoughnessFactor) are imported in v1, the texture(s) are not sampled (report-only)"
+            ));
+        }
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform is
+        // applied per-map (all five families) — the only variant still
+        // unmapped is a texCoord index override (v1 imports TEXCOORD_0
+        // only), which is reported rather than silently dropped.
+        if m.uv_tex_coord_override {
+            report_lines.push(format!(
+                "{group_name}: KHR_texture_transform.texCoord override — only TEXCOORD_0 is imported in v1, the override is ignored (report-only; the transform itself IS applied)"
+            ));
+        }
+        if m.specular_has_texture {
+            report_lines.push(format!(
+                "{group_name}: KHR_materials_specular has a specularTexture/specularColorTexture — only the factor (specularFactor/specularColorFactor) is imported in v1, the texture is not sampled (report-only)"
             ));
         }
         // `render_scene` shipped no per-object normal-scale / occlusion-strength
@@ -674,6 +745,51 @@ fn build_import_graph(
         mat_node
             .params
             .insert("alpha_cutoff".to_string(), float(m.alpha_cutoff));
+        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular + ior
+        // → F0 scale (`fs_pbr`); KHR_texture_transform → base-color UV
+        // affine (`resolve_albedo`). Every field defaults to the neutral
+        // value verified in `gltf_load.rs` (ior=1.5, specular_factor=1.0,
+        // specular_color_factor=[1,1,1], identity uv transform), so a
+        // material without these extensions wires byte-identical params.
+        mat_node.params.insert("ior".to_string(), float(m.ior));
+        mat_node
+            .params
+            .insert("specular".to_string(), float(m.specular_factor));
+        mat_node
+            .params
+            .insert("specular_tint_r".to_string(), float(m.specular_color_factor[0]));
+        mat_node
+            .params
+            .insert("specular_tint_g".to_string(), float(m.specular_color_factor[1]));
+        mat_node
+            .params
+            .insert("specular_tint_b".to_string(), float(m.specular_color_factor[2]));
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat
+        // factors → the second GGX lobe (`fs_pbr`). Defaults (0.0/0.0)
+        // reproduce byte-identical pre-G-P5 output — see `gltf_load.rs`.
+        mat_node
+            .params
+            .insert("clearcoat".to_string(), float(m.clearcoat_factor));
+        mat_node.params.insert(
+            "clearcoat_roughness".to_string(),
+            float(m.clearcoat_roughness_factor),
+        );
+        // Per-map KHR_texture_transform affines (G-P4) — one 6-param set
+        // per map family, identity when the extension is absent.
+        let parts = ["m00", "m01", "m10", "m11", "tx", "ty"];
+        for (prefix, xf) in [
+            ("uv_", &m.base_color_uv_transform),
+            ("nrm_uv_", &m.normal_uv_transform),
+            ("mr_uv_", &m.mr_uv_transform),
+            ("occ_uv_", &m.occlusion_uv_transform),
+            ("em_uv_", &m.emissive_uv_transform),
+        ] {
+            for (part, value) in parts.iter().zip(xf.iter()) {
+                mat_node
+                    .params
+                    .insert(format!("{prefix}{part}"), float(*value));
+            }
+        }
         group_nodes.push(mat_node);
 
         // No per-object Metallic/Roughness card sliders (Peter, 2026-07-15:
@@ -685,8 +801,12 @@ fn build_import_graph(
         // ONLY get an Opacity knob (solid → ghost mid-set on the material's
         // alpha) — opaque/mask objects don't expose it, matching the
         // "inline mux option table params" discipline of not over-exposing
-        // every knob to every object.
-        if is_glass {
+        // every knob to every object. GLB_CONFORMANCE_DESIGN.md D4: card
+        // curation is UI-only and caps at CARD_CURATION_MAX — `materials`
+        // is sorted largest-vertex-count-first above, so `k < CARD_CURATION_MAX`
+        // IS "the largest 16"; every object still gets full graph wiring
+        // regardless of `k`, this gate only withholds the card slider.
+        if is_glass && k < CARD_CURATION_MAX {
             let opacity_id = format!("opacity_{k}");
             card_params.push(card_param(&opacity_id, "Opacity", 0.0, 1.0, effective_alpha, false, &group_name));
             card_bindings.push(card_binding(
@@ -918,25 +1038,13 @@ fn build_import_graph(
 
     nodes.push(render_node);
 
-    // Scene-wide atmosphere (fog + god rays): render_scene's `atmosphere`
-    // input is lazy — unwired is byte-identical to wired-at-defaults, since
-    // every param (fog_density, shaft_intensity, …) defaults to 0 (off).
-    // Wired unconditionally, at those same all-off defaults, purely so the
-    // God Rays card has a live node to bind — an import looks unchanged
-    // until that slider moves.
-    let atmosphere_id = fresh_id();
-    let mut atmosphere_node =
-        plain_node(atmosphere_id, "atmosphere", "node.atmosphere", "atmosphere");
-    // Fog color BLACK, not the atom's grey-blue default: an import sits in a
-    // black void, and grey fog mixes the model toward a colour that exists
-    // nowhere in the scene — reads as a cut-out sticker over the void
-    // (BUG-149 follow-up, Peter 2026-07-14). Black fog fades the model's far
-    // side into the same black as the background (depth cueing, no seam),
-    // and the haze look comes from the shaft march lighting the air instead.
-    atmosphere_node.params.insert("fog_color_r".to_string(), float(0.0));
-    atmosphere_node.params.insert("fog_color_g".to_string(), float(0.0));
-    atmosphere_node.params.insert("fog_color_b".to_string(), float(0.0));
-    nodes.push(atmosphere_node);
+    // No atmosphere node (fog + god rays removed, Peter 2026-07-15): the
+    // BUG-149 scene-scaled fog and shaft knobs never produced the look he
+    // wanted on imports — the cinematic void-haze treatment is a pending
+    // design of its own (`project_void_haze_design_pending`), not two
+    // faders on this card. render_scene's `atmosphere` input is lazy, so
+    // leaving it unwired is byte-identical to the old wired-at-defaults
+    // node with both sliders at 0.
 
     // SSAO contact-occlusion arm, packaged as the same "ao" node group
     // CinematicScene ships (CINEMATIC_POST D9): ssao_gtao → bilateral_blur
@@ -1035,9 +1143,14 @@ fn build_import_graph(
     // Camera FOV card slider reads.
     wires.push(wire(camera_id, "out", lens_id, "camera"));
     wires.push(wire(lens_id, "out", render_id, "camera"));
-    wires.push(wire(envmap_id, "envmap", render_id, "envmap"));
+    // D6 env_mode switch: envmap(bake) -> in_0 (Softbox), hdri -> gain ->
+    // in_1 (HDRI, with the exposure stage — see the hdri_gain node above),
+    // the switch's `out` feeds render_scene same as the direct wire used to.
+    wires.push(wire(envmap_id, "envmap", env_select_id, "in_0"));
+    wires.push(wire(hdri_id, "out", hdri_gain_id, "in"));
+    wires.push(wire(hdri_gain_id, "out", env_select_id, "in_1"));
+    wires.push(wire(env_select_id, "out", render_id, "envmap"));
     wires.push(wire(sun_id, "out", render_id, "light_0"));
-    wires.push(wire(atmosphere_id, "atmosphere", render_id, "atmosphere"));
 
     // render_scene → ao (contact AO) → final.
     wires.push(wire(render_id, "depth", ao_group_id, "depth"));
@@ -1148,6 +1261,14 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "env_intensity", "Environment", 1.0, "envmap", "intensity", 1.0,
     ));
+    // G-P6: the Environment master also drives the HDRI branch's exposure
+    // gain (see the hdri_gain node above), so the fader is live in BOTH
+    // env_mode positions — softbox scales inside the bake, HDRI scales the
+    // decoded map. Each mode passes through exactly one of the two targets,
+    // so there is no double-scaling. Same fan-out pattern as sun_x/y/z.
+    card_bindings.push(card_binding(
+        "env_intensity", "Environment", 1.0, "hdri_gain", "gain", 1.0,
+    ));
     // F-P7 — the softbox dome fill (see the envmap node above). Separate
     // from `env_intensity` (which scales strips + disc + fill together):
     // this one moves ONLY the broad dome radiance, i.e. how much "world"
@@ -1167,6 +1288,38 @@ fn build_import_graph(
     card_bindings.push(card_binding(
         "env_strips", "Strip Lights", IMPORT_STRIPS_DEFAULT, "envmap", "emitter_intensity", 1.0,
     ));
+    // GLB_CONFORMANCE_DESIGN.md D6 — HDRI environment mode. env_mode picks
+    // between the softbox bake (default, index 0) and the decoded HDRI file
+    // (index 1) via `env_select`'s `selector` param (a plain Float — the
+    // node.switch_texture family, not an Enum-typed node param — so the
+    // binding is a Float pass-through like the mux-option-table pattern,
+    // not EnumRound). `env_mode = 1` with an empty `hdri_file` reads as
+    // black (node.hdri_source clears `out` to black until a file decodes),
+    // same "nothing wired yet" convention as every other unwired texture
+    // source in this graph.
+    let mut env_mode_param = card_param("env_mode", "Environment Mode", 0.0, 1.0, 0.0, false, "Environment");
+    env_mode_param.whole_numbers = true;
+    env_mode_param.value_labels = vec!["Softbox".to_string(), "HDRI".to_string()];
+    card_params.push(env_mode_param);
+    card_bindings.push(card_binding(
+        "env_mode", "Environment Mode", 0.0, "env_select", "selector", 1.0,
+    ));
+    // The HDRI file itself is a SEPARATE Browse field/string param from
+    // "model_file" (the imported .glb's own path) — a different file, a
+    // different picker, never defaulted to the glb path. Empty until the
+    // performer picks one; `node.hdri_source` reads that as "nothing
+    // decoded yet" and clears `out` to black (step 6 of its `run()`),
+    // which env_mode=0 (Softbox, the default) never reaches anyway.
+    string_bindings.push(StringBindingDef {
+        id: HDRI_FILE_PARAM_ID.to_string(),
+        label: "HDRI File".to_string(),
+        default_value: String::new(),
+        target: BindingTarget::Node {
+            node_id: NodeId::new("hdri"),
+            param: "path".to_string(),
+        },
+    });
+
     // The shared Ambient fill knob (its per-material bindings were fanned out
     // in the object loop above). 0.0 = no flat fill (lights-only); raise it to
     // lift the shadow side of every material at once.
@@ -1177,36 +1330,9 @@ fn build_import_graph(
     // (`ssao_radius_default`/1.0 intensity, set on the ssao node above);
     // it's just no longer exposed on the outer card.
 
-    // Atmosphere — two independent node.atmosphere knobs, each its own
-    // slider (not folded together): `shaft_intensity` alone does nothing
-    // visible — the shaft march scatters light through the fog medium, so
-    // `fog_density` must also be raised for beams to actually appear
-    // (docs/VOLUMETRIC_LIGHT_DESIGN.md D1/D4: "the two faders", both
-    // required together). Kept separate rather than one combined "God
-    // Rays" knob so fog and shafts stay independently dialable, matching
-    // how every other card knob here maps 1:1 to a node param. Both
-    // default to 0 (off, matches the atom's own defaults) — the sun's
-    // `cast_shadows` (already on above) is what gives the shafts their
-    // shape once both faders are up.
-    //
-    // Fog density is scene-scaled like the internal `ssao_radius_default`
-    // (BUG-149):
-    // the atom's `fog_density` is per-world-unit, so a raw 0–1 slider is a
-    // cliff on any real import (0.13 at the apricot fixture's 27.87-unit
-    // framing distance is optical depth ~3.6 ≈ 97% fog — flat grey mesh,
-    // and the shaft march's in-scattering then blows out the whole frame).
-    // The binding scale maps the slider to optical depth AT THE SUBJECT
-    // (density · framing distance): 3.0/distance puts slider 1.0 at depth
-    // 3 ≈ 95% fogged (whiteout stays reachable), 0.5 ≈ 78%, 0.1 ≈ 26%
-    // haze — the same perceptual fader on any model scale.
-    card_params.push(card_param("fog_density", "Fog Density", 0.0, 1.0, 0.0, false, "Atmosphere"));
-    card_bindings.push(card_binding(
-        "fog_density", "Fog Density", 0.0, "atmosphere", "fog_density", 3.0 / distance,
-    ));
-    card_params.push(card_param("god_rays", "God Rays", 0.0, 2.0, 0.0, false, "Atmosphere"));
-    card_bindings.push(card_binding(
-        "god_rays", "God Rays", 0.0, "atmosphere", "shaft_intensity", 1.0,
-    ));
+    // No Atmosphere section: fog + god rays removed with the atmosphere
+    // node (Peter 2026-07-15) — see the removal comment in
+    // `build_import_graph`.
 
     // Category "Geometry" matches the existing 3D-geometry generator
     // convention (Tesseract / DigitalPlants / NestedCubes / Duocylinder /
@@ -1228,13 +1354,22 @@ fn build_import_graph(
         skip_mode: SkipModeDef::default(),
         param_aliases: Vec::new(),
         value_aliases: Vec::new(),
-        string_params: vec![StringParamSpecDef {
-            id: MODEL_FILE_PARAM_ID.to_string(),
-            name: "Model File".to_string(),
-            default_value: path_str,
-            is_file_picker: true,
-            use_dropdown: false,
-        }],
+        string_params: vec![
+            StringParamSpecDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                name: "Model File".to_string(),
+                default_value: path_str,
+                is_file_picker: true,
+                use_dropdown: false,
+            },
+            StringParamSpecDef {
+                id: HDRI_FILE_PARAM_ID.to_string(),
+                name: "HDRI File".to_string(),
+                default_value: String::new(),
+                is_file_picker: true,
+                use_dropdown: false,
+            },
+        ],
         string_bindings,
     };
 
@@ -1254,7 +1389,6 @@ fn build_import_graph(
         material_count: summary.materials.len(),
         object_count: n,
         textures_wired,
-        dropped_over_cap,
         default_material_vertex_count: summary.default_material_vertex_count,
         camera_synthesized: true,
         report_lines,
@@ -1273,6 +1407,256 @@ mod tests {
     fn azalea_fixture_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb")
+    }
+
+    /// Build a minimal, valid `.glb` with `n` distinct materials, each owning
+    /// exactly one triangle (so every material has geometry and therefore
+    /// counts toward `ImportReport::material_count`) — hand-rolled binary
+    /// container (12-byte header + JSON chunk + BIN chunk, no external
+    /// `.bin`/textures, no `uri` on the buffer so it resolves to the BIN
+    /// chunk per spec §Binary glTF). GLB_CONFORMANCE_DESIGN.md G-P2: proves
+    /// the FULL production parse path (`gltf::import` → `gltf_import_summary`
+    /// → `build_import_graph`) imports every material 1:1, not just the
+    /// graph-assembly half a synthetic [`GltfImportSummary`] would exercise.
+    /// Written to the OS temp dir, not committed — a builder fn, not a
+    /// binary asset (the phase brief's explicit call).
+    fn write_synthetic_multimaterial_glb(n: usize) -> std::path::PathBuf {
+        let mut accessors = Vec::with_capacity(n);
+        let mut buffer_views = Vec::with_capacity(n);
+        let mut materials = Vec::with_capacity(n);
+        let mut primitives = Vec::with_capacity(n);
+        let mut bin = Vec::with_capacity(n * 36);
+
+        for i in 0..n {
+            // One triangle per material, spread along X so no two overlap —
+            // cosmetic, but keeps bbox/normal math non-degenerate.
+            let ox = i as f32 * 2.0;
+            let tri: [[f32; 3]; 3] = [[ox, 0.0, 0.0], [ox + 1.0, 0.0, 0.0], [ox, 1.0, 0.0]];
+            for v in &tri {
+                for c in v {
+                    bin.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+            let byte_offset = i * 36;
+            buffer_views.push(serde_json::json!({
+                "buffer": 0,
+                "byteOffset": byte_offset,
+                "byteLength": 36,
+            }));
+            accessors.push(serde_json::json!({
+                "bufferView": i,
+                "componentType": 5126, // FLOAT
+                "count": 3,
+                "type": "VEC3",
+                "min": [ox, 0.0, 0.0],
+                "max": [ox + 1.0, 1.0, 0.0],
+            }));
+            materials.push(serde_json::json!({
+                "name": format!("Mat{i}"),
+                "pbrMetallicRoughness": { "baseColorFactor": [0.5, 0.5, 0.5, 1.0] },
+            }));
+            // Mode omitted — glTF's default primitive mode is 4 (TRIANGLES).
+            primitives.push(serde_json::json!({
+                "attributes": { "POSITION": i },
+                "material": i,
+            }));
+        }
+
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": primitives }],
+            "accessors": accessors,
+            "bufferViews": buffer_views,
+            "materials": materials,
+            "buffers": [{ "byteLength": bin.len() }],
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+        // GLB container: header + JSON chunk (space-padded to 4 bytes) + BIN
+        // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
+        // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
+        let mut json_padded = json_bytes;
+        while json_padded.len() % 4 != 0 {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while bin_padded.len() % 4 != 0 {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_{n}mat_{}_{}.glb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+        path
+    }
+
+    /// GLB_CONFORMANCE_DESIGN.md D4 / G-P2's named gate test: a 100-material
+    /// synthetic asset — well past the old (dead) 64-object cap, well under
+    /// `OBJECT_SAFETY_MAX` (1024) — imports every single material 1:1, no
+    /// truncation. Also proves the card-curation split: only the largest
+    /// `CARD_CURATION_MAX` (16) objects would get a per-object slider (none
+    /// of these materials are glass, so no Opacity sliders exist either way
+    /// — the object/wire count is what this test pins).
+    #[test]
+    fn over_cap_asset_imports_one_to_one() {
+        let path = write_synthetic_multimaterial_glb(100);
+        let (def, report) = assemble_import_graph(&path).expect("assemble 100-material synthetic glb");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(report.material_count, 100, "all 100 materials have geometry");
+        assert_eq!(
+            report.object_count, 100,
+            "import is 1:1 — object_count must equal material_count, no truncation (D4)"
+        );
+
+        // Every material got its own render_scene wire — mesh_0..mesh_99 all
+        // present, nothing dropped past the old 64-object boundary.
+        for k in 0..100 {
+            assert!(
+                def.wires.iter().any(|w| w.to_port == format!("mesh_{k}")),
+                "material {k} (past the old 64-object cap) must still wire mesh_{k}"
+            );
+            assert!(
+                def.wires.iter().any(|w| w.to_port == format!("material_{k}")),
+                "material {k} must still wire material_{k}"
+            );
+        }
+        // render_scene's own `objects` param must reflect the true count,
+        // not a clamped one.
+        let render_node = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("assembled graph has a render_scene node");
+        assert_eq!(
+            render_node.params.get("objects"),
+            Some(&int(100)),
+            "render_scene.objects must be the true unclamped count"
+        );
+
+        // Structural gate: the assembled graph — 100 objects, well past the
+        // dead 64-object UI cap — must still compile through the real
+        // registry (catches a bad port/wire before any GPU proof).
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(def, &registry, None)
+            .expect("100-object import graph must compile through PresetRuntime::from_def");
+    }
+
+    /// D4's other half: a glb whose material count exceeds `OBJECT_SAFETY_MAX`
+    /// (1024) must error loudly at import time — never silently truncate.
+    /// `object_cap_exceeded_glb_errors_loudly_never_truncates` deliberately
+    /// builds only ONE material past the limit (1025) rather than a much
+    /// larger number — the synthetic-glb builder is O(n) JSON, and this test
+    /// only needs to cross the boundary, not stress it.
+    #[test]
+    fn object_cap_exceeded_glb_errors_loudly_never_truncates() {
+        let n = OBJECT_SAFETY_MAX as usize + 1;
+        let path = write_synthetic_multimaterial_glb(n);
+        let result = assemble_import_graph(&path);
+        std::fs::remove_file(&path).ok();
+
+        let err = result.expect_err("a glb past OBJECT_SAFETY_MAX must error, not truncate");
+        assert!(
+            err.contains(&n.to_string()) && err.contains(&OBJECT_SAFETY_MAX.to_string()),
+            "error must name both the actual count and the safety bound, got: {err}"
+        );
+    }
+
+    /// GLB_CONFORMANCE_DESIGN.md D4's card-curation half, plus the standard
+    /// §5 round-trip rule (imports serialize — same pattern as
+    /// `round_trip_preserves_map_wires_and_sun_coherence_bindings`): 20
+    /// glass objects, largest-vertex-count-first — the first `CARD_CURATION_MAX`
+    /// (16) get an Opacity card slider, the remaining 4 don't, but ALL 20
+    /// still get full graph wiring. Every bit of that — object count, the
+    /// curated/uncurated split, and the wiring — must survive a save/reload
+    /// (JSON round trip of `EffectGraphDef`, the actual persisted artifact
+    /// for an imported generator layer).
+    #[test]
+    fn card_curation_caps_at_16_but_wiring_and_round_trip_stay_1_to_1() {
+        let n = 20;
+        let materials: Vec<_> = (0..n)
+            .map(|k| {
+                let mut m = full_material(k as u32, &format!("Glass{k}"), (n - k) as u32 * 100);
+                // All glass, so every object is a curation candidate — makes
+                // the 16/4 split unambiguous.
+                m.was_blend = true;
+                m.transmission_factor = 0.5;
+                m
+            })
+            .collect();
+        let summary = GltfImportSummary {
+            materials,
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+        };
+        let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
+        let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
+        assert_eq!(report.object_count, 20, "1:1 — every glass object gets full wiring");
+
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        let reloaded: EffectGraphDef = serde_json::from_str(&json).expect("deserialize EffectGraphDef");
+        assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
+
+        for (def, label) in [(&def, "pre-reload"), (&reloaded, "post-reload")] {
+            let meta = def.preset_metadata.as_ref().unwrap_or_else(|| panic!("{label}: v2 metadata"));
+            let opacity_count = meta.params.iter().filter(|p| p.name == "Opacity").count();
+            assert_eq!(
+                opacity_count, CARD_CURATION_MAX,
+                "{label}: exactly the largest {CARD_CURATION_MAX} objects get an Opacity slider"
+            );
+            for k in 0..CARD_CURATION_MAX {
+                assert!(
+                    meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
+                    "{label}: object {k} (top {CARD_CURATION_MAX}) must have a card slider"
+                );
+            }
+            for k in CARD_CURATION_MAX..n {
+                assert!(
+                    !meta.params.iter().any(|p| p.id == format!("opacity_{k}")),
+                    "{label}: object {k} (past the curation cap) must NOT have a card slider"
+                );
+            }
+
+            // Curation is UI-only — full graph wiring survives for every
+            // object, curated or not (the forbidden-move: "per-object slider
+            // explosion" never becomes "per-object geometry drop").
+            let flat = manifold_core::flatten::flatten_groups(def)
+                .unwrap_or_else(|e| panic!("{label}: flatten failed: {e}"));
+            let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+            for k in 0..n {
+                assert!(
+                    flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == format!("mesh_{k}")),
+                    "{label}: object {k} must still wire mesh_{k} regardless of card curation"
+                );
+            }
+        }
+
+        let registry = PrimitiveRegistry::with_builtin();
+        PresetRuntime::from_def(reloaded, &registry, None)
+            .expect("reloaded 20-object import graph must build through PresetRuntime::from_def");
     }
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
@@ -1297,7 +1681,6 @@ mod tests {
         assert_eq!(report.material_count, 2, "azalea has 2 materials with geometry");
         assert_eq!(report.object_count, 2);
         assert_eq!(report.textures_wired, 2, "both azalea materials carry a base-color texture");
-        assert_eq!(report.dropped_over_cap, 0);
         assert_eq!(report.default_material_vertex_count, 0);
         assert!(report.camera_synthesized);
 
@@ -1311,40 +1694,53 @@ mod tests {
         );
 
         let meta = def.preset_metadata.as_ref().expect("v2 metadata");
-        assert_eq!(meta.string_params.len(), 1, "exactly one model_file string param");
+        // GLB_CONFORMANCE_DESIGN.md D6: a second string param, `hdri_file`,
+        // holds the HDRI environment's own Browse field — a separate file
+        // from `model_file` (the imported .glb itself).
+        assert_eq!(meta.string_params.len(), 2, "model_file + hdri_file string params");
         assert_eq!(meta.string_params[0].id, "model_file");
         assert!(meta.string_params[0].is_file_picker);
+        assert_eq!(meta.string_params[1].id, "hdri_file");
+        assert!(meta.string_params[1].is_file_picker);
 
-        assert_eq!(meta.string_bindings.len(), 4, "2 mesh + 2 texture path bindings");
+        assert_eq!(
+            meta.string_bindings.len(),
+            5,
+            "2 mesh + 2 texture path bindings (model_file) + 1 HDRI path binding (hdri_file)"
+        );
         for b in &meta.string_bindings {
-            assert_eq!(b.id, "model_file");
+            assert!(b.id == "model_file" || b.id == "hdri_file", "unexpected string binding id {}", b.id);
             match &b.target {
                 BindingTarget::Node { param, .. } => assert_eq!(param, "path"),
                 other => panic!("expected a Node binding target, got {other:?}"),
             }
         }
+        assert_eq!(
+            meta.string_bindings.iter().filter(|b| b.id == "hdri_file").count(),
+            1,
+            "exactly one hdri_file binding, targeting the hdri node"
+        );
 
         // Curated performance surface. Azalea has 2 objects → 4 camera + 5 sun
-        // + 1 Environment + 1 Fill Light + 1 Strip Lights (F-P7) + 1 Ambient
-        // = 13 framing/material sliders, PLUS 2 Atmosphere (fog density, god
-        // rays — no Motion Blur section, BUG-136) = 15. No per-object
+        // + 1 Environment + 1 Environment Mode (D6) + 1 Fill Light + 1 Strip
+        // Lights (F-P7) + 1 Ambient = 14 framing/material sliders. No
+        // Atmosphere section (fog + god rays removed with the atmosphere
+        // node, Peter 2026-07-15), no Motion Blur (BUG-136), no per-object
         // Metallic/Roughness and no SSAO/DoF card sliders (Peter,
         // 2026-07-15: DoF removed for buggy visuals, AO/metallic/roughness
         // hidden — defaults still apply, just not on the card).
-        assert_eq!(
-            meta.params.len(),
-            15,
-            "13 framing/material + 2 atmosphere (fog + god rays)"
-        );
+        assert_eq!(meta.params.len(), 14, "14 framing/material sliders");
         // Every param routes one-to-one except: the shared Ambient, which
-        // fans out to every material's ambient (2 for azalea); and D7's sun
+        // fans out to every material's ambient (2 for azalea); D7's sun
         // coherence, where each of sun_x/sun_y/sun_z fans out to TWO targets
         // (the sun light AND the envmap's disc direction) — 3 extra
-        // bindings. 15 + 1 (ambient) + 3 (sun coherence) = 19.
+        // bindings; and G-P6's Environment master, which fans out to the
+        // softbox bake's intensity AND the HDRI branch's exposure gain — 1
+        // extra. 14 + 1 (ambient) + 3 (sun coherence) + 1 (env fan-out) = 19.
         assert_eq!(
             meta.bindings.len(),
             19,
-            "15 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets"
+            "14 params, Ambient fanned to 2 materials, sun_x/y/z each fanned to 2 targets, env_intensity fanned to bake + hdri gain"
         );
         // Every card param routes to at least one node param.
         for p in &meta.params {
@@ -1440,8 +1836,9 @@ mod tests {
         // GTAO and the lens are wired into the spine. No motion blur
         // (BUG-136 + fusion cost, see the removal comment in
         // `build_import_graph`), no depth-of-field group (Peter, 2026-07-15:
-        // buggy visuals), and atmosphere is a top-level node.
-        for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens", "node.atmosphere"] {
+        // buggy visuals), no atmosphere node (fog + god rays removed,
+        // Peter 2026-07-15).
+        for present in ["node.ssao_gtao", "node.bilateral_blur", "node.camera_lens"] {
             assert!(
                 def.nodes.iter().any(|n| n.type_id == present)
                     || def.nodes.iter().filter_map(|n| n.group.as_ref()).any(|g| {
@@ -1461,6 +1858,7 @@ mod tests {
             "node.coc_from_depth",
             "node.coc_dilate",
             "node.bokeh_gather",
+            "node.atmosphere",
         ] {
             assert!(
                 !def.nodes.iter().any(|n| n.type_id == absent)
@@ -1478,60 +1876,9 @@ mod tests {
                 "no card param should start with `{gone_prefix}`"
             );
         }
-        // Fog density and god rays are two independent atmosphere sliders,
-        // not folded into one — the atom needs both raised together to show
-        // beams (see the card-authoring comment in `build_import_graph`),
-        // but each still routes to its own atmosphere param 1:1 like every
-        // other card knob.
-        for (id, section, target_node) in [
-            ("fog_density", "Atmosphere", "atmosphere"),
-            ("god_rays", "Atmosphere", "atmosphere"),
-        ] {
-            let p = meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("missing card param `{id}`"));
-            assert_eq!(p.section.as_deref(), Some(section), "`{id}` section");
-            let b = meta.bindings.iter().find(|b| b.id == id).unwrap();
-            match &b.target {
-                BindingTarget::Node { node_id, .. } => {
-                    assert_eq!(node_id.as_str(), target_node, "`{id}` binds `{target_node}`")
-                }
-                other => panic!("expected a Node target for `{id}`, got {other:?}"),
-            }
-        }
-        // Defaults keep a fresh import visually unchanged: fog/god rays both
-        // start at their neutral (no-op) value.
-        let fog_density = meta.params.iter().find(|p| p.id == "fog_density").unwrap();
-        assert_eq!(fog_density.default_value, 0.0, "fog starts off");
-        let god_rays = meta.params.iter().find(|p| p.id == "god_rays").unwrap();
-        assert_eq!(god_rays.default_value, 0.0, "god rays start off");
-        // BUG-149: fog density is scene-scaled — the binding maps the 0–1
-        // slider to optical depth at the subject (3.0 / framing distance,
-        // where the framing distance is exactly the cam_dist card default),
-        // never raw per-world-unit density.
-        let cam_dist = meta.params.iter().find(|p| p.id == "cam_dist").unwrap();
-        let fog_binding = meta.bindings.iter().find(|b| b.id == "fog_density").unwrap();
-        assert!(
-            (fog_binding.scale * cam_dist.default_value - 3.0).abs() < 1e-4,
-            "fog slider must scale by 3.0/framing-distance (got scale {} at distance {})",
-            fog_binding.scale,
-            cam_dist.default_value
-        );
-        // Imports sit in a black void: fog colour must be black (fade into
-        // the void, no grey cut-out wash), not the atom's grey-blue default.
-        let atmo = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.atmosphere")
-            .expect("import graph has an atmosphere node");
-        for c in ["fog_color_r", "fog_color_g", "fog_color_b"] {
-            assert_eq!(
-                atmo.params.get(c),
-                Some(&float(0.0)),
-                "atmosphere `{c}` must default to black for void imports"
-            );
-        }
         for gone in [
             "lens_focus", "lens_fstop", "lens_shutter", "lens_ev", "dof_radius",
-            "motion_blur_px", "mb_shutter", "ssao_bias",
+            "motion_blur_px", "mb_shutter", "ssao_bias", "fog_density", "god_rays",
         ] {
             assert!(
                 !meta.params.iter().any(|p| p.id == gone),
@@ -1593,8 +1940,20 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         };
@@ -1769,8 +2128,20 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: Some(4),
             emissive_strength: 2.5,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         }
@@ -1903,16 +2274,21 @@ mod tests {
         }
     }
 
-    /// D9 doctrine ("every import produces a report") applied to F-P4's
-    /// one remaining not-yet-mapped feature: clearcoat. Transmission and
-    /// BLEND (F-P5/D8) are now REAL mappings, not report-only — an
-    /// over-featured synthetic material carrying clearcoat + transmission +
-    /// BLEND alphaMode must report only clearcoat, and must build a real
-    /// `Blend` material with the transmission-folded alpha.
+    /// D9 doctrine ("every import produces a report") applied to G-P5's one
+    /// remaining not-yet-mapped clearcoat feature: a TEXTURED coat.
+    /// Transmission and BLEND (F-P5/D8) are real mappings, not
+    /// report-only; clearcoat's FACTOR is now a real mapping too (G-P5/D5).
+    /// An over-featured synthetic material carrying a textured clearcoat
+    /// together with transmission and a BLEND alphaMode must report only
+    /// the clearcoat texture, and must build a real `Blend` material with
+    /// the transmission-folded alpha AND the clearcoat factor wired onto
+    /// `node.pbr_material`.
     #[test]
-    fn over_featured_material_reports_only_clearcoat_and_maps_transmission_to_blend() {
+    fn over_featured_material_reports_only_clearcoat_texture_and_maps_transmission_to_blend() {
         let mut m = full_material(0, "Kitchen Sink", 300);
-        m.clearcoat = true;
+        m.clearcoat_factor = 1.0;
+        m.clearcoat_roughness_factor = 0.1;
+        m.clearcoat_has_texture = true;
         m.transmission_factor = 0.9;
         m.was_blend = true;
         m.alpha_mask = false; // a real glTF BLEND material never sets MASK too
@@ -1927,7 +2303,11 @@ mod tests {
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
         println!("over-featured report: {:#?}", report.report_lines);
-        assert_eq!(report.report_lines.len(), 1, "only clearcoat remains report-only");
+        assert_eq!(
+            report.report_lines.len(),
+            1,
+            "only the clearcoat texture remains report-only (the factor is now mapped)"
+        );
         assert!(
             report.report_lines.iter().any(|l| l.contains("clearcoat")),
             "missing a clearcoat report line: {:?}",
@@ -1959,6 +2339,10 @@ mod tests {
             ),
             other => panic!("expected Float color_a, got {other:?}"),
         }
+        // GLB_CONFORMANCE_DESIGN.md G-P5/D5: the factor IS mapped, only the
+        // texture is report-only.
+        assert_eq!(mat.params.get("clearcoat"), Some(&float(1.0)));
+        assert_eq!(mat.params.get("clearcoat_roughness"), Some(&float(0.1)));
     }
 
     /// D7 sun coherence: each of the Sun X/Y/Z card macros must carry TWO
@@ -2171,8 +2555,20 @@ mod tests {
             occlusion_strength: 1.0,
             emissive_texture: None,
             emissive_strength: 1.0,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_color_factor: [1.0, 1.0, 1.0],
+            specular_has_texture: false,
+            base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
+            uv_tex_coord_override: false,
             transmission_factor: 0.0,
-            clearcoat: false,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            clearcoat_has_texture: false,
             was_blend: false,
             vertex_count: verts,
         };
@@ -2694,6 +3090,215 @@ mod tests {
             .join("../../tests/fixtures/gltf/DamagedHelmet.glb")
     }
 
+    /// Build a minimal in-memory glb: one XZ quad whose UVs live ENTIRELY
+    /// outside [0,1] (V in [1.25, 1.75]) textured by an embedded 2×2 PNG —
+    /// top row BLUE, bottom row RED. Under the glTF default sampler
+    /// (REPEAT) V wraps to [0.25, 0.75] and samples the TOP (blue) row;
+    /// under ClampToEdge every sample pins to the BOTTOM (red) row. The
+    /// out-of-range-UV regression fixture for
+    /// `material_maps_repeat_out_of_range_uvs`.
+    #[cfg(feature = "gpu-proofs")]
+    fn build_out_of_range_uv_glb() -> Vec<u8> {
+        let positions: [[f32; 3]; 4] =
+            [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [-1.0, 0.0, 1.0]];
+        let normals: [[f32; 3]; 4] = [[0.0, 1.0, 0.0]; 4];
+        // V spans [1.05, 1.45]: REPEAT wraps to [0.05, 0.45] — entirely
+        // inside the TOP (blue) row of the 2×2 texture. Clamp pins to
+        // V = 1.0, the BOTTOM (red) edge row. (First cut used [1.25, 1.75],
+        // which wraps across BOTH rows and reads mixed — a fixture bug,
+        // not a sampler bug.)
+        let uvs: [[f32; 2]; 4] = [[0.25, 1.05], [0.75, 1.05], [0.75, 1.45], [0.25, 1.45]];
+        let indices: [u16; 6] = [0, 2, 1, 0, 3, 2];
+
+        // 2×2 PNG: row 0 (top) blue, row 1 red.
+        let mut png = Vec::new();
+        {
+            use image::ImageEncoder;
+            let pixels: [u8; 16] =
+                [0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(&pixels, 2, 2, image::ExtendedColorType::Rgba8)
+                .expect("encode fixture png");
+        }
+
+        let mut bin: Vec<u8> = Vec::new();
+        let pos_off = bin.len();
+        bin.extend(positions.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let norm_off = bin.len();
+        bin.extend(normals.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let uv_off = bin.len();
+        bin.extend(uvs.iter().flatten().flat_map(|f| f.to_le_bytes()));
+        let idx_off = bin.len();
+        bin.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let png_off = bin.len();
+        bin.extend_from_slice(&png);
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+
+        let json = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+                "indices": 3,
+                "material": 0
+            }]}],
+            "materials": [{"pbrMetallicRoughness": {
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0
+            }}],
+            "textures": [{"source": 0, "sampler": 0}],
+            "samplers": [{}],
+            "images": [{"bufferView": 4, "mimeType": "image/png"}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+                 "min": [-1.0, 0.0, -1.0], "max": [1.0, 0.0, 1.0]},
+                {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
+                {"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"}
+            ],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": pos_off, "byteLength": 48},
+                {"buffer": 0, "byteOffset": norm_off, "byteLength": 48},
+                {"buffer": 0, "byteOffset": uv_off, "byteLength": 32},
+                {"buffer": 0, "byteOffset": idx_off, "byteLength": 12},
+                {"buffer": 0, "byteOffset": png_off, "byteLength": png.len()}
+            ],
+            "buffers": [{"byteLength": bin.len()}]
+        });
+        let mut json_bytes = serde_json::to_vec(&json).expect("fixture json");
+        while json_bytes.len() % 4 != 0 {
+            json_bytes.push(b' ');
+        }
+
+        let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+        let mut glb = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_bytes);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    /// Regression gate for the 2026-07-15 striped-helmet bug: material maps
+    /// must sample with REPEAT wrapping (the glTF default sampler), not the
+    /// envmap's clamp-V. The fixture quad's V coords are entirely in
+    /// [1.25, 1.75]: REPEAT reads the texture's blue top row; the broken
+    /// clamp pinned every sample to the red bottom edge row. Asserts the
+    /// rendered quad is blue-dominant. Run deliberately (gpu-proofs).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn material_maps_repeat_out_of_range_uvs() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let glb = build_out_of_range_uv_glb();
+        let path = std::env::temp_dir().join("manifold_uv_wrap_regression.glb");
+        std::fs::write(&path, &glb).expect("write temp fixture");
+
+        let (def, _report) = assemble_import_graph(&path).expect("assemble uv-wrap fixture");
+
+        let (w, h) = (128u32, 128u32);
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator = PresetRuntime::from_def_with_device(
+            def,
+            &registry,
+            device.arc(),
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .expect("uv-wrap fixture builds through PresetRuntime");
+        let target = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "uv-wrap");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        // Poll until the background mesh+texture decodes land (byte-stable,
+        // non-black — the BUG-100 double condition).
+        let mut rgb_sum = [0.0f32; 3];
+        let mut prev: Option<Vec<u8>> = None;
+        let mut stable = 0u32;
+        let mut converged = false;
+        for _ in 0..200 {
+            {
+                let mut enc = device.create_encoder("uv-wrap-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+            let bytes_per_row = w * 8;
+            let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut renc = device.create_encoder("uv-wrap-readback");
+            renc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
+            renc.commit_and_wait_completed();
+            let ptr = buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgb_sum = [0.0; 3];
+            let mut raw = Vec::with_capacity(halves.len() * 2);
+            for px in halves.chunks_exact(4) {
+                rgb_sum[0] += half_to_f32(px[0]).max(0.0);
+                rgb_sum[1] += half_to_f32(px[1]).max(0.0);
+                rgb_sum[2] += half_to_f32(px[2]).max(0.0);
+                raw.extend(px.iter().flat_map(|v| v.to_le_bytes()));
+            }
+            let non_black = rgb_sum.iter().sum::<f32>() > 1.0;
+            if non_black && prev.as_deref() == Some(raw.as_slice()) {
+                stable += 1;
+            } else {
+                stable = 0;
+            }
+            prev = Some(raw);
+            if stable >= 3 {
+                converged = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(converged, "uv-wrap fixture render never stabilized non-black");
+        assert!(
+            rgb_sum[2] > rgb_sum[0] * 2.0,
+            "out-of-range V must WRAP to the blue top row, not clamp to the red \
+             bottom edge: sum RGB = {rgb_sum:?}"
+        );
+    }
+
     #[cfg(feature = "gpu-proofs")]
     fn amg_gt3_fixture_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2919,6 +3524,14 @@ mod tests {
 
         let (def, report) = assemble_import_graph(&path).expect("assemble AMG GT3");
         println!("AMG GT3 import report: {report:?}");
+        // GLB_CONFORMANCE_DESIGN.md G-P2 conformance gate: the AMG GT3 has
+        // 78 materials with geometry; with the cap dead, ALL of them must be
+        // wired (pre-G-P2 this was 64, dropping the livery — BUG-163).
+        assert_eq!(
+            report.object_count, 78,
+            "AMG GT3 import must be 1:1 — 78 materials, 78 objects, no cap-drop (BUG-163)"
+        );
+        assert_eq!(report.material_count, 78);
 
         let (w, h) = (512u32, 512u32);
         let device = crate::test_device();

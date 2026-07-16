@@ -2970,6 +2970,20 @@ impl PresetRuntime {
         }
     }
 
+    /// Any node in this graph with background file IO still in flight
+    /// (`EffectNode::io_pending` — the IoBridge decode-thread sources).
+    /// Headless convergence loops (`render-import`, conformance tests) call
+    /// this after each rendered frame: while it returns `true`, byte-stable
+    /// frames must NOT count toward convergence, because a source emitting
+    /// stable black during a long decode (a 74 MB 4k EXR takes seconds) is
+    /// indistinguishable from a settled frame by readback alone
+    /// (GLB_CONFORMANCE_DESIGN.md G-P6 gate-review fix). Nodes pruned from
+    /// the frame's dispatch (e.g. a mux's unselected branch) never spawn
+    /// their decode, so they report `false` and can't wedge the loop.
+    pub fn io_pending(&self) -> bool {
+        self.graph.nodes().any(|n| n.node.io_pending())
+    }
+
     /// Push the host's per-clip string overrides through the preset's
     /// `stringBindings` to the matching inner-node String params. Keys absent
     /// from `values` fall back to the binding's declared default.
