@@ -1,6 +1,6 @@
 # GLB Xfail Burn-Down — fix every defect-class conformance failure (BUG-164–172)
 
-**Status:** APPROVED design, not built · 2026-07-16 · Fable 5 (Peter in the room)
+**Status:** P1+P2 SHIPPED 2026-07-16 (Sonnet 5) — BUG-165/169 (P1, root cause: fixed near-clip plane) and BUG-166/172 (P2, D1 slice-based import + D5 scene fallback) fixed; certification 56 → 61/148. BUG-170 (D8) verdict: no crate bump exists, deferred to `GLTF_ANIMATION_DESIGN.md`. P3 (D2 spec-gloss + D4 default material) and P4 (D3 per-map samplers + D6 instancing) not yet built. New finding during P2: BUG-174 (unlit materials import as lit, not routed to `UnlitMaterial`) — logged, not in this doc's scope. · 2026-07-16 · Fable 5 design, Sonnet 5 execution
 **Prerequisites:** GLB_CONFORMANCE_DESIGN.md SHIPPED (it is — 2026-07-15); the conformance manifest + `tests/glb_conformance.rs` are the acceptance harness.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 

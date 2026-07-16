@@ -1177,15 +1177,35 @@
   },
   {
     "asset": "ClearCoatCarPaint.glb",
-    "checks": [],
-    "status": "xfail:BUG-166",
-    "note": "gltf crate vetoes extensionsRequired entries we already support downstream (clearcoat/unlit)"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/clear_coat_car_paint.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb() replaces gltf::import() with a slice-based parse gated on MANIFOLD's own extensionsRequired allowlist (includes KHR_materials_clearcoat) instead of the crate's feature-flag veto; clearcoat render mapping was already shipped by GLB_CONFORMANCE_DESIGN"
   },
   {
     "asset": "UnlitTest.glb",
-    "checks": [],
-    "status": "xfail:BUG-166",
-    "note": "gltf crate vetoes extensionsRequired entries we already support downstream (clearcoat/unlit)"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/unlit_test.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-166 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2): import_glb()'s own extensionsRequired allowlist (includes KHR_materials_unlit) replaces the crate's feature-flag veto, so this now imports and renders. KHR_materials_unlit itself is not yet wired to the UnlitMaterial primitive (tracked separately as BUG-174) — this asset renders via the default lit path, not true unlit shading."
   },
   {
     "asset": "SpecGlossVsMetalRough.glb",
@@ -1241,9 +1261,19 @@
   },
   {
     "asset": "RecursiveSkeletons.glb",
-    "checks": [],
-    "status": "xfail:BUG-172",
-    "note": "glb with no default scene rejected instead of falling back to root nodes"
+    "checks": [
+      {
+        "kind": "non_black_fraction_min",
+        "value": 0.02
+      },
+      {
+        "kind": "golden",
+        "file": "goldens/recursive_skeletons.png",
+        "mean_abs_tol": 2.0
+      }
+    ],
+    "status": "expect_pass",
+    "note": "BUG-172 FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P2, D5): missing default_scene now falls back to the union of all scenes' roots via the shared scene-fallback helper"
   },
   {
     "asset": "NodePerformanceTest.glb",

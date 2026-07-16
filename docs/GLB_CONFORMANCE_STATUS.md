@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 56 expect_pass, 92 xfail across 12 reasons, 0 unclassified.**
+**148 assets total — 61 expect_pass, 87 xfail across 9 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -15,6 +15,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `AntiqueCamera.glb` | non_black_fraction_min, golden |
 | `Avocado.glb` | non_black_fraction_min, golden |
 | `BarramundiFish.glb` | non_black_fraction_min, golden |
+| `BoomBox.glb` | non_black_fraction_min, golden |
 | `Box.glb` | non_black_fraction_min, golden |
 | `BoxAnimated.glb` | non_black_fraction_min, golden |
 | `BoxInterleaved.glb` | non_black_fraction_min, golden |
@@ -23,6 +24,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `BrainStem.glb` | non_black_fraction_min, golden |
 | `CesiumMan.glb` | non_black_fraction_min, golden |
 | `CesiumMilkTruck.glb` | non_black_fraction_min, golden |
+| `ClearCoatCarPaint.glb` | non_black_fraction_min, golden |
 | `ClearCoatTest.glb` | region_max_luminance_above, golden |
 | `ClearcoatWicker.glb` | non_black_fraction_min, golden |
 | `CompareAlphaCoverage.glb` | non_black_fraction_min, golden |
@@ -44,6 +46,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `Lantern.glb` | non_black_fraction_min, golden |
 | `MaterialsVariantsShoe.glb` | non_black_fraction_min, golden |
 | `MetalRoughSpheres.glb` | non_black_fraction_min, golden |
+| `MetalRoughSpheresNoTextures.glb` | non_black_fraction_min, golden |
 | `MorphPrimitivesTest.glb` | non_black_fraction_min, golden |
 | `MorphStressTest.glb` | non_black_fraction_min, golden |
 | `MultiUVTest.glb` | non_black_fraction_min, golden |
@@ -54,6 +57,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `PlaysetLightTest.glb` | non_black_fraction_min, golden |
 | `PointLightIntensityTest.glb` | non_black_fraction_min, golden |
 | `PotOfCoals.glb` | non_black_fraction_min, golden |
+| `RecursiveSkeletons.glb` | non_black_fraction_min, golden |
 | `RiggedFigure.glb` | non_black_fraction_min, golden |
 | `RiggedSimple.glb` | non_black_fraction_min, golden |
 | `SpecularTest.glb` | region_mean_luminance_below, golden |
@@ -63,6 +67,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `TextureTransformMultiTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformTest/TextureTransformTest.gltf` | region_green_minus_red_above, golden |
 | `Unicode❤♻Test.glb` | non_black_fraction_min, golden |
+| `UnlitTest.glb` | non_black_fraction_min, golden |
 | `VertexColorTest.glb` | non_black_fraction_min, golden |
 | `WaterBottle.glb` | non_black_fraction_min, golden |
 | `XmpMetadataRoundedCube.glb` | non_black_fraction_min, golden |
@@ -75,19 +80,11 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 - `TextureSettingsTest.glb`
 
-### `xfail:BUG-165` — 2 asset(s)
+### `xfail:BUG-165` — 1 asset(s)
 
 **Gap:** multi-texture asset never converges within 300 frames
 
-- `BoomBox.glb`
 - `VirtualCity.glb`
-
-### `xfail:BUG-166` — 2 asset(s)
-
-**Gap:** gltf crate vetoes extensionsRequired entries we already support downstream (clearcoat / unlit)
-
-- `ClearCoatCarPaint.glb`
-- `UnlitTest.glb`
 
 ### `xfail:BUG-167` — 1 asset(s)
 
@@ -100,12 +97,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 **Gap:** EXT_mesh_gpu_instancing entirely unhandled
 
 - `SimpleInstancing.glb`
-
-### `xfail:BUG-169` — 1 asset(s)
-
-**Gap:** texture-less PBR materials render fully black
-
-- `MetalRoughSpheresNoTextures.glb`
 
 ### `xfail:BUG-170` — 3 asset(s)
 
@@ -120,12 +111,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 **Gap:** materialless primitive skipped instead of using the glTF default material
 
 - `BoxVertexColors.glb`
-
-### `xfail:BUG-172` — 1 asset(s)
-
-**Gap:** glb with no default scene rejected instead of falling back to root nodes
-
-- `RecursiveSkeletons.glb`
 
 ### `xfail:BUG-173` — 1 asset(s)
 
