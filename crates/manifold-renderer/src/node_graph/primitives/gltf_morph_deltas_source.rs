@@ -80,6 +80,13 @@ crate::primitive! {
         staging_len_bytes: u64 = 0,
         pending_load: Option<mpsc::Receiver<Result<(Vec<MeshVertex>, u32, u32), String>>> = None,
         uploaded: bool = false,
+        // Bumped every time a background parse lands — see
+        // `gltf_mesh_source`'s identical field for why this (not
+        // `last_key`) is the correct content-change signal.
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1.
+        content_version: u64 = 0,
+        last_copied_content_version: u64 = u64::MAX,
+        last_copied_dst_identity: usize = 0,
     },
 }
 
@@ -118,6 +125,7 @@ impl Primitive for GltfMorphDeltasSource {
                 Ok(Ok((deltas, _target_count, _vertex_count))) => {
                     self.cached_deltas = deltas;
                     self.uploaded = false;
+                    self.content_version = self.content_version.wrapping_add(1);
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_morph_deltas_source: {e}");
@@ -161,10 +169,21 @@ impl Primitive for GltfMorphDeltasSource {
             self.uploaded = true;
         }
 
+        // Gated (RENDER_SCENE_PERF_OPTIMIZATION P1/R1) — see
+        // `gltf_mesh_source`'s identical copy gate for the rationale.
         if let Some(staging) = &self.staging {
-            let copy_size = self.staging_len_bytes.min(dst.size);
-            if copy_size > 0 {
-                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst, copy_size);
+            let dst_identity = dst.identity_key();
+            let unchanged = self.content_version == self.last_copied_content_version
+                && dst_identity == self.last_copied_dst_identity;
+            if unchanged {
+                ctx.mark_outputs_unchanged();
+            } else {
+                let copy_size = self.staging_len_bytes.min(dst.size);
+                if copy_size > 0 {
+                    ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst, copy_size);
+                }
+                self.last_copied_content_version = self.content_version;
+                self.last_copied_dst_identity = dst_identity;
             }
         }
     }
@@ -192,5 +211,132 @@ mod tests {
         let prim = GltfMorphDeltasSource::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_morph_deltas_source");
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// `cargo test -p manifold-renderer --features gpu-proofs
+/// node_graph::primitives::gltf_morph_deltas_source::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::effect_node::ParamValues;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::TestDevice;
+    use manifold_core::{Beats, Seconds};
+
+    const CAPACITY: u32 = 4_000;
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn morph_cube_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/AnimatedMorphCube.glb")
+    }
+
+    fn params_at(path: &str, material_index: f32, capacity: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(Cow::Borrowed("material_index"), ParamValue::Float(material_index));
+        p.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(capacity));
+        p
+    }
+
+    fn run_once(
+        prim: &mut GltfMorphDeltasSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("gltf-morph-deltas-source-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(backend: &MetalBackend, slot: Slot) -> Vec<u8> {
+        let buf = backend.array_buffer(slot).expect("array buffer retained");
+        let ptr = buf.mapped_ptr().expect("shared buffer");
+        unsafe { std::slice::from_raw_parts(ptr, buf.size() as usize) }.to_vec()
+    }
+
+    fn settle(
+        prim: &mut GltfMorphDeltasSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+    ) {
+        for _ in 0..200 {
+            run_once(prim, backend, device, output_scratch, params, frame_time());
+            if !prim.cached_deltas.is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("gltf_morph_deltas_source: parse never settled");
+    }
+
+    fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {
+        let mut backend = MetalBackend::new(device.arc(), 64, 64, manifold_gpu::GpuTextureFormat::Rgba8Unorm);
+        let r_out = ResourceId(0);
+        let buf =
+            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let slot = backend.pre_bind_array(r_out, buf);
+        (backend, r_out, slot)
+    }
+
+    #[test]
+    fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
+        let path = morph_cube_fixture_path();
+        if !path.exists() {
+            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (backend, _r_out, slot) = make_buffer_backend(&device);
+        let scratch: Vec<(&'static str, Slot)> = vec![("deltas", slot)];
+
+        let params = params_at(path.to_str().unwrap(), 0.0, CAPACITY as f32);
+        let mut prim = GltfMorphDeltasSource::new();
+        settle(&mut prim, &backend, &device, &scratch, &params);
+        let frame1 = readback(&backend, slot);
+
+        let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
+        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let frame2 = readback(&backend, slot);
+        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
     }
 }

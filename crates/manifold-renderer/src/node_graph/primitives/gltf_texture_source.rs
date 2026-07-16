@@ -118,14 +118,20 @@ crate::primitive! {
         pending_upload: Option<(u32, u32, Vec<u8>)> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
-        // Identity of the `out` texture whose mip chain was last
-        // regenerated (IMPORT_FIDELITY F-P6). The blit rewrites level 0
-        // every frame, but levels 1.. only need regenerating when the
-        // content changed (fresh upload) or the output slot was handed a
-        // different physical texture (pool recycle / resize) — comparing
-        // `GpuTexture::identity_key` catches both without a per-frame
-        // mip pass.
+        // Identity of the `out` texture the level-0 blit + mip chain were
+        // last written for (IMPORT_FIDELITY F-P6 introduced this for mips
+        // only; RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 extends it
+        // to gate the level-0 blit dispatch itself). Comparing
+        // `GpuTexture::identity_key` catches both a fresh decode (via
+        // `fresh_upload`) and a pool recycle/resize (different physical
+        // texture) without a per-frame mip pass or blit dispatch.
         last_mip_identity: usize = 0,
+        // `mode` the blit last ran with. `mode` affects the blit's output
+        // BYTES directly (gloss-to-roughness repack) without triggering a
+        // re-decode (it isn't part of `last_key`), so it must gate the
+        // blit independently of content/identity — a mode flip with
+        // everything else unchanged must still re-blit.
+        last_blit_mode: f32 = -1.0,
     },
 }
 
@@ -286,61 +292,73 @@ impl Primitive for GltfTextureSource {
             return;
         };
 
-        // 7. Dispatch the stretch-blit compute kernel.
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/gltf_texture_blit.wgsl"),
-                "cs_main",
+        // 7+8. Level-0 blit + mip regen, gated together
+        // (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1): both rewrite
+        // `out`'s content, so both are skipped together whenever nothing
+        // that determines that content changed since we last wrote it —
+        // the decoded pixels (`fresh_upload`), the repack mode (affects
+        // the blit's output bytes directly), or `out`'s own physical
+        // identity (pool recycle/resize hands back a different texture,
+        // which must be re-blitted even if the source pixels and mode
+        // didn't change — the `last_mip_identity` precedent this extends).
+        let out_identity = out.identity_key();
+        let unchanged =
+            !fresh_upload && out_identity == self.last_mip_identity && mode == self.last_blit_mode;
+
+        if unchanged {
+            ctx.mark_outputs_unchanged();
+        } else {
+            let gpu = ctx.gpu_encoder();
+            let pipeline = self.pipeline.get_or_insert_with(|| {
+                gpu.device.create_compute_pipeline(
+                    include_str!("shaders/gltf_texture_blit.wgsl"),
+                    "cs_main",
+                    "node.gltf_texture_source",
+                )
+            });
+            let sampler = self
+                .sampler
+                .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+            let uniforms = GltfTextureBlitUniforms {
+                out_width: w as f32,
+                out_height: h as f32,
+                mode,
+            };
+
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: source_texture,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: out,
+                    },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
                 "node.gltf_texture_source",
-            )
-        });
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            );
 
-        let uniforms = GltfTextureBlitUniforms {
-            out_width: w as f32,
-            out_height: h as f32,
-            mode,
-        };
-
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: source_texture,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: out,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.gltf_texture_source",
-        );
-
-        // 8. Regenerate the output's mip chain (IMPORT_FIDELITY F-P6).
-        // The blit above rewrote level 0; levels 1.. are stale whenever
-        // the content changed (fresh upload) or the slot handed us a
-        // different physical texture than the one we last mipped (pool
-        // recycle / resize). Guarded on the chain actually existing —
-        // tests that pre-bind a flat texture skip the pass cleanly.
-        if out.mip_level_count() > 1 {
-            let out_identity = out.identity_key();
-            if fresh_upload || out_identity != self.last_mip_identity {
+            // Regenerate the output's mip chain (IMPORT_FIDELITY F-P6).
+            // Guarded on the chain actually existing — tests that
+            // pre-bind a flat texture skip the pass cleanly.
+            if out.mip_level_count() > 1 {
                 gpu.native_enc.generate_mipmaps(out);
-                self.last_mip_identity = out_identity;
             }
+
+            self.last_mip_identity = out_identity;
+            self.last_blit_mode = mode;
         }
     }
 }
@@ -472,6 +490,180 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::render_target::RenderTarget;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn helmet_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/DamagedHelmet.glb")
+    }
+
+    fn params_at(path: &str, texture_index: f32, mode: u32, w: f32, h: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(Cow::Borrowed("texture_index"), ParamValue::Float(texture_index));
+        p.insert(Cow::Borrowed("color_space"), ParamValue::Enum(0));
+        p.insert(Cow::Borrowed("width"), ParamValue::Float(w));
+        p.insert(Cow::Borrowed("height"), ParamValue::Float(h));
+        p.insert(Cow::Borrowed("mode"), ParamValue::Enum(mode));
+        p
+    }
+
+    /// Run one frame directly against a real GPU backend (no Graph/Executor
+    /// needed — this Source primitive has zero inputs). Returns whether
+    /// `mark_outputs_unchanged` was declared this frame.
+    fn run_once(
+        prim: &mut GltfTextureSource,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("gltf-texture-source-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+        let tex = backend.texture_2d(slot).expect("texture retained");
+        let bytes_per_row = w * 4; // Rgba8Unorm[Srgb]
+        let total = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("gltf-texture-source-readback");
+        enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared readback");
+        unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
+    }
+
+    /// Settle the async decode by re-running until it's no longer pending
+    /// (bounded — a real fixture decode is milliseconds, not seconds).
+    fn settle(
+        prim: &mut GltfTextureSource,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+    ) {
+        for _ in 0..200 {
+            run_once(prim, backend, device, output_scratch, params, frame_time());
+            if !prim.io_pending() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("gltf_texture_source: decode never settled");
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// asset, frame 2's output is bit-identical to frame 1's, and the
+    /// blit+mip skip (`mark_outputs_unchanged`) fires on frame 2.
+    #[test]
+    fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
+        let path = helmet_fixture_path();
+        if !path.exists() {
+            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target = RenderTarget::new(&device, w, h, format, "gltf-texture-source-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, target);
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+
+        let params = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
+        let mut prim = GltfTextureSource::new();
+        settle(&mut prim, &backend, &device, &output_scratch, &params);
+        let frame1 = readback(&device, &backend, out_slot, w, h);
+
+        let unchanged = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
+        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let frame2 = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+    }
+
+    /// A param change (mode flip) must NOT be skipped, and must produce the
+    /// same output a FRESH executor baked with that param from the start
+    /// would produce.
+    #[test]
+    fn mode_flip_matches_fresh_executor() {
+        let path = helmet_fixture_path();
+        if !path.exists() {
+            println!("mode_flip_matches_fresh_executor: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+        let format = GpuTextureFormat::Rgba8UnormSrgb;
+
+        // Existing executor: settle at mode=passthrough(0), then flip to
+        // mode=gloss_to_roughness(1).
+        let mut backend_a = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target_a = RenderTarget::new(&device, w, h, format, "gltf-texture-source-a");
+        let slot_a = backend_a.pre_bind_texture_2d(r_out, target_a);
+        let scratch_a: Vec<(&'static str, Slot)> = vec![("out", slot_a)];
+        let params_pass = params_at(path.to_str().unwrap(), 0.0, 0, w as f32, h as f32);
+        let mut prim_a = GltfTextureSource::new();
+        settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_pass);
+
+        let params_flipped = params_at(path.to_str().unwrap(), 0.0, 1, w as f32, h as f32);
+        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_flipped, frame_time());
+        assert!(!unchanged, "a mode flip must NOT be gated as unchanged");
+        let flipped_output = readback(&device, &backend_a, slot_a, w, h);
+
+        // Fresh executor: mode=gloss_to_roughness baked in from the start.
+        let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
+        let target_b = RenderTarget::new(&device, w, h, format, "gltf-texture-source-b");
+        let slot_b = backend_b.pre_bind_texture_2d(r_out, target_b);
+        let scratch_b: Vec<(&'static str, Slot)> = vec![("out", slot_b)];
+        let mut prim_b = GltfTextureSource::new();
+        settle(&mut prim_b, &backend_b, &device, &scratch_b, &params_flipped);
+        let fresh_output = readback(&device, &backend_b, slot_b, w, h);
+
+        assert_eq!(
+            flipped_output, fresh_output,
+            "mode flip on a live gated executor must match a fresh executor built with that mode"
+        );
+    }
 
     #[test]
     fn prewarm_pipeline_populates_the_shared_compute_cache() {

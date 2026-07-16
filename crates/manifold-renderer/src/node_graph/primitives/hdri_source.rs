@@ -6,14 +6,20 @@
 //! Shaped identically to `node.gltf_texture_source`
 //! (GLB_CONFORMANCE_DESIGN.md D6/§3: "copy `gltf_texture_source.rs` wholesale
 //! as the shape") — background decode thread → `Rgba16Float` upload →
-//! stretch-blit into the chain-allocated `out` slot every frame → mipmapped
-//! output (IMPORT_FIDELITY F-P6's mip contract: `render_scene` samples
-//! `envmap` under heavy minification during IBL prefilter/irradiance
-//! convolution, so a flat-uploaded map would alias the same way the F-P6
-//! material maps did before mips landed). File I/O + the `image` crate's EXR
-//! decode happen on a background thread (`std::thread::spawn` + `mpsc::
-//! channel`) so the content thread never stalls on a multi-megabyte HDR
-//! decode.
+//! stretch-blit into the chain-allocated `out` slot → mipmapped output
+//! (IMPORT_FIDELITY F-P6's mip contract: `render_scene` samples `envmap`
+//! under heavy minification during IBL prefilter/irradiance convolution, so
+//! a flat-uploaded map would alias the same way the F-P6 material maps did
+//! before mips landed). File I/O + the `image` crate's EXR decode happen on
+//! a background thread (`std::thread::spawn` + `mpsc::channel`) so the
+//! content thread never stalls on a multi-megabyte HDR decode.
+//!
+//! The level-0 blit + mip regen are gated
+//! (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3): on a static file (no
+//! fresh decode, same output-texture identity) `run()` skips both dispatches
+//! and declares `mark_outputs_unchanged()`, so `node.render_scene`'s IBL
+//! re-convolution gate (which reads this node's write generation) can trust
+//! an unchanging generation as "the envmap truly didn't change."
 //!
 //! **No `color_space` param** — unlike `node.gltf_texture_source`, an EXR
 //! environment map is always linear light (D6: "EXR is linear — upload
@@ -132,12 +138,14 @@ crate::primitive! {
         pending_upload: Option<(u32, u32, Vec<u8>)> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
-        // Identity of the `out` texture whose mip chain was last
-        // regenerated (IMPORT_FIDELITY F-P6 contract, mirrored from
-        // node.gltf_texture_source). The blit rewrites level 0 every frame;
-        // levels 1.. only need regenerating when the content changed
-        // (fresh upload) or the output slot was handed a different physical
-        // texture (pool recycle / resize).
+        // Identity of the `out` texture the level-0 blit + mip chain were
+        // last written for (IMPORT_FIDELITY F-P6 introduced this for mips
+        // only; RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 extends it to
+        // gate the level-0 blit dispatch itself, mirroring
+        // node.gltf_texture_source's P1 gate). Comparing
+        // `GpuTexture::identity_key` catches both a fresh decode (via
+        // `fresh_upload`) and a pool recycle/resize (different physical
+        // texture) without a per-frame mip pass or blit dispatch.
         last_mip_identity: usize = 0,
     },
 }
@@ -274,58 +282,67 @@ impl Primitive for HdriSource {
             return;
         };
 
-        // 7. Dispatch the stretch-blit compute kernel.
-        let gpu = ctx.gpu_encoder();
-        let pipeline = self.pipeline.get_or_insert_with(|| {
-            gpu.device.create_compute_pipeline(
-                include_str!("shaders/hdri_source_blit.wgsl"),
-                "cs_main",
+        // 7+8. Level-0 blit + mip regen, gated together
+        // (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3, mirroring
+        // node.gltf_texture_source's P1 gate): both rewrite `out`'s content,
+        // so both are skipped together whenever nothing that determines
+        // that content changed since we last wrote it — the decoded pixels
+        // (`fresh_upload`) or `out`'s own physical identity (pool
+        // recycle/resize hands back a different texture, which must be
+        // re-blit even if the source pixels didn't change).
+        let out_identity = out.identity_key();
+        let unchanged = !fresh_upload && out_identity == self.last_mip_identity;
+
+        if unchanged {
+            ctx.mark_outputs_unchanged();
+        } else {
+            let gpu = ctx.gpu_encoder();
+            let pipeline = self.pipeline.get_or_insert_with(|| {
+                gpu.device.create_compute_pipeline(
+                    include_str!("shaders/hdri_source_blit.wgsl"),
+                    "cs_main",
+                    "node.hdri_source",
+                )
+            });
+            let sampler = self
+                .sampler
+                .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+
+            let uniforms = HdriBlitUniforms {
+                out_width: w as f32,
+                out_height: h as f32,
+            };
+
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: source_texture,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 3,
+                        texture: out,
+                    },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
                 "node.hdri_source",
-            )
-        });
-        let sampler = self
-            .sampler
-            .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
+            );
 
-        let uniforms = HdriBlitUniforms {
-            out_width: w as f32,
-            out_height: h as f32,
-        };
-
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: source_texture,
-                },
-                GpuBinding::Sampler {
-                    binding: 2,
-                    sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: out,
-                },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.hdri_source",
-        );
-
-        // 8. Regenerate the output's mip chain (IMPORT_FIDELITY F-P6
-        // contract). The blit above rewrote level 0; levels 1.. are stale
-        // whenever the content changed (fresh upload) or the slot handed us
-        // a different physical texture than the one we last mipped.
-        if out.mip_level_count() > 1 {
-            let out_identity = out.identity_key();
-            if fresh_upload || out_identity != self.last_mip_identity {
+            // Regenerate the output's mip chain (IMPORT_FIDELITY F-P6).
+            if out.mip_level_count() > 1 {
                 gpu.native_enc.generate_mipmaps(out);
-                self.last_mip_identity = out_identity;
             }
+
+            self.last_mip_identity = out_identity;
         }
     }
 }
@@ -632,6 +649,193 @@ mod gpu_tests {
         assert!((a - 1.0).abs() < 0.05, "a={a}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P3/R3 gate: `run()`'s level-0
+/// blit + mip regen skip, exercised through the real
+/// `EffectNodeContext`/`MetalBackend` harness (same shape as
+/// `gltf_texture_source`'s P1 gpu_tests module — this node has zero graph
+/// inputs, so no full `Graph`/`Executor` is needed).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gate_gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::render_target::RenderTarget;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn write_fixture_exr(dir_tag: &str, w: u32, h: u32, rgb: [f32; 3]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "manifold-hdri-gate-{dir_tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fixture.exr");
+        let mut buf: image::Rgb32FImage = image::ImageBuffer::new(w, h);
+        for px in buf.pixels_mut() {
+            *px = image::Rgb(rgb);
+        }
+        image::DynamicImage::ImageRgb32F(buf)
+            .save_with_format(&path, image::ImageFormat::OpenExr)
+            .expect("write synthetic EXR fixture");
+        path
+    }
+
+    fn params_at(path: &str, w: f32, h: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(Cow::Borrowed("width"), ParamValue::Float(w));
+        p.insert(Cow::Borrowed("height"), ParamValue::Float(h));
+        p
+    }
+
+    /// Returns whether `mark_outputs_unchanged` was declared this frame.
+    fn run_once(
+        prim: &mut HdriSource,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("hdri-gate-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(device: &manifold_gpu::GpuDevice, backend: &MetalBackend, slot: Slot, w: u32, h: u32) -> Vec<u8> {
+        let tex = backend.texture_2d(slot).expect("texture retained");
+        let bytes_per_row = w * 8; // Rgba16Float
+        let total = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total);
+        let mut enc = device.create_encoder("hdri-gate-readback");
+        enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared readback");
+        unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
+    }
+
+    fn settle(
+        prim: &mut HdriSource,
+        backend: &MetalBackend,
+        device: &manifold_gpu::GpuDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+    ) {
+        for _ in 0..200 {
+            run_once(prim, backend, device, output_scratch, params, frame_time());
+            if !prim.io_pending() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("hdri_source: decode never settled");
+    }
+
+    /// I3's contract for this node: on a static file, frame N+1's output is
+    /// bit-identical to frame N's and the blit+mip skip
+    /// (`mark_outputs_unchanged`) fires once settled.
+    #[test]
+    fn settled_frame_matches_previous_and_declares_unchanged() {
+        let path = write_fixture_exr("static", 32, 16, [1.5, 0.5, 2.0]);
+        let device = crate::test_device();
+        let (w, h) = (32u32, 16u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target = RenderTarget::new(&device, w, h, format, "hdri-gate-out");
+        let out_slot = backend.pre_bind_texture_2d(r_out, target);
+        let output_scratch: Vec<(&'static str, Slot)> = vec![("out", out_slot)];
+
+        let params = params_at(path.to_str().unwrap(), w as f32, h as f32);
+        let mut prim = HdriSource::new();
+        settle(&mut prim, &backend, &device, &output_scratch, &params);
+        let frame_settled = readback(&device, &backend, out_slot, w, h);
+
+        let unchanged = run_once(&mut prim, &backend, &device, &output_scratch, &params, frame_time());
+        assert!(unchanged, "settled static file must declare mark_outputs_unchanged");
+        let frame_next = readback(&device, &backend, out_slot, w, h);
+        assert_eq!(frame_settled, frame_next, "next frame must be bit-identical once settled on a static file");
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// D7/I2 shape: a path change (a different HDRI file) must NOT be
+    /// skipped, and must produce the same output a FRESH executor loaded
+    /// with that path from the start would.
+    #[test]
+    fn path_change_is_not_skipped_and_matches_fresh_load() {
+        let path_1 = write_fixture_exr("path-a", 32, 16, [1.0, 1.0, 1.0]);
+        let path_2 = write_fixture_exr("path-b", 32, 16, [3.0, 0.25, 0.75]);
+        let device = crate::test_device();
+        let (w, h) = (32u32, 16u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut backend_a = MetalBackend::new(device.arc(), w, h, format);
+        let r_out = ResourceId(0);
+        let target_a = RenderTarget::new(&device, w, h, format, "hdri-gate-a");
+        let slot_a = backend_a.pre_bind_texture_2d(r_out, target_a);
+        let scratch_a: Vec<(&'static str, Slot)> = vec![("out", slot_a)];
+        let params_1 = params_at(path_1.to_str().unwrap(), w as f32, h as f32);
+        let mut prim_a = HdriSource::new();
+        settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_1);
+
+        let params_2 = params_at(path_2.to_str().unwrap(), w as f32, h as f32);
+        settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_2);
+        let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_2, frame_time());
+        assert!(unchanged, "settled after the path change, the following frame must be gated");
+        let changed_output = readback(&device, &backend_a, slot_a, w, h);
+
+        let mut backend_b = MetalBackend::new(device.arc(), w, h, format);
+        let target_b = RenderTarget::new(&device, w, h, format, "hdri-gate-b");
+        let slot_b = backend_b.pre_bind_texture_2d(r_out, target_b);
+        let scratch_b: Vec<(&'static str, Slot)> = vec![("out", slot_b)];
+        let mut prim_b = HdriSource::new();
+        settle(&mut prim_b, &backend_b, &device, &scratch_b, &params_2);
+        let fresh_output = readback(&device, &backend_b, slot_b, w, h);
+
+        assert_eq!(
+            changed_output, fresh_output,
+            "a path change on a live gated executor must match a fresh executor built with that path"
+        );
+
+        let _ = std::fs::remove_dir_all(path_1.parent().unwrap());
+        let _ = std::fs::remove_dir_all(path_2.parent().unwrap());
     }
 }
 

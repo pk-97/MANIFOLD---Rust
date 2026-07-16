@@ -182,6 +182,17 @@ crate::primitive! {
         pending_load: Option<mpsc::Receiver<Result<Vec<MeshVertex>, String>>> = None,
         // Whether `staging` currently reflects `cached_verts`.
         uploaded: bool = false,
+        // Bumped every time a background parse lands (step 3) — a cheap
+        // content-generation counter, distinct from `last_key`: `last_key`
+        // updates the instant a new selection is requested, before the
+        // async parse finishes, so gating the per-frame copy on it would
+        // incorrectly skip while stale vertices are still in
+        // `cached_verts`. RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1.
+        content_version: u64 = 0,
+        // (content_version, dst identity) the staging→output copy last
+        // ran for. Sentinel values guarantee the first real copy runs.
+        last_copied_content_version: u64 = u64::MAX,
+        last_copied_dst_identity: usize = 0,
     },
 }
 
@@ -268,6 +279,7 @@ impl Primitive for GltfMeshSource {
                 Ok(Ok(verts)) => {
                     self.cached_verts = verts;
                     self.uploaded = false;
+                    self.content_version = self.content_version.wrapping_add(1);
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_mesh_source: {e}");
@@ -317,14 +329,29 @@ impl Primitive for GltfMeshSource {
             self.uploaded = true;
         }
 
-        // 6. Copy staging → dst every frame (cheap blit; dst is the
-        // chain-allocated buffer downstream nodes read from).
+        // 6. Copy staging → dst, gated (RENDER_SCENE_PERF_OPTIMIZATION
+        // P1/R1): skip when the cached content hasn't changed since the
+        // last completed copy AND dst is the same physical buffer we
+        // copied into last frame — pool recycling can hand back a
+        // different physical buffer with stale bytes even when our own
+        // cache is untouched, so identity gates alongside content (the
+        // `last_mip_identity` precedent, extended to buffers via
+        // `GpuBuffer::identity_key`).
         if let Some(staging) = &self.staging {
-            let copy_size = self.staging_len_bytes.min(dst.size);
-            if copy_size > 0 {
-                ctx.gpu_encoder()
-                    .native_enc
-                    .copy_buffer_to_buffer(staging, dst, copy_size);
+            let dst_identity = dst.identity_key();
+            let unchanged = self.content_version == self.last_copied_content_version
+                && dst_identity == self.last_copied_dst_identity;
+            if unchanged {
+                ctx.mark_outputs_unchanged();
+            } else {
+                let copy_size = self.staging_len_bytes.min(dst.size);
+                if copy_size > 0 {
+                    ctx.gpu_encoder()
+                        .native_enc
+                        .copy_buffer_to_buffer(staging, dst, copy_size);
+                }
+                self.last_copied_content_version = self.content_version;
+                self.last_copied_dst_identity = dst_identity;
             }
         }
     }
@@ -483,5 +510,185 @@ mod tests {
         assert!((center[0] - 12.0).abs() < 1e-4);
         assert!((center[1] - 101.0).abs() < 1e-4);
         assert!((center[2] - (-3.0)).abs() < 1e-4);
+    }
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
+/// `cargo test -p manifold-renderer --features gpu-proofs
+/// node_graph::primitives::gltf_mesh_source::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::effect_node::ParamValues;
+    use crate::node_graph::{FrameTime, MetalBackend};
+    use crate::TestDevice;
+    use manifold_core::{Beats, Seconds};
+
+    const CAPACITY: u32 = 20_000;
+
+    fn frame_time() -> FrameTime {
+        FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 }
+    }
+
+    fn helmet_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/DamagedHelmet.glb")
+    }
+
+    fn params_at(path: &str, mesh_index: f32, capacity: f32) -> ParamValues {
+        let mut p = ahash::AHashMap::default();
+        p.insert(Cow::Borrowed("path"), ParamValue::String(path.to_string().into()));
+        p.insert(Cow::Borrowed("mesh_index"), ParamValue::Float(mesh_index));
+        p.insert(Cow::Borrowed("primitive_index"), ParamValue::Float(-1.0));
+        p.insert(Cow::Borrowed("material_index"), ParamValue::Float(-1.0));
+        p.insert(Cow::Borrowed("max_capacity"), ParamValue::Float(capacity));
+        p.insert(Cow::Borrowed("fit"), ParamValue::Enum(0));
+        p.insert(Cow::Borrowed("recenter"), ParamValue::Bool(true));
+        p
+    }
+
+    /// Run one frame directly against a real GPU backend (no Graph/Executor
+    /// needed — this Source primitive has zero inputs). Returns whether
+    /// `mark_outputs_unchanged` was declared this frame.
+    fn run_once(
+        prim: &mut GltfMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+        time: FrameTime,
+    ) -> bool {
+        let mut scalar_ws = Vec::new();
+        let mut camera_ws = Vec::new();
+        let mut light_ws = Vec::new();
+        let mut material_ws = Vec::new();
+        let mut transform_ws = Vec::new();
+        let mut atmosphere_ws = Vec::new();
+        let backend_ref: &dyn Backend = backend;
+        let inputs = NodeInputs::new(&[], backend_ref, &[]);
+        let outputs = NodeOutputs::new(
+            output_scratch,
+            backend_ref,
+            &mut scalar_ws,
+            &mut camera_ws,
+            &mut light_ws,
+            &mut material_ws,
+            &mut transform_ws,
+            &mut atmosphere_ws,
+        );
+        let mut native_enc = device.create_encoder("gltf-mesh-source-test");
+        let unchanged;
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
+            let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, Some(&mut gpu));
+            prim.run(&mut ctx);
+            unchanged = ctx.outputs_unchanged;
+        }
+        native_enc.commit_and_wait_completed();
+        unchanged
+    }
+
+    fn readback(backend: &MetalBackend, slot: Slot) -> Vec<u8> {
+        let buf = backend.array_buffer(slot).expect("array buffer retained");
+        let ptr = buf.mapped_ptr().expect("shared buffer");
+        unsafe { std::slice::from_raw_parts(ptr, buf.size() as usize) }.to_vec()
+    }
+
+    fn settle(
+        prim: &mut GltfMeshSource,
+        backend: &MetalBackend,
+        device: &TestDevice,
+        output_scratch: &[(&'static str, Slot)],
+        params: &ParamValues,
+    ) {
+        for _ in 0..200 {
+            run_once(prim, backend, device, output_scratch, params, frame_time());
+            if !prim.cached_verts.is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("gltf_mesh_source: parse never settled");
+    }
+
+    fn make_buffer_backend(device: &TestDevice) -> (MetalBackend, ResourceId, Slot) {
+        let mut backend = MetalBackend::new(device.arc(), 64, 64, manifold_gpu::GpuTextureFormat::Rgba8Unorm);
+        let r_out = ResourceId(0);
+        let buf =
+            device.create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let slot = backend.pre_bind_array(r_out, buf);
+        (backend, r_out, slot)
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate: on a static
+    /// asset, frame 2's output is bit-identical to frame 1's, and the
+    /// staging→output copy skip (`mark_outputs_unchanged`) fires on frame 2.
+    #[test]
+    fn frame2_matches_frame1_on_static_asset_and_declares_unchanged() {
+        let path = helmet_fixture_path();
+        if !path.exists() {
+            println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+        let (backend, _r_out, slot) = make_buffer_backend(&device);
+        let scratch: Vec<(&'static str, Slot)> = vec![("vertices", slot)];
+
+        let params = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
+        let mut prim = GltfMeshSource::new();
+        settle(&mut prim, &backend, &device, &scratch, &params);
+        let frame1 = readback(&backend, slot);
+
+        let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
+        assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
+        let frame2 = readback(&backend, slot);
+        assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");
+    }
+
+    /// A content-affecting param change (`fit` toggled on) must NOT be
+    /// skipped, and must match a FRESH executor built with that param baked
+    /// in from the start.
+    #[test]
+    fn fit_param_change_matches_fresh_executor() {
+        let path = helmet_fixture_path();
+        if !path.exists() {
+            println!("fit_param_change_matches_fresh_executor: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let device = crate::test_device();
+
+        let (backend_a, _r_out_a, slot_a) = make_buffer_backend(&device);
+        let scratch_a: Vec<(&'static str, Slot)> = vec![("vertices", slot_a)];
+        let params_none = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
+        let mut prim_a = GltfMeshSource::new();
+        settle(&mut prim_a, &backend_a, &device, &scratch_a, &params_none);
+
+        let mut params_fit = params_none.clone();
+        params_fit.insert(Cow::Borrowed("fit"), ParamValue::Enum(1));
+        // Re-triggers a background parse (fit is part of `last_key`) — poll
+        // until it lands, same as the initial settle.
+        for _ in 0..200 {
+            let unchanged = run_once(&mut prim_a, &backend_a, &device, &scratch_a, &params_fit, frame_time());
+            if prim_a.pending_load.is_none() && prim_a.last_key.4 == 1 {
+                assert!(!unchanged, "a content-changing param must not gate as unchanged");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let a_output = readback(&backend_a, slot_a);
+
+        let (backend_b, _r_out_b, slot_b) = make_buffer_backend(&device);
+        let scratch_b: Vec<(&'static str, Slot)> = vec![("vertices", slot_b)];
+        let mut prim_b = GltfMeshSource::new();
+        settle(&mut prim_b, &backend_b, &device, &scratch_b, &params_fit);
+        let b_output = readback(&backend_b, slot_b);
+
+        assert_eq!(
+            a_output, b_output,
+            "fit param change on a live gated executor must match a fresh executor built with that param"
+        );
     }
 }

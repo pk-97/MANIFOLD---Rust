@@ -477,6 +477,16 @@ pub struct RenderScene {
     /// recreated when a caster's `shadow_resolution` changes. Created
     /// `RENDER_TARGET | SHADER_READ` (AGX 0x78 guard).
     shadow_maps: [Option<(u32, manifold_gpu::GpuTexture)>; MAX_SHADOW_CASTING_LIGHTS],
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6 — per-caster shadow
+    /// dirty-check key (a 64-bit hash of everything the shadow pass reads
+    /// for that caster this frame — see the shadow loop below for the exact
+    /// component list). `Some(key) == this frame's freshly computed key`
+    /// means the persisted `shadow_maps[slot]` texture already holds this
+    /// content, so the depth-only draw batch is skipped entirely (I1: ANY
+    /// mismatch — including a `None` on the first frame — falls through to
+    /// a real render and stores the new key; never served on a partial
+    /// match).
+    shadow_cache_keys: [Option<u64>; MAX_SHADOW_CASTING_LIGHTS],
     /// PCF comparison sampler (`compare = Less`).
     shadow_sampler: Option<manifold_gpu::GpuSampler>,
     /// 1×1 `Depth32Float` (`SHADER_READ`) bound to unused/non-caster
@@ -527,9 +537,10 @@ pub struct RenderScene {
     /// IMPORT_FIDELITY_DESIGN.md D2/F-P1: split-sum IBL. Prefiltered
     /// specular mip chain (`PREFILTER_BASE_WIDTH`×`PREFILTER_BASE_HEIGHT`,
     /// `PREFILTER_MIP_COUNT` mips) — allocated ONCE (fixed size, never
-    /// resized) and re-convolved every frame `envmap` is wired (see
-    /// `run_ibl_convolution`'s doc comment for why "skip when unchanged"
-    /// isn't implemented this phase).
+    /// resized). RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):
+    /// re-convolved only when `ibl_cache_key` misses (see
+    /// `run_ibl_convolution`'s doc comment for the generation-signal safety
+    /// argument).
     prefiltered_specular: Option<manifold_gpu::GpuTexture>,
     /// Diffuse irradiance map (`IRRADIANCE_WIDTH`×`IRRADIANCE_HEIGHT`).
     irradiance_map: Option<manifold_gpu::GpuTexture>,
@@ -537,6 +548,16 @@ pub struct RenderScene {
     /// computed ONCE per device, gated by `brdf_lut_built`, never rebuilt.
     brdf_lut: Option<manifold_gpu::GpuTexture>,
     brdf_lut_built: bool,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3): the IBL dirty-check
+    /// key the prefiltered-specular/irradiance convolution last ran with —
+    /// a hash of (envmap slot write generation, envmap texture identity,
+    /// executor rebuild epoch). `Some(key) == this frame's freshly computed
+    /// key` means the persisted `prefiltered_specular`/`irradiance_map`
+    /// textures already hold this exact envmap's convolution, so both
+    /// dispatches are skipped. I2: never served on ANY mismatch, including
+    /// `None` on first use or an unwired-to-wired transition (see
+    /// `run_ibl_convolution`'s doc comment for the full safety argument).
+    ibl_cache_key: Option<u64>,
     ibl_prefilter_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_irradiance_pipeline: Option<manifold_gpu::GpuComputePipeline>,
     ibl_brdf_lut_pipeline: Option<manifold_gpu::GpuComputePipeline>,
@@ -563,6 +584,47 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): this object's port
+    /// names, generated once in [`Self::rebuild`] instead of re-formatted
+    /// every `evaluate()` call. §1's CPU row measured ~22 `format!`
+    /// allocations per object per frame plus a linear `NodeInputs::slot`
+    /// scan per lookup (`bindings.rs`) — together O(objects × wired_ports)
+    /// ≈ O(objects²). `evaluate()` now indexes this `Vec` by object number
+    /// and resolves each name through a per-frame [`bindings::Slot`] index
+    /// (built once via `NodeInputs::build_index`) instead.
+    object_port_names: Vec<ObjectPortNames>,
+    /// Same treatment for `light_{i}` port names.
+    light_port_names: Vec<Box<str>>,
+}
+
+/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4: one object's pre-formatted
+/// port names (mesh/material/every optional map/transform/instances),
+/// rebuilt only when `objects` changes. Field order matches the push order
+/// in [`RenderScene::rebuild`] — cosmetic only, nothing depends on it (each
+/// field is looked up by name through the frame's port index, never by
+/// position).
+struct ObjectPortNames {
+    mesh: Box<str>,
+    material: Box<str>,
+    base_color_map: Box<str>,
+    normal_map: Box<str>,
+    mr_map: Box<str>,
+    occlusion_map: Box<str>,
+    emissive_map: Box<str>,
+    sheen_color_map: Box<str>,
+    sheen_roughness_map: Box<str>,
+    iridescence_map: Box<str>,
+    iridescence_thickness_map: Box<str>,
+    anisotropy_map: Box<str>,
+    clearcoat_map: Box<str>,
+    clearcoat_roughness_map: Box<str>,
+    clearcoat_normal_map: Box<str>,
+    specular_map: Box<str>,
+    specular_color_map: Box<str>,
+    transmission_map: Box<str>,
+    volume_thickness_map: Box<str>,
+    transform: Box<str>,
+    instances: Box<str>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -639,6 +701,7 @@ impl RenderScene {
             shadow_pipeline: None,
             shadow_depth_stencil: None,
             shadow_maps: std::array::from_fn(|_| None),
+            shadow_cache_keys: std::array::from_fn(|_| None),
             shadow_sampler: None,
             dummy_depth: None,
             identity_instance_stub: None,
@@ -663,9 +726,12 @@ impl RenderScene {
             irradiance_map: None,
             brdf_lut: None,
             brdf_lut_built: false,
+            ibl_cache_key: None,
             ibl_prefilter_pipeline: None,
             ibl_irradiance_pipeline: None,
             ibl_brdf_lut_pipeline: None,
+            object_port_names: Vec::new(),
+            light_port_names: Vec::new(),
         };
         s.rebuild(DEFAULT_OBJECTS, DEFAULT_LIGHTS);
         s
@@ -889,6 +955,40 @@ impl RenderScene {
         // starts in.
         self.prev_model = vec![None; n_obj];
         self.prev_view_proj = None;
+
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): format every
+        // port name exactly once, here, at rebuild time (only reached on an
+        // `objects`/`lights` param change — never per frame). `evaluate()`
+        // indexes these by object/light number instead of calling `format!`
+        // itself.
+        self.object_port_names = (0..n_obj)
+            .map(|i| ObjectPortNames {
+                mesh: format!("mesh_{i}").into_boxed_str(),
+                material: format!("material_{i}").into_boxed_str(),
+                base_color_map: format!("base_color_map_{i}").into_boxed_str(),
+                normal_map: format!("normal_map_{i}").into_boxed_str(),
+                mr_map: format!("mr_map_{i}").into_boxed_str(),
+                occlusion_map: format!("occlusion_map_{i}").into_boxed_str(),
+                emissive_map: format!("emissive_map_{i}").into_boxed_str(),
+                sheen_color_map: format!("sheen_color_map_{i}").into_boxed_str(),
+                sheen_roughness_map: format!("sheen_roughness_map_{i}").into_boxed_str(),
+                iridescence_map: format!("iridescence_map_{i}").into_boxed_str(),
+                iridescence_thickness_map: format!("iridescence_thickness_map_{i}")
+                    .into_boxed_str(),
+                anisotropy_map: format!("anisotropy_map_{i}").into_boxed_str(),
+                clearcoat_map: format!("clearcoat_map_{i}").into_boxed_str(),
+                clearcoat_roughness_map: format!("clearcoat_roughness_map_{i}").into_boxed_str(),
+                clearcoat_normal_map: format!("clearcoat_normal_map_{i}").into_boxed_str(),
+                specular_map: format!("specular_map_{i}").into_boxed_str(),
+                specular_color_map: format!("specular_color_map_{i}").into_boxed_str(),
+                transmission_map: format!("transmission_map_{i}").into_boxed_str(),
+                volume_thickness_map: format!("volume_thickness_map_{i}").into_boxed_str(),
+                transform: format!("transform_{i}").into_boxed_str(),
+                instances: format!("instances_{i}").into_boxed_str(),
+            })
+            .collect();
+        self.light_port_names =
+            (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
     }
 
     /// Ensure the memoryless MSAA color + depth targets match the render
@@ -1411,25 +1511,43 @@ impl RenderScene {
     /// hit every frame after the first (see the `ibl_brdf_lut_builds_once`
     /// gpu-proofs test).
     ///
-    /// The prefiltered specular chain and irradiance map are NOT
-    /// content-cached — they re-convolve every call this function is
-    /// invoked with `envmap = Some(_)`, matching D2's own stated
-    /// consequence ("an animated envmap re-prefilters every frame — a
-    /// fixed, small cost, not a correctness hazard") rather than the
-    /// alternative of skipping on an unchanged (texture identity, size)
-    /// key: `bake_equirect_envmap`'s `run()` mutates the SAME persistent
-    /// output texture in place every frame regardless of whether its
-    /// params changed (confirmed by reading that primitive — no internal
-    /// caching), so a pointer/size-based skip would silently treat every
-    /// animated envmap (including the D7 sun-coherence gesture this design
-    /// exists to support) as "unchanged" and go stale — worse than the
-    /// fixed per-frame cost. See `ESCALATION_FP1.md` for the full
-    /// reasoning and the open question this leaves for a future phase.
+    /// **Superseded by RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D7 (P3):**
+    /// the prefiltered specular chain and irradiance map used to be
+    /// re-convolved on EVERY call this function was invoked with `envmap =
+    /// Some(_)` — this section used to warn that a pointer/size-identity
+    /// skip would silently serve outdated convolution output, because
+    /// `bake_equirect_envmap::run()` mutated its SAME persistent output
+    /// texture in place every frame regardless of whether its params
+    /// changed, so identity alone could never tell "unchanged" from
+    /// "rewritten with different content." That hazard is closed now, at
+    /// the root: `bake_equirect_envmap` (and `hdri_source`)
+    /// no longer rewrite unconditionally — each skips its own dispatch and
+    /// calls `ctx.mark_outputs_unchanged()` only when its full param set
+    /// (or decoded file) AND its output texture's physical identity are
+    /// both unchanged since the last frame it actually wrote (P3's producer
+    /// gate, landed and parity-tested before this consumer gate was
+    /// enabled — D7's load-bearing ordering). That declaration is what
+    /// bumps (or doesn't bump) the envmap slot's write generation (D5): a
+    /// truthful "unchanged" is the ONLY way the generation can fail to
+    /// bump, and a false declaration is a per-node-tested property (I3),
+    /// not this call site's concern. So convolution below is skipped only
+    /// when `ibl_cache_key` — a hash of (envmap generation, envmap texture
+    /// identity, executor rebuild epoch) — matches this frame's freshly
+    /// computed key; any mismatch (including first use, an
+    /// unwired-to-wired transition, or the D7 sun-coherence animated-envmap
+    /// gesture actually changing the bake) falls through to a real
+    /// re-convolution (I2: never served on a partial match). The identity
+    /// term stays in the key as the same belt-and-suspenders precedent
+    /// `shadow_cache_keys` uses, and the rebuild-epoch term is required by
+    /// `NodeInputs::slot_generation`'s own doc comment (never compare a
+    /// generation number alone across executor lifetimes).
     fn run_ibl_convolution(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
         sampler: &manifold_gpu::GpuSampler,
         envmap: Option<&manifold_gpu::GpuTexture>,
+        envmap_generation: Option<u64>,
+        rebuild_epoch: u64,
     ) {
         if !self.brdf_lut_built {
             let lut = self.brdf_lut.as_ref().expect("ensured");
@@ -1455,7 +1573,26 @@ impl RenderScene {
             self.brdf_lut_built = true;
         }
 
-        let Some(envmap) = envmap else { return };
+        let Some(envmap) = envmap else {
+            // Unwired ⇒ next wire-up must re-convolve unconditionally, per
+            // I2 (never serve a stale key across an unwired gap).
+            self.ibl_cache_key = None;
+            return;
+        };
+
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        envmap_generation.hash(&mut hasher);
+        hasher.write_usize(envmap.identity_key());
+        hasher.write_u64(rebuild_epoch);
+        let ibl_key = hasher.finish();
+        if self.ibl_cache_key == Some(ibl_key) {
+            // I2: cache hit — the persisted prefiltered-specular/irradiance
+            // textures already hold this exact envmap's convolution.
+            return;
+        }
+        self.ibl_cache_key = Some(ibl_key);
+
         let src_width = envmap.width;
         let src_height = envmap.height;
 
@@ -2043,6 +2180,16 @@ impl EffectNode for RenderScene {
         let objects = self.num_objects as usize;
         let lights_n = self.num_lights as usize;
 
+        // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): built ONCE per
+        // frame from this frame's wired ports (`bindings.rs`'s
+        // `NodeInputs::build_index`), then every per-light/per-object port
+        // lookup below resolves through it in O(1) instead of the
+        // `format!` + linear `iter().find` scan §1's CPU row measured as
+        // O(objects × wired_ports) ≈ O(objects²). Port NAMES themselves are
+        // pre-formatted once in `rebuild()` (`object_port_names` /
+        // `light_port_names`) — nothing here calls `format!`.
+        let port_index = ctx.inputs.build_index();
+
         let cam = ctx
             .inputs
             .camera("camera")
@@ -2082,7 +2229,8 @@ impl EffectNode for RenderScene {
         let mut shaft_light_data: Vec<[f32; 4]> = Vec::new();
         let mut shaft_light_count: u32 = 0;
         for i in 0..lights_n {
-            if let Some(l) = ctx.inputs.light(&format!("light_{i}")) {
+            let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
+            if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
                 let slot: f32 = if l.cast_shadows && casters.len() < MAX_SHADOW_CASTING_LIGHTS {
                     let s = casters.len() as f32;
                     casters.push(l);
@@ -2228,6 +2376,22 @@ impl EffectNode for RenderScene {
             instances: Option<&'ctx manifold_gpu::GpuBuffer>,
             /// `buffer_size / 32` when wired, else 1 (identity stub).
             instance_count: u32,
+            /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            /// `mesh_n` input slot's write generation this frame
+            /// (`ctx.inputs.slot_generation`) — a component of the shadow
+            /// cache key below. `None` only if the (required) mesh port
+            /// somehow resolved to an unbound slot — can't happen on the
+            /// live path (the `vertices` field above already required a
+            /// resolved array), kept `Option` to mirror `slot_generation`'s
+            /// signature exactly rather than unwrap a should-never-fail case.
+            vertices_generation: Option<u64>,
+            /// Same for `instances_n` — `None` both when the port is
+            /// genuinely unwired AND (indistinguishably, which is fine: an
+            /// unwired port never contributes model-specific staleness) if
+            /// somehow unresolved. D6 folds this `Option` into the key
+            /// as-is so "unwired" and "wired-then-unwired" both correctly
+            /// invalidate any cached key computed under the other state.
+            instances_generation: Option<u64>,
             /// IMPORT_FIDELITY_DESIGN.md D8/F-P5: this object's coverage
             /// model — `Blend` routes into the sorted transparent group and
             /// skips every shadow-caster pass; `Opaque`/`Mask` draw in the
@@ -2262,13 +2426,18 @@ impl EffectNode for RenderScene {
         let mut has_transmission = false;
 
         for n in 0..objects {
-            // Per-object port/param names, generated once (no static
-            // name tables — object count is unbounded).
-            let mesh_name = format!("mesh_{n}");
-            let material_name = format!("material_{n}");
-            let Some(vertices) = ctx.inputs.array(&mesh_name) else {
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): port names
+            // are pre-formatted once in `rebuild()` (no static name tables —
+            // object count is unbounded, but the per-object names ARE sized
+            // to the instance and cached there); every lookup below resolves
+            // through `port_index` (built once per frame, above) instead of
+            // a per-lookup `NodeInputs::slot` scan.
+            let names = &self.object_port_names[n];
+            let mesh_slot = port_index.get(names.mesh.as_ref()).copied();
+            let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.error(format!(
-                    "missing required `{mesh_name}` input; renderer fell back to magenta clear"
+                    "missing required `{}` input; renderer fell back to magenta clear",
+                    names.mesh
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2276,9 +2445,14 @@ impl EffectNode for RenderScene {
                 }
                 return;
             };
-            let Some(material) = ctx.inputs.material(&material_name) else {
+            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
+            // `mesh_n` write generation, feeds the shadow cache key below.
+            let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
+            let material_slot = port_index.get(names.material.as_ref()).copied();
+            let Some(material) = material_slot.and_then(|s| ctx.inputs.material_slot(s)) else {
                 ctx.error(format!(
-                    "missing required `{material_name}` input; renderer fell back to magenta clear"
+                    "missing required `{}` input; renderer fell back to magenta clear",
+                    names.material
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2288,8 +2462,8 @@ impl EffectNode for RenderScene {
             };
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.error(format!(
-                    "{:?} material on `{material_name}` requires `envmap` input but it is unwired; renderer fell back to magenta",
-                    material.kind
+                    "{:?} material on `{}` requires `envmap` input but it is unwired; renderer fell back to magenta",
+                    material.kind, names.material
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2297,39 +2471,44 @@ impl EffectNode for RenderScene {
                 }
                 return;
             }
-            let base_color_map = ctx.inputs.texture_2d(&format!("base_color_map_{n}"));
+            // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
+            // this closure doesn't borrow `ctx` (which `ctx.error`/
+            // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
+            let inputs = ctx.inputs;
+            let tex =
+                |name: &str| port_index.get(name).copied().and_then(|s| inputs.texture_2d_slot(s));
+            let base_color_map = tex(&names.base_color_map);
             // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
             // per-object texture ports.
-            let normal_map = ctx.inputs.texture_2d(&format!("normal_map_{n}"));
-            let mr_map = ctx.inputs.texture_2d(&format!("mr_map_{n}"));
-            let occlusion_map = ctx.inputs.texture_2d(&format!("occlusion_map_{n}"));
-            let emissive_map = ctx.inputs.texture_2d(&format!("emissive_map_{n}"));
+            let normal_map = tex(&names.normal_map);
+            let mr_map = tex(&names.mr_map);
+            let occlusion_map = tex(&names.occlusion_map);
+            let emissive_map = tex(&names.emissive_map);
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-            let sheen_color_map = ctx.inputs.texture_2d(&format!("sheen_color_map_{n}"));
-            let sheen_roughness_map = ctx.inputs.texture_2d(&format!("sheen_roughness_map_{n}"));
-            let iridescence_map = ctx.inputs.texture_2d(&format!("iridescence_map_{n}"));
-            let iridescence_thickness_map =
-                ctx.inputs.texture_2d(&format!("iridescence_thickness_map_{n}"));
-            let anisotropy_map = ctx.inputs.texture_2d(&format!("anisotropy_map_{n}"));
+            let sheen_color_map = tex(&names.sheen_color_map);
+            let sheen_roughness_map = tex(&names.sheen_roughness_map);
+            let iridescence_map = tex(&names.iridescence_map);
+            let iridescence_thickness_map = tex(&names.iridescence_thickness_map);
+            let anisotropy_map = tex(&names.anisotropy_map);
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
             // completion sweep).
-            let clearcoat_map = ctx.inputs.texture_2d(&format!("clearcoat_map_{n}"));
-            let clearcoat_roughness_map =
-                ctx.inputs.texture_2d(&format!("clearcoat_roughness_map_{n}"));
-            let clearcoat_normal_map = ctx.inputs.texture_2d(&format!("clearcoat_normal_map_{n}"));
-            let specular_map = ctx.inputs.texture_2d(&format!("specular_map_{n}"));
-            let specular_color_map = ctx.inputs.texture_2d(&format!("specular_color_map_{n}"));
-            let transmission_map = ctx.inputs.texture_2d(&format!("transmission_map_{n}"));
-            let volume_thickness_map = ctx.inputs.texture_2d(&format!("volume_thickness_map_{n}"));
+            let clearcoat_map = tex(&names.clearcoat_map);
+            let clearcoat_roughness_map = tex(&names.clearcoat_roughness_map);
+            let clearcoat_normal_map = tex(&names.clearcoat_normal_map);
+            let specular_map = tex(&names.specular_map);
+            let specular_color_map = tex(&names.specular_color_map);
+            let transmission_map = tex(&names.transmission_map);
+            let volume_thickness_map = tex(&names.volume_thickness_map);
 
             // Unwired `transform_n` = identity (`Transform::default()`) —
             // matches the old scattered params' defaults exactly (pos 0,
             // rot 0, scale 1). See SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
             // D3: no per-object param fallback — `node.transform_3d` is the
             // only producer now.
-            let t = ctx
-                .inputs
-                .transform(&format!("transform_{n}"))
+            let t = port_index
+                .get(names.transform.as_ref())
+                .copied()
+                .and_then(|s| ctx.inputs.transform_slot(s))
                 .unwrap_or_default();
             let model = model_matrix(t.pos, t.rot_euler, t.scale);
             // GBUFFER_DESIGN.md §2 D5 (P2): `None` at this slot (no history
@@ -2440,20 +2619,26 @@ impl EffectNode for RenderScene {
             if is_transmissive {
                 has_transmission = true;
             }
-            let pipeline = {
-                let gpu = ctx.gpu_encoder();
-                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
-                    .clone()
-            };
 
             // D11: wired instances_n draws instance_count = buffer_size / 32
             // copies (0 → that object's draw becomes a legal instance-count-0
             // no-op); unwired draws once via the identity stub (bound at
             // Pass 2 — this object carries no self-owned buffer reference).
-            let instances = ctx.inputs.array(&format!("instances_{n}"));
+            // Resolved BEFORE `pipeline_for` below: `names` borrows
+            // `self.object_port_names`, which the `&mut self` pipeline call
+            // can't coexist with.
+            let instances_slot = port_index.get(names.instances.as_ref()).copied();
+            let instances = instances_slot.and_then(|s| inputs.array_slot(s));
+            let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
             let instance_count = match instances {
                 Some(buf) => (buf.size / instance_size) as u32,
                 None => 1,
+            };
+
+            let pipeline = {
+                let gpu = ctx.gpu_encoder();
+                self.pipeline_for(gpu.device, material.kind, velocity_wired, is_blend)
+                    .clone()
             };
 
             // IMPORT_FIDELITY_DESIGN.md D8/F-P5: view-space depth of this
@@ -2487,6 +2672,8 @@ impl EffectNode for RenderScene {
                 sampler_descs,
                 instances,
                 instance_count,
+                vertices_generation,
+                instances_generation,
                 alpha_mode,
                 sort_depth,
                 is_transmissive,
@@ -2626,9 +2813,12 @@ impl EffectNode for RenderScene {
         // comment for the cache-vs-correctness tradeoff on the two
         // envmap-dependent resources. ----
         {
+            // Read before `ctx.gpu_encoder()` takes a mutable borrow of ctx.
+            let envmap_generation = ctx.inputs.slot_generation("envmap");
+            let rebuild_epoch = ctx.rebuild_epoch;
             let gpu = ctx.gpu_encoder();
             let sampler = self.sampler.as_ref().expect("ensured").clone();
-            self.run_ibl_convolution(gpu, &sampler, envmap_wired);
+            self.run_ibl_convolution(gpu, &sampler, envmap_wired, envmap_generation, rebuild_epoch);
         }
 
         // ---- Shadow depth pre-passes. One depth-only pass per caster
@@ -2656,6 +2846,51 @@ impl EffectNode for RenderScene {
                     continue;
                 };
                 let vp = l.shadow_view_proj();
+
+                // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this caster's
+                // dirty-check key — everything the depth-only batch below
+                // reads. `shadow_view_proj()` is a pure function of the
+                // light alone (light.rs), so a static light reproduces the
+                // exact same `vp` bytes every frame; the per-draw component
+                // list catches every other input (geometry, transforms,
+                // instancing). Hashed into a fixed hasher — zero per-frame
+                // allocation (CLAUDE.md hot-path discipline); `AHasher` is
+                // already this crate's fast-hash workhorse (`ahash::AHashMap`
+                // throughout `execution.rs`).
+                use std::hash::{Hash, Hasher};
+                let mut hasher = ahash::AHasher::default();
+                hasher.write(bytemuck::bytes_of(&vp));
+                hasher.write_u32(l.shadow_resolution);
+                hasher.write_usize(shadow_caster_draws.len());
+                for d in &shadow_caster_draws {
+                    hasher.write(bytemuck::bytes_of(&d.uniforms.model));
+                    d.vertices_generation.hash(&mut hasher);
+                    d.instances_generation.hash(&mut hasher);
+                    hasher.write_u32(vcount(d.vertices));
+                    hasher.write_u32(d.instance_count);
+                }
+                // D6: the rebuild-epoch term — guards against a topology
+                // rebuild carrying this primitive's own Rust state (this
+                // struct, including `shadow_cache_keys`) into a BRAND NEW
+                // executor whose slot generations reset to 0 (see
+                // `Executor::rebuild_epoch`'s doc comment for the full
+                // hazard). Folding it in means a key computed under a prior
+                // executor lifetime can never coincidentally match this one.
+                hasher.write_u64(ctx.rebuild_epoch);
+                let shadow_key = hasher.finish();
+
+                // I1: never serve on ANY mismatch — including the `None` a
+                // fresh primitive (or a resolution/topology change that
+                // reset `shadow_cache_keys`) starts with. A full match means
+                // `shadow_maps[slot]`'s PERSISTED texture (never cleared
+                // except on resolution change — see `ensure_shadow_map`)
+                // already holds exactly this content, so the depth-only
+                // batch this caster would otherwise issue is redundant.
+                if self.shadow_cache_keys[slot] == Some(shadow_key) {
+                    continue;
+                }
+                self.shadow_cache_keys[slot] = Some(shadow_key);
+
                 let shadow_uniforms: Vec<ShadowUniforms> = shadow_caster_draws
                     .iter()
                     .map(|d| ShadowUniforms {

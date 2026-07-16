@@ -396,7 +396,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
-        let inputs = NodeInputs::new(inputs_bindings, &backend);
+        let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,
@@ -474,7 +474,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
-        let inputs = NodeInputs::new(inputs_bindings, &backend);
+        let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,
@@ -549,7 +549,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
-        let inputs = NodeInputs::new(inputs_bindings, &backend);
+        let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,

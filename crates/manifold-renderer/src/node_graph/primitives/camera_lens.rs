@@ -240,7 +240,7 @@ mod run_tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
-        let inputs = NodeInputs::new(&wire_slots, &backend);
+        let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
             &backend,

@@ -114,6 +114,20 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         None => DEFAULT_FRAMES,
     };
     let profile_mode = args.iter().any(|a| a == "--profile");
+    // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D3b/P4: a continuously-
+    // animated fixture (e.g. BrainStem.glb) never emits a byte-stable frame,
+    // so the io_pending/stability convergence loop below spins to
+    // `WARMUP_CAP` and errors on every run. `--warmup-frames N` bypasses the
+    // convergence gate entirely with a fixed unconditional warmup — report-
+    // only (import mode carries no baseline to interact with), and it does
+    // not change behavior for any run that omits the flag.
+    let fixed_warmup: Option<u32> = match arg_value(args, "--warmup-frames") {
+        Some(s) => Some(
+            s.parse()
+                .map_err(|e| format!("--warmup-frames must be a positive integer: {e}"))?,
+        ),
+        None => None,
+    };
 
     // EXACT render_import.rs construction — never a wrapper project, never
     // through the loader/content thread (D7).
@@ -150,42 +164,65 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
     // background decode thread gets wall time between polls during warmup,
     // same reasoning as render_import.rs's module doc; it stays confined to
     // warmup and never leaks into the measured window below).
-    let mut prev_raw: Option<Vec<u8>> = None;
-    let mut stable_count = 0u32;
-    let mut warmup_frame = 0u32;
-    let mut converged = false;
-    while warmup_frame < WARMUP_CAP {
-        let ctx = mk_ctx(warmup_frame, width, height);
-        let mut enc = device.create_encoder("perf-soak-import-warmup");
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+    let warmup_frame = if let Some(n) = fixed_warmup {
+        // D3b: fixed-warmup override — render exactly `n` frames
+        // unconditionally, no io_pending/byte-stability check at all. Never
+        // taken unless the flag is passed; the convergence loop below is
+        // untouched for every other run.
+        for i in 0..n {
+            let ctx = mk_ctx(i, width, height);
+            let mut enc = device.create_encoder("perf-soak-import-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+            }
+            enc.commit_and_wait_completed();
         }
-        enc.commit_and_wait_completed();
+        eprintln!(
+            "perf-soak (import): fixed warmup of {n} frames (--warmup-frames, convergence gate \
+             bypassed)"
+        );
+        n
+    } else {
+        let mut prev_raw: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        let mut warmup_frame = 0u32;
+        let mut converged = false;
+        while warmup_frame < WARMUP_CAP {
+            let ctx = mk_ctx(warmup_frame, width, height);
+            let mut enc = device.create_encoder("perf-soak-import-warmup");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
+            }
+            enc.commit_and_wait_completed();
 
-        let io_pending = runtime.io_pending();
-        let raw = readback_raw_halves(&device, &target.texture, width, height);
-        let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
-        prev_raw = Some(raw);
-        if byte_stable && !io_pending {
-            stable_count += 1;
-        } else {
-            stable_count = 0;
+            let io_pending = runtime.io_pending();
+            let raw = readback_raw_halves(&device, &target.texture, width, height);
+            let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
+            prev_raw = Some(raw);
+            if byte_stable && !io_pending {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            warmup_frame += 1;
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if stable_count >= STABLE_STREAK {
+                converged = true;
+                break;
+            }
         }
-        warmup_frame += 1;
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        if stable_count >= STABLE_STREAK {
-            converged = true;
-            break;
+        if !converged {
+            return Err(format!(
+                "convergence failed after {WARMUP_CAP} warmup frames ({width}x{height}) — a \
+                 background texture decode may be stuck (render-import's WARNING case), or the \
+                 fixture never stabilizes (a continuously-animated asset) — use --warmup-frames N"
+            ));
         }
-    }
-    if !converged {
-        return Err(format!(
-            "convergence failed after {WARMUP_CAP} warmup frames ({width}x{height}) — a \
-             background texture decode may be stuck (render-import's WARNING case)"
-        ));
-    }
-    eprintln!("perf-soak (import): converged after {warmup_frame} warmup frames");
+        eprintln!("perf-soak (import): converged after {warmup_frame} warmup frames");
+        warmup_frame
+    };
 
     let stats_json = if profile_mode {
         run_profiled(&mut runtime, &device, &target, &manifest, width, height, frames, warmup_frame)?
@@ -297,13 +334,30 @@ fn run_profiled(
     runtime.set_profiling(true);
     runtime.set_profile_scope("import");
 
+    // D4b (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md, amendment mid-P0): a
+    // node's internal GPU passes (shadow, IBL prefilter/irradiance, main)
+    // never call `set_profile_tag` — they all share ONE tag (the node's) but
+    // each `reserve()` site carries a distinct `label`. Rows stay keyed by
+    // `tag` (one row per node); each row now nests a `passes` map keyed by
+    // `label` so those passes don't collapse into one number. `type_id`/
+    // `cpu_us` are node-level, recorded once.
+    struct NodeAgg {
+        type_id: String,
+        cpu_us: f64,
+        passes: std::collections::HashMap<String, f64>, // label -> gpu_ms
+    }
+
     struct ProfiledFrame {
         index: u32,
         total_gpu_ms: f64,
         overflow: usize,
         spans_used: usize,
-        untagged_ms: f64,
-        nodes: std::collections::HashMap<String, (String, f64, f64)>, // tag -> (type_id, gpu_ms, cpu_us)
+        // D4/D4b: spans whose tag matches no live executor step this frame
+        // are grouped by their OWN label (e.g. "node.render_scene shadow")
+        // into per-label rows instead of one collapsed scalar — import mode
+        // only.
+        unmatched: std::collections::HashMap<String, f64>, // label -> gpu_ms
+        nodes: std::collections::HashMap<String, NodeAgg>, // tag -> NodeAgg
     }
 
     let mut recorded: Vec<ProfiledFrame> = Vec::with_capacity(frames as usize);
@@ -325,21 +379,23 @@ fn run_profiled(
             total_gpu_ms: profile.total_ms,
             overflow: profile.overflow,
             spans_used: profile.spans.len(),
-            untagged_ms: 0.0,
+            unmatched: std::collections::HashMap::new(),
             nodes: std::collections::HashMap::new(),
         };
         for span in &profile.spans {
             match cpu_by_tag.get(span.tag.as_str()) {
                 Some(cpu) => {
-                    let entry = frame
-                        .nodes
-                        .entry(span.tag.clone())
-                        .or_insert_with(|| (cpu.type_id.clone(), 0.0, cpu.cpu_nanos as f64 / 1000.0));
-                    entry.1 += span.millis;
+                    let agg = frame.nodes.entry(span.tag.clone()).or_insert_with(|| NodeAgg {
+                        type_id: cpu.type_id.clone(),
+                        cpu_us: cpu.cpu_nanos as f64 / 1000.0,
+                        passes: std::collections::HashMap::new(),
+                    });
+                    *agg.passes.entry(span.label.clone()).or_insert(0.0) += span.millis;
                 }
-                // D6: a span whose tag matches no live executor step this
-                // frame is reported explicitly, never silently dropped.
-                None => frame.untagged_ms += span.millis,
+                // D4b: a span whose tag matches no live executor step this
+                // frame is reported explicitly, grouped by its OWN label —
+                // never silently dropped, never collapsed into one scalar.
+                None => *frame.unmatched.entry(span.label.clone()).or_insert(0.0) += span.millis,
             }
         }
         recorded.push(frame);
@@ -367,28 +423,61 @@ fn run_profiled(
         .iter()
         .take(PROFILE_WORST_FRAMES_K)
         .map(|f| {
-            let mut node_rows: Vec<(&String, &(String, f64, f64))> = f.nodes.iter().collect();
-            node_rows.sort_by(|a, b| (b.1).1.partial_cmp(&(a.1).1).unwrap_or(std::cmp::Ordering::Equal));
             let share_denom = if f.total_gpu_ms > 0.0 { f.total_gpu_ms } else { 1.0 };
+            let mut node_rows: Vec<(&String, &NodeAgg, f64)> = f
+                .nodes
+                .iter()
+                .map(|(tag, agg)| (tag, agg, agg.passes.values().sum::<f64>()))
+                .collect();
+            node_rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
             let mut nodes_json: Vec<serde_json::Value> = node_rows
                 .iter()
-                .map(|(tag, (type_id, gpu_ms, cpu_us))| {
+                .map(|(tag, agg, gpu_ms)| {
+                    // D4b: nested per-pass breakdown — each distinct `label`
+                    // under this node's tag gets its own {label, gpu_ms,
+                    // share_of_frame} row, sorted descending by gpu_ms,
+                    // always an array (even length 1).
+                    let mut pass_rows: Vec<(&String, &f64)> = agg.passes.iter().collect();
+                    pass_rows.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    let passes_json: Vec<serde_json::Value> = pass_rows
+                        .iter()
+                        .map(|(label, pass_ms)| {
+                            serde_json::json!({
+                                "label": label,
+                                "gpu_ms": pass_ms,
+                                "share_of_frame": **pass_ms / share_denom,
+                            })
+                        })
+                        .collect();
                     serde_json::json!({
                         "tag": tag,
-                        "type_id": type_id,
+                        "type_id": agg.type_id,
                         "gpu_ms": gpu_ms,
-                        "cpu_us": cpu_us,
+                        "cpu_us": agg.cpu_us,
                         "share_of_frame": gpu_ms / share_denom,
+                        "passes": passes_json,
                     })
                 })
                 .collect();
-            nodes_json.push(serde_json::json!({
-                "tag": "untagged",
-                "type_id": "untagged",
-                "gpu_ms": f.untagged_ms,
-                "cpu_us": 0.0,
-                "share_of_frame": f.untagged_ms / share_denom,
-            }));
+            // D4/D4b: per-label unmatched rows (spans whose tag matches no
+            // live executor step) replace the old collapsed "untagged"
+            // scalar.
+            let mut unmatched_rows: Vec<(&String, &f64)> = f.unmatched.iter().collect();
+            unmatched_rows.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (label, gpu_ms) in unmatched_rows {
+                nodes_json.push(serde_json::json!({
+                    "tag": label,
+                    "type_id": "unmatched",
+                    "gpu_ms": gpu_ms,
+                    "cpu_us": 0.0,
+                    "share_of_frame": gpu_ms / share_denom,
+                    "passes": [{
+                        "label": label,
+                        "gpu_ms": gpu_ms,
+                        "share_of_frame": gpu_ms / share_denom,
+                    }],
+                }));
+            }
             serde_json::json!({
                 "frame_index": f.index,
                 "total_gpu_ms": f.total_gpu_ms,
@@ -400,13 +489,15 @@ fn run_profiled(
         .collect();
 
     if let Some(w) = ranked.first() {
+        let unmatched_total: f64 = w.unmatched.values().sum();
         eprintln!(
-            "perf-soak (import) --profile: worst frame #{} = {:.3}ms GPU ({} nodes + untagged \
-             {:.3}ms)",
+            "perf-soak (import) --profile: worst frame #{} = {:.3}ms GPU ({} matched nodes + {} \
+             unmatched-label rows totalling {:.3}ms)",
             w.index,
             w.total_gpu_ms,
             w.nodes.len(),
-            w.untagged_ms
+            w.unmatched.len(),
+            unmatched_total
         );
     }
 
