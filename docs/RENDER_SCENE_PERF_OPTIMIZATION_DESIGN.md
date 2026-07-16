@@ -1,12 +1,20 @@
 # Render-Scene Perf Optimization — retiring BUG-189's ~10 ms import-graph GPU floor
 
-**Status:** APPROVED 2026-07-16 (Fable, under Peter's explicit overnight mandate: "finish the
-optimisations end to end in this orchestration session using sonnet agents") · design 2026-07-16 ·
-Fable · This document is the execution contract for an unattended Sonnet-orchestrated build. Every
-decision is closed; zero executor discretion. Scoping authority for anything this doc does not
-answer is Fable, not the orchestrator — if a phase hits an undecided fork, STOP the phase and
-surface it, do not improvise (Peter's instruction to the orchestrator, verbatim: "you do not have
-permission to make decisions yourself unadvised").
+**Status:** SHIPPED 2026-07-17 — all phases (P0–P4 + P3b) landed and P5's final re-measure is in
+(Sonnet, orchestrated overnight per Peter's explicit mandate: "finish the optimisations end to end
+in this orchestration session using sonnet agents") · design 2026-07-16 (Fable) · APPROVED
+2026-07-16. **Final numbers (AMG GT3, M4 Max, two-consecutive-run pairs, `cargo xtask perf-soak`):**
+@3840×2160 GPU p50 13.554ms → **9.45ms** (~4.1ms/~30% drop); @1920×1080 GPU p50 9.830ms → **5.73ms**
+(~4.1ms/~42% drop). BUG-189's shadow+IBL re-render waste is closed; the residual is `render_scene`'s
+main pass — real work, not staleness, and now essentially 100% of render_scene's own GPU time in
+steady state (no separately-labeled shadow/IBL rows survive a profiled run) — R4 (indexed-mesh
+rendering, deferred) is the next lever, per the Deferred section below. BUG-190 (BrainStem CPU cost)
+was diagnosed, not fixed, per this doc's own D3/D3b scope — see `docs/BUG_BACKLOG.md`. This document
+was the execution contract for an unattended Sonnet-orchestrated build; every decision was closed,
+zero executor discretion. Scoping authority for anything this doc did not answer was Fable, not the
+orchestrator — if a phase hit an undecided fork, the rule was STOP and surface it, never improvise
+(Peter's instruction to the orchestrator, verbatim: "you do not have permission to make decisions
+yourself unadvised").
 **Prerequisites:** PERF_BUDGET_GATE_DESIGN.md P1+P2+P2b SHIPPED (`7afcb059`/`49f5a066`) — perf-soak
 is this design's sole measurement oracle. GLTF_ANIMATION_DESIGN.md A1–A3 SHIPPED. Nothing here
 waits on A4 or on SCENE_SETUP_PANEL_DESIGN.md (see D9).
@@ -501,6 +509,31 @@ Forbidden moves: editing generated boards by hand; claiming BUG-190 fixed withou
 re-measure showing it. Test scope: docs-index freshness test via the default sweep.
 Dependencies: P1–P4.
 
+**P5 landed 2026-07-17.** Full re-measure on the fully-landed tree (all of P0–P4 + P3b), AMG GT3,
+two consecutive unprofiled runs per resolution: @3840×2160 GPU p50 9.454ms / 9.449ms (down from the
+P0 baseline 13.554ms — ~4.1ms/~30% drop, matching P3b's numbers within run-to-run noise); @1920×1080
+GPU p50 5.744ms / 5.716ms (down from the P0 baseline 9.830ms — ~4.1ms/~42% drop, a bigger
+proportional win than @4K since the removed IBL-convolution cost was resolution-independent). A
+profiled sanity run at both resolutions confirms `render_scene`'s tag now carries a single pass row
+in steady state (no separate `shadow`/`ibl prefilter`/`ibl irradiance` rows survive — both fully
+gated away), i.e. the entire residual is main pass: D1b's ~54%-of-render_scene forecast is now
+effectively 100%, because everything else on a static scene is gated to zero. BrainStem
+(`--warmup-frames 30`, P4's flag): GPU p50=4.003ms p95=8.174ms (healthy); CPU-encode-wall
+p50=20.330ms (only ~4-5% better than P0's uncommitted 21.4ms pre-P4 measurement) — confirms P4's own
+finding that the repaired `format!`/scan pattern was real but not BrainStem's dominant cost; the
+remaining ~20ms is a named, unattributed follow-up in `docs/BUG_BACKLOG.md`'s BUG-190 entry, not
+re-opened as a fix attempt here (D3/D3b scope). Supersession sweep: `rg` for "BUG-189", "BUG-190",
+"BUG-193", "10ms floor", "import graph floor", "R0"–"R6", "RENDER_SCENE_PERF" across `docs/` found
+no stale assertion of the old unfixed floor — the two other hits (`PERF_BUDGET_GATE_DESIGN.md` D7's
+"first customer is BUG-189's ~10ms floor" and `GLTF_ANIMATION_DESIGN.md`'s BUG-190 cross-reference)
+are both correctly-framed historical record of why those decisions were made, not present-tense
+claims — left as-is. Memory directory (`~/.claude/projects/.../memory/`) swept the same way: zero
+hits on any of the search terms, nothing to fix there. `docs/README.md`'s generated line for this
+doc was refreshed via `scripts/gen_docs_index.py` to reflect the new Status header (no doc
+added/renamed, so this was the only regen trigger). Default workspace sweep
+(`cargo nextest run --workspace`) green: 3450 passed, 12 skipped, including the docs-index
+freshness test.
+
 ## §. Decided — do not reopen
 1. Tonight = R0+R1+R2+R3+R5; R4 and R6 deferred with named triggers (D1/D2).
 2. BrainStem/BUG-190 is diagnosis-only tonight; no fix built against a guess (D3).
@@ -518,11 +551,13 @@ Dependencies: P1–P4.
 ## §. Deferred
 - **R4 — indexed mesh rendering** (kill the 3.84× vertex amplification; `Array` index port,
   `draw_indexed` in manifold-gpu, reconciliation over every flat-layout-assuming mesh consumer).
-  Revive: own Fable/Opus design session once P5's re-measure records the residual main-pass share.
-  Post-D1b forecast: main pass is ~54% of render_scene GPU time and cannot be dirty-gated (the
-  camera animates on stage), so after P2+P3 it will dominate the residual floor (~7 ms @4K) —
-  revival is near-certain; schedule the design session soon after tonight lands. The trigger
-  number and the supervised-session requirement are unchanged.
+  Revive: own Fable/Opus design session — the trigger has now fired. **P5's final re-measure
+  (2026-07-17, AMG GT3, fully-landed tree) records the residual main-pass share as ~100% of
+  render_scene's own GPU time** — ~9.45ms @3840×2160 GPU p50, ~5.73ms @1920×1080 GPU p50 — because
+  every other pass (shadow, IBL) is now gated to zero on a static scene, confirmed by a profiled run
+  showing a single unlabeled `node.render_scene` pass row at both resolutions (no earlier forecast
+  language remains; this is the measured number, not a prediction). Revival is due: schedule the
+  design session. The supervised-session requirement (D1, D2) is unchanged.
 - **R6 — GPU culling.** Revive: multi-GLB merged scenes routine (SCENE_SETUP_PANEL P4 shipped)
   AND P5 shows main-pass draw cost dominating; needs graph-side AABB infra that doesn't exist.
 - **Project-mode unmatched-span label breakdown** (mirror of P0's import-mode change). Revive:
