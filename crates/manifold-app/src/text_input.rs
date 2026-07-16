@@ -96,6 +96,12 @@ pub enum TextInputField {
     /// `UserLibrary::rename` (My Library) or executes
     /// `RenameEmbeddedPresetCommand` (Project).
     RenamePreset,
+    /// Scene Setup panel Objects-row rename (SCENE_SETUP_PANEL_DESIGN.md P2).
+    /// Carries the object's group node id; the target layer rides on
+    /// `TextInputState::scene_object_layer_id` (`LayerId` not `Copy`). Commit
+    /// routes to `RenameGroupCommand`, addressed at the layer directly (no
+    /// graph editor needs to be open — the panel is a fourth surface).
+    SceneObjectRename(u32),
 }
 
 impl TextInputField {
@@ -270,6 +276,9 @@ pub struct TextInputState {
     pub marker_id: Option<manifold_core::MarkerId>,
     /// AudioSendId for the AudioSendLabel field (Arc<str> not Copy).
     pub audio_send_id: Option<manifold_core::AudioSendId>,
+    /// LayerId for the `SceneObjectRename` field (not `Copy`, so stored
+    /// separately — mirrors `layer_id`/`audio_send_id`).
+    pub scene_object_layer_id: Option<manifold_core::LayerId>,
     /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
     pub graph_param_name: Option<String>,
     /// Cell context for `GraphTableCell` (carries the full table, so stored
@@ -318,6 +327,7 @@ impl TextInputState {
             layer_id: None,
             marker_id: None,
             audio_send_id: None,
+            scene_object_layer_id: None,
             graph_param_name: None,
             graph_table_edit: None,
             inspector_param: None,

@@ -1435,7 +1435,8 @@ pub fn sync_inspector_data(
     if ui.scene_setup_panel.is_open() {
         use manifold_renderer::node_graph::scene_vm::SceneVm;
         use manifold_ui::panels::scene_setup_panel::{
-            AtmosphereRowVm, EnvironmentRowVm, RowAddr, RowValue, SceneSetupState, SceneSetupVm,
+            AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
+            SceneSetupState, SceneSetupVm, TransformRowVm,
         };
 
         let sel_layer_idx = selection
@@ -1474,12 +1475,167 @@ pub fn sync_inspector_data(
                                        driven: bool,
                                        min: f32,
                                        max: f32| RowValue {
-                                addr: RowAddr { node_doc_id, param_id: param_id.to_string() },
+                                addr: RowAddr::root(node_doc_id, param_id),
                                 value,
                                 min,
                                 max,
                                 driven,
                             };
+                            // Scoped variant for a P2 Objects row living
+                            // inside the object's own group (material/
+                            // modifier params) — same shape, plus the
+                            // `[group_node_id]` scope the graph command
+                            // family's `.with_scope` takes.
+                            let scoped_row = |scope_path: Vec<u32>,
+                                              node_doc_id: u32,
+                                              param_id: &str,
+                                              value: f32,
+                                              driven: bool,
+                                              min: f32,
+                                              max: f32| RowValue {
+                                addr: RowAddr { scope_path, node_doc_id, param_id: param_id.to_string() },
+                                value,
+                                min,
+                                max,
+                                driven,
+                            };
+                            let transform_row = |t: &manifold_renderer::node_graph::scene_vm::TransformVm| {
+                                Box::new(TransformRowVm {
+                                    pos: (
+                                        row(t.node_doc_id, "pos_x", t.pos_value.0, t.pos_driven.0, -100.0, 100.0),
+                                        row(t.node_doc_id, "pos_y", t.pos_value.1, t.pos_driven.1, -100.0, 100.0),
+                                        row(t.node_doc_id, "pos_z", t.pos_value.2, t.pos_driven.2, -100.0, 100.0),
+                                    ),
+                                    rot: (
+                                        row(
+                                            t.node_doc_id,
+                                            "rot_x",
+                                            t.rot_value.0,
+                                            t.rot_driven.0,
+                                            -std::f32::consts::TAU,
+                                            std::f32::consts::TAU,
+                                        ),
+                                        row(
+                                            t.node_doc_id,
+                                            "rot_y",
+                                            t.rot_value.1,
+                                            t.rot_driven.1,
+                                            -std::f32::consts::TAU,
+                                            std::f32::consts::TAU,
+                                        ),
+                                        row(
+                                            t.node_doc_id,
+                                            "rot_z",
+                                            t.rot_value.2,
+                                            t.rot_driven.2,
+                                            -std::f32::consts::TAU,
+                                            std::f32::consts::TAU,
+                                        ),
+                                    ),
+                                    scale: (
+                                        row(t.node_doc_id, "scale_x", t.scale_value.0, t.scale_driven.0, 0.01, 10.0),
+                                        row(t.node_doc_id, "scale_y", t.scale_value.1, t.scale_driven.1, 0.01, 10.0),
+                                        row(t.node_doc_id, "scale_z", t.scale_value.2, t.scale_driven.2, 0.01, 10.0),
+                                    ),
+                                })
+                            };
+                            let material_row =
+                                |group_node_id: u32, m: &manifold_renderer::node_graph::scene_vm::MaterialVm| match m
+                                {
+                                    manifold_renderer::node_graph::scene_vm::MaterialVm::Known(row_data) => {
+                                        let scope = vec![group_node_id];
+                                        let color = (
+                                            scoped_row(
+                                                scope.clone(),
+                                                row_data.node_doc_id,
+                                                "color_r",
+                                                row_data.base_color_value.0,
+                                                row_data.base_color_driven.0,
+                                                0.0,
+                                                1.0,
+                                            ),
+                                            scoped_row(
+                                                scope.clone(),
+                                                row_data.node_doc_id,
+                                                "color_g",
+                                                row_data.base_color_value.1,
+                                                row_data.base_color_driven.1,
+                                                0.0,
+                                                1.0,
+                                            ),
+                                            scoped_row(
+                                                scope.clone(),
+                                                row_data.node_doc_id,
+                                                "color_b",
+                                                row_data.base_color_value.2,
+                                                row_data.base_color_driven.2,
+                                                0.0,
+                                                1.0,
+                                            ),
+                                        );
+                                        match &row_data.metallic_roughness {
+                                            Some(mr) => ObjectMaterialVm::Pbr {
+                                                color,
+                                                metallic: scoped_row(
+                                                    scope.clone(),
+                                                    row_data.node_doc_id,
+                                                    "metallic",
+                                                    mr.metallic_value,
+                                                    mr.metallic_driven,
+                                                    0.0,
+                                                    1.0,
+                                                ),
+                                                roughness: scoped_row(
+                                                    scope,
+                                                    row_data.node_doc_id,
+                                                    "roughness",
+                                                    mr.roughness_value,
+                                                    mr.roughness_driven,
+                                                    0.01,
+                                                    1.0,
+                                                ),
+                                            },
+                                            None => ObjectMaterialVm::Other { color },
+                                        }
+                                    }
+                                    manifold_renderer::node_graph::scene_vm::MaterialVm::None => {
+                                        ObjectMaterialVm::None
+                                    }
+                                };
+                            let objects: Vec<ObjectRowVm> = vm
+                                .objects
+                                .iter()
+                                .map(|o| match o {
+                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known {
+                                        index,
+                                        group_node_id,
+                                        name,
+                                        transform,
+                                        material,
+                                        modifier_chain,
+                                        ..
+                                    } => ObjectRowVm::Known(Box::new(
+                                        manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
+                                            index: *index,
+                                            group_node_id: *group_node_id,
+                                            name: name.clone(),
+                                            transform: transform.as_ref().map(&transform_row),
+                                            material: material_row(*group_node_id, material),
+                                            modifier_names: modifier_chain
+                                                .iter()
+                                                .map(|m| modifier_display_name(&m.type_id))
+                                                .collect(),
+                                        },
+                                    )),
+                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Custom {
+                                        index,
+                                        transform,
+                                    } => ObjectRowVm::Custom {
+                                        index: *index,
+                                        transform: transform.as_ref().map(&transform_row),
+                                    },
+                                })
+                                .collect();
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -1565,6 +1721,7 @@ pub fn sync_inspector_data(
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
+                                objects,
                             }))
                         }
                     }
@@ -2697,6 +2854,23 @@ mod build_audio_card_state_trigger_mode_tests {
         let params = ["clip_trigger"];
         let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
         assert_eq!(cfg.trigger_mode_idx[0], 2); // Both
+    }
+}
+
+/// Display name for one D6 modifier-stack atom (P2 shows the chain as a
+/// display-only line; the interactive stack is P5). Falls back to the raw
+/// type_id for anything outside the curated D6 list — never blank, per D3's
+/// "custom" degrade rule.
+fn modifier_display_name(type_id: &str) -> String {
+    match type_id {
+        "node.bend_mesh" => "Bend".to_string(),
+        "node.twist_mesh" => "Twist".to_string(),
+        "node.taper_mesh" => "Taper".to_string(),
+        "node.push_along_normals" => "Inflate".to_string(),
+        "node.push_mesh" => "Displace by Texture".to_string(),
+        "node.morph_mesh" => "Morph".to_string(),
+        "node.rotate_3d" => "Rotate".to_string(),
+        other => other.to_string(),
     }
 }
 

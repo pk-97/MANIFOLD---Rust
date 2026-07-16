@@ -212,13 +212,15 @@ pub enum PanelAction {
     /// closes the other dock, same either/or toggle policy as that pair).
     /// Header button.
     OpenSceneSetup,
-    /// A Scene Setup panel row write: `(layer_id, node_doc_id, param_name,
-    /// new_value)`. Dispatched through the identical `SetGraphNodeParamCommand`
-    /// the graph editor's node face already uses — the panel's "fourth
-    /// surface" (D3: every editable row carries its `(scope_path,
-    /// node_doc_id, param_id)` write address; scope_path is always empty for
-    /// P1's Environment/Fog rows, which live at the generator graph's root).
-    SceneSetupParamChanged(LayerId, u32, String, f32),
+    /// A Scene Setup panel row write: `(layer_id, scope_path, node_doc_id,
+    /// param_name, new_value)`. Dispatched through the identical
+    /// `SetGraphNodeParamCommand` the graph editor's node face already uses —
+    /// the panel's "fourth surface" (D3: every editable row carries its
+    /// `(scope_path, node_doc_id, param_id)` write address). `scope_path` is
+    /// empty for root-level rows (Environment/Fog, Lights, Camera, object
+    /// transforms) and `[group_node_id]` for a P2 Objects material/modifier
+    /// row living inside the object's own group.
+    SceneSetupParamChanged(LayerId, Vec<u32>, u32, String, f32),
     /// "Add environment" (D3): spawn `node.bake_environment` wired to the
     /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
     SceneSetupAddEnvironment(LayerId, u32),
@@ -233,6 +235,18 @@ pub enum PanelAction {
     /// D7 "Open Graph Editor" empty-state action for a generator layer with
     /// no `render_scene` — reuses the existing open-editor action.
     SceneSetupOpenGraphEditor(LayerId),
+    /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
+    /// (SCENE_BUILD P5) — no new mutation path.
+    SceneSetupAddObject(LayerId, u32, u32),
+    /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
+    /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
+    SceneSetupAddLight(LayerId, u32, u32),
+    /// P2 object-name click: `(layer_id, group_node_id, current_name)` — opens
+    /// the shared inline text-input session (same mechanics as
+    /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
+    /// SCENE_BUILD P3 rename-sweep command, unchanged).
+    SceneSetupRenameObjectClicked(LayerId, u32, String),
 
     // Footer
     CycleQuantize,

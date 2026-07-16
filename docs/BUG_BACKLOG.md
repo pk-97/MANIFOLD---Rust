@@ -134,6 +134,26 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-191 (scene-setup-no-remove-object-command) — Scene Setup panel's Objects section has no "Remove" affordance — no composite command exists to dispatch
+
+**Status:** OPEN — found 2026-07-17 during SCENE_SETUP_PANEL_DESIGN.md P2 (Objects section), escalated per the design doc's own §8 contract rather than improvised.
+
+**Symptom:** SCENE_SETUP_PANEL_DESIGN.md's D4 table and P2 phase brief both call for a per-object "remove (delete-group + decrement composite, the existing path)" — the brief's own VERIFY marker (`rg -n "delete.*group|RemoveScene" crates/manifold-editing/src/commands/graph.rs`) turns up nothing: no composite command decrements `render_scene`'s `objects` count, renumbers the remaining `mesh_k`/`transform_k`/`material_k` wires above the removed index, and deletes the group subtree as one undo unit. `RemoveGraphNodeCommand` (generic node+wire removal) exists but does NOT touch the `objects` param or renumber subsequent object ports — using it alone would leave a gap (e.g. removing object 1 of 3 leaves `objects=3` with `mesh_1` unwired, showing as a phantom Custom row, while `mesh_2` stays wired at the wrong index). `RemoveSceneCommand` (`manifold-editing/src/commands/session_commands.rs`) is a different concept entirely (SESSION_MODE clip-launch scenes, not 3D scenes).
+
+**Root cause:** design-time assumption gap — SCENE_SETUP_PANEL_DESIGN.md assumed a removal composite already shipped (mirroring `AddSceneObjectCommand`/`AddSceneLightCommand`), but no prior phase (SCENE_BUILD P5 built add-only) ever built the remove side.
+
+**Fix shape:** a new `RemoveSceneObjectCommand` (and `RemoveSceneLightCommand`), each one undo unit, shaped like `AddSceneObjectCommand`: delete the object's group node + its 3 root-level wires (`mesh_k`/`transform_k`/`material_k` → `render_scene`), decrement `objects`, and renumber every wire whose port index was above the removed one (`mesh_{k+1}` → `mesh_k`, etc. — lights are simpler, no renumbering needed since `node.light` wires directly with no per-object port shift beyond the single `light_k` slot). This is a genuine new composite, not one of SCENE_SETUP_PANEL_DESIGN's five named additions (env/fog add, D5 import, D6 ×3) — Peter's call needed on whether it's in-scope for this design or its own small follow-up. P2 shipped without a Remove control rather than invent this unreviewed.
+
+### BUG-192 (scene-setup-vertex-count-not-computable-from-def) — Scene Setup panel's header "vertex count" (D4) has no honest source — mesh geometry isn't stored in the graph def
+
+**Status:** OPEN — found 2026-07-17 during SCENE_SETUP_PANEL_DESIGN.md P2, same escalate-don't-fabricate call as BUG-191.
+
+**Symptom:** D4's header row commits to "object/light/vertex counts + shadow-caster count (static, from the Vm — the honest cheap cost line)". Object/light/shadow-caster counts are real (`SceneHeaderVm`, already shipped P1). A vertex count is not: mesh-source nodes are either procedural generators (`node.cube_mesh`, `node.generate_grid_mesh`, …, whose vertex counts are Rust-side constants/formulas, never stored as a graph-def param) or `node.gltf_mesh_source`/`node.gltf_skinned_mesh_source` (which read a `.glb` from disk at RUN time — the importer's own `GltfImportSummary.vertex_count` is import-time metadata, never stashed back onto the mesh-source node's `params`). `SceneVm::from_def` is a pure function of `EffectGraphDef` alone (D3's own architectural constraint, enforced by §4's negative gate) with no GPU/mesh access — so no code path can produce a real vertex count without either violating that purity or loading assets.
+
+**Root cause:** design assumed a "cheap proxy" count was available; on inspection, no per-node vertex metadata exists anywhere in the def, and fabricating one (e.g. counting resolved mesh-source nodes, which would just re-state `object_count`) would be a dishonestly-labeled number, not a proxy.
+
+**Fix shape:** two real options, both bigger than a panel-only change: (a) stash `vertex_count` as a node param on mesh-source nodes at import/generation time (touches `gltf_import.rs` + every procedural mesh-generator primitive — a real, scoped feature); (b) compute it from loaded mesh data at content-thread render time and pipe it back as part of `ContentState` (crosses the UI/content boundary `SceneVm` was built to avoid). Until one ships, the header row omits "vertices" — P2 shipped objects/lights/shadow-casters only (already present from P1), which is what's genuinely computable today.
+
 ### BUG-190 (brainstem-24-skinned-objects-370ms-per-frame) — `BrainStem.glb` (24 separate skinned objects, 78 materials total) renders a flat ~370ms/frame from frame 0 — 18x over the 20ms hot-path budget — found 2026-07-16 during GLTF_ANIMATION_DESIGN.md A2's hot-path gate
 **Status:** OPEN — measurement session only, not diagnosed; NOT blocking A2 (BrainStem was the design doc's joint-count re-derivation note, never a named gate fixture — the actual A2 gate fixtures, `CesiumMan.glb` and `Fox.glb`, measure 5–7ms/frame, comfortably inside budget).
 

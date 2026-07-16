@@ -256,7 +256,7 @@ pub(super) fn dispatch_project(
         // `Application::watch_generator_graph` does, then dispatch the SAME
         // command a card/node-face/group-face write would — no new mutation
         // path (§4).
-        PanelAction::SceneSetupParamChanged(layer_id, node_doc_id, param_id, value) => {
+        PanelAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
@@ -265,7 +265,8 @@ pub(super) fn dispatch_project(
                     param_id.clone(),
                     manifold_core::effect_graph_def::SerializedParamValue::Float { value: *value },
                     default,
-                );
+                )
+                .with_scope(scope_path.clone());
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
@@ -296,6 +297,48 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        // P2 "+ Object"/"+ Light" buttons: the SAME `AddSceneObjectCommand`/
+        // `AddSceneLightCommand` the graph editor's own canvas buttons
+        // dispatch (SCENE_BUILD P5) — no new mutation path. `next_index`
+        // rides on the action (the panel reads it off the live Vm's own
+        // `object_count`/`light_count`, same source the canvas button uses).
+        // The centroid/pos offsets are cosmetic editor-canvas placement only.
+        PanelAction::SceneSetupAddObject(layer_id, render_scene_node_id, next_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let centroid = (900.0, 200.0 + 40.0 * *next_index as f32);
+                let cmd = manifold_editing::commands::graph::AddSceneObjectCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *next_index,
+                    centroid,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SceneSetupAddLight(layer_id, render_scene_node_id, next_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let pos = (-260.0, 50.0 + 40.0 * *next_index as f32);
+                let cmd = manifold_editing::commands::graph::AddSceneLightCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *next_index,
+                    pos,
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -350,7 +393,11 @@ pub(super) fn dispatch_project(
 /// lookup `Application::watch_generator_graph` performs, factored out so the
 /// Scene Setup panel's dispatch arms above don't need the graph editor to be
 /// open (they address the layer directly, not `watched_graph_target`).
-fn generator_catalog_default(
+/// `pub(crate)` + re-exported from `ui_bridge` (see `mod.rs`) so
+/// `Application::handle_text_input_commit`'s `SceneObjectRename` arm can
+/// reuse it too — the panel's rename commit is the same "address the layer
+/// directly" shape as the four arms below.
+pub(crate) fn generator_catalog_default(
     project: &Project,
     layer_id: &LayerId,
 ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
@@ -361,4 +408,175 @@ fn generator_catalog_default(
     }
     let json = manifold_renderer::node_graph::bundled_preset_json(&gt)?;
     serde_json::from_str(&json).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    //! SCENE_SETUP_PANEL_DESIGN.md P2 gate: "add-object button emits
+    //! AddSceneObjectCommand" — proven end to end through the SAME
+    //! `dispatch_project` entry point the panel's "+ Object"/"+ Light"
+    //! clicks reach (`ui_bridge::dispatch` routes `SceneSetupAddObject`/
+    //! `SceneSetupAddLight` here, per `mod.rs`'s routing list), not just the
+    //! command's own already-covered unit test in `manifold-editing`.
+    use super::*;
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::types::LayerType;
+
+    fn scene_layer_project() -> (Project, LayerId, u32) {
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Scene",
+            LayerType::Generator,
+            PresetTypeId::from_string("SceneStarter".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let def = manifold_renderer::node_graph::bundled_preset_def(
+            &project.timeline.layers[idx].generator_type().clone(),
+        )
+        .expect("SceneStarter is a bundled preset");
+        let render_scene_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .expect("SceneStarter has a render_scene node")
+            .id;
+        (project, layer_id, render_scene_id)
+    }
+
+    /// The layer's CURRENT effective def — the per-instance override once
+    /// one exists (post-edit), falling back to the bundled catalog default
+    /// beforehand (pre-edit: a fresh `SceneStarter` layer has no override
+    /// yet, exactly why `AddSceneObjectCommand` needs a `catalog_default` to
+    /// lift one — same resolution `state_sync.rs`'s panel-Vm builder uses).
+    fn effective_def(project: &Project, layer_id: &LayerId) -> manifold_core::effect_graph_def::EffectGraphDef {
+        let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
+        layer.generator_graph().cloned().unwrap_or_else(|| {
+            manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
+                .cloned()
+                .expect("SceneStarter is a bundled preset")
+        })
+    }
+
+    fn objects_param(project: &Project, layer_id: &LayerId, render_scene_id: u32) -> f32 {
+        let graph = effective_def(project, layer_id);
+        let scene = graph.nodes.iter().find(|n| n.id == render_scene_id).unwrap();
+        match scene.params.get("objects") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            _ => 0.0,
+        }
+    }
+
+    fn lights_param(project: &Project, layer_id: &LayerId, render_scene_id: u32) -> f32 {
+        let graph = effective_def(project, layer_id);
+        let scene = graph.nodes.iter().find(|n| n.id == render_scene_id).unwrap();
+        match scene.params.get("lights") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            _ => 0.0,
+        }
+    }
+
+    /// Minimal harness for `dispatch_project`'s unused-outside-the-matched-
+    /// arms params (`_content_state`/`_ui`/`_selection`/`_active_layer`/
+    /// `_user_prefs`) — none of the four Scene Setup arms touch them.
+    fn dispatch_harness() -> (
+        crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+        crate::content_state::ContentState,
+        UIRoot,
+        SelectionState,
+        Option<LayerId>,
+        UserPrefs,
+    ) {
+        (
+            crossbeam_channel::unbounded().0,
+            crate::content_state::ContentState::default(),
+            UIRoot::new(),
+            manifold_ui::UIState::new(),
+            None,
+            UserPrefs::load(),
+        )
+    }
+
+    #[test]
+    fn scene_setup_add_object_dispatches_add_scene_object_command() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = objects_param(&project, &layer_id, render_scene_id);
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action =
+            PanelAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before as u32);
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "adding an object is a structural graph edit");
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+    }
+
+    #[test]
+    fn scene_setup_add_light_dispatches_add_scene_light_command() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = lights_param(&project, &layer_id, render_scene_id);
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action =
+            PanelAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, before as u32);
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "adding a light is a structural graph edit");
+        assert_eq!(lights_param(&project, &layer_id, render_scene_id), before + 1.0);
+    }
+
+    /// "rename emits the sweep command": `generator_catalog_default` +
+    /// `RenameGroupCommand` is the EXACT pair `Application::
+    /// handle_text_input_commit`'s `SceneObjectRename` arm calls — proven
+    /// here against a real project/layer instead of only via
+    /// `RenameGroupCommand`'s own already-covered unit tests, so the panel's
+    /// specific "resolve by layer_id, not watched_graph_target" wiring is
+    /// what's actually under test.
+    #[test]
+    fn generator_catalog_default_plus_rename_group_command_renames_the_object() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let def = generator_catalog_default(&project, &layer_id).expect("resolves for a live layer");
+        let group_node_id = def
+            .nodes
+            .iter()
+            .find(|n| n.group.is_some())
+            .expect("SceneStarter has at least one named object group")
+            .id;
+
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let mut cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+            target,
+            Vec::new(),
+            group_node_id,
+            "Hero".to_string(),
+            def,
+        );
+        use manifold_editing::command::Command;
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let graph = layer.generator_graph().unwrap();
+        let renamed = graph.nodes.iter().find(|n| n.id == group_node_id).unwrap();
+        assert_eq!(renamed.handle.as_deref(), Some("Hero"));
+        // render_scene_id untouched by the rename — sanity that the harness
+        // resolved the right node.
+        assert!(graph.nodes.iter().any(|n| n.id == render_scene_id));
+    }
 }

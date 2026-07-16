@@ -12,6 +12,12 @@ mod project;
 mod state_sync;
 mod transport;
 
+/// Re-exported so `Application::handle_text_input_commit`'s
+/// `SceneObjectRename` arm (main-window text-input commit, not a
+/// `PanelAction`) can resolve a layer's generator-graph catalog default the
+/// same way the Scene Setup panel's other dispatch arms do.
+pub(crate) use project::generator_catalog_default;
+
 use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -566,6 +572,8 @@ pub fn dispatch(
         | PanelAction::SceneSetupParamChanged(..)
         | PanelAction::SceneSetupAddEnvironment(..)
         | PanelAction::SceneSetupAddFog(..)
+        | PanelAction::SceneSetupAddObject(..)
+        | PanelAction::SceneSetupAddLight(..)
         | PanelAction::SceneSetupNewScene(..) => project::dispatch_project(
             action,
             project,
@@ -603,6 +611,10 @@ pub fn dispatch(
         | PanelAction::EffectMappingGotoNode { .. }
         // Consumed in app_render (opens the inline rename editor); no-op here.
         | PanelAction::AudioSendLabelClicked(_)
+        // Consumed in app_render (opens the Scene Setup object-rename inline
+        // editor, SCENE_SETUP_PANEL_DESIGN.md P2) — same shape as
+        // `AudioSendLabelClicked` above.
+        | PanelAction::SceneSetupRenameObjectClicked(..)
         // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
         | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
 

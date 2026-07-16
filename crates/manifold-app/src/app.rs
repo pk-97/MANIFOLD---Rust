@@ -1496,6 +1496,35 @@ impl Application {
                     self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                 }
             }
+            // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md P2) ───────
+            // The panel addresses the layer directly (no graph editor needs
+            // to be open — it's a fourth surface, not a canvas view), so this
+            // resolves its own catalog default via `generator_catalog_default`
+            // instead of `watched_graph_target`/`watched_catalog_default`.
+            TextInputField::SceneObjectRename(group_node_id) => {
+                let new_handle = text.trim().to_string();
+                if !new_handle.is_empty()
+                    && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
+                {
+                    if let Some(default) =
+                        crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
+                    {
+                        let target = manifold_core::GraphTarget::Generator(layer_id);
+                        let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+                            target,
+                            Vec::new(),
+                            group_node_id,
+                            new_handle,
+                            default,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::GraphStringParam(node_id) => {
                 if let (Some(param_name), Some(target), Some(default)) = (
                     self.text_input.graph_param_name.take(),

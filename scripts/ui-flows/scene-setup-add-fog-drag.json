@@ -63,9 +63,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "0.00",
-          "under_text": "Fog",
-          "nth": 0
+          "name": "scene_setup.fog.density_value"
         }
       },
       "check": "Exists"
@@ -75,9 +73,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "0.00",
-          "under_text": "Fog",
-          "nth": 0
+          "name": "scene_setup.fog.density_value"
         }
       },
       "gesture": {
@@ -98,13 +94,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "0.00",
-          "under_text": "Fog",
-          "nth": 0
+          "name": "scene_setup.fog.density_value",
+          "text": "0.00"
         }
       },
       "check": {
-        "Count": 1
+        "Count": 0
       }
     }
   },
@@ -116,17 +111,5 @@
       }
     }
   },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "text": "0.00",
-          "under_text": "Fog",
-          "nth": 0
-        }
-      },
-      "check": "Exists"
-    }
-  }
+  "Snapshot"
 ]

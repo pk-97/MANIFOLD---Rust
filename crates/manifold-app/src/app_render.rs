@@ -1568,6 +1568,29 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
+                PanelAction::SceneSetupRenameObjectClicked(layer_id, group_node_id, name) => {
+                    // P2 object-name click — same shape as
+                    // `AudioSendLabelClicked` below: begin the shared inline
+                    // text-input session anchored over the row's own name
+                    // label. Commit routes to `RenameGroupCommand` addressed
+                    // directly at the layer (no graph editor needs to be
+                    // open — the panel is a fourth surface, not a canvas view).
+                    if let Some(r) = self
+                        .ws
+                        .ui_root
+                        .scene_setup_panel
+                        .object_name_rect(&self.ws.ui_root.tree, *group_node_id)
+                    {
+                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::SceneObjectRename(*group_node_id),
+                            name,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            11.0,
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::OpenGeneratorGraphEditor => {
                     // Ask the content thread to snapshot the active layer's
                     // generator graph and set the unified watched_graph_target
