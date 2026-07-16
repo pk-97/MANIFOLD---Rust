@@ -1448,15 +1448,11 @@ fn azalea_glb_renders_lit_through_render_scene() {
         return;
     }
 
-    let (document, buffers, _images) =
-        gltf::import(&path).unwrap_or_else(|e| panic!("gltf::import({}): {e}", path.display()));
-
-    let scene = document.default_scene().unwrap_or_else(|| {
-        panic!("{}: glb has no default scene — cannot walk node tree", path.display())
-    });
+    let (document, buffers, _images) = crate::node_graph::gltf_load::import_glb(&path)
+        .unwrap_or_else(|e| panic!("import_glb({}): {e}", path.display()));
 
     let mut verts: Vec<MeshVertex> = Vec::new();
-    for node in scene.nodes() {
+    for node in crate::node_graph::gltf_load::resolve_import_nodes(&document) {
         walk_gltf_node(&node, MAT4_IDENTITY, &buffers, &mut verts);
     }
     assert!(
