@@ -27,7 +27,7 @@
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 823.0, "y": 756.0 } },
+      "target": { "Point": { "x": 823.0, "y": 780.0 } },
       "gesture": {
         "Click": {
           "modifiers": {}
