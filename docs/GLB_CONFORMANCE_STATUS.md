@@ -4,14 +4,19 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 69 expect_pass, 79 xfail across 5 reasons, 0 unclassified.**
+**148 assets total — 107 expect_pass, 41 xfail across 6 reasons, 0 unclassified.**
 
 ## expect_pass
 
 | Asset | Checks |
 |---|---|
+| `ABeautifulGame.glb` | non_black_fraction_min |
 | `AlphaBlendModeTest.glb` | non_black_fraction_min, golden |
 | `AnimatedMorphCube.glb` | non_black_fraction_min, golden |
+| `AnisotropyBarnLamp.glb` | non_black_fraction_min |
+| `AnisotropyDiscTest.glb` | non_black_fraction_min |
+| `AnisotropyRotationTest.glb` | non_black_fraction_min, golden |
+| `AnisotropyStrengthTest.glb` | non_black_fraction_min |
 | `AntiqueCamera.glb` | non_black_fraction_min, golden |
 | `AttenuationTest.glb` | region_mean_luminance_below |
 | `Avocado.glb` | non_black_fraction_min, golden |
@@ -24,35 +29,59 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `BoxTexturedNonPowerOfTwo.glb` | non_black_fraction_min, golden |
 | `BoxVertexColors.glb` | non_black_fraction_min, golden |
 | `BrainStem.glb` | non_black_fraction_min, golden |
+| `CarConcept.glb` | non_black_fraction_min |
+| `CarbonFibre.glb` | non_black_fraction_min |
 | `CesiumMan.glb` | non_black_fraction_min, golden |
 | `CesiumMilkTruck.glb` | non_black_fraction_min, golden |
+| `ChairDamaskPurplegold.glb` | non_black_fraction_min |
+| `ChronographWatch.glb` | non_black_fraction_min |
 | `ClearCoatCarPaint.glb` | non_black_fraction_min, golden |
 | `ClearCoatTest.glb` | region_max_luminance_above, golden |
 | `ClearcoatWicker.glb` | non_black_fraction_min, golden |
+| `CommercialRefrigerator.glb` | non_black_fraction_min |
 | `CompareAlphaCoverage.glb` | non_black_fraction_min, golden |
 | `CompareAmbientOcclusion.glb` | non_black_fraction_min, golden |
+| `CompareAnisotropy.glb` | non_black_fraction_min, golden |
 | `CompareBaseColor.glb` | non_black_fraction_min, golden |
 | `CompareClearcoat.glb` | non_black_fraction_min, golden |
+| `CompareDispersion.glb` | non_black_fraction_min |
 | `CompareEmissiveStrength.glb` | non_black_fraction_min, golden |
+| `CompareIor.glb` | non_black_fraction_min |
+| `CompareIridescence.glb` | non_black_fraction_min, golden |
 | `CompareMetallic.glb` | non_black_fraction_min, golden |
 | `CompareNormal.glb` | non_black_fraction_min, golden |
 | `CompareRoughness.glb` | non_black_fraction_min, golden |
+| `CompareSheen.glb` | non_black_fraction_min, golden |
 | `CompareSpecular.glb` | non_black_fraction_min, golden |
 | `CompareTransmission.glb` | region_stddev_above |
 | `CompareVolume.glb` | region_green_minus_red_above |
 | `Corset.glb` | non_black_fraction_min, golden |
 | `DamagedHelmet.glb` | non_black_fraction_min, golden |
 | `DirectionalLight.glb` | non_black_fraction_min, golden |
+| `DispersionTest.glb` | non_black_fraction_min |
+| `DragonAttenuation.glb` | non_black_fraction_min |
+| `DragonDispersion.glb` | non_black_fraction_min |
 | `Duck.glb` | non_black_fraction_min, golden |
 | `EmissiveStrengthTest.glb` | lights_off_nonblack_min, golden |
 | `Fox.glb` | non_black_fraction_min, golden |
+| `GlamVelvetSofa.glb` | non_black_fraction_min |
+| `GlassBrokenWindow.glb` | non_black_fraction_min |
+| `GlassHurricaneCandleHolder.glb` | non_black_fraction_min |
+| `GlassVaseFlowers.glb` | non_black_fraction_min |
+| `IORTestGrid.glb` | non_black_fraction_min |
 | `InterpolationTest.glb` | non_black_fraction_min, golden |
+| `IridescenceAbalone.glb` | non_black_fraction_min |
+| `IridescenceLamp.glb` | non_black_fraction_min |
+| `IridescenceSuzanne.glb` | non_black_fraction_min, golden |
+| `IridescentDishWithOlives.glb` | non_black_fraction_min |
 | `Lantern.glb` | non_black_fraction_min, golden |
+| `LightsPunctualLamp.glb` | non_black_fraction_min |
 | `MaterialsVariantsShoe.glb` | non_black_fraction_min, golden |
 | `MetalRoughSpheres.glb` | non_black_fraction_min, golden |
 | `MetalRoughSpheresNoTextures.glb` | non_black_fraction_min, golden |
 | `MorphPrimitivesTest.glb` | non_black_fraction_min, golden |
 | `MorphStressTest.glb` | non_black_fraction_min, golden |
+| `MosquitoInAmber.glb` | non_black_fraction_min |
 | `MultiUVTest.glb` | non_black_fraction_min, golden |
 | `NegativeScaleTest.glb` | non_black_fraction_min, golden |
 | `NormalTangentMirrorTest.glb` | non_black_fraction_min, golden |
@@ -64,16 +93,25 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `RecursiveSkeletons.glb` | non_black_fraction_min, golden |
 | `RiggedFigure.glb` | non_black_fraction_min, golden |
 | `RiggedSimple.glb` | non_black_fraction_min, golden |
+| `SheenChair.glb` | non_black_fraction_min |
+| `SheenTestGrid.glb` | non_black_fraction_min, golden |
 | `SimpleInstancing.glb` | non_black_fraction_min, golden |
 | `SpecGlossVsMetalRough.glb` | non_black_fraction_min, golden |
+| `SpecularSilkPouf.glb` | non_black_fraction_min |
 | `SpecularTest.glb` | region_mean_luminance_below, golden |
+| `SunglassesKhronos.glb` | non_black_fraction_min |
 | `TextureCoordinateTest.glb` | non_black_fraction_min, golden |
 | `TextureEncodingTest.glb` | non_black_fraction_min, golden |
 | `TextureLinearInterpolationTest.glb` | non_black_fraction_min, golden |
 | `TextureSettingsTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformMultiTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformTest/TextureTransformTest.gltf` | region_green_minus_red_above, golden |
+| `ToyCar.glb` | non_black_fraction_min |
+| `TransmissionOrderTest.glb` | non_black_fraction_min |
 | `TransmissionRoughnessTest.glb` | region_mean_luminance_below |
+| `TransmissionTest.glb` | non_black_fraction_min |
+| `TransmissionThinwallTestGrid.glb` | non_black_fraction_min |
+| `USDShaderBallForGltf.glb` | non_black_fraction_min |
 | `Unicode❤♻Test.glb` | non_black_fraction_min, golden |
 | `UnlitTest.glb` | non_black_fraction_min, golden |
 | `VertexColorTest.glb` | non_black_fraction_min, golden |
@@ -88,19 +126,27 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 - `VirtualCity.glb`
 
-### `xfail:BUG-170` — 3 asset(s)
+### `xfail:BUG-170` — 5 asset(s)
 
 **Gap:** gltf crate 'missing field node' parse failure (KHR_animation_pointer / KHR_node_visibility)
 
 - `AnimatedColorsCube.glb`
+- `AnimationPointerUVs.glb`
 - `CubeVisibility.glb`
 - `LightVisibility.glb`
+- `PotOfCoalsAnimationPointer.glb`
 
 ### `xfail:BUG-173` — 1 asset(s)
 
 **Gap:** 10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) — not a defect
 
 - `NodePerformanceTest.glb`
+
+### `xfail:BUG-184` — 1 asset(s)
+
+**Gap:** EXT_texture_webp is extensionsRequired and unsupported (no webp decoder) — correctly rejected, but the crate's raw textures[].source validation error surfaces instead of our own clean extensionsRequired veto message
+
+- `SheenWoodLeatherSofa.glb`
 
 ### `xfail:G-P7` — 29 asset(s)
 
@@ -136,53 +182,12 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 - `TriangleWithoutIndices (no glTF-Binary variant at pin)`
 - `TwoSidedPlane (no glTF-Binary variant at pin)`
 
-### `xfail:deferred-3` — 45 asset(s)
+### `xfail:diffuse-transmission-deferred` — 4 asset(s)
 
-**Gap:** unsupported material extension (sheen / iridescence / volume / transmission-family / anisotropy-the-extension) — GLB_CONFORMANCE_DESIGN.md §7 deferred item 3
+**Gap:** KHR_materials_diffuse_transmission full BTDF (and, for ScatteringSkull, KHR_materials_volume_scatter) explicitly deferred per GLTF_MATERIAL_EXTENSIONS_DESIGN.md §5 — renders as a plain opaque material, no crash
 
-- `ABeautifulGame.glb`
-- `AnimationPointerUVs.glb`
-- `AnisotropyBarnLamp.glb`
-- `AnisotropyDiscTest.glb`
-- `AnisotropyRotationTest.glb`
-- `AnisotropyStrengthTest.glb`
-- `CarConcept.glb`
-- `CarbonFibre.glb`
-- `ChairDamaskPurplegold.glb`
-- `ChronographWatch.glb`
-- `CommercialRefrigerator.glb`
-- `CompareAnisotropy.glb`
-- `CompareDispersion.glb`
-- `CompareIor.glb`
-- `CompareIridescence.glb`
-- `CompareSheen.glb`
 - `DiffuseTransmissionPlant.glb`
 - `DiffuseTransmissionTeacup.glb`
 - `DiffuseTransmissionTest.glb`
-- `DispersionTest.glb`
-- `DragonAttenuation.glb`
-- `DragonDispersion.glb`
-- `GlamVelvetSofa.glb`
-- `GlassBrokenWindow.glb`
-- `GlassHurricaneCandleHolder.glb`
-- `GlassVaseFlowers.glb`
-- `IORTestGrid.glb`
-- `IridescenceAbalone.glb`
-- `IridescenceLamp.glb`
-- `IridescenceSuzanne.glb`
-- `IridescentDishWithOlives.glb`
-- `LightsPunctualLamp.glb`
-- `MosquitoInAmber.glb`
-- `PotOfCoalsAnimationPointer.glb`
 - `ScatteringSkull.glb`
-- `SheenChair.glb`
-- `SheenTestGrid.glb`
-- `SheenWoodLeatherSofa.glb`
-- `SpecularSilkPouf.glb`
-- `SunglassesKhronos.glb`
-- `ToyCar.glb`
-- `TransmissionOrderTest.glb`
-- `TransmissionTest.glb`
-- `TransmissionThinwallTestGrid.glb`
-- `USDShaderBallForGltf.glb`
 
