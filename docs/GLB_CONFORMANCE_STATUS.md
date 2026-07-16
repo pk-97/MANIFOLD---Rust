@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 63 expect_pass, 85 xfail across 7 reasons, 0 unclassified.**
+**148 assets total — 65 expect_pass, 83 xfail across 5 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -61,11 +61,13 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `RecursiveSkeletons.glb` | non_black_fraction_min, golden |
 | `RiggedFigure.glb` | non_black_fraction_min, golden |
 | `RiggedSimple.glb` | non_black_fraction_min, golden |
+| `SimpleInstancing.glb` | non_black_fraction_min, golden |
 | `SpecGlossVsMetalRough.glb` | non_black_fraction_min, golden |
 | `SpecularTest.glb` | region_mean_luminance_below, golden |
 | `TextureCoordinateTest.glb` | non_black_fraction_min, golden |
 | `TextureEncodingTest.glb` | non_black_fraction_min, golden |
 | `TextureLinearInterpolationTest.glb` | non_black_fraction_min, golden |
+| `TextureSettingsTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformMultiTest.glb` | non_black_fraction_min, golden |
 | `TextureTransformTest/TextureTransformTest.gltf` | region_green_minus_red_above, golden |
 | `Unicode❤♻Test.glb` | non_black_fraction_min, golden |
@@ -76,23 +78,11 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 
 ## xfail (by reason)
 
-### `xfail:BUG-164` — 1 asset(s)
-
-**Gap:** per-texture wrap/filter ignored (one shared REPEAT sampler)
-
-- `TextureSettingsTest.glb`
-
 ### `xfail:BUG-165` — 1 asset(s)
 
 **Gap:** multi-texture asset never converges within 300 frames
 
 - `VirtualCity.glb`
-
-### `xfail:BUG-168` — 1 asset(s)
-
-**Gap:** EXT_mesh_gpu_instancing entirely unhandled
-
-- `SimpleInstancing.glb`
 
 ### `xfail:BUG-170` — 3 asset(s)
 
