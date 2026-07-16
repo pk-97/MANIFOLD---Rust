@@ -1,6 +1,6 @@
 # glTF Animation — imported clips as performable motion (node TRS, skinning, morphs)
 
-**Status:** PROPOSED direction, conformance treatment (STANDARD §9) — Peter's read + approval pending · 2026-07-16 · Fable 5
+**Status:** APPROVED · 2026-07-16 · Fable 5 (Peter approved) · A1 IN PROGRESS
 **Prerequisites:** GLB_XFAIL_BURNDOWN_DESIGN.md P2 (owns the BUG-170 crate-bump verdict; its D8 may hand this doc three pointer-animation assets). No dependency on GLTF_MATERIAL_EXTENSIONS_DESIGN.md — the two can execute in either order.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
