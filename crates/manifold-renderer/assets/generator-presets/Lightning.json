@@ -1,0 +1,675 @@
+{
+  "version": 2,
+  "name": "Lightning",
+  "description": "A grown bolt, not an animated one. Each strike runs one CPU midpoint-displacement pass: a jagged core channel plus two generations of branches, thick at the trunk and hairline at the tips (per-point width taper through draw_lines). The bolt is live for exactly one frame - the afterglow is a decaying feedback Max, the air glow a wide gaussian screened on top, and the whole frame kicks with a strike-driven flash envelope. Strikes arrive from clip triggers (gate card) or beat-quantized auto-strike. Near-white HDR core over pure black through the Log tone curve - never saturated purple, never slow cartoon animation.",
+  "presetMetadata": {
+    "id": "Lightning",
+    "displayName": "Lightning",
+    "category": "Pattern",
+    "oscPrefix": "lightning",
+    "available": true,
+    "isLineBased": false,
+    "params": [
+      {
+        "id": "strike_enable",
+        "name": "Strike",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": true,
+        "isTriggerGate": true,
+        "formatString": "F0",
+        "oscSuffix": "strike"
+      },
+      {
+        "id": "auto_strike",
+        "name": "Auto Strike",
+        "min": 0.0,
+        "max": 16.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1",
+        "oscSuffix": "autoStrike"
+      },
+      {
+        "id": "jag",
+        "name": "Jaggedness",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.35,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "jag"
+      },
+      {
+        "id": "branches",
+        "name": "Branches",
+        "min": 0.0,
+        "max": 12.0,
+        "defaultValue": 5.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0",
+        "oscSuffix": "branches"
+      },
+      {
+        "id": "afterglow",
+        "name": "Afterglow",
+        "min": 0.5,
+        "max": 0.98,
+        "defaultValue": 0.88,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "afterglow"
+      },
+      {
+        "id": "flash",
+        "name": "Flash",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "flash"
+      },
+      {
+        "id": "reach",
+        "name": "Reach",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.3,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "reach"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "strike_enable",
+        "label": "Strike",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "gate",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "auto_strike",
+        "label": "Auto Strike",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bolt",
+          "param": "auto_strike_beats"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "jag",
+        "label": "Jaggedness",
+        "defaultValue": 0.35,
+        "target": {
+          "kind": "node",
+          "nodeId": "bolt",
+          "param": "jag"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "branches",
+        "label": "Branches",
+        "defaultValue": 5.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "bolt",
+          "param": "branch_count"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "afterglow",
+        "label": "Afterglow",
+        "defaultValue": 0.88,
+        "target": {
+          "kind": "node",
+          "nodeId": "glow_decay",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "flash",
+        "label": "Flash",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "flash_scale",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "reach",
+        "label": "Reach",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "bolt",
+          "param": "reach"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 10,
+      "nodeId": "gate",
+      "typeId": "node.trigger_gate",
+      "handle": "gate",
+      "title": "Strike Gate",
+      "params": {
+        "enable": {
+          "type": "Bool",
+          "value": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "bolt",
+      "typeId": "node.lightning_bolt",
+      "handle": "bolt",
+      "title": "Bolt Growth",
+      "params": {
+        "auto_strike_beats": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "jag": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "branch_count": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "branch_decay": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "detail": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "reach": {
+          "type": "Float",
+          "value": 0.3
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "draw_core",
+      "typeId": "node.draw_lines",
+      "handle": "draw_core",
+      "title": "Core Channel",
+      "params": {
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.006
+        },
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "beat_flash_amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 3.6
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 3.8
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 4.0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "draw_branches",
+      "typeId": "node.draw_lines",
+      "handle": "draw_branches",
+      "title": "Branch Filaments",
+      "params": {
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.004
+        },
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "beat_flash_amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.78
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.02
+        }
+      }
+    },
+    {
+      "id": 22,
+      "nodeId": "strike_mix",
+      "typeId": "node.mix",
+      "handle": "strike_mix",
+      "title": "Core + Branches",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 30,
+      "nodeId": "glow_decay",
+      "typeId": "node.scale_offset_image",
+      "handle": "glow_decay",
+      "title": "Afterglow Decay",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 0.88
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 31,
+      "nodeId": "glow_max",
+      "typeId": "node.mix",
+      "handle": "glow_max",
+      "title": "Strike over Afterglow",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 3
+        }
+      }
+    },
+    {
+      "id": 32,
+      "nodeId": "glow_memory",
+      "typeId": "node.feedback",
+      "handle": "glow_memory",
+      "title": "Afterglow Memory",
+      "outputFormats": {
+        "out": "rgba16float"
+      }
+    },
+    {
+      "id": 40,
+      "nodeId": "air_blur_h",
+      "typeId": "node.gaussian_blur",
+      "handle": "air_blur_h",
+      "title": "Air Glow H",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 2
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 41,
+      "nodeId": "air_blur_v",
+      "typeId": "node.gaussian_blur",
+      "handle": "air_blur_v",
+      "title": "Air Glow V",
+      "params": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 2
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "step": {
+          "type": "Float",
+          "value": 3.0
+        }
+      }
+    },
+    {
+      "id": 42,
+      "nodeId": "air_screen",
+      "typeId": "node.mix",
+      "handle": "air_screen",
+      "title": "Air Glow Screen",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 50,
+      "nodeId": "pulse_env",
+      "typeId": "node.envelope_follower_ar",
+      "handle": "pulse_env",
+      "title": "Flash Envelope",
+      "params": {
+        "attack": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "release": {
+          "type": "Float",
+          "value": 0.35
+        }
+      }
+    },
+    {
+      "id": 51,
+      "nodeId": "flash_scale",
+      "typeId": "node.scale_offset_value",
+      "handle": "flash_scale",
+      "title": "Flash Amount",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 52,
+      "nodeId": "frame_flash",
+      "typeId": "node.flash",
+      "handle": "frame_flash",
+      "title": "Frame Kick",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      }
+    },
+    {
+      "id": 60,
+      "nodeId": "tone",
+      "typeId": "node.reinhard_tone_map",
+      "handle": "tone",
+      "title": "Display Tone",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 2
+        },
+        "contrast": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 12.0
+        }
+      }
+    },
+    {
+      "id": 61,
+      "nodeId": "opaque",
+      "typeId": "node.set_alpha",
+      "handle": "opaque",
+      "title": "Opaque Output",
+      "params": {
+        "alpha": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 10,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "strike"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "points",
+      "toNode": 20,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "core_edges",
+      "toNode": 20,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "widths",
+      "toNode": 20,
+      "toPort": "widths"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "points",
+      "toNode": 21,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "branch_edges",
+      "toNode": 21,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "widths",
+      "toNode": 21,
+      "toPort": "widths"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "color",
+      "toNode": 22,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "color",
+      "toNode": 22,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 32,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 31,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "out",
+      "toNode": 31,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 32,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 40,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 40,
+      "fromPort": "out",
+      "toNode": 41,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "out",
+      "toNode": 42,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 41,
+      "fromPort": "out",
+      "toNode": 42,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "strike_pulse",
+      "toNode": 50,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 50,
+      "fromPort": "out",
+      "toNode": 51,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 42,
+      "fromPort": "out",
+      "toNode": 52,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 51,
+      "fromPort": "out",
+      "toNode": 52,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 52,
+      "fromPort": "out",
+      "toNode": 60,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 60,
+      "fromPort": "out",
+      "toNode": 61,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 61,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    }
+  ]
+}

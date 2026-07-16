@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 239 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 241 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -100,7 +100,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (11)
+### Generate (12)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -112,6 +112,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | HDRI Source | `node.hdri_source` | Source | Loads a linear-HDR .exr environment map from disk as a texture, so a real-world HDRI capture flows into node.render_scene's envmap input like any other texture… |
 | Image Folder | `node.image_folder` | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
+| Lightning Bolt | `node.lightning_bolt` | Source | Grows a jagged lightning bolt with branches each time it is struck — thick at the trunk, hairline at the tips. Feed its points and edges into Draw Lines. |
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
 | Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
@@ -141,7 +142,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
-### Composite (7)
+### Composite (8)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -150,6 +151,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | Masked Mix | `node.masked_mix` | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
 | Mix | `node.mix` | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
 | Multi Blend | `node.multi_blend` | Filter | Adds together any number of images and divides by a shared amount, collapsing a long chain of Mix(Add) nodes into one. Divisor 1 sums, divisor N averages. |
+| Set Alpha | `node.set_alpha` | Filter | Forces the image's alpha to a fixed opacity while leaving the colours untouched. Ends a generator chain whose blends have eaten the alpha channel. |
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
@@ -364,7 +366,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Effect & generator presets (50)
+### Effect & generator presets (51)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -396,6 +398,7 @@ _Generated from the node registry. Do not hand-edit. 239 nodes registered, group
 | `Infrared` | Infrared | effect | Color | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
+| `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MetallicGlass` | Metallic Glass | generator | Sim | 13 |
 | `Mirror` | Mirror | effect | Spatial | 2 |

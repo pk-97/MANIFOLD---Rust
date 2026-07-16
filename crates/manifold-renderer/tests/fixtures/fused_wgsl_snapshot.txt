@@ -5831,6 +5831,416 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r1);
 }
 
+=== generator:Lightning node:62 ===
+// @static_param: n0_offset
+// @static_param: n1_amount
+// @static_param: n1_mode
+// @static_param: n2_amount
+// @static_param: n2_mode
+struct Params {
+    n0_scale: f32,
+    n0_offset: f32,
+    n1_amount: f32,
+    n1_mode: u32,
+    n2_amount: f32,
+    n2_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var src_2: texture_2d<f32>;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+fn q16(v: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(pack2x16float(v.xy)), unpack2x16float(pack2x16float(v.zw)));
+}
+
+fn overlay_channel(a: f32, b: f32) -> f32 {
+    if a < 0.5 {
+        return 2.0 * a * b;
+    }
+    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+}
+
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
+fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 0u: { return b; }
+        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
+        case 2u: { return a + b; }
+        case 3u: { return max(a, b); }
+        case 4u: { return a * b; }
+        case 5u: { return abs(a - b); }
+        case 6u: {
+            return vec3<f32>(
+                overlay_channel(a.x, b.x),
+                overlay_channel(a.y, b.y),
+                overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
+        }
+        default: { return b; }
+    }
+}
+
+fn n0_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32, offset: f32) -> vec4<f32> {
+    return vec4<f32>(
+        c.r * scale + offset,
+        c.g * scale + offset,
+        c.b * scale + offset,
+        c.a,
+    );
+}
+
+fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    let out_a = mix(a.a, b.a, amount);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    let out_a = mix(a.a, b.a, amount);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let ext_2 = textureLoad(src_2, coord, 0);
+    let r0 = q16(n0_body(ext_0, uv, vec2<f32>(dims), params.n0_scale, params.n0_offset));
+    let r1 = n1_body(ext_1, ext_2, uv, vec2<f32>(dims), params.n1_amount, params.n1_mode);
+    let r2 = q16(n2_body(r1, r0, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode));
+    textureStore(dst, coord, r2);
+}
+
+=== generator:Lightning node:63 ===
+// @static_param: n0_address_mode
+// @static_param: n0_axis
+// @static_param: n0_kernel_size
+// @static_param: n0_radius
+// @static_param: n0_radius_mode
+// @static_param: n0_step
+// @static_param: n1_amount
+// @static_param: n1_mode
+// @static_param: n2_mode
+// @static_param: n3_contrast
+// @static_param: n3_curve
+// @static_param: n3_intensity
+// @static_param: n4_alpha
+struct Params {
+    n0_kernel_size: u32,
+    n0_axis: u32,
+    n0_step: f32,
+    n0_radius_mode: u32,
+    n0_radius: f32,
+    n0_address_mode: u32,
+    n1_amount: f32,
+    n1_mode: u32,
+    n2_amount: f32,
+    n2_mode: u32,
+    n3_intensity: f32,
+    n3_contrast: f32,
+    n3_curve: u32,
+    n4_alpha: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+const SG_K9_0: f32 = 0.16501;
+const SG_K9_1: f32 = 0.15019;
+const SG_K9_2: f32 = 0.11325;
+const SG_K9_3: f32 = 0.07076;
+const SG_K9_4: f32 = 0.03664;
+const SG_K17_0: f32 = 0.10315;
+const SG_K17_1: f32 = 0.09998;
+const SG_K17_2: f32 = 0.09103;
+const SG_K17_3: f32 = 0.07786;
+const SG_K17_4: f32 = 0.06257;
+const SG_K17_5: f32 = 0.04723;
+const SG_K17_6: f32 = 0.03350;
+const SG_K17_7: f32 = 0.02232;
+const SG_K17_8: f32 = 0.01396;
+const SG_K25_0:  f32 = 0.07087;
+const SG_K25_1:  f32 = 0.06947;
+const SG_K25_2:  f32 = 0.06540;
+const SG_K25_3:  f32 = 0.05917;
+const SG_K25_4:  f32 = 0.05148;
+const SG_K25_5:  f32 = 0.04307;
+const SG_K25_6:  f32 = 0.03465;
+const SG_K25_7:  f32 = 0.02680;
+const SG_K25_8:  f32 = 0.01995;
+const SG_K25_9:  f32 = 0.01428;
+const SG_K25_10: f32 = 0.00983;
+const SG_K25_11: f32 = 0.00651;
+const SG_K25_12: f32 = 0.00415;
+
+fn overlay_channel(a: f32, b: f32) -> f32 {
+    if a < 0.5 {
+        return 2.0 * a * b;
+    }
+    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+}
+
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
+fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 0u: { return b; }
+        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
+        case 2u: { return a + b; }
+        case 3u: { return max(a, b); }
+        case 4u: { return a * b; }
+        case 5u: { return abs(a - b); }
+        case 6u: {
+            return vec3<f32>(
+                overlay_channel(a.x, b.x),
+                overlay_channel(a.y, b.y),
+                overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
+        }
+        default: { return b; }
+    }
+}
+
+fn n0_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(src_0, samp, c, 0.0);
+}
+
+fn n0_sg_blur_9(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K9_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K9_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K9_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K9_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K9_4;
+    return acc;
+}
+
+fn n0_sg_blur_17(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K17_0;
+    acc += (n0_fetch_in(uv + d      ) + n0_fetch_in(uv - d      )) * SG_K17_1;
+    acc += (n0_fetch_in(uv + d * 2.0) + n0_fetch_in(uv - d * 2.0)) * SG_K17_2;
+    acc += (n0_fetch_in(uv + d * 3.0) + n0_fetch_in(uv - d * 3.0)) * SG_K17_3;
+    acc += (n0_fetch_in(uv + d * 4.0) + n0_fetch_in(uv - d * 4.0)) * SG_K17_4;
+    acc += (n0_fetch_in(uv + d * 5.0) + n0_fetch_in(uv - d * 5.0)) * SG_K17_5;
+    acc += (n0_fetch_in(uv + d * 6.0) + n0_fetch_in(uv - d * 6.0)) * SG_K17_6;
+    acc += (n0_fetch_in(uv + d * 7.0) + n0_fetch_in(uv - d * 7.0)) * SG_K17_7;
+    acc += (n0_fetch_in(uv + d * 8.0) + n0_fetch_in(uv - d * 8.0)) * SG_K17_8;
+    return acc;
+}
+
+fn n0_sg_blur_25(uv: vec2<f32>, d: vec2<f32>) -> vec4<f32> {
+    var acc = n0_fetch_in(uv) * SG_K25_0;
+    acc += (n0_fetch_in(uv + d       ) + n0_fetch_in(uv - d       )) * SG_K25_1;
+    acc += (n0_fetch_in(uv + d *  2.0) + n0_fetch_in(uv - d *  2.0)) * SG_K25_2;
+    acc += (n0_fetch_in(uv + d *  3.0) + n0_fetch_in(uv - d *  3.0)) * SG_K25_3;
+    acc += (n0_fetch_in(uv + d *  4.0) + n0_fetch_in(uv - d *  4.0)) * SG_K25_4;
+    acc += (n0_fetch_in(uv + d *  5.0) + n0_fetch_in(uv - d *  5.0)) * SG_K25_5;
+    acc += (n0_fetch_in(uv + d *  6.0) + n0_fetch_in(uv - d *  6.0)) * SG_K25_6;
+    acc += (n0_fetch_in(uv + d *  7.0) + n0_fetch_in(uv - d *  7.0)) * SG_K25_7;
+    acc += (n0_fetch_in(uv + d *  8.0) + n0_fetch_in(uv - d *  8.0)) * SG_K25_8;
+    acc += (n0_fetch_in(uv + d *  9.0) + n0_fetch_in(uv - d *  9.0)) * SG_K25_9;
+    acc += (n0_fetch_in(uv + d * 10.0) + n0_fetch_in(uv - d * 10.0)) * SG_K25_10;
+    acc += (n0_fetch_in(uv + d * 11.0) + n0_fetch_in(uv - d * 11.0)) * SG_K25_11;
+    acc += (n0_fetch_in(uv + d * 12.0) + n0_fetch_in(uv - d * 12.0)) * SG_K25_12;
+    return acc;
+}
+
+// Dynamic-radius separable Gaussian — bit-exact port of the legacy fluid-sim
+// blur. Bilinear tap-pair optimisation: adjacent samples (j, j+1) collapse to one
+// bilinear fetch at their weighted midpoint.
+
+fn n0_sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    let sigma = max(radius / 3.0, 1.0);
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
+
+    var result = n0_fetch_in(uv);
+    var total_weight = 1.0;
+
+    let radius_int = i32(radius);
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += n0_fetch_in(uv + axis_dir * offset) * w_ab;
+            result += n0_fetch_in(uv - axis_dir * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            result += n0_fetch_in(uv + axis_dir * fj) * w_a;
+            result += n0_fetch_in(uv - axis_dir * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
+    }
+
+    return result / total_weight;
+}
+
+// Linear-radius separable Gaussian — exact port of node.blur's per-axis pass
+// (blur.wgsl mode 0): sigma = max(radius/2, 0.5), one tap per integer offset
+// -r..r (no tap-pair trick), normalized by the running weight sum, radius
+// clamped to 32. radius <= 0 collapses to a single center sample. Taps land on
+// texel centers, so fusing through this mode is filter-exact by construction.
+
+fn n0_sg_blur_linear(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32> {
+    // Single-exit on purpose: an early return here leaves unreachable blocks
+    // that abort spirv-opt's merge-return pass, and the whole fused kernel
+    // then ships UNOPTIMIZED (no inlining/DCE — measured slow enough to flip
+    // the perf gate). Same arithmetic, same order, just one return.
+    let r_int = min(i32(radius), 32);
+    var result: vec4<f32>;
+    if r_int <= 0 {
+        result = n0_fetch_in(uv);
+    } else {
+        let sigma = max(radius * 0.5, 0.5);
+        let two_sigma_sq = 2.0 * sigma * sigma;
+
+        var sum = vec4<f32>(0.0);
+        var weight_sum = 0.0;
+        for (var d: i32 = -r_int; d <= r_int; d = d + 1) {
+            let s = n0_fetch_in(uv + axis_dir * f32(d));
+            let dist_sq = f32(d * d);
+            let w = exp(-dist_sq / two_sigma_sq);
+            sum = sum + s * w;
+            weight_sum = weight_sum + w;
+        }
+        result = sum / max(weight_sum, 1e-6);
+    }
+    return result;
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, kernel_size: u32, axis: u32, step: f32, radius_mode: u32, radius: f32, address_mode: u32) -> vec4<f32> {
+    let texel = vec2<f32>(1.0) / dims;
+
+    var result: vec4<f32>;
+    if radius_mode == 1u || radius_mode == 2u {
+        var axis_dir: vec2<f32>;
+        if axis == 0u {
+            axis_dir = vec2<f32>(texel.x, 0.0);
+        } else {
+            axis_dir = vec2<f32>(0.0, texel.y);
+        }
+        if radius_mode == 2u {
+            result = n0_sg_blur_linear(uv, axis_dir, radius);
+        } else {
+            result = n0_sg_blur_dynamic(uv, axis_dir, radius);
+        }
+    } else {
+        var d: vec2<f32>;
+        if axis == 0u {
+            d = vec2<f32>(texel.x * step, 0.0);
+        } else {
+            d = vec2<f32>(0.0, texel.y * step);
+        }
+        if kernel_size == 0u {
+            result = n0_sg_blur_9(uv, d);
+        } else if kernel_size == 1u {
+            result = n0_sg_blur_17(uv, d);
+        } else {
+            result = n0_sg_blur_25(uv, d);
+        }
+    }
+
+    return result;
+}
+
+fn n1_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    let out_a = mix(a.a, b.a, amount);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    var col = c.rgb;
+    if mode == 2u {
+        col = col * mix(1.0, 3.0, amount);
+    } else if mode == 1u {
+        col = mix(col, vec3<f32>(1.0, 1.0, 1.0), amount);
+    } else {
+        col = col * (1.0 - amount);
+    }
+    return vec4<f32>(col, c.a);
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32, contrast: f32, curve: u32) -> vec4<f32> {
+    let x = c.rgb * intensity * contrast;
+    var mapped: vec3<f32>;
+    if curve == 2u {
+        mapped = log2(vec3<f32>(1.0) + x) / log2(65.0);
+    } else if curve == 1u {
+        mapped = x / (x + vec3<f32>(1.0));
+    } else {
+        mapped = x * (1.0 + x / vec3<f32>(9.0)) / (1.0 + x);
+    }
+    return vec4<f32>(mapped, c.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, alpha: f32) -> vec4<f32> {
+    return vec4<f32>(c.rgb, alpha);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_kernel_size, params.n0_axis, params.n0_step, params.n0_radius_mode, params.n0_radius, params.n0_address_mode);
+    let r1 = n1_body(ext_1, r0, uv, vec2<f32>(dims), params.n1_amount, params.n1_mode);
+    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_intensity, params.n3_contrast, params.n3_curve);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_alpha);
+    textureStore(dst, coord, r4);
+}
+
 === generator:MetallicGlass node:44 ===
 // @static_param: n0_output_channel
 // @static_param: n1_offset

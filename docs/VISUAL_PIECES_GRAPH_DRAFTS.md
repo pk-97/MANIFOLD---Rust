@@ -460,6 +460,15 @@ through the Log tonemap — never saturated purple, never slow cartoon animation
 
 **Verify.** CPU test: fixed seed → identical polyline twice (determinism); PNG triptych strike/+3 frames/+10 frames — core gone, afterglow decaying, no accumulation blowout.
 
+**As built (2026-07-16) — BUILT, Peter's look pass owed.** Deviations from the sketch above, each with a reason:
+
+- **Outputs are one `points` + one `widths` + two `EdgePair` topologies (`core_edges`, `branch_edges`)**, not two `CurvePoint` arrays. Variable-length polylines inside fixed-capacity Array buffers are only expressible on `draw_lines`' sentinel-skipping edges path (the sequential path draws the whole buffer capacity), and branches are *disjoint* polylines, which a bare point array can't encode at all. `CurvePoint` stays its frozen 8-byte layout; the width taper rides the parallel `widths: Array(f32)` — which is also the shape of the `draw_lines` extension that landed with the piece (optional `widths` input, tapered-capsule SDF, geometry bit-identical when unwired).
+- **Extra outputs `strike_pulse` (1.0 on the strike frame) + `age`.** The flash envelope is `strike_pulse → envelope_follower_ar` (activated from the registered-but-unused list) `→ scale_offset_value(scale = Flash card) → flash.amount` — no new envelope logic anywhere.
+- **`auto_strike_beats` param + Auto Strike card** (default 2 beats): beat-quantized strikes without MIDI, and the only way headless renders/tests can fire the bolt besides `--triggers`. The Strike card is the NestedCubes idiom: a toggle (`isTriggerGate`) on `trigger_gate.enable`, clip triggers as the instrument.
+- **`node.set_alpha` (new atom, codegen path + parity test) ends the chain.** The afterglow loop (`Max` mix against `feedback × decay`) locks alpha at 0 forever — see the "additive feedback loop eats the alpha channel" bug class in DECOMPOSING_GENERATORS.md §8. Opaque display output is the same decision `resolve_scatter` bakes in-kernel.
+- **Card list as shipped (7):** Strike (gate toggle) · Auto Strike · Jaggedness · Branches · Afterglow · Flash · Reach. Palette was killed with L2; colors are `draw_lines` HDR color params (near-white blue core, branches at 0.3×).
+- **Harness gotchas for look-dev renders:** pin `--max-frames` equal to `--frames` (the convergence loop otherwise keeps rendering until the afterglow decays to black and saves that), and expect the PNG dimmer than the app — `readback_to_srgb_png` applies its own Reinhard on top of the preset's Log curve, capping PNG whites at ~0.5.
+
 ## A12. What Survives (effect — self-portrait I)
 
 **Intent.** Re-describe a frame through the instrument's own perception nodes and redraw it from only the description, feeding the redraw back in. Loss is constitutive; the image converges to the machine's prior. One fader: let reality back in, or let it drift. (Ancestor: Lucier, *I Am Sitting in a Room*.)
