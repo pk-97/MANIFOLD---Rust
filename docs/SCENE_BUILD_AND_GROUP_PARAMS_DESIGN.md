@@ -5,7 +5,13 @@ built by an Opus-orchestrated Sonnet wave. Scene-building is now named per-objec
 transforms as composable `Transform`-port atoms (beat-modulatable), group boxes that carry their
 sub-node sliders, and one-click "+ Object"/"+ Light" that spawn wired/lit/visible — all verified on
 the real azalea glTF import. Owed: Peter's L4 feel-pass on the P5 gestures (click-script in
-`docs/landings/2026-07-10-scene-build-p5.md`). Per-phase detail below. · design 2026-07-06 · Fable. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
+`docs/landings/2026-07-10-scene-build-p5.md`). Per-phase detail below. · design 2026-07-06 · Fable.
+**SUPERSEDED 2026-07-17 (object-identity mechanism only):** D7 below describes wiring a new
+object's group to `render_scene`'s `mesh_k`/`material_k`/`transform_k` ports — that per-object
+port family was replaced by `SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (shipped 2026-07-17) with one
+`object_k` wire out of a `node.scene_object` node; `AddSceneObjectCommand` now emits the new
+shape. The rest of this doc's design (card sections, Transform atoms, group boxes) is unaffected
+and still describes the shipped mechanism. **P1 SHIPPED 2026-07-10** (main `3a6e30b7`):
 `PortType::Transform` + `node.transform_3d` atom. **P2 SHIPPED 2026-07-10**: `render_scene` sheds
 all per-object transform params for `transform_n` ports; v1.12.0 migration carries old saves across
 (values + card bindings re-pointed); glTF importer emits the end-state shape. Migration parity vs

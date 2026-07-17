@@ -1,20 +1,27 @@
 # Scene Object & Panel v2 — objects become graph vocabulary; the panel becomes outliner + properties
 
-**Status: IN PROGRESS — P1+P2 SHIPPED @ `5c5dacfe`, P3 SHIPPED @ `da452351`
-(both 2026-07-17, landing reports
-`docs/landings/2026-07-17-scene-object-v2-p1-p2.md` and
-`docs/landings/2026-07-17-scene-object-v2-p3.md`); P4 (value-cell contract)
-implemented @ `33c575ab`. P5 (SceneVm v2 / D12 + outliner+properties)
-implemented this session, worktree `.claude/worktrees/slot-1`, not yet
-landed to main — full gate green (2188 focused tests, clippy clean, 9/10 UI
-flows passing, held-out merged-scene render verified) EXCEPT the "Add
-modifier" chip, which is a confirmed dead affordance against any real
-grouped object — see BUG-218 (the D6 modifier-stack commands still splice
-at the pre-D12 group_output.vertices port, out of this phase's blast
-radius, fix owed to `manifold-editing`). BUG-210 (AddSceneObjectCommand
-pre-migration wires) FIXED by P3. BUG-212 opened by P3
-(DuplicateSceneObjectCommand's fresh NodeIds break imported objects' string
-bindings — real gap, not a regression, needs its own fix).**
+**Status: SHIPPED — all 5 phases landed on main 2026-07-17 (P1+P2 @ `5c5dacfe`,
+P3 @ `da452351`, P4+P5 @ landing SHA below). Landing reports:
+`docs/landings/2026-07-17-scene-object-v2-p1-p2.md`,
+`docs/landings/2026-07-17-scene-object-v2-p3.md`,
+`docs/landings/2026-07-17-scene-object-v2-p4-p5.md`. The object model, the
+Object wire, and the outliner+properties panel are all live on main.
+Three known, tracked gaps outside what P1-P5 committed to fix (none are
+regressions from this landing — all found BY this wave's own gates, all
+logged before the session ended, per house rule): BUG-218 ("Add modifier"
+chip is a dead affordance against any real grouped object — the D6
+modifier-stack commands still splice at the pre-D12 group_output.vertices
+port, fix owed to `manifold-editing`, out of every phase's committed blast
+radius); BUG-212 (`DuplicateSceneObjectCommand`'s fresh NodeIds break an
+imported object's string-bound model-file path — Duplicate on a
+hand-built object works, on an imported one does not); BUG-199 (dock
+scroll — explicitly out of scope for this whole design, owned elsewhere).
+BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. A fourth,
+more severe gap was found AND FIXED during P4+P5's own landing (not left
+open): the D5 migration was never actually wired into the real project-load
+path, and `SceneVm`'s transform/material/vertex-count tracing didn't
+understand the migrated-project topology — both fixed in the same landing,
+see that report for the full diagnosis.**
 **(APPROVED design 2026-07-17 · Fable 5, design session with Peter)**
 **Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
