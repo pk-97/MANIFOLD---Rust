@@ -1,0 +1,64 @@
+[
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Source"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "EXTRA 23 • Bloom • Amount"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 1086.0,
+          "y": 1404.72,
+          "width": 440.0,
+          "height": 24.0
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Source"
+        }
+      },
+      "gesture": {
+        "Scroll": {
+          "delta": {
+            "x": 0.0,
+            "y": 300.0
+          }
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "EXTRA 23 • Bloom • Amount"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 1086.0,
+          "y": 1132.0,
+          "width": 440.0,
+          "height": 24.0
+        }
+      }
+    }
+  }
+]

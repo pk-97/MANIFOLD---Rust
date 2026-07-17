@@ -14,7 +14,7 @@ from pathlib import Path
 
 POOL = Path(__file__).resolve().parents[2] / ".claude" / "worktrees"
 POOL_WARN_GB = 200
-MAX_SLOTS = 6  # keep in sync with scripts/agent-worktree.py
+MAX_SLOTS = 10  # keep in sync with scripts/agent-worktree.py
 
 
 def main() -> int:

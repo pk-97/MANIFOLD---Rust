@@ -2364,6 +2364,16 @@ impl ScenePanel {
                 self.drag_layer_id = None;
                 (false, Vec::new())
             }
+            // BUG-199: mouse-wheel scroll over the docked body, routed here by
+            // `window_input.rs`'s `primary_mouse_wheel` through the generic
+            // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
+            // `window_input` already gated on `layout.scene_setup().contains(pos)`
+            // before emitting this, so no further position check is needed here.
+            // The dock rebuilds every frame, which re-applies the new offset.
+            UIEvent::Scroll { delta, .. } => {
+                self.handle_scroll(delta.y);
+                (true, Vec::new())
+            }
             _ => (false, Vec::new()),
         }
     }

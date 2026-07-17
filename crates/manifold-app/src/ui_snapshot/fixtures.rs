@@ -475,13 +475,41 @@ fn audio_sends_scene() -> SceneData {
     bloom
         .audio_mods_mut()
         .push(ParameterAudioMod::new(
-            bloom_param.into(),
-            send_a_id,
+            bloom_param.clone().into(),
+            send_a_id.clone(),
             AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
         ));
     bloom_layer.effects = Some(vec![bloom]);
 
-    project.timeline.layers = vec![kick, bloom_layer, strobe_layer];
+    let mut layers = vec![kick, bloom_layer, strobe_layer];
+
+    // BUG-199 (dock scroll): 24 extra Send-A consumer layers, each a distinct
+    // video layer carrying its own Bloom-audio-mod consumer row in the
+    // "Consumers — Kick" list. Pushes the Audio Setup dock's content well
+    // past its viewport height (`audio-dock-scroll.json`'s acceptance flow),
+    // without touching the sends themselves (Send A/B stay exactly as
+    // above) — `audio-setup-hygiene.json`'s gain-reset assertions only key
+    // on the two sends' gain labels and are unaffected by extra consumers.
+    for i in 0..24 {
+        let mut extra_layer = Layer::new(format!("EXTRA {i}"), LayerType::Video, 3 + i);
+        extra_layer.layer_id = lid(&format!("extra-consumer-{i}"));
+        extra_layer.clips.push(TimelineClip::new_video(
+            format!("extra_{i}.mov"),
+            Beats(0.0),
+            Beats(48.0),
+            Seconds::ZERO,
+        ));
+        let mut extra_bloom = effect("Bloom");
+        extra_bloom.audio_mods_mut().push(ParameterAudioMod::new(
+            bloom_param.clone().into(),
+            send_a_id.clone(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full),
+        ));
+        extra_layer.effects = Some(vec![extra_bloom]);
+        layers.push(extra_layer);
+    }
+
+    project.timeline.layers = layers;
 
     let content = ContentState { current_beat: Beats(0.0), is_playing: false, ..Default::default() };
     SceneData { project, content, active: Some(1), selection: UIState::default() }
