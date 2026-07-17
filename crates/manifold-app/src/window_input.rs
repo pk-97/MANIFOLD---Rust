@@ -692,13 +692,21 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
-            // BUG-199: Audio Setup / Scene Setup docks — route through the
-            // generic `UIEvent::Scroll` pipeline (same mechanism the open-
-            // dropdown branch above uses) so the real app and the headless
-            // `Gesture::Scroll` harness share one path. `contains()` is
-            // already the open-check: a closed dock's rect is `Rect::ZERO`.
-            // No per-panel in-place offset here — the docks rebuild every
-            // frame, which is enough to re-apply the new scroll offset.
+            // BUG-199/BUG-223: Audio Setup / Scene Setup docks — route
+            // through the generic `UIEvent::Scroll` pipeline (same mechanism
+            // the open-dropdown branch above uses) so the real app and the
+            // headless `Gesture::Scroll` harness share one path. `contains()`
+            // is already the open-check: a closed dock's rect is
+            // `Rect::ZERO`. BUG-199's original fix assumed "the docks
+            // rebuild every frame" — false: `app_render.rs`'s
+            // `apply_ui_frame_invalidations` only rebuilds when
+            // `needs_rebuild`/`scroll_dirty` says so (BUG-223 escaped
+            // because the headless script harness always forces one rebuild
+            // on its first dispatched gesture, via `Inspector::
+            // skip_to_settled`'s `settled` flag — masking a scroll that
+            // updates internal offset state but never gets baked into node
+            // positions). Set `needs_rebuild` explicitly, same as the
+            // inspector branch below.
             if self.ws.ui_root.layout.scene_setup().contains(pos)
                 || self.ws.ui_root.layout.audio_setup().contains(pos)
             {
@@ -706,6 +714,7 @@ impl Application {
                     .ui_root
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                self.needs_rebuild = true;
                 return;
             }
 
