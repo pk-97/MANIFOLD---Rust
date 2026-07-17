@@ -1,0 +1,232 @@
+{
+  "version": 2,
+  "name": "Scene Starter",
+  "description": "SCENE_SETUP_PANEL_DESIGN.md D7 starter scene: a grid floor and a cube, sun + soft fill light, softbox environment, subtle fog, orbit camera framing the cube. The generator assigned by the Scene Setup panel's \"New 3D Scene\" empty-state action — good at defaults, every value an ordinary graph param from birth.",
+  "presetMetadata": {
+    "id": "SceneStarter",
+    "displayName": "Scene Starter",
+    "category": "Geometry",
+    "oscPrefix": "scenestarter",
+    "available": true,
+    "isLineBased": false,
+    "params": [],
+    "bindings": [],
+    "skipMode": { "kind": "never" }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 1,
+      "typeId": "node.orbit_camera",
+      "nodeId": "camera",
+      "handle": "camera",
+      "params": {
+        "orbit": { "type": "Float", "value": 0.7 },
+        "tilt": { "type": "Float", "value": 0.35 },
+        "distance": { "type": "Float", "value": 5.0 },
+        "fov_y": { "type": "Float", "value": 0.9 },
+        "look_y": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 2,
+      "typeId": "node.atmosphere",
+      "nodeId": "fog",
+      "handle": "fog",
+      "params": {
+        "fog_density": { "type": "Float", "value": 0.04 },
+        "height_falloff": { "type": "Float", "value": 0.3 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.bake_environment",
+      "nodeId": "environment",
+      "handle": "environment",
+      "params": {
+        "mode": { "type": "Enum", "value": 1 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "fill": { "type": "Float", "value": 0.3 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.light",
+      "nodeId": "sun",
+      "handle": "sun",
+      "params": {
+        "mode": { "type": "Enum", "value": 0 },
+        "pos_x": { "type": "Float", "value": 0.0 },
+        "pos_y": { "type": "Float", "value": 7.0 },
+        "pos_z": { "type": "Float", "value": 7.0 },
+        "aim_x": { "type": "Float", "value": 0.0 },
+        "aim_y": { "type": "Float", "value": 0.0 },
+        "aim_z": { "type": "Float", "value": 0.0 },
+        "color_r": { "type": "Float", "value": 1.0 },
+        "color_g": { "type": "Float", "value": 1.0 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 1.0 },
+        "cast_shadows": { "type": "Float", "value": 1.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.light",
+      "nodeId": "fill_light",
+      "handle": "fill_light",
+      "params": {
+        "mode": { "type": "Enum", "value": 1 },
+        "pos_x": { "type": "Float", "value": -4.0 },
+        "pos_y": { "type": "Float", "value": 2.0 },
+        "pos_z": { "type": "Float", "value": -3.0 },
+        "color_r": { "type": "Float", "value": 0.75 },
+        "color_g": { "type": "Float", "value": 0.82 },
+        "color_b": { "type": "Float", "value": 1.0 },
+        "intensity": { "type": "Float", "value": 0.35 },
+        "cast_shadows": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "group",
+      "nodeId": "floor",
+      "handle": "Floor",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            { "name": "vertices", "portType": "Array(MeshVertex)" },
+            { "name": "material", "portType": "Material" },
+            { "name": "transform", "portType": "Transform" }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 11,
+            "typeId": "node.grid_mesh",
+            "nodeId": "floor_mesh",
+            "handle": "floor_mesh",
+            "params": {
+              "resolution_x": { "type": "Int", "value": 8 },
+              "resolution_y": { "type": "Int", "value": 8 },
+              "size_x": { "type": "Float", "value": 12.0 },
+              "size_y": { "type": "Float", "value": 12.0 }
+            }
+          },
+          {
+            "id": 12,
+            "typeId": "node.phong_material",
+            "nodeId": "floor_mat",
+            "handle": "floor_mat",
+            "params": {
+              "color_r": { "type": "Float", "value": 0.55 },
+              "color_g": { "type": "Float", "value": 0.55 },
+              "color_b": { "type": "Float", "value": 0.6 },
+              "ambient": { "type": "Float", "value": 0.25 }
+            }
+          },
+          {
+            "id": 13,
+            "typeId": "node.transform_3d",
+            "nodeId": "floor_xform",
+            "handle": "floor_xform",
+            "params": {
+              "pos_x": { "type": "Float", "value": 0.0 },
+              "pos_y": { "type": "Float", "value": 0.0 },
+              "pos_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          { "id": 14, "typeId": "system.group_output", "nodeId": "floor_out", "handle": "output" }
+        ],
+        "wires": [
+          { "fromNode": 11, "fromPort": "vertices", "toNode": 14, "toPort": "vertices" },
+          { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "material" },
+          { "fromNode": 13, "fromPort": "transform", "toNode": 14, "toPort": "transform" }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "typeId": "group",
+      "nodeId": "cube",
+      "handle": "Cube",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            { "name": "vertices", "portType": "Array(MeshVertex)" },
+            { "name": "material", "portType": "Material" },
+            { "name": "transform", "portType": "Transform" }
+          ],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 21,
+            "typeId": "node.cube_mesh",
+            "nodeId": "cube_mesh",
+            "handle": "cube_mesh",
+            "params": {
+              "size": { "type": "Float", "value": 1.2 }
+            }
+          },
+          {
+            "id": 22,
+            "typeId": "node.phong_material",
+            "nodeId": "cube_mat",
+            "handle": "cube_mat",
+            "params": {
+              "color_r": { "type": "Float", "value": 0.85 },
+              "color_g": { "type": "Float", "value": 0.35 },
+              "color_b": { "type": "Float", "value": 0.3 },
+              "ambient": { "type": "Float", "value": 0.22 }
+            }
+          },
+          {
+            "id": 23,
+            "typeId": "node.transform_3d",
+            "nodeId": "cube_xform",
+            "handle": "cube_xform",
+            "params": {
+              "pos_x": { "type": "Float", "value": 0.0 },
+              "pos_y": { "type": "Float", "value": 0.6 },
+              "pos_z": { "type": "Float", "value": 0.0 }
+            }
+          },
+          { "id": 24, "typeId": "system.group_output", "nodeId": "cube_out", "handle": "output" }
+        ],
+        "wires": [
+          { "fromNode": 21, "fromPort": "vertices", "toNode": 24, "toPort": "vertices" },
+          { "fromNode": 22, "fromPort": "out", "toNode": 24, "toPort": "material" },
+          { "fromNode": 23, "fromPort": "transform", "toNode": 24, "toPort": "transform" }
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "typeId": "node.render_scene",
+      "nodeId": "scene",
+      "handle": "scene",
+      "params": {
+        "objects": { "type": "Float", "value": 2.0 },
+        "lights": { "type": "Float", "value": 2.0 }
+      }
+    },
+    { "id": 31, "typeId": "system.final_output", "nodeId": "final_output", "handle": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 1, "fromPort": "out", "toNode": 30, "toPort": "camera" },
+    { "fromNode": 2, "fromPort": "atmosphere", "toNode": 30, "toPort": "atmosphere" },
+    { "fromNode": 3, "fromPort": "envmap", "toNode": 30, "toPort": "envmap" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 30, "toPort": "light_0" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 30, "toPort": "light_1" },
+    { "fromNode": 10, "fromPort": "vertices", "toNode": 30, "toPort": "mesh_0" },
+    { "fromNode": 10, "fromPort": "material", "toNode": 30, "toPort": "material_0" },
+    { "fromNode": 10, "fromPort": "transform", "toNode": 30, "toPort": "transform_0" },
+    { "fromNode": 20, "fromPort": "vertices", "toNode": 30, "toPort": "mesh_1" },
+    { "fromNode": 20, "fromPort": "material", "toNode": 30, "toPort": "material_1" },
+    { "fromNode": 20, "fromPort": "transform", "toNode": 30, "toPort": "transform_1" },
+    { "fromNode": 30, "fromPort": "color", "toNode": 31, "toPort": "in" }
+  ]
+}

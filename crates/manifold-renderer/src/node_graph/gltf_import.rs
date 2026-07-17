@@ -5532,27 +5532,31 @@ mod tests {
     /// must load + wire clean, proving reconfigure runs before wire/port
     /// validation for the new port-based surface too.
     #[test]
-    fn render_scene_with_three_objects_loads_transform_nodes() {
+    fn render_scene_with_three_objects_loads_object_port() {
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: `transform_2` (the
+        // subject of the original "unknown parameter 'pos_x_2'" regression
+        // this test was written for) no longer exists as a render_scene
+        // port at all — `node.scene_object` owns `transform` now, and
+        // render_scene's per-object surface is `object_k` only. The
+        // analogous regression under the new shape: `object_2`, a port
+        // that only exists once render_scene reconfigures to objects >= 3,
+        // must load clean (reconfigure runs before port validation) —
+        // same proof, new port.
         use crate::node_graph::persistence::EffectGraphDefExt;
 
         let mut render = plain_node(0, "render", "node.render_scene", "render");
         render.params.insert("objects".to_string(), int(3));
         render.params.insert("lights".to_string(), int(1));
 
-        // The port that was unresolvable before the fix: object index 2's
-        // transform, which only exists once render_scene reconfigures to
-        // objects >= 3.
-        let mut transform_2 = plain_node(1, "transform_2", "node.transform_3d", "transform_2");
-        transform_2.params.insert("pos_x".to_string(), float(-1.5));
-        transform_2.params.insert("pos_y".to_string(), float(0.25));
+        let scene_object_2 = plain_node(1, "object_2", "node.scene_object", "object_2");
 
         let def = EffectGraphDef {
             version: 1,
             name: None,
             description: None,
             preset_metadata: None,
-            nodes: vec![render, transform_2],
-            wires: vec![wire(1, "transform", 0, "transform_2")],
+            nodes: vec![render, scene_object_2],
+            wires: vec![wire(1, "object", 0, "object_2")],
         };
 
         // Validate at the `into_graph` layer — the exact place the
@@ -5562,12 +5566,12 @@ mod tests {
         // of scope for the port-surface regression.)
         let registry = PrimitiveRegistry::with_builtin();
         let graph = def.into_graph(&registry).expect(
-            "render_scene with objects=3 must accept a transform_2 wire at load \
+            "render_scene with objects=3 must accept an object_2 wire at load \
              (reconfigure runs before port validation)",
         );
         assert!(
-            graph.wires().iter().any(|w| w.to.1 == "transform_2"),
-            "the transform_2 wire survives into the built graph"
+            graph.wires().iter().any(|w| w.to.1 == "object_2"),
+            "the object_2 wire survives into the built graph"
         );
     }
 

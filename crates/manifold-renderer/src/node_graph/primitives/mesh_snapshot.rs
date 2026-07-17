@@ -243,44 +243,55 @@ use crate::node_graph::effect_node::{
 use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::Source;
+use crate::node_graph::primitives::scene_object::SceneObjectNode;
 use super::{PhongMaterial, RenderScene, Transform3D, UnlitMaterial};
 
 /// `Graph::connect` needs a `&'static str` port name; these helpers only
 /// ever address the first handful of scene objects, so a small literal
 /// table avoids leaking a formatted `String` just to satisfy the lifetime.
-fn transform_port_name(index: usize) -> &'static str {
+fn object_port_name(index: usize) -> &'static str {
     match index {
-        0 => "transform_0",
-        1 => "transform_1",
-        2 => "transform_2",
-        3 => "transform_3",
-        4 => "transform_4",
-        _ => panic!("mesh_snapshot test helper: add a transform_{{index}} literal for index {index}"),
+        0 => "object_0",
+        1 => "object_1",
+        2 => "object_2",
+        3 => "object_3",
+        4 => "object_4",
+        _ => panic!("mesh_snapshot test helper: add an object_{{index}} literal for index {index}"),
     }
 }
 
+/// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D4: `render_scene`'s per-object
+/// surface is one `Object` wire now, not a family of parallel ports. Mint
+/// one `node.scene_object` for object `index`, wire its `object` output
+/// into `render`'s `object_{index}` port, and hand back the scene_object's
+/// id — callers wire mesh/material/maps/transform into ITS inputs instead
+/// of directly into `render`.
+fn add_scene_object(g: &mut Graph, render: NodeInstanceId, index: usize) -> NodeInstanceId {
+    let obj = g.add_node(Box::new(SceneObjectNode::new()));
+    g.connect((obj, "object"), (render, object_port_name(index))).unwrap();
+    obj
+}
+
 /// Add a `node.transform_3d` node, set its `pos_x` param, and wire its
-/// `transform` output into `render`'s `transform_{index}` port. Test helper
+/// `transform` output into `scene_object`'s `transform` input. Test helper
 /// replacing the retired `render_scene` per-object `pos_x_{index}` param
-/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3 — the render node no longer
-/// carries per-object TRS params at all, only the `transform_n` port).
-fn wire_pos_x(g: &mut Graph, render: NodeInstanceId, index: usize, pos_x: f32) {
+/// (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3 — TRS lives on
+/// `node.scene_object`'s `transform` input now, fed by `node.transform_3d`).
+fn wire_pos_x(g: &mut Graph, scene_object: NodeInstanceId, pos_x: f32) {
     let t = g.add_node(Box::new(Transform3D::new()));
     g.set_param(t, "pos_x", ParamValue::Float(pos_x)).unwrap();
-    g.connect((t, "transform"), (render, transform_port_name(index)))
-        .unwrap();
+    g.connect((t, "transform"), (scene_object, "transform")).unwrap();
 }
 
 /// Same as [`wire_pos_x`] but for a full `(pos_x, pos_y, pos_z)` triple —
 /// replaces three retired `pos_x_{index}`/`pos_y_{index}`/`pos_z_{index}`
 /// param sets with one `node.transform_3d` node.
-fn wire_pos(g: &mut Graph, render: NodeInstanceId, index: usize, pos: [f32; 3]) {
+fn wire_pos(g: &mut Graph, scene_object: NodeInstanceId, pos: [f32; 3]) {
     let t = g.add_node(Box::new(Transform3D::new()));
     g.set_param(t, "pos_x", ParamValue::Float(pos[0])).unwrap();
     g.set_param(t, "pos_y", ParamValue::Float(pos[1])).unwrap();
     g.set_param(t, "pos_z", ParamValue::Float(pos[2])).unwrap();
-    g.connect((t, "transform"), (render, transform_port_name(index)))
-        .unwrap();
+    g.connect((t, "transform"), (scene_object, "transform")).unwrap();
 }
 
 /// Test-only no-op source for `Array<MeshVertex>`. The caller pre-binds a
@@ -758,14 +769,16 @@ fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
-    wire_pos_x(&mut g, render, 1, -offset);
+    let obj0 = add_scene_object(&mut g, render, 0);
+    let obj1 = add_scene_object(&mut g, render, 1);
+    wire_pos_x(&mut g, obj1, -offset);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((cube0, "vertices"), (render, "mesh_0")).unwrap();
-    g.connect((cube1, "vertices"), (render, "mesh_1")).unwrap();
-    g.connect((mat0, "out"), (render, "material_0")).unwrap();
-    g.connect((mat1, "out"), (render, "material_1")).unwrap();
+    g.connect((cube0, "vertices"), (obj0, "vertices")).unwrap();
+    g.connect((cube1, "vertices"), (obj1, "vertices")).unwrap();
+    g.connect((mat0, "out"), (obj0, "material")).unwrap();
+    g.connect((mat1, "out"), (obj1, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
 
@@ -848,11 +861,12 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(num_lights as f32))
         .unwrap();
+    let obj0 = add_scene_object(&mut g, render, 0);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
-    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((mesh, "out"), (obj0, "vertices")).unwrap();
+    g.connect((mat, "out"), (obj0, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
 
     // Sun light on the camera's own side — the physically intuitive
@@ -980,14 +994,16 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+    let obj0 = add_scene_object(&mut g, render, 0);
+    let obj1 = add_scene_object(&mut g, render, 1);
     // Object 0 offset to one side. Object 1 offset toward the camera
     // along roughly this orbit/tilt's eye-to-origin direction (0.72,
     // 0.34, 0.60 — the reverse of the camera's forward vector) with only
     // a modest same-side X offset, so its (larger, nearer) silhouette
     // partially overlaps object 0's — the occlusion render_scene exists
     // for, made visible.
-    wire_pos_x(&mut g, render, 0, -1.5);
-    wire_pos(&mut g, render, 1, [0.8, 0.3, 1.2]);
+    wire_pos_x(&mut g, obj0, -1.5);
+    wire_pos(&mut g, obj1, [0.8, 0.3, 1.2]);
 
     // Angled key light in the camera's OWN octant. The M6-D4 flip is
     // view-based (`if dot(N, V) < 0.0 { N = -N; }`), so a convex cube's
@@ -1004,10 +1020,10 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((cube0, "vertices"), (render, "mesh_0")).unwrap();
-    g.connect((cube1, "vertices"), (render, "mesh_1")).unwrap();
-    g.connect((mat0, "out"), (render, "material_0")).unwrap();
-    g.connect((mat1, "out"), (render, "material_1")).unwrap();
+    g.connect((cube0, "vertices"), (obj0, "vertices")).unwrap();
+    g.connect((cube1, "vertices"), (obj1, "vertices")).unwrap();
+    g.connect((mat0, "out"), (obj0, "material")).unwrap();
+    g.connect((mat1, "out"), (obj1, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
     g.connect((light, "out"), (render, "light_0")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
@@ -1126,14 +1142,15 @@ fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(0.0)).unwrap();
+    let obj0 = add_scene_object(&mut g, render, 0);
 
     let src = g.add_node(Box::new(Source::new()));
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
-    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((mesh, "out"), (obj0, "vertices")).unwrap();
+    g.connect((mat, "out"), (obj0, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
-    g.connect((src, "out"), (render, "base_color_map_0")).unwrap();
+    g.connect((src, "out"), (obj0, "base_color_map")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
 
     let plan = compile(&g).unwrap();
@@ -1535,11 +1552,12 @@ fn azalea_glb_renders_lit_through_render_scene() {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+    let obj0 = add_scene_object(&mut g, render, 0);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((mesh, "out"), (render, "mesh_0")).unwrap();
-    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((mesh, "out"), (obj0, "vertices")).unwrap();
+    g.connect((mat, "out"), (obj0, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
     g.connect((light, "out"), (render, "light_0")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
@@ -1733,14 +1751,15 @@ fn gltf_mesh_source_renders_azalea_to_png() {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
+    let obj0 = add_scene_object(&mut g, render, 0);
     // Recenter the (not-recentered) primitive output at the origin so
     // CameraOrbit's fixed target frames it.
-    wire_pos(&mut g, render, 0, [-center[0], -center[1], -center[2]]);
+    wire_pos(&mut g, obj0, [-center[0], -center[1], -center[2]]);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((src, "vertices"), (render, "mesh_0")).unwrap();
-    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((src, "vertices"), (obj0, "vertices")).unwrap();
+    g.connect((mat, "out"), (obj0, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
     g.connect((light, "out"), (render, "light_0")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
@@ -1961,13 +1980,14 @@ fn gltf_textured_azalea_renders_through_render_scene_to_png() {
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
     g.set_param(render, "lights", ParamValue::Float(1.0)).unwrap();
-    wire_pos(&mut g, render, 0, [-center[0], -center[1], -center[2]]);
+    let obj0 = add_scene_object(&mut g, render, 0);
+    wire_pos(&mut g, obj0, [-center[0], -center[1], -center[2]]);
 
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
-    g.connect((src, "vertices"), (render, "mesh_0")).unwrap();
-    g.connect((tex, "out"), (render, "base_color_map_0")).unwrap();
-    g.connect((mat, "out"), (render, "material_0")).unwrap();
+    g.connect((src, "vertices"), (obj0, "vertices")).unwrap();
+    g.connect((tex, "out"), (obj0, "base_color_map")).unwrap();
+    g.connect((mat, "out"), (obj0, "material")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
     g.connect((light, "out"), (render, "light_0")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();

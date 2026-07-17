@@ -231,6 +231,7 @@ mod tests {
                 "Peak",
                 "Sample & Hold",
                 "Scale + Offset (value)",
+                "Scene Object",
                 "Smoothing",
                 "Sum Into Bins",
                 "Texture Size",

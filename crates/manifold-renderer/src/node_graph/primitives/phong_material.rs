@@ -286,6 +286,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(inputs_bindings, &backend, &[]);
         let outputs = NodeOutputs::new(
             outputs_bindings,
@@ -296,6 +297,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
         let time = crate::node_graph::effect_node::FrameTime {
             beats: Beats(0.0),

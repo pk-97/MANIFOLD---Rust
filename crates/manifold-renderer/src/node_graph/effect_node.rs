@@ -602,6 +602,32 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Whether this node's outputs carry GPU resources (`Slot`s) *inside a
+    /// CPU struct field* rather than on the wire's own port type — invisible
+    /// to the planner's normal wire-based lifetime tracking, which only
+    /// walks `Texture2D`/`Array` typed wires.
+    ///
+    /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2: `node.scene_object` forwards
+    /// mesh/map/instance `Slot`s inside the [`SceneObject`](crate::node_graph::scene_object::SceneObject)
+    /// it emits. Without this declaration, the planner would see only the
+    /// wire into `node.scene_object` and free those resource slots after
+    /// `node.scene_object` runs — the same silent-corruption class
+    /// `skip_passthrough_ports` exists to prevent for aliased textures, one
+    /// level removed (through a struct field instead of a direct alias).
+    ///
+    /// When `true`, the planner (`execution_plan.rs`) extends the lifetime
+    /// of every wired `Texture2D`/`Array` input to cover the last reader of
+    /// this node's own output — the exact rule
+    /// [`variadic_skip_passthrough_out`](Self::variadic_skip_passthrough_out)
+    /// already implements for a mux's aliased texture inputs, applied here
+    /// to a struct-carried resource instead of a direct alias.
+    ///
+    /// Default: `false` (most nodes' outputs are fully described by their
+    /// wire's own port type).
+    fn carries_resources(&self) -> bool {
+        false
+    }
+
     /// Runtime services this node's `evaluate` requires from the
     /// executor. The compiler aggregates these across all nodes in
     /// the graph and the executor's entry points validate against

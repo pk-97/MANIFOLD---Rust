@@ -83,6 +83,8 @@ pub struct Executor {
     transform_write_scratch: Vec<(Slot, crate::node_graph::transform::Transform)>,
     /// Sibling scratch for [`PortType::Atmosphere`] writes — same drain pattern.
     atmosphere_write_scratch: Vec<(Slot, crate::node_graph::atmosphere::Atmosphere)>,
+    /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
+    object_write_scratch: Vec<(Slot, crate::node_graph::scene_object::SceneObject)>,
     /// Per-step scratch for structured errors pushed via
     /// [`EffectNodeContext::error`]. Drained + logged after each
     /// `evaluate` / `late_capture` returns. Errors don't halt the frame
@@ -386,6 +388,7 @@ impl Executor {
             material_write_scratch: Vec::new(),
             transform_write_scratch: Vec::new(),
             atmosphere_write_scratch: Vec::new(),
+            object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
             live_steps: Vec::new(),
@@ -1249,6 +1252,7 @@ impl Executor {
                     self.material_write_scratch.clear();
                     self.transform_write_scratch.clear();
                     self.atmosphere_write_scratch.clear();
+                    self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
                         let backend_ref: &dyn Backend = &*self.backend;
@@ -1262,6 +1266,7 @@ impl Executor {
                             &mut self.material_write_scratch,
                             &mut self.transform_write_scratch,
                             &mut self.atmosphere_write_scratch,
+                            &mut self.object_write_scratch,
                         );
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
@@ -1349,6 +1354,10 @@ impl Executor {
                     // Atmosphere writes use the same drain shape.
                     for (slot, value) in self.atmosphere_write_scratch.drain(..) {
                         self.backend.set_atmosphere(slot, value);
+                    }
+                    // Object writes use the same drain shape.
+                    for (slot, value) in self.object_write_scratch.drain(..) {
+                        self.backend.set_object(slot, value);
                     }
                     // Structured errors reported via `ctx.error(...)` —
                     // log once per occurrence. Primitives are expected
@@ -1619,6 +1628,7 @@ impl Executor {
                 self.material_write_scratch.clear();
                 self.transform_write_scratch.clear();
                 self.atmosphere_write_scratch.clear();
+                self.object_write_scratch.clear();
                 self.error_scratch.clear();
                 let backend_ref: &dyn Backend = &*self.backend;
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations);
@@ -1631,6 +1641,7 @@ impl Executor {
                     &mut self.material_write_scratch,
                     &mut self.transform_write_scratch,
                     &mut self.atmosphere_write_scratch,
+                    &mut self.object_write_scratch,
                 );
                 let mut ctx = EffectNodeContext::with_state(
                     time,

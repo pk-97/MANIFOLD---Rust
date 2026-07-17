@@ -379,7 +379,13 @@ pub fn ungroup(
 
 // ── helpers ──
 
-fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
+/// Disambiguate `base` against `used`, inserting whichever candidate wins
+/// (`base`, then `base_2`, `base_3`, …) so the caller's `used` set stays
+/// current for the next call. `pub(crate)`: also reused by
+/// `scene_object_migration` (minting `node.scene_object` handles borrowed
+/// from a group producer must not collide with an unrelated node that
+/// already holds that exact string at the same scope).
+pub(crate) fn unique_name(base: &str, used: &mut BTreeSet<String>) -> String {
     if used.insert(base.to_string()) {
         return base.to_string();
     }

@@ -300,6 +300,10 @@ const PORT_TRANSFORM_COLOR: Color32 = Color32::new(255, 128, 199, 255);
 /// blue-grey — reads as "atmosphere", hue ~210°, clear of Transform's magenta
 /// (~326°) and Camera's salmon (~0°).
 const PORT_ATMOSPHERE_COLOR: Color32 = Color32::new(150, 185, 215, 255);
+/// `PortType::Object` (one scene object's full bundle, `node.scene_object`).
+/// Chartreuse — hue ~93°, the widest open gap on the wheel (between Light's
+/// ~53° and Array's ~134°, ≥40° from each neighbour).
+const PORT_OBJECT_COLOR: Color32 = Color32::new(178, 255, 115, 255);
 /// Ghost-wire tint while dragging over a compatible / incompatible input port —
 /// a live green/red "this will / won't connect" hint, so a mis-wire is caught
 /// before the drop, not after. The actual connect still validates server-side.
