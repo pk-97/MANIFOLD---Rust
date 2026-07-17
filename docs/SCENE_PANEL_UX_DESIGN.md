@@ -1,6 +1,6 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
-**Status:** APPROVED design, not built · 2026-07-17 · Fable
+**Status:** IN PROGRESS — UX-P1 landed (selection responds same-frame + outliner unification); UX-P2 (properties rows on the card family) not started · 2026-07-17 · Fable
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
