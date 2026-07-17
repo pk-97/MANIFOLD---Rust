@@ -201,8 +201,31 @@ def _babyslakh_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str, An
     return override
 
 
+def _manifold_own_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str, Any]:
+    """SAME bug class as the babyslakh override above, found later (B2 round
+    1, 2026-07-18): eval.sweep_p4._build_manifold_own_kick_tracks ALSO loads
+    `mix.wav` (correct for ADTOF), and this bakeoff script's Stage-1 arm was
+    silently reusing it too -- these 5 fixtures (tests/fixtures/audio/*)
+    each have their OWN isolated `drums.wav` Ableton stem sitting right next
+    to mix.wav on disk (never used by this script until now). Measured
+    impact: apricots_128bpm's kick F1 went from 0.0 (fed the full
+    commercial-sounding mix) to 0.645 (fed drums.wav) in an isolated check;
+    this override applies the same fix inside the full scoreboard run."""
+    override: Dict[str, Any] = {}
+    for track in corpus:
+        if track.source != "manifold_own":
+            continue
+        drums_path = Path(track.audio_path).with_name("drums.wav")
+        if not drums_path.exists():
+            continue
+        audio, sr = load_audio_mono(drums_path, target_sr=44100, ffmpeg_bin=None)
+        override[track.id] = (audio, sr)
+    return override
+
+
 def run_stage1_on_corpus(corpus: List[TrackData]) -> List[Stage1Result]:
     audio_override = _babyslakh_drum_stem_audio_override(corpus)
+    audio_override.update(_manifold_own_drum_stem_audio_override(corpus))
     out: List[Stage1Result] = []
     for track in corpus:
         audio, sr = audio_override.get(track.id, (track.audio, track.sr))

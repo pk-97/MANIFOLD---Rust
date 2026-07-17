@@ -31,12 +31,15 @@ Pipeline (per track)
    `degenerate` when the best silhouette is at/below floor, or one cluster
    swallows almost every onset (both read as "this track didn't actually
    separate into distinct drum objects").
-4. `_label_clusters` -- labels each cluster by its RAW-feature centroid
-   signature via fixed heuristic thresholds (per-track calibration: the
-   thresholds are on physically-meaningful ratios/Hz, not on absolute levels
-   that would need a global template). Thresholds were set and checked
-   against the self_render EDM-kit fixture (known truth, kick/snare/hat/
-   clap/tom all present) in eval/tests/test_stage1_dsp_detection.py.
+4. `_label_clusters` -- labels each cluster by NEAREST DEV-FITTED class
+   profile centroid (B2 lever 2, 2026-07-18 addendum: a nearest-centroid
+   classifier fit from DEV truth only by eval/fit_stage1_profiles.py,
+   written to eval/calibration/stage1_class_profiles.json -- supervised
+   threshold calibration, not model training). Clustering stays per-track/
+   relative (per-track StandardScaler, unchanged, "per-track adaptation
+   staying primary" per the design); only the label assignment consults the
+   fitted global profiles. Falls back to a hand-tuned heuristic threshold
+   cascade (_label_clusters_heuristic) if the fitted file is absent.
 5. `detect_drums_stage1` -- emits `List[Event]` in the SAME contract as
    `manifold_audio.adtof_detection.detect_drums_adtof` (type/time/confidence),
    confidence derived from each onset's standardized distance to its
@@ -52,7 +55,9 @@ compare like-for-like).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import librosa
@@ -109,6 +114,31 @@ HIGH_BAND_HZ = (2000.0, 24000.0)
 DEGENERATE_SILHOUETTE_FLOOR = 0.05
 DEGENERATE_DOMINANT_CLUSTER_FRACTION = 0.95
 CLASS_NAMES = ("kick", "snare", "clap", "hat", "tom", "perc")
+
+# Column order for _feature_matrix / the fitted class-profile JSON. Order
+# matters: eval/fit_stage1_profiles.py writes centroids in this exact order.
+FEATURE_NAMES = ("centroid_hz", "flatness", "low_ratio", "mid_ratio", "high_ratio", "decay_rate_db_per_sec")
+
+# B2 lever 2 (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum):
+# dev-fitted class-signature profiles replace the hand-tuned threshold
+# cascade (see _label_clusters_heuristic below, kept as the fallback when
+# this file doesn't exist). Fit by eval/fit_stage1_profiles.py from DEV
+# truth only (self_render edm_kit_128bpm + babyslakh dev drum stems + E-GMD
+# dev + manifold_own kick fixtures) -- a nearest-centroid classifier fit,
+# not model training.
+CLASS_PROFILES_PATH = Path(__file__).resolve().parents[1] / "eval" / "calibration" / "stage1_class_profiles.json"
+_class_profiles_cache: Optional[Dict[str, object]] = None
+
+
+def _load_class_profiles() -> Optional[Dict[str, object]]:
+    global _class_profiles_cache
+    if _class_profiles_cache is not None:
+        return _class_profiles_cache
+    if not CLASS_PROFILES_PATH.exists():
+        return None
+    with open(CLASS_PROFILES_PATH) as f:
+        _class_profiles_cache = json.load(f)
+    return _class_profiles_cache
 
 
 @dataclass(frozen=True)
@@ -295,12 +325,47 @@ def _feature_matrix(features: List[OnsetFeatures]) -> np.ndarray:
     ], dtype=np.float64)
 
 
-def _label_clusters(raw_features: np.ndarray, labels: np.ndarray, k: int) -> Dict[int, str]:
+def _label_clusters_nearest_profile(raw_features: np.ndarray, labels: np.ndarray, k: int, profiles: Dict[str, object]) -> Dict[int, str]:
+    """B2 lever 2: label each cluster by NEAREST DEV-FITTED class profile
+    centroid (Euclidean distance in the GLOBAL standardized feature space
+    eval/fit_stage1_profiles.py fit from DEV truth), not a hand-written
+    threshold cascade. Clustering itself stays per-track/relative (the
+    caller's own per-track StandardScaler, unchanged) -- only the LABEL
+    assignment uses the fitted global scale."""
+    scaler_mean = np.asarray(profiles["scaler_mean"], dtype=np.float64)
+    scaler_scale = np.asarray(profiles["scaler_scale"], dtype=np.float64)
+    centroids: Dict[str, np.ndarray] = {
+        cls: np.asarray(vec, dtype=np.float64) for cls, vec in profiles["class_profile_centroids"].items()
+    }
+    cluster_class: Dict[int, str] = {}
+    for c in range(k):
+        mask = labels == c
+        if not np.any(mask):
+            continue
+        cluster_mean_raw = raw_features[mask].mean(axis=0)
+        cluster_std = (cluster_mean_raw - scaler_mean) / scaler_scale
+        best_cls, best_dist = None, float("inf")
+        for cls, profile_vec in centroids.items():
+            dist = float(np.linalg.norm(cluster_std - profile_vec))
+            if dist < best_dist:
+                best_dist, best_cls = dist, cls
+        cluster_class[c] = best_cls if best_cls is not None else "perc"
+    return cluster_class
+
+
+def _label_clusters_heuristic(raw_features: np.ndarray, labels: np.ndarray, k: int) -> Dict[int, str]:
     """Label each cluster by its RAW-feature centroid signature -- fixed
     heuristic thresholds on physically-meaningful ratios/Hz (per-track
     calibration: relative to THIS track's own onsets, never an absolute
     global template). Column order matches _feature_matrix: [centroid_hz,
-    flatness, low_ratio, mid_ratio, high_ratio, decay_rate_db_per_sec]."""
+    flatness, low_ratio, mid_ratio, high_ratio, decay_rate_db_per_sec].
+
+    SUPERSEDED as the primary path by _label_clusters_nearest_profile (B2
+    lever 2, docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md 2026-07-18 addendum) --
+    kept as the fallback _label_clusters uses when the fitted profile file
+    (eval/calibration/stage1_class_profiles.json) doesn't exist, so the
+    module still functions (degraded) in an environment that hasn't run
+    eval/fit_stage1_profiles.py yet."""
     cluster_class: Dict[int, str] = {}
     for c in range(k):
         mask = labels == c
@@ -315,7 +380,23 @@ def _label_clusters(raw_features: np.ndarray, labels: np.ndarray, k: int) -> Dic
         # self_render EDM-kit fixture's own per-class feature means), then
         # clap vs hat is a centroid split (clap's highpass timbre measures
         # further into the "high" band than a hat's plain broadband noise).
-        if centroid_hz < 200.0 and low_r > 0.45:
+        #
+        # Kick: BAND-DOMINANCE, not an absolute centroid cutoff (fixed
+        # 2026-07-18, B2 lever 1). The original rule was `centroid_hz < 200
+        # and low_r > 0.45`, calibrated against a pure 60Hz synthetic sine
+        # burst (centroid ~83Hz). A REAL kick (E-GMD, manifold_own's
+        # Ableton-stem `drums.wav`) has a beater-click transient + harmonic
+        # content that pushes its measured spectral centroid into the
+        # 1000-2000Hz range over an 80ms window even though low_ratio is
+        # still clearly the dominant band relative to that SAME cluster's
+        # own mid/high (e.g. one diagnosed real cluster: centroid=1464Hz,
+        # low=0.735, mid=0.096, high=0.156 -- unambiguously kick-shaped by
+        # dominance, but the 200Hz absolute cutoff silently excluded it,
+        # so no cluster was EVER labeled kick on real material -- confirmed
+        # via manifold_own's apricots_128bpm drums.wav, not just
+        # E-GMD/babyslakh). Dominance is centroid-Hz-independent and
+        # generalizes to both the synthetic burst and real kicks.
+        if low_r > mid_r and low_r > high_r and low_r > 0.45:
             cluster_class[c] = "kick"
         elif centroid_hz < 700.0 and flatness < 0.30:
             cluster_class[c] = "tom"
@@ -328,6 +409,17 @@ def _label_clusters(raw_features: np.ndarray, labels: np.ndarray, k: int) -> Dic
         else:
             cluster_class[c] = "perc"
     return cluster_class
+
+
+def _label_clusters(raw_features: np.ndarray, labels: np.ndarray, k: int) -> Dict[int, str]:
+    """Entry point cluster_onsets calls. Uses the DEV-fitted nearest-centroid
+    classifier when eval/calibration/stage1_class_profiles.json exists
+    (the shipped, expected case -- see eval/fit_stage1_profiles.py), else
+    falls back to the hand-tuned heuristic cascade."""
+    profiles = _load_class_profiles()
+    if profiles is not None:
+        return _label_clusters_nearest_profile(raw_features, labels, k, profiles)
+    return _label_clusters_heuristic(raw_features, labels, k)
 
 
 def cluster_onsets(
