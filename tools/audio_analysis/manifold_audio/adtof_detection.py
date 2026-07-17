@@ -29,6 +29,73 @@ _MIDI_TO_TYPE = {
 _DEFAULT_THRESHOLDS = [0.12, 0.14, 0.14, 0.18, 0.18]
 
 
+def _run_adtof_inference(audio_path: str, fps: int = 100, device: str = "cpu"):
+    """Shared model-load + inference helper. Returns the raw (time_steps, 5)
+    class-activation array (LABELS_5 order: kick, snare, tom, hihat, cymbal),
+    before any peak-picking. Factored out of detect_drums_adtof (P4,
+    docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §4.2/D6) so the precision
+    post-processing module (manifold_audio.precision_postprocessing) can
+    operate on the same raw activations detect_drums_adtof already computed
+    internally, without duplicating the model-load/inference path — both
+    detect_drums_adtof and detect_drums_adtof_activations below call this,
+    so detect_drums_adtof's own output is unchanged by this refactor (no
+    behavior change, pure extraction)."""
+    import torch
+    from adtof_pytorch.model import (
+        calculate_n_bins,
+        create_frame_rnn_model,
+        load_audio_for_model,
+        load_pytorch_weights,
+    )
+    from adtof_pytorch import get_default_weights_path
+
+    audio_path = str(audio_path)
+    if not Path(audio_path).is_file():
+        raise FileNotFoundError(f"[adtof] audio file not found: {audio_path}")
+
+    # Load and preprocess audio using the package's own helpers.
+    x = load_audio_for_model(audio_path, fps=fps)
+
+    # Resolve device.
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+    if device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+        device = "cpu"
+    dev = torch.device(device)
+
+    # Load model with bundled weights via adtof_pytorch helpers.
+    n_bins = calculate_n_bins()
+    model = create_frame_rnn_model(n_bins=n_bins)
+    weights_path = get_default_weights_path()
+    if weights_path is None or not Path(weights_path).exists():
+        raise FileNotFoundError("[adtof] model weights not found in adtof_pytorch package")
+    model = load_pytorch_weights(model, str(weights_path), strict=False)
+    model.to(dev)
+    model.eval()
+
+    # Inference.
+    with torch.no_grad():
+        x = x.to(dev)
+        activations = model(x).cpu().numpy()  # shape: (1, time_steps, 5)
+
+    return activations[0]  # (time_steps, 5)
+
+
+def detect_drums_adtof_activations(audio_path: str, fps: int = 100, device: str = "cpu"):
+    """Raw per-class activation curve (time_steps, 5), LABELS_5 order (kick,
+    snare, tom, hihat, cymbal) — the precision post-processing module's
+    entry point (P4 §1(c): median-adaptive ODF baseline needs the continuous
+    curve, not detect_drums_adtof's already-peak-picked events). Same
+    inference path as detect_drums_adtof (via _run_adtof_inference); no
+    peak-picking applied here.
+
+    Returns
+    -------
+    (activations, fps) : tuple[np.ndarray, int]
+    """
+    return _run_adtof_inference(audio_path, fps=fps, device=device), fps
+
+
 def detect_drums_adtof(
     audio_path: str,
     thresholds: Optional[Dict[str, float]] = None,
@@ -62,23 +129,10 @@ def detect_drums_adtof(
     FileNotFoundError
         If audio_path does not exist.
     """
-    import torch
-    import numpy as np
-    from adtof_pytorch.model import (
-        calculate_n_bins,
-        create_frame_rnn_model,
-        load_audio_for_model,
-        load_pytorch_weights,
-    )
     from adtof_pytorch.post_processing import (
         PeakPicker,
         LABELS_5,
     )
-    from adtof_pytorch import get_default_weights_path
-
-    audio_path = str(audio_path)
-    if not Path(audio_path).is_file():
-        raise FileNotFoundError(f"[adtof] audio file not found: {audio_path}")
 
     # Build per-class threshold list in LABELS_5 order: [kick, snare, tom, hihat, cymbal].
     thresh_list = list(_DEFAULT_THRESHOLDS)
@@ -88,32 +142,7 @@ def detect_drums_adtof(
             if name in thresholds:
                 thresh_list[i] = float(thresholds[name])
 
-    # Load and preprocess audio using the package's own helpers.
-    x = load_audio_for_model(audio_path, fps=fps)
-
-    # Resolve device.
-    if device == "cuda" and not torch.cuda.is_available():
-        device = "cpu"
-    if device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
-        device = "cpu"
-    dev = torch.device(device)
-
-    # Load model with bundled weights via adtof_pytorch helpers.
-    n_bins = calculate_n_bins()
-    model = create_frame_rnn_model(n_bins=n_bins)
-    weights_path = get_default_weights_path()
-    if weights_path is None or not Path(weights_path).exists():
-        raise FileNotFoundError("[adtof] model weights not found in adtof_pytorch package")
-    model = load_pytorch_weights(model, str(weights_path), strict=False)
-    model.to(dev)
-    model.eval()
-
-    # Inference.
-    with torch.no_grad():
-        x = x.to(dev)
-        activations = model(x).cpu().numpy()  # shape: (1, time_steps, 5)
-
-    pred = activations[0]  # (time_steps, 5)
+    pred = _run_adtof_inference(audio_path, fps=fps, device=device)  # (time_steps, 5)
 
     # Peak picking with per-class thresholds.
     picker = PeakPicker(thresholds=thresh_list, fps=fps)
