@@ -41,6 +41,8 @@ import tarfile
 import time
 import urllib.request
 from pathlib import Path
+
+from eval.paths import DATA_ROOT
 from typing import Optional
 
 ZENODO_RECORD = 4599666
@@ -171,7 +173,7 @@ def stream_extract_split(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/slakh2100_test"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "slakh2100_test")
     parser.add_argument("--progress-every", type=float, default=30.0, help="seconds between progress log lines")
     parser.add_argument("--max-bytes", type=int, default=None, help="stop early after this many kept bytes (debug/testing only)")
     args = parser.parse_args(argv)

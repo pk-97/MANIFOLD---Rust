@@ -94,7 +94,8 @@ def _features_for_truth(audio: np.ndarray, sr: int, truth_by_class: Dict[str, Li
 
 
 def _edm_kit_examples() -> List[Tuple[np.ndarray, str]]:
-    base = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "self_render"
+    from eval.paths import DATA_ROOT
+    base = DATA_ROOT / "self_render"
     wav = base / "edm_kit_128bpm.wav"
     if not wav.exists():
         print("[fit_stage1_profiles] edm_kit_128bpm.wav missing -- run `python -m eval.fetch.self_render` first", file=sys.stderr)

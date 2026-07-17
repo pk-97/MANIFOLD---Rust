@@ -25,6 +25,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from eval.paths import DATA_ROOT
+
 REPO_ZIP_URL = "https://github.com/urinieto/harmonixset/archive/refs/heads/master.zip"
 KEEP_SUBPATHS = ("dataset/beats_and_downbeats", "dataset/segments", "dataset/metadata.csv", "dataset/youtube_urls.csv", "dataset/youtube_alignment_scores.csv", "LICENSE")
 
@@ -66,7 +68,7 @@ def fetch_and_extract(out_dir: Path) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/harmonixset"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "harmonixset")
     args = parser.parse_args(argv)
     rc = fetch_and_extract(args.out_dir)
     if rc == 0:

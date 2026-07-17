@@ -46,7 +46,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval import metrics  # noqa: E402
 
-BABYSLAKH_ROOT = Path(__file__).resolve().parents[1] / "eval" / "data" / "babyslakh_16k" / "babyslakh_16k"
+from eval.paths import DATA_ROOT  # noqa: E402
+
+BABYSLAKH_ROOT = DATA_ROOT / "babyslakh_16k" / "babyslakh_16k"
 
 # manifold_audio.adtof_detection's own 4-class vocabulary (kick/snare/hat/perc)
 # mapped from GM percussion note numbers (standard General MIDI drum map).

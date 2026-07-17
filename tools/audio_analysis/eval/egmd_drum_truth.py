@@ -30,7 +30,9 @@ import pretty_midi
 
 from eval.baseline_scoreboard_p3 import CLASSES, GM_TO_CLASS
 
-EGMD_ROOT = Path(__file__).resolve().parent / "data" / "egmd"
+from eval.paths import DATA_ROOT
+
+EGMD_ROOT = DATA_ROOT / "egmd"
 
 
 def load_manifest(root: Path = EGMD_ROOT) -> Dict[str, object]:

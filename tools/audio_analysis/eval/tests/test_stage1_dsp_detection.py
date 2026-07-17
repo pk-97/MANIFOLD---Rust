@@ -45,7 +45,9 @@ from manifold_audio.stage1_dsp_detection import (
     extract_onset_features,
 )
 
-SELF_RENDER_DIR = Path(__file__).resolve().parents[2] / "eval" / "data" / "self_render"
+from eval.paths import DATA_ROOT
+
+SELF_RENDER_DIR = DATA_ROOT / "self_render"
 
 pytestmark = pytest.mark.skipif(
     not (SELF_RENDER_DIR / "edm_kit_128bpm.wav").exists(),

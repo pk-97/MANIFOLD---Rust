@@ -35,6 +35,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+
+from eval.paths import DATA_ROOT
 from typing import Dict, List
 
 import numpy as np
@@ -345,7 +347,7 @@ def _midi_ground_truth(pm: pretty_midi.PrettyMIDI) -> List[Dict]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/self_render"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "self_render")
     args = parser.parse_args(argv)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
