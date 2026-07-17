@@ -2000,7 +2000,31 @@ fn build_import_graph(
     ];
     let radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
-    let distance = 2.2 * radius;
+    // Camera vertical FOV — hoisted here so both the framing-distance fit
+    // below and the camera node's own `fov_y` param (set further down) read
+    // the SAME value; a duplicated literal is how BUG-206-style drift
+    // happens in the first place.
+    let fov_y = 0.9_f32;
+    // BUG-206 fix: `2.2 * radius` alone frames by the bbox half-DIAGONAL,
+    // which for an elongated (tall/thin) object barely exceeds its dominant
+    // axis — the frame's vertical span contains the object with almost no
+    // margin, and camera tilt + perspective push it past the top/bottom
+    // edges. Frame by PER-AXIS fit instead: for each axis, the distance
+    // required so that half the axis's extent subtends no more than the
+    // half-FOV, with a 1.15 safety margin. The render aspect isn't known at
+    // import time, so the horizontal half-angle is conservatively treated
+    // as equal to the vertical one (square-aspect assumption — never
+    // UNDER-frames a wider-than-tall render).
+    let half_fov_tan = (fov_y * 0.5).tan();
+    let per_axis_fit = dims
+        .iter()
+        .map(|&extent| (extent * 0.5) / half_fov_tan * 1.15)
+        .fold(0.0f32, f32::max);
+    // The `2.2 * radius` floor keeps every COMPACT asset's framing IDENTICAL
+    // to before this fix (the golden-stability guarantee: per_axis_fit is
+    // only ever larger than the floor for objects dominated by one axis,
+    // where the diagonal-based distance genuinely under-frames).
+    let distance = (2.2 * radius).max(per_axis_fit);
     // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
     // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
     // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
@@ -2110,7 +2134,7 @@ fn build_import_graph(
     cam_node.params.insert("orbit".to_string(), float(0.7));
     cam_node.params.insert("tilt".to_string(), float(0.3));
     cam_node.params.insert("distance".to_string(), float(distance));
-    cam_node.params.insert("fov_y".to_string(), float(0.9));
+    cam_node.params.insert("fov_y".to_string(), float(fov_y));
     cam_node.params.insert("look_y".to_string(), float(0.0));
     // BUG-165/BUG-169 fix — see `near_clip` computation above.
     cam_node.params.insert("near".to_string(), float(near_clip));
@@ -5035,60 +5059,63 @@ mod tests {
     /// to be a real render (BUG-205's speck fails), not a full-frame
     /// blowout, and the lit centroid near frame center (wrong-space
     /// framing fails). Edge-contact (object cropped at opposite frame
-    /// edges) is checked against an xfail list — mixamo_like.glb currently
-    /// trips it, tracked as BUG-206; fixing the framing removes the entry.
+    /// edges) is checked at TWO phases — 0.0 (straight/rest pose, the worst
+    /// case for an elongated skinned rig) and 0.25 (the original single
+    /// phase) — against an xfail list. BUG-206 fixed the framing distance
+    /// (per-axis fit, not bbox-diagonal), so the list is empty; a fixture
+    /// only goes back on it after investigation confirms the crop is a
+    /// distinct, unrelated bug (see BUG-206 backlog entry).
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn hostile_fixtures_render_within_framing_invariants() {
         let (w, h) = (256u32, 256u32);
-        const EDGE_XFAIL: &[&str] = &["mixamo_like.glb"]; // BUG-206
+        const EDGE_XFAIL: &[&str] = &[];
+        const PHASES: &[f32] = &[0.0, 0.25];
         for path in hostile_fixture_paths() {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let (def, _report) = super::assemble_import_graph(&path)
-                .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
-            let duration_s = skeleton_pose_duration_s(&def);
-            let rgba = render_skinned_import_at_progress(def, w, h, 0.25, duration_s);
+            for &phase in PHASES {
+                let (def, _report) = super::assemble_import_graph(&path)
+                    .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
+                let duration_s = skeleton_pose_duration_s(&def);
+                let rgba = render_skinned_import_at_progress(def, w, h, phase, duration_s);
 
-            let mut lit = 0u64;
-            let (mut cx, mut cy) = (0.0f64, 0.0f64);
-            let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
-            for y in 0..h {
-                for x in 0..w {
-                    let i = ((y * w + x) * 4) as usize;
-                    if rgba[i].max(rgba[i + 1]).max(rgba[i + 2]) > 8 {
-                        lit += 1;
-                        cx += x as f64;
-                        cy += y as f64;
-                        top |= y == 0;
-                        bottom |= y == h - 1;
-                        left |= x == 0;
-                        right |= x == w - 1;
+                let mut lit = 0u64;
+                let (mut cx, mut cy) = (0.0f64, 0.0f64);
+                let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = ((y * w + x) * 4) as usize;
+                        if rgba[i].max(rgba[i + 1]).max(rgba[i + 2]) > 8 {
+                            lit += 1;
+                            cx += x as f64;
+                            cy += y as f64;
+                            top |= y == 0;
+                            bottom |= y == h - 1;
+                            left |= x == 0;
+                            right |= x == w - 1;
+                        }
                     }
                 }
-            }
-            let fraction = lit as f64 / (w as u64 * h as u64) as f64;
-            assert!(
-                (0.005..=0.95).contains(&fraction),
-                "{name}: lit fraction {fraction:.4} outside [0.005, 0.95] — speck (BUG-205 \
-                 class), black frame, or full-frame blowout"
-            );
-            let (cx, cy) = (cx / lit as f64 / w as f64, cy / lit as f64 / h as f64);
-            assert!(
-                (0.2..=0.8).contains(&cx) && (0.2..=0.8).contains(&cy),
-                "{name}: lit centroid ({cx:.2}, {cy:.2}) outside the center region — \
-                 wrong-space framing/recenter"
-            );
-            let cropped = (top && bottom) || (left && right);
-            // Edge contact is pose-dependent for animated assets, so the
-            // xfail is permissive (skipped, not required-to-trip): the
-            // listed asset MAY crop at some phases (BUG-206). When BUG-206
-            // lands, empty the list so the invariant guards everything.
-            if !EDGE_XFAIL.contains(&name.as_str()) {
+                let fraction = lit as f64 / (w as u64 * h as u64) as f64;
                 assert!(
-                    !cropped,
-                    "{name}: object touches opposite frame edges — default framing crops it \
-                     (BUG-206 class)"
+                    (0.005..=0.95).contains(&fraction),
+                    "{name}@phase{phase}: lit fraction {fraction:.4} outside [0.005, 0.95] — \
+                     speck (BUG-205 class), black frame, or full-frame blowout"
                 );
+                let (cx, cy) = (cx / lit as f64 / w as f64, cy / lit as f64 / h as f64);
+                assert!(
+                    (0.2..=0.8).contains(&cx) && (0.2..=0.8).contains(&cy),
+                    "{name}@phase{phase}: lit centroid ({cx:.2}, {cy:.2}) outside the center \
+                     region — wrong-space framing/recenter"
+                );
+                let cropped = (top && bottom) || (left && right);
+                if !EDGE_XFAIL.contains(&name.as_str()) {
+                    assert!(
+                        !cropped,
+                        "{name}@phase{phase}: object touches opposite frame edges — default \
+                         framing crops it (BUG-206 class)"
+                    );
+                }
             }
         }
     }
