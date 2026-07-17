@@ -19,6 +19,7 @@ pub mod transform;
 pub mod viewport_camera;
 pub mod viewport_overlay;
 pub mod viewport_render;
+pub mod viewport_session;
 mod binding_migration;
 mod boundary_nodes;
 mod bound_graph;
@@ -74,6 +75,7 @@ pub use viewport_overlay::{
     composite_overlay_lines_rgba8, grid_lines, light_billboard_lines, project_lines,
 };
 pub use viewport_render::{ViewportRenderError, override_camera_def, render_viewport_frame};
+pub use viewport_session::ViewportSession;
 pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,

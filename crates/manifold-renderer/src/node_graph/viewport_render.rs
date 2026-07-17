@@ -44,7 +44,10 @@ use crate::preset_runtime::{JsonGeneratorLoadError, PresetRuntime};
 /// (`docs/REALTIME_3D_DESIGN.md` D6) every other free-look camera source
 /// uses; the viewport asks for no new primitive.
 const OVERRIDE_CAMERA_TYPE_ID: &str = "node.free_camera";
-const OVERRIDE_CAMERA_NODE_ID: &str = "__viewport_editor_camera__";
+/// `pub(crate)`: `viewport_session.rs` resolves this exact node id to a
+/// runtime `NodeInstanceId` once per graph build (`Graph::instance_by_node_id`)
+/// so subsequent camera moves are a `Graph::set_param` call, not a rebuild.
+pub(crate) const OVERRIDE_CAMERA_NODE_ID: &str = "__viewport_editor_camera__";
 
 #[derive(Debug)]
 pub enum ViewportRenderError {

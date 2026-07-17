@@ -97,6 +97,7 @@ mod ui_translate;
 mod user_library;
 mod user_prefs;
 mod window_input;
+mod viewport_input;
 mod window_registry;
 mod workspace;
 
