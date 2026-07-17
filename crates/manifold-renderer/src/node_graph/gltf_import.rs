@@ -7568,7 +7568,7 @@ mod tests {
         }
         clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
 
-        // BUG-211 workaround (demo-only, see the backlog entry this test's
+        // BUG-212 workaround (demo-only, see the backlog entry this test's
         // failure led to): string_bindings (the "Model File" → mesh-source
         // `path` binding every importer object carries) address their
         // target by stable NodeId. DuplicateSceneObjectCommand mints a
