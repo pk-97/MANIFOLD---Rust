@@ -51,6 +51,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-096 | **camera-rotate-sliders-jump-no-degrees** | FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open) |
+| BUG-206 | **import-framing-crops-elongated-objects** | tall/thin imports overflow the synthesized orbit camera's frame (cropped top AND bottom at default framing) — `distance = 2.2 * radius` uses the bbox half-DIAGONAL, marginal for elongated shapes once tilt+perspective are added — LOW |
 | BUG-203 | **fluidsim2d-count-dims-display** | FluidSim2D: raising Particle Count dims the image instead of reading as more particles — MED |
 | BUG-201 | **interaction-overlay-automation-callback-type-complexity** | `manifold-ui --all-targets` clippy fails on 4 `type_complexity` findings in `interaction_overlay.rs`, unrelated to BUG-112 — LOW (lint-only) |
 | BUG-170 | **gltf-crate-missing-field-node-parse-failure** | five Khronos assets fail at `gltf::import()` itself with `missing field 'node'` — a crate-level JSON-shape parse gap, not an extension-support gap |
@@ -160,7 +161,15 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-191 (perf-soak-start-seek-first-frame-spike) — `cargo xtask perf-soak --start <beats>` produces a ~34-37ms content-thread frame right after the transport seeks, tripping I1 on that one frame — found 2026-07-16 during PERF_BUDGET_GATE_DESIGN.md P2, confirmed pre-existing
+### BUG-206 (import-framing-crops-elongated-objects) — tall/thin imports overflow the synthesized camera's frame — found 2026-07-17 (first synthetic hostile-fixture run: Blender-generated skinned cylinder, 10:1 aspect, cropped top AND bottom at default framing)
+
+**Status:** OPEN — LOW (one orbit/zoom gesture recovers; every import exposes the Camera card).
+
+**Symptom:** an elongated import (bind-skinned bbox ~1.0 tall × 0.2 wide) renders correctly sized but overflows the default frame vertically — lit pixels touch both top and bottom edges. Compact objects (azalea, helmet, skeleton_animated post-BUG-205) frame fine.
+
+**Root cause:** `assemble_import_graph`'s `distance = 2.2 * radius` (gltf_import.rs, near the BUG-165/169 near-clip comment) uses the bbox half-DIAGONAL as `radius`. For an object dominated by one axis the diagonal barely exceeds that axis, so the frame's vertical span (`2 * distance * tan(fov_y/2)` ≈ 1.08 × height at fov_y 0.9) contains the object with almost no margin — and camera tilt (0.3) plus perspective (near surface projects larger) push it past the edges.
+
+**Fix shape:** frame by per-axis fit instead of diagonal: required distance = max over axes of (extent/2) / tan(half-fov for that screen axis), times a ~1.15 margin, using the render aspect for the horizontal fov. Keep `2.2 * radius` as the floor so compact assets keep their current framing (goldens unaffected). Belongs with the planned import sweep harness — its "no lit pixels on opposite frame edges" invariant is the regression oracle for exactly this. — `cargo xtask perf-soak --start <beats>` produces a ~34-37ms content-thread frame right after the transport seeks, tripping I1 on that one frame — found 2026-07-16 during PERF_BUDGET_GATE_DESIGN.md P2, confirmed pre-existing
 
 **Status:** PARTIAL FIX @ Lane 6, 2026-07-17 — the `node.spawn_from_image` contributor is closed (prewarmed, gated green); the dominant remaining contributors (`node.wgsl_compute` × several instances, `node.blob_tracker`) are ATTRIBUTED but not fixed — fix shape queued for next wave.
 
