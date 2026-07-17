@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-235 | **manifold-own-kick-fixtures-systematic-adtof-timing-bias** | Raw ADTOF kick detections on the 5 `manifold_own` electronic kick fixtures show a tight, track-dependent, systematically-EARLY offset (20–125ms) vs. their hand-labeled truth — not random misses (feel_the_vibration_174bpm: all 15 predictions land 80–120ms early, near-monotonically). Confirmed NOT a scorer column-swap bug: `mix_time_s`/`drums_time_s` are byte-identical for 4/5 tracks, and bad_guy's existing column choice (`mix_time_s`) already carries the smaller offset. A pre-existing (P1-recorded, not P3-introduced) onset-convention gap between ADTOF and this pack's hand-labeled truth — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P3, orchestrator diagnostic |
 | BUG-232 | **harmonix-matched-audio-carries-multi-second-timing-offset** | YouTube-matched Harmonix audio (`eval/fetch/harmonix_audio.py`) commonly carries a multi-second constant timing offset vs. the Harmonix annotation reference (2.9s–7.3s seen across a 15-track sample) — raw beat_f1 against these matched tracks is near-zero (0.11 mean) despite Beat This tracking a plausible beat count; a difference-histogram shift estimator recovers beat_f1 to 0.65 mean once corrected. A data-alignment gap, not a detector bug — blocks using Harmonix-matched audio for beat/downbeat tuning until productized — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P3 |
 | BUG-231 | **beat-this-no-tempo-hint-api-for-octave-fix** | `beat_this`'s license-clean "minimal" postprocessing path has no BPM-range/tempo-prior parameter anywhere in its inference API — the `liveshow_integer` 115.4-vs-132-BPM (~7:8 ratio) mis-track from P2 can't be fixed by passing a hint; a future fix needs a post-hoc heuristic on Beat This's own output, not a detector-side parameter — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P3 |
 | BUG-230 | **beat-this-short-clip-bpm-convergence** | Beat This converges on the same ~142.86 BPM for 4 of 5 unrelated ~13s isolated-stem test clips (apricots/bad_guy/feel_the_vibration/tears; only inhale_exhale differs, at a plausible half-tempo) — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P2 listen-list render |
@@ -176,6 +177,28 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-235 (manifold-own-kick-fixtures-systematic-adtof-timing-bias) — raw ADTOF kick output is systematically early vs. the 5 manifold_own hand-labeled kick fixtures — found 2026-07-17, AUDIO_ANALYSIS_ACCURACY P3, orchestrator diagnostic
+
+**Status:** OPEN — LOW-MED (measurement-correctness finding, not a functional regression; the ADTOF pipeline itself isn't broken — babyslakh's per-class scoring on the same detector gets kick F1 0.818 — but this fixture pack's own kick F1 numbers understate accuracy at the current 50ms tolerance).
+
+**Symptom:** the P3 full-pack baseline scored raw ADTOF kick detections against the 5 `manifold_own` electronic kick fixtures at F1 0.067–0.75 (mean 0.238), anomalously low next to babyslakh's per-class ADTOF kick F1 of 0.818 on the same detector. The orchestrator flagged the right-count/zero-overlap signature (apricots: 1 TP of 14 pred/16 truth; feel_the_vibration: 0 TP of 15/16) as a possible label time-base mismatch — the same hazard class this session's own Harmonix finding (BUG-232) proved is live in this corpus.
+
+**Diagnostic performed (median signed offset, predicted kick − nearest truth, against BOTH label columns):**
+
+| Track | vs `mix_time_s` | vs `drums_time_s` | Columns identical? |
+|---|---|---|---|
+| apricots_128bpm | −125ms | −125ms | yes |
+| bad_guy_128bpm | −20ms | +75ms | **no** (its own known tempo-warp caveat) |
+| feel_the_vibration_174bpm | −100ms | −100ms | yes |
+| inhale_exhale_145bpm | −62.5ms | −62.5ms | yes |
+| tears_140bpm | −77.5ms | −77.5ms | yes |
+
+Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF raw kicks vs `mix_time_s` truth): every single prediction is early, tightly clustered −80ms to −120ms with a slight drift across the track (−80, −80, −100, −100, −95, −80, −100, −95, −115, −105, −100, −110, −120, −100, −120) — not scattered/random misses, a clean systematic bias.
+
+**Root cause:** confirmed this is NOT a scorer column-selection bug. Per `tests/fixtures/audio_labels/README.md`, "the other four tracks' stems and mix share a time base exactly" — `mix_time_s` and `drums_time_s` are byte-identical for apricots/feel_the_vibration/inhale_exhale/tears, so no column swap is possible or would change anything for them. `bad_guy_128bpm` is the ONLY track with genuinely different columns (its own documented tempo-warp caveat), and the scorer's existing choice (`mix_time_s`, scored against `mix.wav` predictions) already carries the smaller offset (−20ms) vs. the alternative (+75ms) — i.e. the current column choice is already correct everywhere it could possibly be wrong. What IS real: a systematic (tight, track-dependent, NOT random/non-constant) timing bias of 20–125ms between ADTOF's raw kick-onset picking convention and this fixture pack's hand-labeled truth convention (`audio_labels/README.md`: "onset = walk-back to 25% of the sub-envelope peak"). This is a pre-existing pipeline characteristic, not introduced by P3 — the identical low numbers (apricots 0.20, feel_the_vibration 0.0 via the full `analyze_percussion()` pipeline, not just raw ADTOF) already exist in P1's own committed `dev_2026-07-17.json`, untouched by this session. At the 50ms tolerance `eval/metrics.py` uses (D10-frozen — already wider than these 5 fixtures' own historical ±35ms convention per the labels README), most of these offsets still exceed tolerance and drive F1 toward zero despite ADTOF finding a kick near almost every truth kick. Plausible (not confirmed) explanation for why babyslakh scores so much higher on the same detector: Slakh's aligned-MIDI truth is the exact digital note-onset from synthesis, which may simply sit closer to ADTOF's own onset-picking convention than this pack's hand-crafted "25% envelope rise" rule does.
+
+**Fix shape:** same class of problem D14's decode/detector-stage alignment work already solves (measure a per-stage/per-detector systematic bias, apply the correction once at a defined seam) — but applying it is tuning, out of scope for this measurement-only phase. A future phase should either (a) extend D14's methodology (`decoder_alignment.json`'s mechanism) to a per-onset-convention calibration for this fixture pack, or (b) re-derive these 5 fixtures' truth extraction to match ADTOF's own onset convention if the two are judged incompatible by design. No scorer or detector change made this session (measurement only, per the orchestrator's explicit instruction).
 
 ### BUG-232 (harmonix-matched-audio-carries-multi-second-timing-offset) — YouTube-matched Harmonix audio isn't timing-aligned with the annotation reference — found 2026-07-17, AUDIO_ANALYSIS_ACCURACY P3
 
