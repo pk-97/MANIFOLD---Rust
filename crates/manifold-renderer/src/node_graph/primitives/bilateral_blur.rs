@@ -100,6 +100,12 @@ crate::primitive! {
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/bilateral_blur_body.wgsl"),
     input_access: [Gather, GatherTexel],
+    // D6(a): `depth` is compared texel-vs-tap (`dz_j`) across all 9 taps to
+    // weight the edge-aware blend — fp16 quantization of that per-tap
+    // difference shows up as banding in the AO denoise near silhouette
+    // edges. `in` stays filtered (Gather, unmarked): the color/AO signal
+    // being blurred has no derivative/horizon read.
+    precision_critical: ["depth"],
     stencil_fetch: true,
     derived_uniforms: ["near", "far"],
     wgsl_includes: [DEPTH_COMMON],

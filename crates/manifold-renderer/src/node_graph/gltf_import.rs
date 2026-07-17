@@ -6055,7 +6055,7 @@ mod tests {
         // is_watched = false -> production render path, INCLUDING the on-demand
         // fusion attempt the raw from_def proof never exercised.
         let mut generator = registry
-            .create_with_override(device.arc(), &preset_id, Some(&def), w, h, false, None)
+            .create_with_override(device.arc(), &preset_id, Some(&def), w, h, false, None, false)
             .expect(
                 "create_with_override must build the imported generator from its override def, \
                  even though the preset id is not in the bundled catalog",

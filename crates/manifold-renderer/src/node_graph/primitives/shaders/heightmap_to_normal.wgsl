@@ -24,11 +24,14 @@
 //
 // Output: RGB = signed unit normal in [-1, 1]. Alpha = 1.
 //
+// D6(a) (docs/DEPTH_RELIGHT_DESIGN.md): reads via exact integer textureLoad
+// + manual ClampToEdge (no sampler) — every offset lands on an exact texel
+// center, so this agrees bit-for-bit with the prior filtering-sampler read.
+//
 // Bindings:
 //   @binding(0) uniforms (16 bytes)
 //   @binding(1) tex_in
-//   @binding(2) tex_sampler
-//   @binding(3) output_tex (rgba16float storage)
+//   @binding(2) output_tex (rgba16float storage)
 
 struct Uniforms {
     z_scale: f32,
@@ -39,8 +42,7 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var tex_in: texture_2d<f32>;
-@group(0) @binding(2) var tex_sampler: sampler;
-@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var output_tex: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -48,13 +50,19 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
-    let inv = vec2<f32>(1.0) / vec2<f32>(dims);
-    let uv = (vec2<f32>(id.xy) + 0.5) * inv;
+    let dims_i = vec2<i32>(dims);
+    let max_c = dims_i - vec2<i32>(1, 1);
+    let c = vec2<i32>(id.xy);
 
-    let hL = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(-inv.x, 0.0), 0.0).r;
-    let hR = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>( inv.x, 0.0), 0.0).r;
-    let hD = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0, -inv.y), 0.0).r;
-    let hU = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0,  inv.y), 0.0).r;
+    let cL = clamp(c - vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cR = clamp(c + vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cD = clamp(c - vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+    let cU = clamp(c + vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+
+    let hL = textureLoad(tex_in, cL, 0).r;
+    let hR = textureLoad(tex_in, cR, 0).r;
+    let hD = textureLoad(tex_in, cD, 0).r;
+    let hU = textureLoad(tex_in, cU, 0).r;
     let gx = (hR - hL) * 0.5;
     let gy = (hU - hD) * 0.5 * uniforms.aspect;
     let z = max(uniforms.z_scale, 1e-4);

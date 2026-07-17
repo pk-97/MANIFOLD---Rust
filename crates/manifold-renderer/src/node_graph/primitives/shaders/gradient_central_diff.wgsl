@@ -14,26 +14,25 @@
 //                in per-UV-unit space; matches the legacy
 //                fluid_gradient_rotate's `grad / (2 * texel)` math)
 //
-// Boundary policy is the sampler's address mode (host-side): Clamp
-// (default) or Repeat (toroidal — for cyclic fluid-sim density fields).
+// Boundary policy is resolved MANUALLY (D6(a), no sampler at all): Clamp
+// (default) clamps the neighbour index to the texture bounds; Repeat
+// modulo-wraps it toroidally — for cyclic fluid-sim density fields.
 //
 // Bindings:
 //   @binding(0) uniforms (16 bytes)
 //   @binding(1) tex_in
-//   @binding(2) tex_sampler
-//   @binding(3) output_tex (rgba16float storage)
+//   @binding(2) output_tex (rgba16float storage)
 
 struct Uniforms {
     channel: u32,    // 0=R, 1=G, 2=B, 3=A
     scale_mode: u32, // 0=Texel, 1=UV
-    _pad0: f32,
-    _pad1: f32,
+    wrap_mode: u32,  // 0=Clamp, 1=Repeat
+    _pad0: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var tex_in: texture_2d<f32>;
-@group(0) @binding(2) var tex_sampler: sampler;
-@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var output_tex: texture_storage_2d<rgba16float, write>;
 
 fn select_channel(c: vec4<f32>, idx: u32) -> f32 {
     switch idx {
@@ -44,19 +43,30 @@ fn select_channel(c: vec4<f32>, idx: u32) -> f32 {
     }
 }
 
+// See gradient_central_diff_body.wgsl's gcd_wrap_coord for the exactness
+// argument (offset is always precisely one texel from an exact texel-center
+// fragment coordinate, so clamp/modulo agree bit-for-bit with the retired
+// sampler-address-mode read).
+fn gcd_wrap_coord(c: vec2<i32>, dims_i: vec2<i32>, wrap_mode: u32) -> vec2<i32> {
+    if wrap_mode == 1u {
+        return ((c % dims_i) + dims_i) % dims_i;
+    }
+    return clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output_tex);
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
-    let inv = vec2<f32>(1.0) / vec2<f32>(dims);
-    let uv = (vec2<f32>(id.xy) + 0.5) * inv;
+    let dims_i = vec2<i32>(dims);
+    let c = vec2<i32>(id.xy);
 
-    let cL = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(-inv.x, 0.0), 0.0);
-    let cR = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>( inv.x, 0.0), 0.0);
-    let cD = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0, -inv.y), 0.0);
-    let cU = textureSampleLevel(tex_in, tex_sampler, uv + vec2<f32>(0.0,  inv.y), 0.0);
+    let cL = textureLoad(tex_in, gcd_wrap_coord(c - vec2<i32>(1, 0), dims_i, uniforms.wrap_mode), 0);
+    let cR = textureLoad(tex_in, gcd_wrap_coord(c + vec2<i32>(1, 0), dims_i, uniforms.wrap_mode), 0);
+    let cD = textureLoad(tex_in, gcd_wrap_coord(c - vec2<i32>(0, 1), dims_i, uniforms.wrap_mode), 0);
+    let cU = textureLoad(tex_in, gcd_wrap_coord(c + vec2<i32>(0, 1), dims_i, uniforms.wrap_mode), 0);
 
     let diff_x = select_channel(cR, uniforms.channel) - select_channel(cL, uniforms.channel);
     let diff_y = select_channel(cU, uniforms.channel) - select_channel(cD, uniforms.channel);

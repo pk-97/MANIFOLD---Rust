@@ -142,6 +142,24 @@ pub trait PrimitiveSpec: Send {
     /// also defaults to `Coincident`.
     const INPUT_ACCESS: &'static [crate::node_graph::freeze::classify::InputAccess] = &[];
 
+    /// Names of texture inputs whose CONSUMPTION differentiates or
+    /// horizon-tests the value — a finite-difference gradient, a raymarch
+    /// penetration test, a thin-lens CoC derivation — where fp16's ~10-bit
+    /// mantissa quantizes into visible contours (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// D6(a)). The freeze compiler's format-selection seam
+    /// (`execution_plan::compile`) promotes a materialized intermediate to
+    /// `Rgba32Float` when at least one consumer names it here AND no consumer
+    /// reads it through a FILTERING sampler (`InputAccess::Coincident` /
+    /// `Gather` — non-filterable Rgba32Float can't back those on Apple GPUs).
+    /// Meta-test `precision_critical_inputs_are_texel_exact`
+    /// (`freeze::classify`) enforces that every name listed here corresponds
+    /// to a texture input whose OWN `INPUT_ACCESS` entry is texel-exact
+    /// (`CoincidentTexel`/`GatherTexel`) — marking a filtering-access input
+    /// here would be a self-contradiction (this atom itself couldn't take a
+    /// fp32 producer). Empty (the default) means no input asks for fp32.
+    /// Set via the macro's `precision_critical:` field.
+    const PRECISION_CRITICAL_INPUTS: &'static [&'static str] = &[];
+
     /// STENCIL-FETCH body ABI (stencil tier): the `wgsl_body` reads each of its
     /// `Gather` texture inputs through a free function `fetch_<port>(uv:
     /// vec2<f32>) -> vec4<f32>` instead of receiving `(texture_2d, sampler)`
@@ -753,6 +771,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
         P::INPUT_ACCESS
     }
+    fn precision_critical_inputs(&self) -> &'static [&'static str] {
+        P::PRECISION_CRITICAL_INPUTS
+    }
     fn stencil_fetch(&self) -> bool {
         P::STENCIL_FETCH
     }
@@ -881,6 +902,7 @@ macro_rules! primitive {
         $( param_contracts: [ $(($contract_param:literal, $contract_expr:expr)),* $(,)? ], )?
         $( wgsl_body: $wgsl_body:expr, )?
         $( input_access: [ $($access:ident),* $(,)? ], )?
+        $( precision_critical: [ $($prec_crit:literal),* $(,)? ], )?
         $( stencil_fetch: $stencil:literal, )?
         $( wgsl_specialization: [ $(($tok:literal, $tok_param:literal)),* $(,)? ], )?
         $( derived_uniforms: [ $($derived:literal),* $(,)? ], )?
@@ -944,6 +966,8 @@ macro_rules! primitive {
             $( const WGSL_BODY: Option<&'static str> = Some($wgsl_body); )?
             $( const INPUT_ACCESS: &'static [$crate::node_graph::freeze::classify::InputAccess] =
                 &[ $($crate::node_graph::freeze::classify::InputAccess::$access),* ]; )?
+            $( const PRECISION_CRITICAL_INPUTS: &'static [&'static str] =
+                &[ $($prec_crit),* ]; )?
             $( const STENCIL_FETCH: bool = $stencil; )?
             $( const WGSL_SPECIALIZATION: &'static [(&'static str, &'static str)] =
                 &[ $(($tok, $tok_param)),* ]; )?
