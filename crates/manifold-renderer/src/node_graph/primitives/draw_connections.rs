@@ -102,6 +102,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire node.connect_nearest's edges output into `edges` and the same detections it consumed into `detections`. dash_fill is the OFF fraction of each dash cycle (legacy step semantics); set midpoint_radius_px to 0 for plain lines. Skips to a zero-cost passthrough while no pairs exist.",
     examples: [],
     picker: { label: "Draw Connections", category: Atom },

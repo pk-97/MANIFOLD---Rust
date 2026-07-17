@@ -86,6 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `inject_index = -1` disables the burst (the kernel early-outs); the four zones (0..3) are hardcoded tetrahedron-vertex positions. Typical wiring: a clip-trigger cycle picks the zone, gated by node.inject_burst's `active` (mux to -1 when idle); `inject_force` from the gated force slider; `inject_phase` from inject_burst's phase. `dt = delta * 60` baked in; time uses ctx.time.seconds for the noise-perturbation phase. When inject_index < 0 or inject_force * envelope is tiny the kernel early-outs (cheap when idle).",
     examples: ["FluidSim3D"],
     picker: { label: "Add Burst (3D, radial)", category: Atom },

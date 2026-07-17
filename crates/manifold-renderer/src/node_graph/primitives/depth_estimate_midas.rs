@@ -100,6 +100,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "If the MiDaS native plugin can't be loaded, the primitive logs a warning once and outputs black thereafter. Lower analysis_max_dim makes inference faster but coarser; higher update_interval reduces CPU load at the cost of temporal lag. Compose into node.compose with a luminance mask to layer depth-aware effects, or feed the depth into another primitive that accepts a control texture.",
     examples: [],
     picker: { label: "Depth Map", category: Atom },

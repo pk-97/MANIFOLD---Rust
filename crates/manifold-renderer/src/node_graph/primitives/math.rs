@@ -67,6 +67,7 @@ crate::primitive! {
             enum_values: MATH_OPS,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Divide by ~0 clamps to 0 — control signals must never produce NaN/Inf that downstream shaders could propagate. Sin and Cos are unary ops that read `a` only (in radians) and ignore `b`; convenient for deriving rotation coefficients from time wires when composing rotating procedural fields. Floor and Ceil are unary; the canonical use is bracket-interp scaffolding (a_lo = floor(freq), a_hi = ceil(freq), a_lerp = freq - a_lo) for graphs that morph smoothly between integer-parameter samples of a curve family (Lissajous, Rose, etc.).",
     examples: [],
     picker: { label: "Math", category: Driver },
@@ -196,6 +197,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

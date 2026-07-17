@@ -61,6 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the `instances` input. The amplitude factor matches the legacy DigitalPlants convention: 0.2 yields a [-0.1, 0.1] radians range across each axis. The hash uses idx*3 + {0,1,2} keys so each axis is decorrelated; the sequence is deterministic per index (re-rendering the same chain gives identical jitter). ADD semantics preserve any upstream rotation — emitting a uniform pose from a wrap and then jittering it is the typical composition.",
     examples: [],
     picker: { label: "Rotation Jitter", category: Atom },

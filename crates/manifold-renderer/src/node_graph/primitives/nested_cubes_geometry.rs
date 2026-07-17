@@ -93,6 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "target_angles is required — drive it from node.cycle_table_row (pose mode) or node.sum_into_bins (envelope mode). Trigger source is conventional `system.generator_input.trigger_count`; on each new trigger the kick envelope snaps to 1.0 and decays exponentially at `decay_rate` per second, multiplied into each face's random-axis 45° rotation. State is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule).",
     examples: ["NestedCubes"],
     picker: { label: "Nested Cubes Geometry", category: Atom },

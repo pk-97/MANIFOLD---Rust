@@ -109,6 +109,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: reads a normal map (not color) and a Light; pointwise same-texel shading calc with no UV remap, classified structurally like the other lighting atoms (basic_light, rim_light, matcap_two_tone)
+    depth_rule: Inherit,
     composition_notes: "Both light and view are normalised in-shader. Color alpha is ignored; output alpha = spec weight. For audio-reactive sparkle, wire a beat-driven LFO into `power` (lower power = broader highlight; higher = pinpoint). When `light` is wired, the light's direction overrides `light_x/y/z`; the light's pre-multiplied colour multiplies into the `color` tint (so a yellow light through a magenta surface gives a yellow×magenta highlight).",
     examples: [],
     picker: { label: "Shininess (Blinn)", category: Atom },

@@ -71,6 +71,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The vine/ribbon/sweep atom — a path built from generate_range + array_math (a circle: cos/sin of an angle ramp) plus a linear `lift` becomes a helix, the archetypal climbing vine. Wire `radius_scale` to a growth-front ramp (generate_range fraction -> array_math ScaleOffset/Clamp01 threshold against a beat-driven phase) so the tube visibly grows from base to tip — the radius collapses to 0 past the front instead of the whole tube popping in at once. Wire node.make_triangles downstream with src_cols = sides+1, src_rows = the path's point count. The +Y reference frame degenerates on a near-vertical path segment (Deferred #4) — keep paths mostly horizontal/spiraling in v1, or accept the pinch.",
     examples: ["Vine"],
     picker: { label: "Tube From Path", category: Atom },

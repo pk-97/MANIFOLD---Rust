@@ -107,6 +107,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Orthographic mode matches Wireframe's bit-exact behaviour (PROJ_SCALE = 0.25 by default; scales xy directly, ignores z). Perspective mode applies s = proj_dist / (proj_dist + z) scaling — useful when the upstream geometry has meaningful depth variation. Active count = input buffer's vertex count; output buffer should be at least the same size.",
     examples: [],
     picker: { label: "Flatten 3D → 2D", category: Atom },

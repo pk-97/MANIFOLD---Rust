@@ -102,6 +102,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Mask value = 1 - smoothstep(1 - softness, 1 + softness, length(rotated_uv / (rx, ry))). softness is in normalized-radius units — softness=0 is a hard edge, softness=1 means the falloff extends a full radius beyond the nominal edge. Radius=0 collapses the axis to a point (the mask never reaches 1 along that axis); useful for line-like masks. For DoF radial: cx=focus_x, cy=focus_y, radius_x=radius_y=focus_width, softness=0.5 → pipe through node.invert to get the standard CoC (outside=1, inside=0). For aspect-correct circles: wire aspect from node.texture_size and divide one radius by it.",
     examples: [],
     picker: { label: "Circle Mask", category: Atom },

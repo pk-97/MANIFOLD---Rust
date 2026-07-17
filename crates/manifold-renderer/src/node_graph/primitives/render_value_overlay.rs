@@ -180,6 +180,7 @@ crate::primitive! {
             enum_values: ANCHORS,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire detection regions (Channels[X, Y, WIDTH, HEIGHT]) into `positions`; optionally wire a Channels[VALUE: F32] into `values` for Float3 format. Labels are positioned at each item's (X, Y) + (offset_x, offset_y). format=Index shows array index, Hex shows '0X' + hex, Coord shows 'xxx,yyy' from X/Y × 999, Float3 shows value × 1000 as 3 digits. For the Blob Track HUD, use multiple instances with different formats and offsets.",
     examples: [],
     picker: { label: "Value Overlay", category: Atom },

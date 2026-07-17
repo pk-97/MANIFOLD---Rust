@@ -75,6 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Drop-in replacement for the two node.variable_blur (H then V) nodes inside a DoF chain: wire the same `in` (the color feeding variable_blur_h.in) and the same `width` (the CoC source feeding both variable_blur H/V — coc_dilate's output in CinematicScene, NOT coc_from_depth directly, so BUG-137's dilation still reaches this gather) into this ONE node instead, and wire its `out` to whatever consumed variable_blur_v.out. `max_radius` must match the upstream CoC producer's own max_radius param (same shared-units contract node.variable_blur has with node.coc_from_depth) — set to the same value (24.0 default, matching CinematicScene's coc/coc_dilate/variable_blur chain). One dispatch replaces two: this is the DoF gather upgrade, not an additional stage.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Bokeh Gather", category: Atom },

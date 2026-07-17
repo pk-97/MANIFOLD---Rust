@@ -74,6 +74,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The 'breathe' / 'inflate' atom — wire an LFO or node.envelope_follower_ar into `amount` for a mesh that pulses with the low band. Wire node.mesh_ramp's `weights` output to grow the push progressively across the mesh instead of uniformly. Wire a noise or image Texture2D into `field` to localize the push (field_bias = 0.5 centers it, matching node.push_mesh's height_bias convention). Pair with node.facet_normals downstream once amount is large enough that the unchanged normals start looking wrong under lighting.",
     examples: ["Breathe"],
     picker: { label: "Push Along Normals", category: Atom },

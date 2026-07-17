@@ -71,6 +71,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: Texture3D output — outside the 2D depth channel
+    depth_rule: Terminal,
     composition_notes: "vol_res × vol_res × vol_depth must match the producing ScatterParticles3D primitive. Output Texture3D must be Rgba16Float — the shader writes via texture_storage_3d<rgba16float, write>. The output volume is pre-bound by the chain build at the same dimensions; the accumulator buffer is sized vol_res² × vol_depth × 4 bytes.",
     examples: [],
     picker: { label: "Resolve Scatter (3D)", category: Atom },

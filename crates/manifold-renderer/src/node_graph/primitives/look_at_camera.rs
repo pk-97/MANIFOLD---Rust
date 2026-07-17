@@ -108,6 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "All seven spatial params (pos_x/pos_y/pos_z/target_x/target_y/target_z/fov_y) are port-shadowed, so wiring a beat_ramp into any of them makes that axis of the camera move beat-addressable. World up is fixed at (0,1,0) in v1 — no up param; a near-vertical pos-target line will degenerate the basis the same way any look-at camera does. fov_y is an Angle param, so the editor and outer-card sliders display and edit it in degrees while storage stays in radians. `near`/`far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)`. `pos_x`/`pos_y`/`pos_z` outputs mirror `node.orbit_camera`'s surface for PBR material atoms that need the camera world position per pixel.",
     examples: [],
     picker: { label: "Look-At Camera", category: Driver },

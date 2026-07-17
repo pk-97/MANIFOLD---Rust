@@ -77,6 +77,7 @@ crate::primitive! {
             enum_values: CHROMA_KEY_MODES,
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Output mask is written to all RGB channels so it's visible as grayscale in the editor; downstream `masked_mix` reads only `.r`. Tolerance is the RGB Euclidean distance threshold — values above ~0.5 already select most of typical imagery.",
     examples: [],
     picker: { label: "Chroma Key", category: Atom },

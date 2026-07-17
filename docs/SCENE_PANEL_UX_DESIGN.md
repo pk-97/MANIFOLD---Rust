@@ -1,6 +1,6 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
-**Status:** APPROVED design, not built · 2026-07-17 · Fable
+**Status:** IN PROGRESS — UX-P1 + UX-P2 SHIPPED 2026-07-17 (`6dd700e7`); UX-P3 (modulation via exposure-on-demand, Peter's same-day directive) DESIGNED, not built · 2026-07-17 · Fable
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -97,6 +97,25 @@ Both phases live in `manifold-ui` + the `dispatch_inspector`/state_sync seams in
 - **Acceptance demo:** L3 — the two flow scripts; PNG reviewed for affordance legibility: sliders read as sliders, cells read as scrubbable (hover state captured in one frame of the flow), swatch shows the row's color.
 - **Performer gesture:** grab Roughness and sweep it full-range in one drag (slider), then Shift-scrub a Position cell for a fine nudge (cell) — the flow script performs both and asserts both values moved.
 - **Forbidden moves:** inventing a color picker (D4's rejected alternative); new style constants (D7); replacing value cells with sliders on unbounded params; keeping the chip grid alive next to the dropdown (parallel old path); touching scene_vm.rs or any command.
+
+### UX-P3 — scene params join the modulation surface (amendment, 2026-07-17)
+
+Peter, same day, after UX-P1/P2 shipped: *"It would be nice to also be able to apply modulation to the params in the scene too. Maybe reusing the card sliders and drawer and modulation buttons etc 1:1 would be make sense here? One surface to learn?"* — the directive is 1:1 reuse; the mechanism below is the technical call.
+
+**D8 — Modulation rides exposure-on-demand, not a new binding target.** A scene row's mod affordance (the same T/∿/A button strip effect-card rows carry) works by ensuring the row's node param is an **exposed card param** on the layer's generator card, then opening the standard drawer against it. First click on a row's mod button that has no exposure = create the exposure (through the same `EditingService` command path the graph editor's "expose param to card" uses — find and reuse it, don't reinvent), named `<ObjectName> · <ParamLabel>`; subsequent interaction is indistinguishable from an effect card param. Everything downstream — drivers, envelopes, audio modulation, MIDI/OSC mapping, `param_values` storage, serialization, the perform surface — is the existing system untouched.
+*Rejected: extending the modulation infra to target raw node addresses (scope_path + node_doc_id + param_id) directly* — that duplicates exposure's entire job across storage, playback application, MIDI mapping, and serialization; it is the plausible-wrong architecture for this phase, forbidden by name.
+Consequences, stated honestly: modulated scene params appear as exposed params on the layer's generator card (visible in the inspector card's param list). That is arguably correct — they ARE performance params now — but the card list can grow long on heavily-modulated scenes. If it bothers Peter in use, a card-side grouping treatment is a follow-up, not a reason to fork the binding model.
+
+**D9 — Row rendering converges on the card row family.** With exposure in place, a modulated scene row IS a card param row; render it with the same `ParamRow`/drawer components param_card.rs uses (including `ParamModState`/`AudioCardState` wiring), not a lookalike. Unmodulated rows keep their UX-P2 rendering (slider or value cell) plus the mod button strip. Swatch polish from the UX-P2 review lands here: swatch to ≥20px with a hairline border so it reads as a color chip, not a checkbox.
+
+**D10 — Driven-state display is shared.** A scene param with a live modulation shows the same driven affordance an effect card row shows (the existing driven/latched visuals), sourced from the same state the card reads — no scene-panel-local driven cache.
+
+- **Entry state:** UX-P1+UX-P2 on main (`6dd700e7`). Verify anchors: param_card.rs row/drawer builders; the graph editor's expose-param command (find by rg 'expose' in manifold-editing commands + the graph editor panel — re-derive at read-back, escalate if no such command exists); `ParamModState`/`AudioCardState` (param_card.rs).
+- **Read-back:** this amendment; param_card.rs module docs end-to-end; the exposure command's inverse (unexpose) semantics — what happens to a drawer when its exposure is removed in the graph editor mid-session must be handled the way the effect card handles a deleted param (find that behavior, mirror it).
+- **Deliverables:** mod button strip on scene property rows; exposure-on-demand command wiring; drawer open/interaction parity with effect cards (one shared code path, not a copy); swatch polish; flow script driving: click a scene row's mod button → exposure created → drawer opens → assign an LFO → the param's value visibly modulates (assert via the row's value text changing across two snapshots with transport running).
+- **Gate:** *Positive:* the flow above (L3); focused nextest `-p manifold-ui -p manifold-app -p manifold-editing`; round-trip gate (BUG-036 rule): save → reload → the exposed scene param still modulates AFTER reload, asserted, not assumed. *Negative:* no new binding-target enum anywhere (`rg` for new variants on the binding types touched); no scene-panel-local copy of drawer rendering (the drawer builder call sites must resolve to param_card.rs's).
+- **Performer gesture:** map a MIDI knob to an object's Scale via the row's mod strip and sweep it live — the gate exercises the mapping path at minimum to the assignment (hardware sweep is Peter's click-script line).
+- **Forbidden moves:** a parallel drawer implementation; a new binding target kind (D8's rejected alternative); exposing ALL scene params eagerly at import (exposure is on-demand only — eager exposure floods the card and the perform surface); touching the modulation application code in playback.
 
 ## 6. Decided — do not reopen
 

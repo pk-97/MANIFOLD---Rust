@@ -43,6 +43,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "rate = cycles per beat (1 = one ramp per beat); attack = fraction of the cycle the ramp takes (0.15 = Voronoi Prism's pop-in). At attack→0 it's effectively a gate (instant on). The `beat` input port-shadows FrameTime.beats — unwired it reads the playback clock, matching node.beat_gate. Pure scalar, no GPU.",
     examples: ["preset.effect.voronoi_prism"],
     picker: { label: "Beat Ramp", category: Driver },

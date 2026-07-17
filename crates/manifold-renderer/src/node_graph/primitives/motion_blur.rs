@@ -98,6 +98,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Warp,
     composition_notes: "Wire render_scene's `velocity` output straight into `velocity` (requires GBUFFER's emit_velocity path — lazy, costs nothing unless wired) and the Camera used for `node.camera_lens` into `camera` so the shutter reads the same lens exposure/DoF use. `samples` is a fixed WGSL const (8), not a runtime param — D4 commits the tap count. `max_blur_px` is a safety clamp on the smear distance in pixels, independent of `node.variable_blur`'s own `max_radius` (no shared-units contract with the DoF chain the way coc_from_depth has with variable_blur — motion blur and DoF are independent smears in this preset). Sits at the END of the CinematicScene chain, after the DoF+SSAO composited color, so its Gather `in` read can virtually stencil-fetch-chain that upstream pointwise work instead of materializing an extra intermediate.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Motion Blur", category: Atom },

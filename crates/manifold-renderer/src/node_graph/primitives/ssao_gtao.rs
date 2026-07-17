@@ -139,6 +139,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: wide-radius multi-tap gather over `depth`, but output stays coincident with the input pixel grid — classified like blur/convolution, not a UV remap
+    depth_rule: Inherit,
     composition_notes: "Output is a grayscale AO map (R=G=B=occlusion, A=1) — wire straight into a node.mix (mode=Multiply, amount=1.0) with the scene color as `a` and this atom's `out` as `b`; this atom never touches the color image itself (D9's explicit no-fused-color contract, unchanged from D3). `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized), same contract as node.coc_from_depth / the retired node.ssao_from_depth. `radius` is a WORLD-units horizon-search radius (not pixels) — scale it to the scene's scale, not the canvas resolution. There is no `bias` param — the per-sample range check (reject a sample whose reconstructed view-space distance from the center exceeds `radius`) already guards self-occlusion acne; D9(b) forbids re-adding one. Replaces node.ssao_from_depth 1:1 on the output contract — a saved graph carrying the old type id load-migrates automatically (radius/intensity carry over, bias is dropped).",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "SSAO (GTAO)", category: Atom },

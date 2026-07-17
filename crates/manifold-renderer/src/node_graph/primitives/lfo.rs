@@ -114,6 +114,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Defaults reproduce the historic beat-locked unipolar [0, 1] behaviour: Musical mode, rate=1/4, sine, min=0, max=1. Switch `rate_mode` to Free and set `angular_rate` (rad/s) to drive the underlying `sin(seconds * angular_rate)` — matches legacy generator code expressed as `sin(time * rate)` with no unit conversion. For the linear-ramp phase pattern of legacy generators (`phase = time * phase_rate`), use Free + saw shape + `min=0, max=2π` so the saw output fed into `sin(a*t + phase)` reproduces the legacy phase wrap exactly. `min`/`max` swap signs to invert without a `node.math` and produce bipolar output (-1, 1) or arbitrary amplitude+offset in one node.",
     examples: [],
     picker: { label: "LFO", category: Driver },
@@ -246,6 +247,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

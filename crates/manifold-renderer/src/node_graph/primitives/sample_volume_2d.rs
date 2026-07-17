@@ -72,6 +72,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: crosses domains: input is Texture3D (out of the 2D depth channel's scope) but the output is a genuine 2D Texture2D slice with no 2D depth to inherit, so it originates a fresh field like a generator
+    depth_rule: SourceHeight,
     composition_notes: "slice_z is clamped to [0, 1] in-shader; values outside the volume's Z range produce the boundary texel (sampler clamp). Bilinear filtering across X/Y/Z; the slice is interpolated between adjacent Z layers so smooth slice_z drives produce smooth animation. Output is Rgba16Float — the shader passes through whatever channels the volume has.",
     examples: [],
     picker: { label: "Slice Volume", category: Atom },

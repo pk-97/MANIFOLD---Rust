@@ -105,6 +105,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Pick (a, b, c) to choose the field projection: (1,0,0)=along X, (0,1,0)=along Y, (1,1,0)=diagonal X+Y. Pair with `node.rotate_coordinates` upstream for rotated projections — feed the rotated UV in and keep (a, b) = (1, 0). Wire `freq` from a shared value node and `time` from system.generator_input.time so all five terms in a Plasma-style sum stay phase-coherent.",
     examples: [],
     picker: { label: "Sine Wave (projected)", category: Atom },

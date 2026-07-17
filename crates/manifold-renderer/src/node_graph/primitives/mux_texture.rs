@@ -216,6 +216,9 @@ fn resolve_selector_index(selector: f32, count: usize) -> usize {
 }
 
 impl EffectNode for MuxTexture {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::CombineNearest
+    }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }

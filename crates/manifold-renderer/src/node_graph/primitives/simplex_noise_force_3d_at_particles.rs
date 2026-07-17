@@ -90,6 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `turbulence` and `anti_clump` are port-shadow so an LFO / clip-trigger envelope / outer-card slider drives the noise energy and the density-adaptive boost live. The density Texture3D modulates amplitude: where particles have accumulated (high density), the noise amplitude rises by `1 + capped(d) * anti_clump`, which spreads clumps apart. Time animates the noise field through `time2 * 0.1`. Wire downstream of node.sample_volume_at_particles, upstream of node.move_particles_3d.",
     examples: ["FluidSim3D"],
     picker: { label: "Turbulence (3D, simplex)", category: Atom },

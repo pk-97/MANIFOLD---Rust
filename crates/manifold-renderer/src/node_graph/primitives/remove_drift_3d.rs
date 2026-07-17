@@ -70,6 +70,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Insert between the internal field forces (node.sample_volume_at_particles + node.turbulence_3d) and the boundary forces (node.push_from_walls_3d) in a particle force chain: internal forces should conserve momentum, wall forces should not — balancing after the walls would cancel the container cushion. The mean is computed over particles with life > 0 only. amount blends the correction (1 = conservation enforced, 0 = passthrough) and is port-shadowed for live modulation. Output capacity follows the `in` array.",
     examples: ["FluidSim3D"],
     picker: { label: "Remove Drift (3D)", category: Atom },

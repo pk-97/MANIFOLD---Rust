@@ -68,6 +68,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Radial mask is a verbatim port of the legacy chromatic-aberration math: smoothstep(0, 0.707, dist) then mix(mask, 1, 1 - falloff) — falloff=1 keeps the full center→edge ramp, falloff=0 makes the field uniform. Near-center (dist < 1e-5) falls back to (1, 0). `angle` (Linear) and `falloff` (Radial) are port-shadowed for per-frame drive. The output is the OUTWARD/forward direction; for chromatic aberration the consumer (chromatic_displace) is fed a negated, pixel-scaled amount so red samples outward like the legacy effect. Pair: radial_offset_field → chromatic_displace(velocity) with amount = -(offset · ~1440px) → mix(source, split, Lerp, amount).",
     examples: ["preset.effect.chromatic_aberration"],
     picker: { label: "Radial Offset Field", category: Atom },

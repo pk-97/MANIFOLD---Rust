@@ -2791,7 +2791,7 @@ mod b4_group_move_tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }
     }
 
@@ -3291,7 +3291,7 @@ mod p1_4_gesture_integrity_tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }
     }
 

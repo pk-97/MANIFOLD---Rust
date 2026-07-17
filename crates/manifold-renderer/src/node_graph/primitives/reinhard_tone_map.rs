@@ -72,6 +72,7 @@ crate::primitive! {
             enum_values: &["Extended", "Simple", "Log"],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "intensity scales the pre-tonemap signal; contrast is a second multiplier. Both port-shadowed for runtime modulation (canvas-area brightness comp, audio-driven dynamics). Extended white-point fixed at 3.0 (FluidSim default). Simple curve is bit-exact `x/(x+1)` — pick this when matching a legacy renderer that used textbook Reinhard. Log (white fixed at 64.0) is the default grade for accumulated-density renders (resolve_scatter/resolve_accumulator output) — faint single-particle deposits stay visible against multi-thousand-hit hot spots. Output alpha = source alpha. For HDR pipelines that need parameterised white-point or alternate curves, swap in `node.tone_map`.",
     examples: [],
     picker: { label: "Reinhard Tone Map", category: Atom },

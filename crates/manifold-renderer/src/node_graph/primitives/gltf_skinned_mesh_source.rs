@@ -93,6 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source. max_capacity is the pre-allocation ceiling in vertices for all three arrays (they stay coincident); gltf_import.rs sets it to the exact parsed vertex count.",
     examples: [],
     picker: { label: "glTF Skinned Mesh", category: Atom },

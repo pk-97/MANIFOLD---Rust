@@ -60,6 +60,8 @@ crate::primitive! {
             enum_values: MIRROR_FOLD_MODES,
         },
     ],
+    // depth_rule: zero-input fold-coordinate generator (same shape as centered_uv/kaleidoscope) consumed by a downstream node.remap — no depth origin of its own
+    depth_rule: Terminal,
     composition_notes: "Verbatim port of uv_transform.wgsl's mirror pass (modes 1..8, before the affine steps): flips are `1 - uv`; QuadMirror folds both axes onto [0.25, 0.75]; FoldX/FoldY/FoldBoth are the triangle-wave `0.5 - abs(uv - 0.5)` per active axis. Output UVs stay in [0, 1] so remap's Clamp wrap is a no-op safety. Pair: source → mirror_fold_uv → remap(source, uv_field) → mix(source, remapped, Lerp, amount). Default mode 6 (FoldX) matches the legacy Mirror preset default.",
     examples: ["preset.effect.mirror"],
     picker: { label: "Mirror", category: Atom },

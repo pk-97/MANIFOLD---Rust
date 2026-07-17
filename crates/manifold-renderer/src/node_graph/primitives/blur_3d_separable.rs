@@ -79,6 +79,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: Texture3D-domain fluid-sim blur — outside the 2D depth companion channel entirely (buffer/volume domain), treated like other Texture3D atoms
+    depth_rule: Terminal,
     composition_notes: "vol_res must match the input/output Texture3D dimensions. radius is in voxel units; sigma = max(radius/2.5, 0.5). Scalar mode preserves green/blue/alpha as zero/zero/one (writes single channel via .r). Vector mode preserves all four channels. Sampler is repeat-mode (toroidal wrap on edges).",
     examples: [],
     picker: { label: "Blur (3D)", category: Atom },

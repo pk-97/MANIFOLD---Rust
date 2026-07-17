@@ -783,7 +783,7 @@ fn clip_body_sheet() {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         });
     }
 
@@ -885,7 +885,7 @@ fn clip_waveform_sheet() {
             waveform: Some(wf.clone()),
             in_point_seconds: 0.0,
             // 4 beats × 0.25 s/beat = 1.0 s → whole file maps across the clip.
-            warped_secs_per_beat: 0.25,
+            waveform_breakpoints: vec![(0.0, 0.0), (1.0, 1.0)],
         });
     }
 

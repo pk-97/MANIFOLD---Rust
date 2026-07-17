@@ -42,6 +42,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Negative input is clamped to 0 before pow (pow of a negative base with a non-integer exponent is undefined). For signed fields, scale_offset_texture(0.5, 0.5) first, or pair with abs_texture. Star fields: voronoi_2d → fract_texture → power_texture(16) spikes the F1 distance into pinpoints.",
     examples: [],
     picker: { label: "Power", category: Atom },

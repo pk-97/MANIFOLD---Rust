@@ -134,6 +134,9 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl EffectNode for CompressorEnvelope {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

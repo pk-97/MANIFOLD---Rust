@@ -75,6 +75,9 @@ impl Default for Plasma {
 }
 
 impl EffectNode for Plasma {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::SourceHeight
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

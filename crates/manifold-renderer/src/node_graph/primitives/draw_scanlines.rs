@@ -73,6 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Place last in a HUD stack so the scanlines sit over every layer (Blob Track uses spacing 2, intensity 0.04). alpha and intensity are port-shadowed — wire the HUD's shared amount control into alpha.",
     examples: [],
     picker: { label: "Draw Scanlines", category: Atom },

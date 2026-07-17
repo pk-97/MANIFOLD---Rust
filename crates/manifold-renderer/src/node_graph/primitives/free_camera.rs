@@ -108,6 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "All seven spatial params (pos_x/pos_y/pos_z/yaw/pitch/roll/fov_y) are port-shadowed, so wiring a beat_ramp into any of them makes that axis of the camera move beat-addressable — a dolly move scrubbed by the timeline instead of hand-keyframed. yaw/pitch/roll/fov_y are Angle params, so the editor and outer-card sliders display and edit them in degrees while storage stays in radians. `near`/`far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)`. `pos_x`/`pos_y`/`pos_z` outputs mirror `node.orbit_camera`'s surface for PBR material atoms that need the camera world position per pixel.",
     examples: [],
     picker: { label: "Free Camera", category: Driver },
