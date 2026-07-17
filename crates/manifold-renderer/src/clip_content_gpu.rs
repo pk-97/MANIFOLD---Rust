@@ -127,6 +127,13 @@ pub struct ClipContentGpu {
     fence_wait_events: u64,
     /// CPU scratch the waveform rasteriser paints into before upload (reused).
     scratch: Vec<Color32>,
+    /// Per-clip breakpoint-segment geometry, reused across clips within a
+    /// frame (cleared + rebuilt per clip, capacity persists). Each entry is
+    /// `(x_start_px, x_end_px, waveform_x_px, waveform_w_px, src_start,
+    /// src_end, texel_count)` for one consecutive breakpoint pair — computed
+    /// once, read twice: to build the fingerprint, then (only on repaint) to
+    /// re-select the MIP level and draw.
+    seg_scratch: Vec<(i32, i32, f32, f32, f32, f32, usize)>,
     /// This frame's draw list (reused).
     draws: Vec<PendingDraw>,
     /// This frame's seen clip ids, for pool eviction (reused). A set so eviction
@@ -202,6 +209,7 @@ impl ClipContentGpu {
             frame_fence: None,
             fence_wait_events: 0,
             scratch: Vec::new(),
+            seg_scratch: Vec::new(),
             draws: Vec::with_capacity(MAX_CLIP_QUADS),
             seen: AHashSet::with_capacity(MAX_CLIP_QUADS),
         }
@@ -274,37 +282,70 @@ impl ClipContentGpu {
             let tex_w = ((draw_w * scale).round() as u32).clamp(1, MAX_CONTENT_PX);
             let tex_h = ((draw_h * scale).round() as u32).clamp(1, MAX_CONTENT_PX);
 
-            // Source window (Ableton model — identical to the old layer-bitmap path).
-            let dur_beats = (clip.end_beat - clip.start_beat).as_f32();
+            // Source window (Ableton model), now PIECEWISE per the clip's
+            // tempo-map breakpoints (`crates/manifold-app/src/ui_bridge/
+            // state_sync.rs::audio_waveform_breakpoints`) instead of one
+            // constant-spb window for the whole clip — a varying tempo map
+            // makes seconds-per-beat non-constant, so the source window must
+            // be re-derived per segment between consecutive breakpoints.
+            // `x_frac` is beat-linear (matches pixel x); a constant-tempo clip
+            // has exactly 2 breakpoints → one segment, identical to the old
+            // single-window draw.
             let full_w_px = cw * scale; // the clip's FULL width in physical px
             let full_x_px = (cx - draw_x0) * scale; // clip-left relative to texture origin (≤ 0)
             let file_secs = renderer.clip_duration_seconds();
-            let win_secs = dur_beats * clip.warped_secs_per_beat;
-            let (src_start, src_end) = if file_secs > 0.0 {
-                (
-                    (clip.in_point_seconds / file_secs).clamp(0.0, 1.0),
-                    ((clip.in_point_seconds + win_secs) / file_secs).clamp(0.0, 1.0),
-                )
-            } else {
-                (0.0, 1.0)
-            };
-            let frac = (src_end - src_start).max(1e-4);
-            // Pick the MIP at the resolution the whole file would occupy if the
-            // window were stretched to full width (so a zoomed-in trim isn't coarse).
-            let level = match renderer.select_level_for_zoom(full_w_px / frac, 1.0) {
-                Some(l) => l,
-                None => continue, // decode not ready → no waveform yet
-            };
+            if clip.waveform_breakpoints.len() < 2 || !renderer.is_ready() {
+                continue; // zero-duration clip, or decode not ready yet
+            }
 
-            let fp = fingerprint(
-                tex_w,
-                tex_h,
-                full_x_px,
-                full_w_px,
-                src_start,
-                src_end,
-                level.texel_count(),
-            );
+            // Pass 1: geometry only (cheap arithmetic, no painting) — builds
+            // the fingerprint. `texel_count` is folded in so a background
+            // decode refinement under an unchanged window still repaints.
+            self.seg_scratch.clear();
+            for seg in clip.waveform_breakpoints.windows(2) {
+                let (x0_frac, secs0) = seg[0];
+                let (x1_frac, secs1) = seg[1];
+                let seg_w_px = (x1_frac - x0_frac) * full_w_px;
+                if seg_w_px <= 0.0 {
+                    continue; // degenerate/duplicate breakpoint
+                }
+                let seg_x0_px = full_x_px + x0_frac * full_w_px;
+                let x_start = (seg_x0_px.round() as i32).clamp(0, tex_w as i32);
+                let x_end =
+                    ((full_x_px + x1_frac * full_w_px).round() as i32).clamp(0, tex_w as i32);
+                if x_end <= x_start {
+                    continue; // segment fully outside the visible texture
+                }
+                let (src_start, src_end) = if file_secs > 0.0 {
+                    (
+                        (secs0 / file_secs).clamp(0.0, 1.0),
+                        (secs1 / file_secs).clamp(0.0, 1.0),
+                    )
+                } else {
+                    (0.0, 1.0)
+                };
+                let frac = (src_end - src_start).max(1e-4);
+                // Pick the MIP at the resolution the whole file would occupy if
+                // THIS segment's window were stretched to full width (so a
+                // zoomed-in trim isn't coarse).
+                let Some(level) = renderer.select_level_for_zoom(seg_w_px / frac, 1.0) else {
+                    continue; // shouldn't happen once is_ready() passed; skip defensively
+                };
+                self.seg_scratch.push((
+                    x_start,
+                    x_end,
+                    seg_x0_px,
+                    seg_w_px,
+                    src_start,
+                    src_end,
+                    level.texel_count(),
+                ));
+            }
+            if self.seg_scratch.is_empty() {
+                continue; // nothing visible/valid to paint this frame
+            }
+
+            let fp = fingerprint(tex_w, tex_h, &self.seg_scratch);
 
             let needs_paint = match self.pool.get(&clip.clip_id) {
                 Some(t) => t.fingerprint != fp || t.width != tex_w || t.height != tex_h,
@@ -316,20 +357,33 @@ impl ClipContentGpu {
                 let px_count = (tex_w * tex_h) as usize;
                 self.scratch.clear();
                 self.scratch.resize(px_count, Color32::TRANSPARENT);
-                manifold_ui::waveform_painter::draw_waveform(
-                    &mut self.scratch,
-                    tex_w as usize,
-                    tex_h as usize,
-                    level,
-                    0,
-                    tex_w as i32,
-                    0,
-                    tex_h as i32,
-                    full_x_px,
-                    full_w_px,
-                    src_start,
-                    src_end,
-                );
+
+                // Pass 2: re-select each segment's MIP level (cheap, same
+                // deterministic lookup as pass 1) and draw it into its own
+                // pixel range — non-overlapping ranges, so the painter's
+                // center-line stroke is drawn exactly once per column.
+                for &(x_start, x_end, seg_x0_px, seg_w_px, src_start, src_end, _texels) in
+                    &self.seg_scratch
+                {
+                    let frac = (src_end - src_start).max(1e-4);
+                    let Some(level) = renderer.select_level_for_zoom(seg_w_px / frac, 1.0) else {
+                        continue;
+                    };
+                    manifold_ui::waveform_painter::draw_waveform(
+                        &mut self.scratch,
+                        tex_w as usize,
+                        tex_h as usize,
+                        level,
+                        x_start,
+                        x_end,
+                        0,
+                        tex_h as i32,
+                        seg_x0_px,
+                        seg_w_px,
+                        src_start,
+                        src_end,
+                    );
+                }
 
                 let recreate = match self.pool.get(&clip.clip_id) {
                     Some(t) => t.width != tex_w || t.height != tex_h,
@@ -453,18 +507,13 @@ impl ClipContentGpu {
 }
 
 /// Deterministic content fingerprint (no RNG — wrapping integer mix). Captures
-/// everything that changes the painted pixels: texture size, the waveform's
-/// position/scale within the texture, the source window, and the MIP resolution.
-/// Scroll alone does NOT change these for a fully-visible clip → cache hit.
-fn fingerprint(
-    tex_w: u32,
-    tex_h: u32,
-    full_x_px: f32,
-    full_w_px: f32,
-    src_start: f32,
-    src_end: f32,
-    texel_count: usize,
-) -> u64 {
+/// everything that changes the painted pixels: texture size, and — per
+/// breakpoint segment — its pixel range, its position/scale within the
+/// texture, its source window, and its MIP resolution (so a tempo-map edit,
+/// which changes segment count/position, and a background decode refinement,
+/// which changes `texel_count` under an unchanged window, both repaint).
+/// Scroll alone does NOT change any of these for a fully-visible clip → cache hit.
+fn fingerprint(tex_w: u32, tex_h: u32, segments: &[(i32, i32, f32, f32, f32, f32, usize)]) -> u64 {
     let mut h: u64 = 1469598103934665603; // FNV offset basis
     let mut mix = |v: u64| {
         h ^= v;
@@ -472,10 +521,15 @@ fn fingerprint(
     };
     mix(tex_w as u64);
     mix(tex_h as u64);
-    mix(full_x_px.round() as i64 as u64);
-    mix(full_w_px.round() as i64 as u64);
-    mix(src_start.to_bits() as u64);
-    mix(src_end.to_bits() as u64);
-    mix(texel_count as u64);
+    mix(segments.len() as u64);
+    for &(x_start, x_end, wx, ww, src_start, src_end, texel_count) in segments {
+        mix(x_start as u64);
+        mix(x_end as u64);
+        mix(wx.round() as i64 as u64);
+        mix(ww.round() as i64 as u64);
+        mix(src_start.to_bits() as u64);
+        mix(src_end.to_bits() as u64);
+        mix(texel_count as u64);
+    }
     h
 }
