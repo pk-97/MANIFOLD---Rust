@@ -281,7 +281,19 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
     let mut last_fraction = 0.0f64;
 
     for frame in 0..MAX_FRAMES {
-        let time = frame as f64 * DT as f64;
+        // BUG-210: `time`/`beat`/`anim_progress` are FROZEN across the
+        // convergence loop. The old advancing clock predates auto-playing
+        // imports (GLTF_ANIMATION A1–A4): an animated asset re-poses every
+        // frame, so byte-stability never occurs, `last_fraction` keeps its
+        // 0.0 initializer, and the error reports a phantom black frame —
+        // every animated Khronos asset (CesiumMan, Fox, BrainStem,
+        // RiggedFigure, RiggedSimple, AnimatedMorphCube) "never converged"
+        // while rendering perfectly. Freezing the clock keeps the loop's
+        // real job intact (byte-stability still detects late texture-decode
+        // swaps — a swap breaks the streak once, then re-stabilizes) while
+        // making animated assets exactly as deterministic as static ones.
+        // `frame_count` still advances: decode/io paths key off it.
+        let time = 0.0f64;
         let ctx = PresetContext {
             time,
             beat: time * 2.0,
@@ -294,7 +306,7 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
             owner_key: 0,
             is_clip_level: false,
             frame_count: frame as i64,
-            anim_progress: (frame as f32 / 60.0).min(1.0),
+            anim_progress: 1.0,
             trigger_count: 0,
         };
         let mut enc = device.create_encoder("conformance-frame");

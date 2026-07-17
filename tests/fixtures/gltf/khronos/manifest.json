@@ -1098,16 +1098,16 @@
       {
         "kind": "region_green_minus_red_above",
         "region": [
-          0.502,
-          0.458,
-          0.555,
-          0.49
+          0.53,
+          0.6,
+          0.59,
+          0.64
         ],
-        "value": 8.0
+        "value": 6.0
       }
     ],
     "status": "expect_pass",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce"
+    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: KHR_materials_volume Beer-Lambert attenuation -- the volume-attenuated bowl reads distinctly green (attenuationColor), a color shift the old code (which never read attenuationColor/attenuationDistance) could not produce. BUG-185 re-baseline (2026-07-17, eyeballed render): E6's thicknessTexture honoring made the tint follow the thickness map, so the old upper-interior region went legitimately thin/clear; region moved to the bowl's thick lower interior (measured G-R 10.13 there, ~0 with volume off), floor 8 -> 6 for margin on both sides"
   },
   {
     "asset": "DiffuseTransmissionPlant.glb",
