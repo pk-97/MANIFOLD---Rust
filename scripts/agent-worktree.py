@@ -39,7 +39,9 @@ On acquire, a slot whose target/ exceeds TARGET_CAP_GB is wiped before
 handoff (stale artifacts of dead branches otherwise accumulate without
 bound) — an occasional cold build in exchange for a hard per-slot disk
 ceiling. Worst-case pool size: MAX_SLOTS × TARGET_CAP_GB plus checkouts,
-roughly 160 GB.
+roughly 270 GB (cap raised 6→10 on 2026-07-17, Peter's call — slots are
+created on demand, so the pool only reaches this if 10 concurrent
+workstreams actually happen).
 
 Release is an optimization, not a safety mechanism: a forgotten lease
 expires after LEASE_TTL_HOURS and only ever pins one slot.
@@ -57,7 +59,7 @@ REPO = Path(__file__).resolve().parent.parent
 POOL = REPO / ".claude" / "worktrees"
 LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
 LEASE_TTL_HOURS = 8
-MAX_SLOTS = 6          # hard structural cap — there is no override flag
+MAX_SLOTS = 10         # hard structural cap — there is no override flag
 TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
 SLOT_PREFIX = "slot-"
 
