@@ -2996,13 +2996,31 @@ impl Application {
                     continue;
                 }
                 manifold_ui::GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
-                    // Blocking native folder picker — fine for authoring (same as
-                    // preset import/export). On a pick, set the param to the path
-                    // through the same command SetGraphNodeParam uses.
+                    // Blocking native picker — fine for authoring (same as preset
+                    // import/export). `is_path_param` (graph_canvas/model.rs)
+                    // groups "folder"/"path"/"file"/"dir" together to decide
+                    // whether a click opens a browser at all, but the browser
+                    // kind still has to match the param's actual shape: only a
+                    // "folder"/"dir"-named param (e.g. node.image_folder's
+                    // `folder`) wants a directory picker — a "path"/"file"-named
+                    // param (node.hdri_source, node.gltf_texture_source, …)
+                    // names one file on disk, and `pick_folder()` can't select a
+                    // file at all (the bug behind not being able to pick an .exr
+                    // for the HDRI node's `path` param). On a pick, set the param
+                    // to the path through the same command SetGraphNodeParam uses.
+                    let wants_folder = {
+                        let n = param_name.to_ascii_lowercase();
+                        n.contains("folder") || n.contains("dir")
+                    };
+                    let picked = if wants_folder {
+                        rfd::FileDialog::new().pick_folder()
+                    } else {
+                        rfd::FileDialog::new().pick_file()
+                    };
                     if let (Some(eid), Some(default)) = (
                         self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
-                    ) && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    ) && let Some(folder) = picked
                     {
                         let path = folder.to_string_lossy().to_string();
                         let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
