@@ -1,0 +1,45 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.object.roughness_value", "text": "1.00" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.object.roughness_track" } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 650.0, "y": 810.0 } }, "steps": 8 } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  "Snapshot",
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.object.roughness_driver_btn" } },
+      "check": "Exists"
+    }
+  }
+]
