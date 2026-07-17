@@ -409,6 +409,15 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
    row); Peter explicitly wants this (quote in intro).
 5. **Peter's-bounce fixture set for L4 taste** — trigger: Peter supplies bounces;
    they join the metamorphic suite (label-free) + eyeball imports, never the tuned sets.
+6. **`.als` automation import** — one-shot offline tool parsing the Ableton set
+   file (gzipped XML: true breakpoints, curve shapes included) to migrate Ableton
+   macro automation into native Manifold automation lanes 1:1, resolving each
+   envelope's device parameter to its Manifold param via the existing
+   `AbletonParamMapping` structural identity. OSC route rejected for 1:1: the
+   Live Object Model exposes only `value_at_time` sampling, no breakpoint access
+   (sampling + breakpoint simplification remains the fallback if the XML
+   target-resolution proves gnarly). Not on the eval-set critical path —
+   trigger: Peter asks (parked 2026-07-17).
 
 ## Addendum 2026-07-09 — BUG-069 rework reframed (Fable + Peter discussion)
 
@@ -423,3 +432,40 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
   attaches CC BY 4.0. Always read the record itself.
 - **Vocal detection**: stems when present (vocal-stem activity — free, exact); full-mix
   needs a model, separately vetted, never blocks the rest.
+
+## Addendum 2026-07-17 — Live-show eval fixture + oracle stance (Fable + Peter discussion)
+
+- **Peter's 20-minute live set becomes a first-class fixture set.** The manually
+  placed clips are labels — three truth types with different reliability: the
+  project's BPM grid = beat/downbeat/tempo truth (the set is grid-locked); clip
+  starts in drum-built sections = onset truth within a tolerance window; clip
+  starts in synth/ambient sections = section-boundary truth only (placed ahead of
+  swells, quantized — NOT acoustic onsets). A small extractor reads the
+  `.manifold` project (grid, clip starts, section boundaries) and emits harness
+  labels. The quiet/ambient sections are deliberately valuable: they measure
+  false-positive rate, the failure mode that ruins a show and that public onset
+  benchmarks under-test. (Consistent with the 2026-07-08 "Ableton sessions are
+  NOT fixtures" ruling — that barred his huge Ableton *project files*; this uses
+  the exported audio plus the *Manifold* project's labels.)
+- **Tier split by section (D9 guard applies).** Some sections join `dev`, some
+  `heldout`; the show must not be tuning-set-only or it stops predicting stage
+  behavior. Peter owes the split call (or the first ingest session proposes one).
+- **Audio path.** The harness consumes the demucs separation of the master export
+  (htdemucs via the existing `external_tools.py` path) — consistent with the
+  domain-matching stance (tune on separated renders, not clean stems). Peter's
+  real Ableton stems serve exactly one purpose: scoring demucs itself on his
+  material (the separation-error yardstick). They are never harness input.
+- **madmom/ADTOF as dense reference oracles on the show — within D8** (evaluation
+  and parameter tuning only). They fill the density gap (every hit, not just
+  where a clip was placed) but are NOT truth: disagreements with Peter's labels
+  get spot-checked by ear. Carve-out against D2's deletion gate: after P6, madmom
+  may exist ONLY inside the harness environment, never importable from the app
+  pipeline — an eval-tool exemption, not a fallback.
+- **Windowed real-time structure detector (Peter's proposal).** Rolling N-second
+  window → tempo via onset autocorrelation, phrase/section via self-similarity +
+  novelty, adaptive per-band thresholds — no trained weights. It competes on the
+  same scoreboard against Beat This on the show fixtures; if it hits the bar
+  on-distribution, it wins (also the license-clean outcome). Expected division
+  stands: the window is memory of *this* song; trained weights are a prior over
+  *music* — beat/downbeat on unfamiliar material and drum-object naming remain
+  model candidates (Beat This offline; Deferred #1 Stage 2).

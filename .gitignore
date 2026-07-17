@@ -58,3 +58,13 @@ tests/fixtures/gltf/khronos/*
 # never vendored (audit table, GLB_CONFORMANCE_DESIGN.md §1).
 tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
 tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb
+
+# Downloaded look-test showcase assets (large, licensing unvetted) — ignored
+# by name so they never read as dirt in worktree slots (untracked-but-not-
+# ignored files wedge the ring: the slot never returns to idle, 2026-07-17).
+# Deliberate small CC0 fixtures stay tracked; add a line here when you
+# download a new heavyweight asset.
+tests/fixtures/gltf/abandoned_warehouse_-_interior_scene.glb
+tests/fixtures/gltf/skeleton_animated.glb
+tests/fixtures/gltf/skull_salazar_downloadable.glb
+tests/fixtures/gltf/the_rosetta_stone.glb
