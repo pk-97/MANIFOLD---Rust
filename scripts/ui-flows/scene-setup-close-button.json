@@ -8,7 +8,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Outliner" } },
+      "selector": { "Query": { "text": "Objects" } },
       "check": "Exists"
     }
   },
@@ -27,7 +27,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Outliner" } },
+      "selector": { "Query": { "text": "Objects" } },
       "check": { "Count": 0 }
     }
   },
