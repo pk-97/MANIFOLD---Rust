@@ -1564,6 +1564,28 @@ pub fn sync_inspector_data(
                                     .as_ref()
                                     .is_some_and(|d| is_param_exposed(d, node_doc_id, param_id)),
                             };
+                            // C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md):
+                            // moved up from its original C-P1a position
+                            // (right before the old Environment/Fog-only
+                            // `environment`/`atmosphere` construction below)
+                            // so `transform_row`/`material_row` — which build
+                            // BEFORE that point in this match arm — can also
+                            // wrap their rows in `ModulatedRow` via `mrow`.
+                            // Same closure, same definition, just visible
+                            // earlier in this block; the Environment/Fog call
+                            // sites further down are unchanged.
+                            use manifold_ui::panels::scene_setup_panel::{
+                                ModulatedRow, synth_world_param_id,
+                            };
+                            let gen_inst = l.gen_params();
+                            let mrow = |node_doc_id: u32, param_key: &str, v: RowValue| ModulatedRow {
+                                modulation: Box::new(row_modulation_for_id(
+                                    gen_inst,
+                                    synth_world_param_id(node_doc_id, param_key).as_ref(),
+                                    automation_latched,
+                                )),
+                                value: v,
+                            };
                             let transform_row = |t: &manifold_renderer::node_graph::scene_vm::TransformVm| {
                                 // D12 fix: `t`'s own addresses already carry
                                 // the correct `scope_path` (empty for a
@@ -1577,42 +1599,63 @@ pub fn sync_inspector_data(
                                 let row = |node_doc_id: u32, param_id: &str, value: f32, driven: bool, min: f32, max: f32| {
                                     scoped_row(scope.clone(), node_doc_id, param_id, value, driven, min, max)
                                 };
+                                // C-P1b: each cell is now a `ModulatedRow` —
+                                // `mrow` synthesizes the SAME
+                                // `scene.{node_doc_id}.{param_key}` id the
+                                // panel's `build_object_card_row` uses to key
+                                // its own id map (D2's "one definition both
+                                // sides use"), independent of `scope_path`
+                                // (node_doc_id alone is document-wide unique,
+                                // so a grouped object's transform still
+                                // resolves its modulation facts correctly).
                                 Box::new(TransformRowVm {
                                     pos: (
-                                        row(t.node_doc_id, "pos_x", t.pos_value.0, t.pos_driven.0, -100.0, 100.0),
-                                        row(t.node_doc_id, "pos_y", t.pos_value.1, t.pos_driven.1, -100.0, 100.0),
-                                        row(t.node_doc_id, "pos_z", t.pos_value.2, t.pos_driven.2, -100.0, 100.0),
+                                        mrow(t.node_doc_id, "pos_x", row(t.node_doc_id, "pos_x", t.pos_value.0, t.pos_driven.0, -100.0, 100.0)),
+                                        mrow(t.node_doc_id, "pos_y", row(t.node_doc_id, "pos_y", t.pos_value.1, t.pos_driven.1, -100.0, 100.0)),
+                                        mrow(t.node_doc_id, "pos_z", row(t.node_doc_id, "pos_z", t.pos_value.2, t.pos_driven.2, -100.0, 100.0)),
                                     ),
                                     rot: (
-                                        row(
+                                        mrow(
                                             t.node_doc_id,
                                             "rot_x",
-                                            t.rot_value.0,
-                                            t.rot_driven.0,
-                                            -std::f32::consts::TAU,
-                                            std::f32::consts::TAU,
+                                            row(
+                                                t.node_doc_id,
+                                                "rot_x",
+                                                t.rot_value.0,
+                                                t.rot_driven.0,
+                                                -std::f32::consts::TAU,
+                                                std::f32::consts::TAU,
+                                            ),
                                         ),
-                                        row(
+                                        mrow(
                                             t.node_doc_id,
                                             "rot_y",
-                                            t.rot_value.1,
-                                            t.rot_driven.1,
-                                            -std::f32::consts::TAU,
-                                            std::f32::consts::TAU,
+                                            row(
+                                                t.node_doc_id,
+                                                "rot_y",
+                                                t.rot_value.1,
+                                                t.rot_driven.1,
+                                                -std::f32::consts::TAU,
+                                                std::f32::consts::TAU,
+                                            ),
                                         ),
-                                        row(
+                                        mrow(
                                             t.node_doc_id,
                                             "rot_z",
-                                            t.rot_value.2,
-                                            t.rot_driven.2,
-                                            -std::f32::consts::TAU,
-                                            std::f32::consts::TAU,
+                                            row(
+                                                t.node_doc_id,
+                                                "rot_z",
+                                                t.rot_value.2,
+                                                t.rot_driven.2,
+                                                -std::f32::consts::TAU,
+                                                std::f32::consts::TAU,
+                                            ),
                                         ),
                                     ),
                                     scale: (
-                                        row(t.node_doc_id, "scale_x", t.scale_value.0, t.scale_driven.0, 0.01, 10.0),
-                                        row(t.node_doc_id, "scale_y", t.scale_value.1, t.scale_driven.1, 0.01, 10.0),
-                                        row(t.node_doc_id, "scale_z", t.scale_value.2, t.scale_driven.2, 0.01, 10.0),
+                                        mrow(t.node_doc_id, "scale_x", row(t.node_doc_id, "scale_x", t.scale_value.0, t.scale_driven.0, 0.01, 10.0)),
+                                        mrow(t.node_doc_id, "scale_y", row(t.node_doc_id, "scale_y", t.scale_value.1, t.scale_driven.1, 0.01, 10.0)),
+                                        mrow(t.node_doc_id, "scale_z", row(t.node_doc_id, "scale_z", t.scale_value.2, t.scale_driven.2, 0.01, 10.0)),
                                     ),
                                 })
                             };
@@ -1628,8 +1671,11 @@ pub fn sync_inspector_data(
                                         // correct for an ungrouped object
                                         // too (empty scope).
                                         let scope = row_data.base_color_addr.0.scope_path.clone();
+                                        // C-P1b: `ModulatedRow`s, same
+                                        // `mrow` synthesis as `transform_row`
+                                        // above.
                                         let color = (
-                                            scoped_row(
+                                            mrow(row_data.node_doc_id, "color_r", scoped_row(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_r",
@@ -1637,8 +1683,8 @@ pub fn sync_inspector_data(
                                                 row_data.base_color_driven.0,
                                                 0.0,
                                                 1.0,
-                                            ),
-                                            scoped_row(
+                                            )),
+                                            mrow(row_data.node_doc_id, "color_g", scoped_row(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_g",
@@ -1646,8 +1692,8 @@ pub fn sync_inspector_data(
                                                 row_data.base_color_driven.1,
                                                 0.0,
                                                 1.0,
-                                            ),
-                                            scoped_row(
+                                            )),
+                                            mrow(row_data.node_doc_id, "color_b", scoped_row(
                                                 scope.clone(),
                                                 row_data.node_doc_id,
                                                 "color_b",
@@ -1655,12 +1701,12 @@ pub fn sync_inspector_data(
                                                 row_data.base_color_driven.2,
                                                 0.0,
                                                 1.0,
-                                            ),
+                                            )),
                                         );
                                         match &row_data.metallic_roughness {
                                             Some(mr) => ObjectMaterialVm::Pbr {
                                                 color,
-                                                metallic: scoped_row(
+                                                metallic: mrow(row_data.node_doc_id, "metallic", scoped_row(
                                                     scope.clone(),
                                                     row_data.node_doc_id,
                                                     "metallic",
@@ -1668,8 +1714,8 @@ pub fn sync_inspector_data(
                                                     mr.metallic_driven,
                                                     0.0,
                                                     1.0,
-                                                ),
-                                                roughness: scoped_row(
+                                                )),
+                                                roughness: mrow(row_data.node_doc_id, "roughness", scoped_row(
                                                     scope,
                                                     row_data.node_doc_id,
                                                     "roughness",
@@ -1677,7 +1723,7 @@ pub fn sync_inspector_data(
                                                     mr.roughness_driven,
                                                     0.01,
                                                     1.0,
-                                                ),
+                                                )),
                                             },
                                             None => ObjectMaterialVm::Other { color },
                                         }
@@ -1919,46 +1965,71 @@ pub fn sync_inspector_data(
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::None
                                 }
                             };
+                            // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md
+                            // D3): the converted Environment/Fog rows also
+                            // need their driver/envelope/audio-mod facts —
+                            // this crate is the only side with a
+                            // `PresetInstance` to query. `gen_inst`/`mrow`
+                            // are defined once, earlier in this match arm
+                            // (moved there C-P1b so `transform_row`/
+                            // `material_row` can reuse them too) — reused
+                            // here unchanged.
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
                                         mode_is_hdri: e.mode_value != 0,
-                                        intensity: row(
+                                        intensity: mrow(
                                             e.intensity_addr.node_doc_id,
-                                            &e.intensity_addr.param_id,
-                                            e.intensity_value,
-                                            e.intensity_driven,
-                                            0.0,
-                                            4.0,
+                                            "intensity",
+                                            row(
+                                                e.intensity_addr.node_doc_id,
+                                                &e.intensity_addr.param_id,
+                                                e.intensity_value,
+                                                e.intensity_driven,
+                                                0.0,
+                                                4.0,
+                                            ),
                                         ),
-                                        fill: row(
+                                        fill: mrow(
                                             e.fill_addr.node_doc_id,
-                                            &e.fill_addr.param_id,
-                                            e.fill_value,
-                                            e.fill_driven,
-                                            0.0,
-                                            2.0,
+                                            "fill",
+                                            row(
+                                                e.fill_addr.node_doc_id,
+                                                &e.fill_addr.param_id,
+                                                e.fill_value,
+                                                e.fill_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                         hdri_file: e.hdri_file_value,
                                     }
                                 }
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
                                     EnvironmentRowVm::Bare {
-                                        intensity: row(
+                                        intensity: mrow(
                                             e.intensity_addr.node_doc_id,
-                                            &e.intensity_addr.param_id,
-                                            e.intensity_value,
-                                            e.intensity_driven,
-                                            0.0,
-                                            4.0,
+                                            "intensity",
+                                            row(
+                                                e.intensity_addr.node_doc_id,
+                                                &e.intensity_addr.param_id,
+                                                e.intensity_value,
+                                                e.intensity_driven,
+                                                0.0,
+                                                4.0,
+                                            ),
                                         ),
-                                        fill: row(
+                                        fill: mrow(
                                             e.fill_addr.node_doc_id,
-                                            &e.fill_addr.param_id,
-                                            e.fill_value,
-                                            e.fill_driven,
-                                            0.0,
-                                            2.0,
+                                            "fill",
+                                            row(
+                                                e.fill_addr.node_doc_id,
+                                                &e.fill_addr.param_id,
+                                                e.fill_value,
+                                                e.fill_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                     }
                                 }
@@ -1972,21 +2043,29 @@ pub fn sync_inspector_data(
                             let atmosphere = match vm.atmosphere {
                                 manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
                                     AtmosphereRowVm::Wired {
-                                        density: row(
+                                        density: mrow(
                                             a.density_addr.node_doc_id,
-                                            &a.density_addr.param_id,
-                                            a.density_value,
-                                            a.density_driven,
-                                            0.0,
-                                            1.0,
+                                            "density",
+                                            row(
+                                                a.density_addr.node_doc_id,
+                                                &a.density_addr.param_id,
+                                                a.density_value,
+                                                a.density_driven,
+                                                0.0,
+                                                1.0,
+                                            ),
                                         ),
-                                        height_falloff: row(
+                                        height_falloff: mrow(
                                             a.height_falloff_addr.node_doc_id,
-                                            &a.height_falloff_addr.param_id,
-                                            a.height_falloff_value,
-                                            a.height_falloff_driven,
-                                            0.0,
-                                            2.0,
+                                            "height_falloff",
+                                            row(
+                                                a.height_falloff_addr.node_doc_id,
+                                                &a.height_falloff_addr.param_id,
+                                                a.height_falloff_value,
+                                                a.height_falloff_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                     }
                                 }
@@ -1994,6 +2073,10 @@ pub fn sync_inspector_data(
                                     AtmosphereRowVm::None
                                 }
                             };
+                            let (audio_send_labels, audio_send_ids) = (
+                                project.audio_setup.sends.iter().map(|s| s.label.clone()).collect(),
+                                project.audio_setup.sends.iter().map(|s| s.id.clone()).collect(),
+                            );
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
                                 scene_name: l.name.clone(),
@@ -2004,6 +2087,8 @@ pub fn sync_inspector_data(
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
+                                audio_send_labels,
+                                audio_send_ids,
                                 objects,
                                 lights,
                                 camera,
@@ -2498,15 +2583,10 @@ fn build_audio_card_state(
 /// `automation_latched` is `ContentState::automation_latched_params`, same as
 /// every other caller of `build_card_modulation`.
 ///
-/// Not yet called from production code this session — the mandatory
-/// refactor deliverable ships ahead of its consumer. Un-suppression trigger:
-/// the scene panel's exposed-row inline-drawer rendering (D9/D10 of
-/// SCENE_PANEL_UX_DESIGN.md's UX-P3 amendment) wires this into
-/// `sync_inspector_data`'s scene section to source each exposed row's
-/// `ParamModState`/`AudioCardState` slice — the follow-up phase this
-/// session's report names as not completed. Delete this allow (and the
-/// function, if still unused) if that phase is abandoned instead.
-#[allow(dead_code)]
+/// Un-suppression trigger fired (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md
+/// C-P1a): called by [`row_modulation_for_id`] below, which flattens this
+/// query's sized-to-1 output into one [`RowModulation`] scalar struct per
+/// Environment/Fog row for `sync_inspector_data`'s scene section.
 pub(crate) fn lookup_param_mod_for_id(
     inst: &PresetInstance,
     param_id: &str,
@@ -2517,6 +2597,56 @@ pub(crate) fn lookup_param_mod_for_id(
         build_card_modulation(inst, 1, resolve, automation_latched),
         build_audio_card_state(inst, 1, resolve),
     )
+}
+
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): flatten
+/// [`lookup_param_mod_for_id`]'s sized-to-1 `(CardModulation, AudioCardState)`
+/// into one scalar [`manifold_ui::panels::scene_setup_panel::RowModulation`]
+/// for a single Environment/Fog row. `inst = None` (no generator on the
+/// layer yet, or the layer isn't a generator) returns the idle default —
+/// same "no modulation, not an error" contract `lookup_param_mod_for_id`
+/// itself has for an un-modulated param.
+pub(crate) fn row_modulation_for_id(
+    inst: Option<&PresetInstance>,
+    param_id: &str,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+) -> manifold_ui::panels::scene_setup_panel::RowModulation {
+    use manifold_ui::panels::scene_setup_panel::RowModulation;
+    let Some(inst) = inst else {
+        return RowModulation::default();
+    };
+    let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched);
+    RowModulation {
+        driver_active: m.driver_active[0],
+        trim_min: m.trim_min[0],
+        trim_max: m.trim_max[0],
+        driver_beat_div_idx: m.driver_beat_div_idx[0],
+        driver_waveform_idx: m.driver_waveform_idx[0],
+        driver_reversed: m.driver_reversed[0],
+        driver_dotted: m.driver_dotted[0],
+        driver_triplet: m.driver_triplet[0],
+        driver_free_period: m.driver_free_period[0],
+        envelope_active: m.envelope_active[0],
+        target_norm: m.target_norm[0],
+        env_decay: m.env_decay[0],
+        automation_active: m.automation_active[0],
+        automation_overridden: m.automation_overridden[0],
+        audio_active: a.active[0],
+        audio_send_id: a.send_id[0].clone(),
+        audio_kind_idx: a.kind_idx[0],
+        audio_band_idx: a.band_idx[0],
+        audio_range_min: a.range_min[0],
+        audio_range_max: a.range_max[0],
+        audio_invert: a.invert[0],
+        audio_rate: a.rate[0],
+        audio_sensitivity: a.sensitivity[0],
+        audio_attack_ms: a.attack_ms[0],
+        audio_release_ms: a.release_ms[0],
+        audio_trigger_mode_idx: a.trigger_mode_idx[0],
+        audio_action_idx: a.action_idx[0],
+        audio_step_amount: a.step_amount[0],
+        audio_wrap_idx: a.wrap_idx[0],
+    }
 }
 
 #[cfg(test)]

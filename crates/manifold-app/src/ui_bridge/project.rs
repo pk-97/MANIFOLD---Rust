@@ -981,4 +981,147 @@ mod tests {
             "the twist node lands inside the object's own group body"
         );
     }
+    /// BUG-229 diagnosis (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1, orchestrator
+    /// addition): Peter reported "the params ... for cameras, world, lights ... do
+    /// nothing." Before this test, `SceneSetupParamChanged` had zero dispatch-level
+    /// coverage for these three families — only Add/Remove/rename were proven
+    /// through `dispatch_project`; the value-write path itself was unverified past
+    /// the panel's own click/drag unit tests (which only assert an action gets
+    /// *built*, never that it changes anything). Value-level, not dispatch-log-level,
+    /// per the escalation brief: reads the def's actual `params` map after dispatch.
+    ///
+    /// Result: for a FRESH `SceneStarter` layer (no per-instance override yet — the
+    /// common real case, since a scene layer never diverges until you scrub
+    /// something), the write DOES land — `SetGraphNodeParamCommand` + the traced
+    /// `RowAddr` (root scope, `node_doc_id` off the same `SceneVm::from_def` state_sync
+    /// walks) are correct for all three families. This rules out the
+    /// addressing/dispatch layer as BUG-229's root cause. The live "does nothing"
+    /// symptom therefore lives above this layer — most likely in the bespoke
+    /// per-family click/drag routing (`build_light_numeric_row`/
+    /// `build_camera_numeric_row`/the World rows' equivalents) that C-P1 deletes
+    /// wholesale in favor of the card's proven `build_param_row` click path. Logged
+    /// as BUG-229 in `docs/BUG_BACKLOG.md` with this finding; not fixed this session
+    /// (see design doc status — C-P1's full row-swap was not completed).
+    #[test]
+    fn scene_setup_param_changed_writes_light_intensity_to_def() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let light_node_id = vm
+            .lights
+            .iter()
+            .find_map(|l| match l {
+                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => Some(r.node_doc_id),
+                _ => None,
+            })
+            .expect("SceneStarter ships with at least one known light");
+
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let action = PanelAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            light_node_id,
+            "intensity".to_string(),
+            7.77,
+        );
+        let result = dispatch_project(
+            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+
+        let after_def = effective_def(&project, &layer_id);
+        let node = after_def.nodes.iter().find(|n| n.id == light_node_id).unwrap();
+        match node.params.get("intensity") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert_eq!(*value, 7.77, "light intensity should have changed in the def")
+            }
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    /// BUG-229 diagnosis, camera twin of the light test above.
+    #[test]
+    fn scene_setup_param_changed_writes_camera_orbit_to_def() {
+        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let camera_node_id = match vm.camera {
+            manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
+            other => panic!("SceneStarter's default camera should be Orbit, got {other:?}"),
+        };
+
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let action = PanelAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            camera_node_id,
+            "orbit".to_string(),
+            2.5,
+        );
+        let result = dispatch_project(
+            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+
+        let after_def = effective_def(&project, &layer_id);
+        let node = after_def.nodes.iter().find(|n| n.id == camera_node_id).unwrap();
+        match node.params.get("orbit") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert_eq!(*value, 2.5, "camera orbit should have changed in the def")
+            }
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    /// BUG-229 diagnosis, fog/atmosphere twin. SceneStarter ships with NO fog node
+    /// by default (`AtmosphereVm::None`) — add one first through the SAME
+    /// `SceneSetupAddFog` dispatch the panel's "+ Fog" button uses, exactly like a
+    /// real session would, then scrub `fog_density` through it.
+    #[test]
+    fn scene_setup_param_changed_writes_fog_density_to_def() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let add_fog = PanelAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
+        dispatch_project(
+            &add_fog, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &mut user_prefs,
+        );
+
+        let def = effective_def(&project, &layer_id);
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
+        let fog_node_id = match vm.atmosphere {
+            manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => a.density_addr.node_doc_id,
+            manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
+                panic!("SceneSetupAddFog should have wired an atmosphere node")
+            }
+        };
+
+        let action = PanelAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            Vec::new(),
+            fog_node_id,
+            "fog_density".to_string(),
+            0.42,
+        );
+        let result = dispatch_project(
+            &action, &mut project, &content_tx, &content_state, &mut ui, &mut selection, &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(!result.structural_change, "a param scrub is not a structural graph edit");
+
+        let after_def = effective_def(&project, &layer_id);
+        let node = after_def.nodes.iter().find(|n| n.id == fog_node_id).unwrap();
+        match node.params.get("fog_density") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert_eq!(*value, 0.42, "fog density should have changed in the def")
+            }
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
 }

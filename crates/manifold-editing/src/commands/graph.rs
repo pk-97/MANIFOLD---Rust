@@ -828,6 +828,28 @@ impl SetGraphNodeParamCommand {
         self.scope_path = scope_path;
         self
     }
+
+    /// Seed `previous_value` explicitly instead of letting `execute()`
+    /// self-capture it off whatever's in the graph at execute time.
+    ///
+    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D4): self-capture is
+    /// correct only when `execute()` runs exactly once, before any other
+    /// write has touched the same key — true for every existing call site
+    /// (one edit, one command). It is WRONG for a drag-cadence commit built
+    /// from a live-preview gesture: by the time the ONE commit command's
+    /// `execute()` actually runs (locally, or later on the content thread
+    /// once queued `MutateProjectLive` motion writes have already applied),
+    /// the graph already holds the POST-drag value, so self-capture would
+    /// record `previous_value == new_value` — an undo that restores
+    /// nothing. The caller already holds the true pre-drag value (captured
+    /// at `ParamSnapshot`, before any write); this lets it hand that value
+    /// to the command directly, so `execute()`'s self-capture guard
+    /// (`prev_already_captured`) skips and `undo()` restores the real
+    /// pre-drag state. `None` means "the key was absent before the drag."
+    pub fn with_previous(mut self, previous: Option<SerializedParamValue>) -> Self {
+        self.previous_value = Some(previous);
+        self
+    }
 }
 
 impl Command for SetGraphNodeParamCommand {
