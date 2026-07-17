@@ -100,6 +100,24 @@ from manifold_audio.precision_postprocessing import (  # noqa: E402
 # see module docstring's round-2 correction.
 DENSE = "dense"
 SPARSE_VISUAL = "sparse_visual"
+# Dense-in-window (2026-07-18, Peter's confirmation): the liveshow clip
+# placements are per-hit COMPLETE inside the sections where a class is
+# performed ("rapid fire clips to show drum hits"), and absent elsewhere
+# (sustained-clip sections). Measured against the extracted truth: median
+# same-class inter-onset gap 0.5-1.5 beats inside runs; kick covers ~21% of
+# 4-bar windows, snare ~43%. So per class, truth RUNS are dense truth and
+# the space between runs proves nothing. Scoring: derive each class's
+# active windows from its own truth runs, restrict PREDICTIONS to those
+# windows, and score full P/R/F1 there (truth is inside by construction).
+DENSE_IN_WINDOW = "dense_in_window"
+
+# Window derivation for DENSE_IN_WINDOW: a run breaks where the same-class
+# inter-onset gap exceeds ACTIVE_RUN_GAP_BEATS (well above the measured
+# 0.5-1.5-beat in-run spacing, well below the multi-bar silence between
+# performed sections); each run is padded by ACTIVE_RUN_PAD_BEATS so a
+# detection a hair outside the first/last hit still counts against us.
+ACTIVE_RUN_GAP_BEATS = 8.0
+ACTIVE_RUN_PAD_BEATS = 2.0
 
 # How far (in beats) around any sparse-visual truth event a prediction must
 # fall to count toward "active-passage precision" -- a restricted precision
@@ -178,6 +196,47 @@ def active_passage_filter(pred_times: List[float], truth_times: List[float], win
             near = True
         if near:
             out.append(p)
+    return out
+
+
+def derive_active_windows(
+    truth_times: List[float],
+    bpm: float,
+    gap_beats: float = ACTIVE_RUN_GAP_BEATS,
+    pad_beats: float = ACTIVE_RUN_PAD_BEATS,
+) -> List[Tuple[float, float]]:
+    """DENSE_IN_WINDOW machinery: contiguous same-class truth runs ->
+    padded [start, end] windows in seconds. A run breaks where the
+    inter-onset gap exceeds gap_beats. A single isolated onset still gets
+    its own (pad-sized) window -- one-shots stay scoreable."""
+    if not truth_times or bpm <= 0:
+        return []
+    spb = 60.0 / bpm
+    gap_sec, pad_sec = gap_beats * spb, pad_beats * spb
+    ts = sorted(truth_times)
+    windows: List[Tuple[float, float]] = []
+    run_start = prev = ts[0]
+    for t in ts[1:]:
+        if t - prev > gap_sec:
+            windows.append((run_start - pad_sec, prev + pad_sec))
+            run_start = t
+        prev = t
+    windows.append((run_start - pad_sec, prev + pad_sec))
+    return windows
+
+
+def filter_to_windows(times: List[float], windows: List[Tuple[float, float]]) -> List[float]:
+    """Times falling inside any window (windows are sorted, non-overlapping
+    by construction -- adjacent runs are separated by > gap > 2*pad)."""
+    if not times or not windows:
+        return []
+    starts = np.asarray([w[0] for w in windows], dtype=np.float64)
+    ends = np.asarray([w[1] for w in windows], dtype=np.float64)
+    out = []
+    for t in times:
+        idx = int(np.searchsorted(starts, t, side="right")) - 1
+        if idx >= 0 and t <= ends[idx]:
+            out.append(t)
     return out
 
 
@@ -355,7 +414,11 @@ def _build_liveshow_dev_tracks() -> List[TrackData]:
             id=fx["id"], domain=fx.get("domain", "electronic"), source="liveshow",
             audio=audio, sr=sr, audio_path=str(wav_path),
             activations=activations, fps=fps, basic_pitch_notes=notes,
-            truth_type=SPARSE_VISUAL,
+            # DENSE_IN_WINDOW since 2026-07-18 (was SPARSE_VISUAL): Peter
+            # confirmed the placements are per-hit complete inside performed
+            # sections -- see the truth-type comment block up top. Sparse
+            # recall-only scoring undersold these 1,771 real-music labels.
+            truth_type=DENSE_IN_WINDOW,
             truth_by_class=truth, one_shot_truth_by_class=one_shot,
             grid=BeatGridRef(bpm=bpm, anchor_sec=0.0),
         ))
@@ -418,6 +481,25 @@ def score_config_for_class(corpus: List[TrackData], class_name: str, config: Pre
             dense_rows.append({
                 "id": track.id, "domain": track.domain, "source": track.source,
                 "n_pred": len(pred), "n_truth": len(truth), f"{class_name}_f1": prf.f1,
+                "precision": prf.precision, "recall": prf.recall,
+            })
+            continue
+
+        if track.truth_type == DENSE_IN_WINDOW:
+            # Full P/R/F1, but predictions OUTSIDE the class's own active
+            # windows are discarded first (out there, silence proves
+            # nothing). Truth is inside the windows by construction. Rows
+            # join dense_rows -- these ARE dense numbers, per class, within
+            # the performed passages.
+            bpm = track.grid.bpm if track.grid is not None else 0.0
+            windows = derive_active_windows(truth, bpm)
+            pred_w = filter_to_windows(pred, windows)
+            prf = metrics.event_prf(pred_w, truth, tolerance_sec=metrics.EVENT_TOLERANCE_SEC)
+            dense_rows.append({
+                "id": track.id, "domain": track.domain, "source": track.source,
+                "n_pred": len(pred_w), "n_pred_unwindowed": len(pred),
+                "n_truth": len(truth), "n_windows": len(windows),
+                f"{class_name}_f1": prf.f1,
                 "precision": prf.precision, "recall": prf.recall,
             })
             continue
