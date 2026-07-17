@@ -1896,6 +1896,9 @@ fn parse_fusion_param(rest: &str) -> Option<ParamDef> {
 // ─────────────────────────────────────────────────────────────────────
 
 impl EffectNode for WgslCompute {
+    // depth_rule: user-authored arbitrary WGSL kernel — its color/UV/combine
+    // semantics aren't known at authoring time, so Terminal is the safest
+    // conservative default (never wrongly Inherit/Warp an unknown shader).
     fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
         crate::node_graph::depth_rule::DepthRule::Terminal
     }
