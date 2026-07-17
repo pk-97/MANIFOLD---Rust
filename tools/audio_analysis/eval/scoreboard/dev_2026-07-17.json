@@ -1,0 +1,321 @@
+{
+  "generated_at": "2026-07-17T10:39:26.461102+00:00",
+  "split": "dev",
+  "pipeline_version": "p1-2026-07-17",
+  "kick_onset_fixtures": [
+    {
+      "id": "apricots_128bpm",
+      "bpm": 128,
+      "domain": "electronic",
+      "mix": {
+        "n_pred": 14,
+        "n_truth": 16,
+        "precision": 0.21428571428571427,
+        "recall": 0.1875,
+        "f1": 0.19999999999999998,
+        "tp": 3,
+        "fp": 11,
+        "fn": 13,
+        "tolerance_sec": 0.05
+      },
+      "drums": {
+        "n_pred": 14,
+        "n_truth": 16,
+        "precision": 0.14285714285714285,
+        "recall": 0.125,
+        "f1": 0.13333333333333333,
+        "tp": 2,
+        "fp": 12,
+        "fn": 14,
+        "tolerance_sec": 0.05
+      }
+    },
+    {
+      "id": "bad_guy_128bpm",
+      "bpm": 128,
+      "domain": "electronic",
+      "mix": {
+        "n_pred": 23,
+        "n_truth": 17,
+        "precision": 0.6521739130434783,
+        "recall": 0.8823529411764706,
+        "f1": 0.75,
+        "tp": 15,
+        "fp": 8,
+        "fn": 2,
+        "tolerance_sec": 0.05
+      },
+      "drums": {
+        "n_pred": 17,
+        "n_truth": 17,
+        "precision": 0.4117647058823529,
+        "recall": 0.4117647058823529,
+        "f1": 0.4117647058823529,
+        "tp": 7,
+        "fp": 10,
+        "fn": 10,
+        "tolerance_sec": 0.05
+      }
+    },
+    {
+      "id": "feel_the_vibration_174bpm",
+      "bpm": 174,
+      "domain": "electronic",
+      "mix": {
+        "n_pred": 15,
+        "n_truth": 16,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "tp": 0,
+        "fp": 15,
+        "fn": 16,
+        "tolerance_sec": 0.05
+      },
+      "drums": {
+        "n_pred": 15,
+        "n_truth": 16,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "tp": 0,
+        "fp": 15,
+        "fn": 16,
+        "tolerance_sec": 0.05
+      }
+    },
+    {
+      "id": "inhale_exhale_145bpm",
+      "bpm": 145,
+      "domain": "electronic",
+      "mix": {
+        "n_pred": 18,
+        "n_truth": 14,
+        "precision": 0.5,
+        "recall": 0.6428571428571429,
+        "f1": 0.5625000000000001,
+        "tp": 9,
+        "fp": 9,
+        "fn": 5,
+        "tolerance_sec": 0.05
+      },
+      "drums": {
+        "n_pred": 14,
+        "n_truth": 14,
+        "precision": 0.6428571428571429,
+        "recall": 0.6428571428571429,
+        "f1": 0.6428571428571429,
+        "tp": 9,
+        "fp": 5,
+        "fn": 5,
+        "tolerance_sec": 0.05
+      }
+    },
+    {
+      "id": "tears_140bpm",
+      "bpm": 140,
+      "domain": "electronic",
+      "mix": {
+        "n_pred": 22,
+        "n_truth": 10,
+        "precision": 0.18181818181818182,
+        "recall": 0.4,
+        "f1": 0.25000000000000006,
+        "tp": 4,
+        "fp": 18,
+        "fn": 6,
+        "tolerance_sec": 0.05
+      },
+      "drums": {
+        "n_pred": 13,
+        "n_truth": 10,
+        "precision": 0.38461538461538464,
+        "recall": 0.5,
+        "f1": 0.4347826086956522,
+        "tp": 5,
+        "fp": 8,
+        "fn": 5,
+        "tolerance_sec": 0.05
+      }
+    }
+  ],
+  "metamorphic": {
+    "babyslakh": [
+      {
+        "track": "Track00001",
+        "results": [
+          {
+            "name": "gain_invariance_down",
+            "passed": false,
+            "detail": "max matched event-time shift 210.0ms > 21.0ms tolerance"
+          },
+          {
+            "name": "time_stretch_invariance_faster",
+            "passed": false,
+            "detail": "event times didn't scale with stretch: max matched-pair shift 244.3ms > 20.0ms (event count delta: -12)"
+          },
+          {
+            "name": "noise_floor_silence",
+            "passed": true,
+            "detail": "no new events under -40.0dB noise"
+          }
+        ]
+      },
+      {
+        "track": "Track00002",
+        "results": [
+          {
+            "name": "gain_invariance",
+            "passed": true,
+            "detail": "stable under +-6.0dB"
+          },
+          {
+            "name": "time_stretch_invariance_faster",
+            "passed": false,
+            "detail": "event times didn't scale with stretch: max matched-pair shift 248.1ms > 20.0ms (event count delta: -2)"
+          },
+          {
+            "name": "noise_floor_silence",
+            "passed": true,
+            "detail": "no new events under -40.0dB noise"
+          }
+        ]
+      },
+      {
+        "track": "Track00003",
+        "results": [
+          {
+            "name": "gain_invariance_down",
+            "passed": false,
+            "detail": "max matched event-time shift 80.0ms > 21.0ms tolerance"
+          },
+          {
+            "name": "time_stretch_invariance_faster",
+            "passed": false,
+            "detail": "event times didn't scale with stretch: max matched-pair shift 249.5ms > 20.0ms (event count delta: -9)"
+          },
+          {
+            "name": "noise_floor_silence",
+            "passed": true,
+            "detail": "no new events under -40.0dB noise"
+          }
+        ]
+      }
+    ]
+  },
+  "noise_floor": {
+    "fixture": "apricots_128bpm",
+    "n_runs": 3,
+    "stats": {
+      "kick_f1": {
+        "metric_name": "kick_f1",
+        "values": [
+          0.19999999999999998,
+          0.19999999999999998,
+          0.19999999999999998
+        ],
+        "mean": 0.19999999999999998,
+        "stdev": 0.0,
+        "range": 0.0
+      },
+      "kick_precision": {
+        "metric_name": "kick_precision",
+        "values": [
+          0.21428571428571427,
+          0.21428571428571427,
+          0.21428571428571427
+        ],
+        "mean": 0.21428571428571427,
+        "stdev": 0.0,
+        "range": 0.0
+      },
+      "kick_recall": {
+        "metric_name": "kick_recall",
+        "values": [
+          0.1875,
+          0.1875,
+          0.1875
+        ],
+        "mean": 0.1875,
+        "stdev": 0.0,
+        "range": 0.0
+      }
+    }
+  },
+  "skipped": [
+    {
+      "id": "liveshow_midnight_patience",
+      "reason": "no audio-scoring path wired in P1 (registered, not yet scored)"
+    },
+    {
+      "id": "liveshow_integer",
+      "reason": "no audio-scoring path wired in P1 (registered, not yet scored)"
+    },
+    {
+      "id": "liveshow_pattern",
+      "reason": "no audio-scoring path wired in P1 (registered, not yet scored)"
+    },
+    {
+      "id": "liveshow_all_in_for_you",
+      "reason": "no audio-scoring path wired in P1 (registered, not yet scored)"
+    },
+    {
+      "id": "liveshow_oh_so_suddenly",
+      "reason": "no audio-scoring path wired in P1 (registered, not yet scored)"
+    }
+  ],
+  "worst_kick_mix_f1": [
+    {
+      "id": "feel_the_vibration_174bpm",
+      "domain": "electronic",
+      "mix_f1": 0.0,
+      "drums_f1": 0.0
+    },
+    {
+      "id": "apricots_128bpm",
+      "domain": "electronic",
+      "mix_f1": 0.19999999999999998,
+      "drums_f1": 0.13333333333333333
+    },
+    {
+      "id": "tears_140bpm",
+      "domain": "electronic",
+      "mix_f1": 0.25000000000000006,
+      "drums_f1": 0.4347826086956522
+    },
+    {
+      "id": "inhale_exhale_145bpm",
+      "domain": "electronic",
+      "mix_f1": 0.5625000000000001,
+      "drums_f1": 0.6428571428571429
+    },
+    {
+      "id": "bad_guy_128bpm",
+      "domain": "electronic",
+      "mix_f1": 0.75,
+      "drums_f1": 0.4117647058823529
+    }
+  ],
+  "by_domain": {
+    "kick_mix_f1": {
+      "electronic": {
+        "mean": 0.35250000000000004,
+        "n": 5
+      },
+      "overall": {
+        "mean": 0.35250000000000004,
+        "n": 5
+      }
+    },
+    "kick_drums_f1": {
+      "electronic": {
+        "mean": 0.3245475581536963,
+        "n": 5
+      },
+      "overall": {
+        "mean": 0.3245475581536963,
+        "n": 5
+      }
+    }
+  }
+}

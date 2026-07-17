@@ -2,15 +2,69 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import wave
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
 from manifold_audio.external_tools import _resolve_ffmpeg_path
+
+# D14 (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md): per-format decode-stage
+# alignment correction, measured by eval/click_track.py against known-
+# position click fixtures and written to decoder_alignment.json beside this
+# file. Absent file or absent key = zero correction (today's behavior,
+# unchanged) — this is additive, never a behavior change for a format that
+# hasn't been measured yet.
+_DECODER_ALIGNMENT_PATH = Path(__file__).resolve().parent / "decoder_alignment.json"
+_decoder_alignment_cache: Optional[Dict[str, float]] = None
+
+
+def _load_decoder_alignment_table() -> Dict[str, float]:
+    global _decoder_alignment_cache
+    if _decoder_alignment_cache is not None:
+        return _decoder_alignment_cache
+    table: Dict[str, float] = {}
+    if _DECODER_ALIGNMENT_PATH.exists():
+        try:
+            payload = json.loads(_DECODER_ALIGNMENT_PATH.read_text())
+            table = {k: float(v) for k, v in payload.get("correction_sec_by_suffix", {}).items()}
+        except Exception:
+            table = {}
+    _decoder_alignment_cache = table
+    return table
+
+
+def _shift_audio_by_correction(audio: np.ndarray, sr: int, correction_sec: float) -> np.ndarray:
+    """Pure sample-shift logic, split out from the table lookup so it's
+    directly testable (eval/tests/test_click_track.py locks this sign
+    convention down — the single most dangerous place for D14 to silently
+    do the wrong thing). correction_sec is the raw measured offset
+    (decoded_time - truth_time): > 0 means this format's decode arrives late
+    relative to truth -> advance (trim leading samples); < 0 means early ->
+    delay (prepend zeros). See eval/click_track.py
+    (write_decoder_alignment_table) for how this is measured — the sign
+    convention there must match exactly."""
+    if correction_sec == 0.0:
+        return audio
+    shift_samples = int(round(correction_sec * sr))
+    if shift_samples > 0:
+        return np.ascontiguousarray(audio[shift_samples:], dtype=np.float32)
+    if shift_samples < 0:
+        pad = np.zeros(-shift_samples, dtype=np.float32)
+        return np.ascontiguousarray(np.concatenate([pad, audio]), dtype=np.float32)
+    return audio
+
+
+def _apply_decode_stage_correction(audio: np.ndarray, sr: int, suffix: str) -> np.ndarray:
+    """Looks up the measured per-format correction (D14) and applies it via
+    _shift_audio_by_correction."""
+    table = _load_decoder_alignment_table()
+    correction_sec = table.get(suffix.lower().lstrip("."), 0.0)
+    return _shift_audio_by_correction(audio, sr, correction_sec)
 
 
 def _read_wav_to_mono_float(path: Path) -> Tuple[np.ndarray, int]:
@@ -107,6 +161,11 @@ def load_audio_mono(path: Path, target_sr: int, ffmpeg_bin: Optional[str]) -> Tu
     if sr != target_sr:
         audio = _resample_linear(audio, sr, target_sr)
         sr = target_sr
+
+    # D14: correct measured per-format decode-stage skew at the seam where
+    # audio enters analysis (this function), before anything downstream sees
+    # a sample. No-op for formats with no measured entry (default zero).
+    audio = _apply_decode_stage_correction(audio, sr, path.suffix)
 
     if len(audio) == 0:
         raise RuntimeError("Decoded audio is empty.")

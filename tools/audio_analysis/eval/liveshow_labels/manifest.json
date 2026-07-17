@@ -1,0 +1,8 @@
+{
+  "n_layers": 46,
+  "n_tempo_points": 97,
+  "n_onset_truth_layers": 27,
+  "n_section_truth_layers": 3,
+  "n_onset_truth_events": 1771,
+  "n_section_truth_events": 783
+}

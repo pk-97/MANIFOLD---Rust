@@ -1,0 +1,18 @@
+# Fetched dataset audio/annotations and computed caches — never commit audio.
+# data/ (below) already covers every fetched file regardless of extension;
+# these explicit patterns are redundant belt-and-suspenders so a plain
+# extension grep across .gitignore files finds this one directly (P1 gate:
+# `rg -l '\.wav|\.flac|\.mp3' --glob '*.gitignore' tools/audio_analysis/eval`).
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.npz
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Scoreboard JSON reports ARE committed (small, no audio) — do not ignore.
+!scoreboard/
+!scoreboard/*.json
