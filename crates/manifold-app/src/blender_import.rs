@@ -376,4 +376,85 @@ mod tests {
         assert!(msg.contains("Blender"));
         assert!(msg.contains("blender.org"));
     }
+
+    /// Real end-to-end proof, gated behind an env var and `#[ignore]` so the
+    /// default sweep never depends on Blender being installed. Generates a
+    /// rigged FBX via `scripts/blender/make_hostile_rig.py` into a temp dir
+    /// (never committed — regenerated fresh every run), converts it through
+    /// the real `convert_via_blender` path, then imports the produced glb
+    /// through `assemble_import_graph` and asserts the result is actually
+    /// driven by `node.gltf_skeleton_pose` — the same assertion pattern
+    /// `gltf_import.rs`'s `skinned_import_gets_no_rigid_animation_source`
+    /// test uses for the checked-in fixture, applied here to a freshly
+    /// Blender-converted one.
+    ///
+    /// Run with: `MANIFOLD_RUN_BLENDER_TESTS=1 cargo test -p manifold-app
+    /// --bin manifold -- --ignored blender_import::tests::real_conversion`
+    #[test]
+    #[ignore = "requires a real Blender install; env-gated, see MANIFOLD_RUN_BLENDER_TESTS"]
+    fn real_conversion_produces_a_skeleton_posed_import() {
+        if std::env::var("MANIFOLD_RUN_BLENDER_TESTS").is_err() {
+            eprintln!(
+                "skipping: set MANIFOLD_RUN_BLENDER_TESTS=1 to run the real Blender integration test"
+            );
+            return;
+        }
+
+        let prefs = UserPrefs::for_test();
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repo root must resolve");
+
+        let blender = discover_blender(&prefs).expect(
+            "MANIFOLD_RUN_BLENDER_TESTS=1 was set but no Blender install was discovered",
+        );
+
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "manifold_blender_integration_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let fbx_path = tmp_dir.join("hostile_rig.fbx");
+
+        // Generate the rigged FBX fresh, in the temp dir — never committed,
+        // matching the lane's gate ("generate ... in the test's own setup
+        // into a temp dir, never commit the generated file").
+        let make_rig_script = repo_root.join("scripts/blender/make_hostile_rig.py");
+        assert!(
+            make_rig_script.is_file(),
+            "make_hostile_rig.py missing at {}",
+            make_rig_script.display()
+        );
+        let gen_status = Command::new(&blender)
+            .arg("-b")
+            .arg("-P")
+            .arg(&make_rig_script)
+            .arg("--")
+            .arg(&fbx_path)
+            .status()
+            .expect("failed to launch Blender to generate the hostile rig");
+        assert!(gen_status.success(), "make_hostile_rig.py exited non-zero");
+        assert!(fbx_path.is_file(), "hostile rig FBX was never written");
+
+        // Convert through the real production path.
+        let outcome = convert_via_blender(&prefs, &repo_root, &fbx_path)
+            .expect("real Blender conversion must succeed");
+        assert!(outcome.glb_path.is_file());
+
+        // Import through the same path a dropped .glb takes.
+        let (def, report) =
+            manifold_renderer::node_graph::gltf_import::assemble_import_graph(&outcome.glb_path)
+                .expect("assemble_import_graph must succeed on the converted glb");
+        assert!(report.object_count > 0, "converted rig must import at least one object");
+
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten converted import def");
+        assert!(
+            flat.nodes.iter().any(|n| n.type_id == "node.gltf_skeleton_pose"),
+            "the converted rigged FBX must drive its mesh through node.gltf_skeleton_pose \
+             (proves the skinning/armature survived the Blender round-trip, not just geometry)"
+        );
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
 }
