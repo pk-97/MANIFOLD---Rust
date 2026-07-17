@@ -2243,6 +2243,7 @@ impl Command for AddSceneObjectCommand {
             let mesh_id = fresh();
             let mat_id = fresh();
             let transform_id = fresh();
+            let scene_object_id = fresh();
             let out_id = fresh();
             let group_id = fresh();
 
@@ -2260,49 +2261,42 @@ impl Command for AddSceneObjectCommand {
                 Some(format!("transform_{k}")),
                 BTreeMap::new(),
             );
+            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
+            // material/transform triple into a single Object wire —
+            // handle-stamped so the outliner shows this object's own name,
+            // not a producer's. render_scene v2 (D4) has no mesh_k/
+            // material_k/transform_k ports any more; it takes object_k only.
+            let handle = format!("Object {}", k + 1);
+            let scene_object_node =
+                scene_build_node(scene_object_id, "node.scene_object", Some(handle.clone()), BTreeMap::new());
             let out_node = scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
 
             let group_wires = vec![
-                scene_build_wire(mesh_id, "vertices", out_id, "vertices"),
-                scene_build_wire(mat_id, "out", out_id, "material"),
-                scene_build_wire(transform_id, "transform", out_id, "transform"),
+                scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
+                scene_build_wire(mat_id, "out", scene_object_id, "material"),
+                scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
+                scene_build_wire(scene_object_id, "object", out_id, "object"),
             ];
 
-            let mut group_node = scene_build_node(
-                group_id,
-                GROUP_TYPE_ID,
-                Some(format!("Object {}", k + 1)),
-                BTreeMap::new(),
-            );
+            let mut group_node =
+                scene_build_node(group_id, GROUP_TYPE_ID, Some(handle), BTreeMap::new());
             group_node.editor_pos = Some(centroid);
             group_node.group = Some(Box::new(GroupDef {
                 interface: GroupInterface {
                     inputs: Vec::new(),
-                    outputs: vec![
-                        InterfacePortDef {
-                            name: "vertices".to_string(),
-                            port_type: "Array(Vertex)".to_string(),
-                        },
-                        InterfacePortDef {
-                            name: "material".to_string(),
-                            port_type: "Material".to_string(),
-                        },
-                        InterfacePortDef {
-                            name: "transform".to_string(),
-                            port_type: "Transform".to_string(),
-                        },
-                    ],
+                    outputs: vec![InterfacePortDef {
+                        name: "object".to_string(),
+                        port_type: "Object".to_string(),
+                    }],
                     params: Vec::new(),
                 },
-                nodes: vec![mesh_node, mat_node, transform_node, out_node],
+                nodes: vec![mesh_node, mat_node, transform_node, scene_object_node, out_node],
                 wires: group_wires,
                 tint: Some([tint.r, tint.g, tint.b, 1.0]),
             }));
 
             nodes.push(group_node);
-            wires.push(scene_build_wire(group_id, "vertices", render_id, &format!("mesh_{k}")));
-            wires.push(scene_build_wire(group_id, "material", render_id, &format!("material_{k}")));
-            wires.push(scene_build_wire(group_id, "transform", render_id, &format!("transform_{k}")));
+            wires.push(scene_build_wire(group_id, "object", render_id, &format!("object_{k}")));
 
             Some(prev)
         });
@@ -6484,26 +6478,30 @@ mod tests {
             .expect("named group created");
         assert_eq!(group.editor_pos, Some((100.0, 200.0)));
         let body = group.group.as_deref().expect("is a group node");
-        assert_eq!(body.nodes.len(), 4, "cube + material + transform + group_output boundary");
+        assert_eq!(
+            body.nodes.len(),
+            5,
+            "cube + material + transform + scene_object bind + group_output boundary"
+        );
         assert!(body.nodes.iter().any(|n| n.type_id == "node.cube_mesh"));
         assert!(body.nodes.iter().any(|n| n.type_id == "node.phong_material"));
         assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
-        assert_eq!(body.wires.len(), 3, "mesh/material/transform each wired to the group_output");
-        assert_eq!(body.interface.outputs.len(), 3);
+        assert!(body.nodes.iter().any(|n| n.type_id == "node.scene_object"));
+        assert_eq!(
+            body.wires.len(),
+            4,
+            "mesh/material/transform wired to scene_object, scene_object wired to the group_output"
+        );
+        assert_eq!(body.interface.outputs.len(), 1, "a single Object output");
+        assert_eq!(body.interface.outputs[0].name, "object");
+        assert_eq!(body.interface.outputs[0].port_type, "Object");
 
-        // The group's three outputs wired to the new object-2 slot's ports.
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3/D4: the group's single
+        // `object` output wired to render_scene's new object_2 slot.
         assert!(def.wires.iter().any(|w| w.from_node == group.id
-            && w.from_port == "vertices"
+            && w.from_port == "object"
             && w.to_node == 0
-            && w.to_port == "mesh_2"));
-        assert!(def.wires.iter().any(|w| w.from_node == group.id
-            && w.from_port == "material"
-            && w.to_node == 0
-            && w.to_port == "material_2"));
-        assert!(def.wires.iter().any(|w| w.from_node == group.id
-            && w.from_port == "transform"
-            && w.to_node == 0
-            && w.to_port == "transform_2"));
+            && w.to_port == "object_2"));
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
