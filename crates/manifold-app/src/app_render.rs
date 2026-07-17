@@ -468,7 +468,7 @@ impl Application {
     /// per-instance override if it has diverged, else the catalog / bundled
     /// default. Cloned (copy is a rare authoring action). `None` when nothing is
     /// watched.
-    fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+    pub(crate) fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
         match self.watched_graph_target.as_ref()? {
             manifold_core::GraphTarget::Effect(eid) => {
                 let fx = self.local_project.find_effect_by_id(eid)?;
@@ -4213,14 +4213,24 @@ impl Application {
         // pattern the audio spectrogram uses (`ui_frame.rs`).
         if let Some(session) = ws.viewport_session.as_mut() {
             let (w, h) = session.dimensions();
-            let rgba = session
-                .render_if_dirty(
-                    &viewport_ctx,
-                    &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
-                    None,
-                    &[],
-                )
-                .to_vec();
+            // P6: gizmo handle geometry for the current selection/mode,
+            // built against THIS frame's def and editor camera — see
+            // `viewport_gizmo` and the `ws.viewport_selected_object`/
+            // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
+            let gizmo_lines: Vec<manifold_renderer::node_graph::WorldLine> = viewport_def
+                .as_ref()
+                .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def)
+                .zip(ws.viewport_selected_object)
+                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(&scene, object_id))
+                .map(|target| manifold_renderer::node_graph::gizmo_lines(ws.viewport_gizmo_mode, &target))
+                .unwrap_or_default();
+            let rgba = session.render_if_dirty(
+                &viewport_ctx,
+                &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
+                None,
+                &[],
+                &gizmo_lines,
+            );
             let need_new_tex = !matches!(
                 ws.viewport_pane.as_ref().and_then(|p| p.local_target()),
                 Some(tex) if tex.width == w && tex.height == h
