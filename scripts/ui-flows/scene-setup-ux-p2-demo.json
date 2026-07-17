@@ -18,15 +18,15 @@
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.object.color_r", "nth": 0 } },
+      "target": { "Query": { "name": "scene_setup.object.color_r_track", "nth": 0 } },
       "gesture": { "Drag": { "to": { "Point": { "x": 700.0, "y": 300.0 } }, "steps": 8 } }
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Point": { "x": 685.0, "y": 540.0 } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 855.0, "y": 540.0 } }, "steps": 8 } }
+      "target": { "Query": { "name": "scene_setup.object.roughness_track", "nth": 0 } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 902.75, "y": 540.0 } }, "steps": 8 } }
     }
   },
   "Snapshot"

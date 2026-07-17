@@ -1,0 +1,116 @@
+{
+  "128bpm": {
+    "raw": {
+      "wav": {
+        "n_beats_detected": 43,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 14.375000000000027,
+        "max_abs_offset_ms": 26.24999999999922,
+        "n_matched_vs_wav": null,
+        "max_abs_diff_vs_wav_ms": 0.0
+      },
+      "mp3": {
+        "n_beats_detected": 43,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 13.749999999999929,
+        "max_abs_offset_ms": 25.000000000000355,
+        "n_matched_vs_wav": 43,
+        "max_abs_diff_vs_wav_ms": 19.999999999999574
+      },
+      "aac": {
+        "n_beats_detected": 43,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 13.749999999999929,
+        "max_abs_offset_ms": 25.000000000000355,
+        "n_matched_vs_wav": 43,
+        "max_abs_diff_vs_wav_ms": 19.999999999999574
+      }
+    },
+    "fitted_grid": {
+      "wav": {
+        "fitted_bpm": 130.4347826086954,
+        "n_grid_points": 45,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 14.159053156146406,
+        "max_abs_offset_ms": 17.284053156144452
+      },
+      "mp3": {
+        "fitted_bpm": 130.4347826086954,
+        "n_grid_points": 45,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 13.693936877076318,
+        "max_abs_offset_ms": 16.818936877074808
+      },
+      "aac": {
+        "fitted_bpm": 130.4347826086954,
+        "n_grid_points": 45,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 13.693936877076318,
+        "max_abs_offset_ms": 16.818936877074808
+      }
+    }
+  },
+  "174bpm": {
+    "raw": {
+      "wav": {
+        "n_beats_detected": 43,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 5.862000000000256,
+        "max_abs_offset_ms": 16.20699999999964,
+        "n_matched_vs_wav": null,
+        "max_abs_diff_vs_wav_ms": 0.0
+      },
+      "mp3": {
+        "n_beats_detected": 43,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 5.862000000000256,
+        "max_abs_offset_ms": 16.20699999999964,
+        "n_matched_vs_wav": 43,
+        "max_abs_diff_vs_wav_ms": 0.0
+      },
+      "aac": {
+        "n_beats_detected": 44,
+        "n_truth": 40,
+        "n_matched_absolute": 36,
+        "median_abs_offset_ms": 5.862000000000256,
+        "max_abs_offset_ms": 16.20699999999964,
+        "n_matched_vs_wav": 43,
+        "max_abs_diff_vs_wav_ms": 0.0
+      }
+    },
+    "fitted_grid": {
+      "wav": {
+        "fitted_bpm": 176.4705882352942,
+        "n_grid_points": 47,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 7.980571428571337,
+        "max_abs_offset_ms": 22.60823588039962
+      },
+      "mp3": {
+        "fitted_bpm": 176.4705882352942,
+        "n_grid_points": 47,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 7.980571428571337,
+        "max_abs_offset_ms": 22.60823588039962
+      },
+      "aac": {
+        "fitted_bpm": 176.4705882352942,
+        "n_grid_points": 47,
+        "n_truth": 36,
+        "n_matched": 36,
+        "median_abs_offset_ms": 7.980071428571711,
+        "max_abs_offset_ms": 23.39198701298706
+      }
+    }
+  }
+}

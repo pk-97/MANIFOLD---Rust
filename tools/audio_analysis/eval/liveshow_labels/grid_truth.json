@@ -1,0 +1,587 @@
+{
+  "source": "Liveschool Live Show V6 AUDIO.manifold",
+  "points": [
+    {
+      "beat": 112.0,
+      "bpm": 132.0,
+      "recorded_at_seconds": 0.0,
+      "source": 4
+    },
+    {
+      "beat": 152.0,
+      "bpm": 133.6970672607422,
+      "recorded_at_seconds": 18.181818,
+      "source": 4
+    },
+    {
+      "beat": 152.5,
+      "bpm": 132.00335693359375,
+      "recorded_at_seconds": 18.406206,
+      "source": 4
+    },
+    {
+      "beat": 160.0,
+      "bpm": 135.3551025390625,
+      "recorded_at_seconds": 21.81521,
+      "source": 4
+    },
+    {
+      "beat": 160.25,
+      "bpm": 131.9998016357422,
+      "recorded_at_seconds": 21.92603,
+      "source": 4
+    },
+    {
+      "beat": 200.0,
+      "bpm": 133.72109985351562,
+      "recorded_at_seconds": 39.994239,
+      "source": 4
+    },
+    {
+      "beat": 200.5,
+      "bpm": 132.0005340576172,
+      "recorded_at_seconds": 40.218586,
+      "source": 4
+    },
+    {
+      "beat": 1062.75,
+      "bpm": 132.3365478515625,
+      "recorded_at_seconds": 432.148831,
+      "source": 4
+    },
+    {
+      "beat": 1076.25,
+      "bpm": 132.6736297607422,
+      "recorded_at_seconds": 438.26959,
+      "source": 4
+    },
+    {
+      "beat": 1089.75,
+      "bpm": 133.01669311523438,
+      "recorded_at_seconds": 444.374797,
+      "source": 4
+    },
+    {
+      "beat": 1103.5,
+      "bpm": 133.3489532470703,
+      "recorded_at_seconds": 450.577026,
+      "source": 4
+    },
+    {
+      "beat": 1116.5,
+      "bpm": 133.6820068359375,
+      "recorded_at_seconds": 456.42634,
+      "source": 4
+    },
+    {
+      "beat": 1130.25,
+      "bpm": 134.0233612060547,
+      "recorded_at_seconds": 462.597702,
+      "source": 4
+    },
+    {
+      "beat": 1143.5,
+      "bpm": 134.35704040527344,
+      "recorded_at_seconds": 468.529504,
+      "source": 4
+    },
+    {
+      "beat": 1157.25,
+      "bpm": 134.70513916015625,
+      "recorded_at_seconds": 474.669859,
+      "source": 4
+    },
+    {
+      "beat": 1171.0,
+      "bpm": 135.0386505126953,
+      "recorded_at_seconds": 480.794347,
+      "source": 4
+    },
+    {
+      "beat": 1184.25,
+      "bpm": 135.38426208496094,
+      "recorded_at_seconds": 486.681551,
+      "source": 4
+    },
+    {
+      "beat": 1198.25,
+      "bpm": 135.72972106933594,
+      "recorded_at_seconds": 492.886112,
+      "source": 4
+    },
+    {
+      "beat": 1212.25,
+      "bpm": 136.0049285888672,
+      "recorded_at_seconds": 499.074882,
+      "source": 4
+    },
+    {
+      "beat": 1282.25,
+      "bpm": 137.01597595214844,
+      "recorded_at_seconds": 529.956116,
+      "source": 4
+    },
+    {
+      "beat": 1287.0,
+      "bpm": 138.0507354736328,
+      "recorded_at_seconds": 532.036166,
+      "source": 4
+    },
+    {
+      "beat": 1291.75,
+      "bpm": 139.08941650390625,
+      "recorded_at_seconds": 534.100624,
+      "source": 4
+    },
+    {
+      "beat": 1296.5,
+      "bpm": 140.13233947753906,
+      "recorded_at_seconds": 536.149666,
+      "source": 4
+    },
+    {
+      "beat": 1301.25,
+      "bpm": 141.13775634765625,
+      "recorded_at_seconds": 538.183457,
+      "source": 4
+    },
+    {
+      "beat": 1305.75,
+      "bpm": 142.1741180419922,
+      "recorded_at_seconds": 540.096482,
+      "source": 4
+    },
+    {
+      "beat": 1310.75,
+      "bpm": 143.2678985595703,
+      "recorded_at_seconds": 542.206571,
+      "source": 4
+    },
+    {
+      "beat": 1315.75,
+      "bpm": 144.3758087158203,
+      "recorded_at_seconds": 544.30055,
+      "source": 4
+    },
+    {
+      "beat": 1320.75,
+      "bpm": 145.460205078125,
+      "recorded_at_seconds": 546.37846,
+      "source": 4
+    },
+    {
+      "beat": 1325.75,
+      "bpm": 146.54042053222656,
+      "recorded_at_seconds": 548.44088,
+      "source": 4
+    },
+    {
+      "beat": 1330.75,
+      "bpm": 147.65936279296875,
+      "recorded_at_seconds": 550.488097,
+      "source": 4
+    },
+    {
+      "beat": 1335.75,
+      "bpm": 148.73562622070312,
+      "recorded_at_seconds": 552.5198,
+      "source": 4
+    },
+    {
+      "beat": 1340.75,
+      "bpm": 149.81578063964844,
+      "recorded_at_seconds": 554.536801,
+      "source": 4
+    },
+    {
+      "beat": 1347.0,
+      "bpm": 150.0016326904297,
+      "recorded_at_seconds": 557.039876,
+      "source": 4
+    },
+    {
+      "beat": 1735.0,
+      "bpm": 150.42950439453125,
+      "recorded_at_seconds": 712.238184,
+      "source": 4
+    },
+    {
+      "beat": 1748.5,
+      "bpm": 150.85484313964844,
+      "recorded_at_seconds": 717.622766,
+      "source": 4
+    },
+    {
+      "beat": 1762.25,
+      "bpm": 151.28887939453125,
+      "recorded_at_seconds": 723.091599,
+      "source": 4
+    },
+    {
+      "beat": 1776.25,
+      "bpm": 151.72610473632812,
+      "recorded_at_seconds": 728.643891,
+      "source": 4
+    },
+    {
+      "beat": 1790.25,
+      "bpm": 152.16357421875,
+      "recorded_at_seconds": 734.180182,
+      "source": 4
+    },
+    {
+      "beat": 1804.25,
+      "bpm": 152.60067749023438,
+      "recorded_at_seconds": 739.700557,
+      "source": 4
+    },
+    {
+      "beat": 1818.25,
+      "bpm": 153.03915405273438,
+      "recorded_at_seconds": 745.20512,
+      "source": 4
+    },
+    {
+      "beat": 1832.25,
+      "bpm": 153.47604370117188,
+      "recorded_at_seconds": 750.693912,
+      "source": 4
+    },
+    {
+      "beat": 1846.25,
+      "bpm": 153.89279174804688,
+      "recorded_at_seconds": 756.167078,
+      "source": 4
+    },
+    {
+      "beat": 1859.75,
+      "bpm": 153.9999237060547,
+      "recorded_at_seconds": 761.430483,
+      "source": 4
+    },
+    {
+      "beat": 2176.0,
+      "bpm": 156.42526245117188,
+      "recorded_at_seconds": 884.644832,
+      "source": 4
+    },
+    {
+      "beat": 2177.25,
+      "bpm": 154.2918701171875,
+      "recorded_at_seconds": 885.124294,
+      "source": 4
+    },
+    {
+      "beat": 2184.0,
+      "bpm": 155.3175048828125,
+      "recorded_at_seconds": 887.749189,
+      "source": 4
+    },
+    {
+      "beat": 2185.25,
+      "bpm": 154.66030883789062,
+      "recorded_at_seconds": 888.232071,
+      "source": 4
+    },
+    {
+      "beat": 2188.0,
+      "bpm": 155.59042358398438,
+      "recorded_at_seconds": 889.298925,
+      "source": 4
+    },
+    {
+      "beat": 2189.25,
+      "bpm": 155.1398162841797,
+      "recorded_at_seconds": 889.78096,
+      "source": 4
+    },
+    {
+      "beat": 2199.25,
+      "bpm": 155.76492309570312,
+      "recorded_at_seconds": 893.648439,
+      "source": 4
+    },
+    {
+      "beat": 2209.25,
+      "bpm": 156.25,
+      "recorded_at_seconds": 897.500398,
+      "source": 4
+    },
+    {
+      "beat": 2214.75,
+      "bpm": 157.82437133789062,
+      "recorded_at_seconds": 899.612398,
+      "source": 4
+    },
+    {
+      "beat": 2216.25,
+      "bpm": 156.83106994628906,
+      "recorded_at_seconds": 900.182652,
+      "source": 4
+    },
+    {
+      "beat": 2226.5,
+      "bpm": 157.473876953125,
+      "recorded_at_seconds": 904.104068,
+      "source": 4
+    },
+    {
+      "beat": 2236.5,
+      "bpm": 158.09317016601562,
+      "recorded_at_seconds": 907.914224,
+      "source": 4
+    },
+    {
+      "beat": 2246.5,
+      "bpm": 158.47250366210938,
+      "recorded_at_seconds": 911.709454,
+      "source": 4
+    },
+    {
+      "beat": 2248.5,
+      "bpm": 159.2445831298828,
+      "recorded_at_seconds": 912.466683,
+      "source": 4
+    },
+    {
+      "beat": 2250.0,
+      "bpm": 158.9440155029297,
+      "recorded_at_seconds": 913.031852,
+      "source": 4
+    },
+    {
+      "beat": 2260.25,
+      "bpm": 159.58482360839844,
+      "recorded_at_seconds": 916.901139,
+      "source": 4
+    },
+    {
+      "beat": 2270.5,
+      "bpm": 160.22579956054688,
+      "recorded_at_seconds": 920.754889,
+      "source": 4
+    },
+    {
+      "beat": 2280.75,
+      "bpm": 160.87330627441406,
+      "recorded_at_seconds": 924.593222,
+      "source": 4
+    },
+    {
+      "beat": 2291.25,
+      "bpm": 161.5298309326172,
+      "recorded_at_seconds": 928.509347,
+      "source": 4
+    },
+    {
+      "beat": 2301.75,
+      "bpm": 162.17819213867188,
+      "recorded_at_seconds": 932.409555,
+      "source": 4
+    },
+    {
+      "beat": 2312.0,
+      "bpm": 165.42153930664062,
+      "recorded_at_seconds": 936.20168,
+      "source": 4
+    },
+    {
+      "beat": 2312.75,
+      "bpm": 162.87393188476562,
+      "recorded_at_seconds": 936.473713,
+      "source": 4
+    },
+    {
+      "beat": 2323.25,
+      "bpm": 163.52841186523438,
+      "recorded_at_seconds": 940.341735,
+      "source": 4
+    },
+    {
+      "beat": 2333.75,
+      "bpm": 163.99853515625,
+      "recorded_at_seconds": 944.194277,
+      "source": 4
+    },
+    {
+      "beat": 2456.0,
+      "bpm": 166.12167358398438,
+      "recorded_at_seconds": 988.920286,
+      "source": 4
+    },
+    {
+      "beat": 2456.5,
+      "bpm": 163.994873046875,
+      "recorded_at_seconds": 989.100877,
+      "source": 4
+    },
+    {
+      "beat": 2616.75,
+      "bpm": 160.19223022460938,
+      "recorded_at_seconds": 1047.730759,
+      "source": 4
+    },
+    {
+      "beat": 2618.0,
+      "bpm": 156.23297119140625,
+      "recorded_at_seconds": 1048.198947,
+      "source": 4
+    },
+    {
+      "beat": 2619.0,
+      "bpm": 151.42752075195312,
+      "recorded_at_seconds": 1048.582988,
+      "source": 4
+    },
+    {
+      "beat": 2620.0,
+      "bpm": 145.77850341796875,
+      "recorded_at_seconds": 1048.979218,
+      "source": 4
+    },
+    {
+      "beat": 2620.75,
+      "bpm": 140.37823486328125,
+      "recorded_at_seconds": 1049.287905,
+      "source": 4
+    },
+    {
+      "beat": 2621.25,
+      "bpm": 134.80621337890625,
+      "recorded_at_seconds": 1049.501613,
+      "source": 4
+    },
+    {
+      "beat": 2621.75,
+      "bpm": 127.6256332397461,
+      "recorded_at_seconds": 1049.724155,
+      "source": 4
+    },
+    {
+      "beat": 2622.25,
+      "bpm": 120.92710876464844,
+      "recorded_at_seconds": 1049.959218,
+      "source": 4
+    },
+    {
+      "beat": 2622.5,
+      "bpm": 115.40310668945312,
+      "recorded_at_seconds": 1050.083259,
+      "source": 4
+    },
+    {
+      "beat": 2622.75,
+      "bpm": 108.8929214477539,
+      "recorded_at_seconds": 1050.213238,
+      "source": 4
+    },
+    {
+      "beat": 2623.0,
+      "bpm": 101.19465637207033,
+      "recorded_at_seconds": 1050.350988,
+      "source": 4
+    },
+    {
+      "beat": 2623.25,
+      "bpm": 91.9422836303711,
+      "recorded_at_seconds": 1050.499218,
+      "source": 4
+    },
+    {
+      "beat": 2623.5,
+      "bpm": 80.74464416503906,
+      "recorded_at_seconds": 1050.662363,
+      "source": 4
+    },
+    {
+      "beat": 2623.75,
+      "bpm": 67.1829833984375,
+      "recorded_at_seconds": 1050.848134,
+      "source": 4
+    },
+    {
+      "beat": 2624.0,
+      "bpm": 88.05184936523438,
+      "recorded_at_seconds": 1051.071405,
+      "source": 4
+    },
+    {
+      "beat": 2624.25,
+      "bpm": 104.24207305908205,
+      "recorded_at_seconds": 1051.241759,
+      "source": 4
+    },
+    {
+      "beat": 2624.5,
+      "bpm": 110.58209228515624,
+      "recorded_at_seconds": 1051.385655,
+      "source": 4
+    },
+    {
+      "beat": 2624.75,
+      "bpm": 116.02610778808594,
+      "recorded_at_seconds": 1051.521301,
+      "source": 4
+    },
+    {
+      "beat": 2625.25,
+      "bpm": 121.4506607055664,
+      "recorded_at_seconds": 1051.779863,
+      "source": 4
+    },
+    {
+      "beat": 2626.0,
+      "bpm": 125.76419067382812,
+      "recorded_at_seconds": 1052.150384,
+      "source": 4
+    },
+    {
+      "beat": 2627.0,
+      "bpm": 128.87059020996094,
+      "recorded_at_seconds": 1052.627468,
+      "source": 4
+    },
+    {
+      "beat": 2628.25,
+      "bpm": 131.26019287109375,
+      "recorded_at_seconds": 1053.209447,
+      "source": 4
+    },
+    {
+      "beat": 2630.25,
+      "bpm": 132.69105529785156,
+      "recorded_at_seconds": 1054.123662,
+      "source": 4
+    },
+    {
+      "beat": 2632.0,
+      "bpm": 134.09323120117188,
+      "recorded_at_seconds": 1054.914973,
+      "source": 4
+    },
+    {
+      "beat": 2633.0,
+      "bpm": 133.82252502441406,
+      "recorded_at_seconds": 1055.362423,
+      "source": 4
+    },
+    {
+      "beat": 2640.25,
+      "bpm": 133.99990844726562,
+      "recorded_at_seconds": 1058.612997,
+      "source": 4
+    },
+    {
+      "beat": 2968.0,
+      "bpm": 135.58091735839844,
+      "recorded_at_seconds": 1205.366821,
+      "source": 4
+    },
+    {
+      "beat": 2968.53125,
+      "bpm": 134.0,
+      "recorded_at_seconds": 1205.601921,
+      "source": 4
+    }
+  ]
+}

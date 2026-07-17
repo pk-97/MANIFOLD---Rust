@@ -1,0 +1,65 @@
+{
+  "_comment": "BUG-235 fix. Per-fixture median signed offset (ADTOF raw kick time minus nearest manifold_own truth time, mix_time_s column) between raw ADTOF's onset-picking convention and this fixture pack's hand-labeled convention (tests/fixtures/audio_labels/README.md: 'onset = walk-back to 25% of the sub-envelope peak' -- a later, energy-anchored convention than ADTOF's own, earlier, transient-anchored one). Applied ONLY at the scoring seam (eval/calibration.py:apply_calibration) -- never inside the detector (manifold_audio.adtof_detection is untouched). See docs/BUG_BACKLOG.md BUG-235 and docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md D14.",
+  "generated_at": "2026-07-17T13:37:22.776707+00:00",
+  "method": "median(pred_time - nearest_truth_time) over raw ADTOF kicks (default thresholds) vs mix_time_s truth, matched within \u00b10.3s (wider than D10's 50ms scoring tolerance so the true bias isn't clipped by the match window itself).",
+  "match_window_sec": 0.3,
+  "offsets_sec": {
+    "apricots_128bpm": -0.125,
+    "bad_guy_128bpm": -0.024999999999999745,
+    "feel_the_vibration_174bpm": -0.09999999999999964,
+    "inhale_exhale_145bpm": -0.0600000000000005,
+    "tears_140bpm": -0.0625
+  },
+  "measurement_detail": [
+    {
+      "id": "apricots_128bpm",
+      "n_pred": 14,
+      "n_truth": 16,
+      "n_matched_for_calibration": 14,
+      "median_offset_sec": -0.125,
+      "min_offset_sec": -0.17999999999999972,
+      "max_offset_sec": 0.07500000000000018,
+      "match_window_sec": 0.3
+    },
+    {
+      "id": "bad_guy_128bpm",
+      "n_pred": 23,
+      "n_truth": 17,
+      "n_matched_for_calibration": 16,
+      "median_offset_sec": -0.024999999999999745,
+      "min_offset_sec": -0.08000000000000007,
+      "max_offset_sec": -0.015000000000000124,
+      "match_window_sec": 0.3
+    },
+    {
+      "id": "feel_the_vibration_174bpm",
+      "n_pred": 15,
+      "n_truth": 16,
+      "n_matched_for_calibration": 15,
+      "median_offset_sec": -0.09999999999999964,
+      "min_offset_sec": -0.120000000000001,
+      "max_offset_sec": -0.08000000000000007,
+      "match_window_sec": 0.3
+    },
+    {
+      "id": "inhale_exhale_145bpm",
+      "n_pred": 18,
+      "n_truth": 14,
+      "n_matched_for_calibration": 17,
+      "median_offset_sec": -0.0600000000000005,
+      "min_offset_sec": -0.27999999999999936,
+      "max_offset_sec": -0.040000000000000036,
+      "match_window_sec": 0.3
+    },
+    {
+      "id": "tears_140bpm",
+      "n_pred": 22,
+      "n_truth": 10,
+      "n_matched_for_calibration": 10,
+      "median_offset_sec": -0.0625,
+      "min_offset_sec": -0.08000000000000007,
+      "max_offset_sec": 0.27,
+      "match_window_sec": 0.3
+    }
+  ]
+}

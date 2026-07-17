@@ -11,10 +11,9 @@ ProgressCallback = Optional[Callable[[float, str], None]]
 
 import numpy as np
 
+from manifold_audio.beat_tracking import bpm_from_beat_times, estimate_beats_this
 from manifold_audio.bpm import (
     _build_beat_grid,
-    _detect_madmom_downbeat_phase,
-    _estimate_madmom_beats,
     _refine_bpm_via_autocorrelation,
     _score_octave_hypotheses,
     estimate_bpm,
@@ -23,7 +22,7 @@ from manifold_audio.conflict_resolution import (
     _count_event_types,
     _overlap_rate,
 )
-from manifold_audio.adtof_detection import detect_drums_adtof
+from manifold_audio.adtof_detection import detect_drums_adtof, resolve_thresholds as resolve_adtof_thresholds
 from manifold_audio.basic_pitch_detection import (
     classify_synth_notes,
     detect_notes_basic_pitch,
@@ -146,6 +145,14 @@ def analyze_percussion(
 
     # ADTOF drum transcription (runs in main process).
     if want_drums and onset_audio_path is not None:
+        # Log the EFFECTIVE per-class thresholds (P4 acceptance, 2026-07-18)
+        # via the same resolver detect_drums_adtof itself uses, so this line
+        # can never drift from what's actually applied.
+        _effective_thresholds = resolve_adtof_thresholds(adtof_thresholds)
+        _progress(
+            0.735,
+            "ADTOF thresholds (kick,snare,tom,hihat,cymbal)=" + ",".join(f"{t:.3f}" for t in _effective_thresholds),
+        )
         _progress(0.74, "drum transcription (ADTOF)")
         adtof_drum_events = detect_drums_adtof(onset_audio_path, thresholds=adtof_thresholds)
         if adtof_drum_events is not None:
@@ -165,40 +172,42 @@ def analyze_percussion(
         if bp_synth_notes is not None:
             _progress(0.80, f"Basic Pitch detected {len(bp_synth_notes)} synth/pad notes")
 
-    # --- Madmom parallel dispatch (beats + vocal) ---
-    # ADTOF/Basic Pitch handle drums/bass/synth/pad; madmom is only
-    # needed for beat tracking and vocal onsets.
-    madmom_pass_count = 0
-    if audio_path is not None:
-        madmom_pass_count += 1  # beat tracking
-    if need_vocal_onsets:
-        madmom_pass_count += 1
+    # --- Beat tracking (Beat This, CPJKU) + vocal onset (madmom, unchanged) ---
+    # ADTOF/Basic Pitch handle drums/bass/synth/pad. Beats/downbeats/tempo
+    # come from Beat This (D1/D2, P2) — the madmom RNN+DBN beat/downbeat
+    # arms are deleted, not paralleled. Vocal onset detection still uses
+    # madmom's CNN onset processor (onset_detection.py, untouched — P6's job).
+    need_beat_tracking = audio_path is not None
+    parallel_pass_count = (1 if need_beat_tracking else 0) + (1 if need_vocal_onsets else 0)
 
     rough_bpm: Optional[float] = None
     tracker_beat_times: List[float] = []
-    madmom_tempo_hypotheses: List[Tuple[float, float]] = []
-    beat_source = "none"
-    madmom_downbeat_phase: Optional[int] = None
+    tracker_downbeat_times: List[float] = []
+    # D1: the pure-DSP autocorrelation estimator is the explicit no-model
+    # fallback — starts here so any early-return path is still stamped
+    # correctly; flipped to "beat_this" only once real tracker beats exist.
+    beat_source = "autocorr_fallback"
     vocal_madmom_result = None
 
     # Build a descriptive label for the parallel phase.
     stem_labels: List[str] = []
-    if audio_path is not None:
+    if need_beat_tracking:
         stem_labels.append("beats")
     if need_vocal_onsets:
         stem_labels.append("vocals")
 
     # Incremental progress per future completion within the 0.80-0.85 range.
-    total_futures = max(1, madmom_pass_count)
+    total_futures = max(1, parallel_pass_count)
     completed_futures = 0
 
     def _future_done(label: str) -> None:
         nonlocal completed_futures
         completed_futures += 1
         frac = completed_futures / total_futures
-        _progress(0.80 + frac * 0.05, f"madmom analysis ({label} done, {completed_futures}/{total_futures})")
+        _progress(0.80 + frac * 0.05, f"analysis ({label} done, {completed_futures}/{total_futures})")
 
     # Build madmom keyword overrides from config (only include keys with non-None values).
+    # Still used by the vocal-onset CNN pass below (onset_detection.py, unchanged).
     madmom_kwargs: Dict[str, object] = {}
     if detection_config is not None:
         if detection_config.madmom_threshold is not None:
@@ -210,23 +219,24 @@ def analyze_percussion(
         if detection_config.madmom_post_max is not None:
             madmom_kwargs["post_max"] = detection_config.madmom_post_max
 
-    if madmom_pass_count > 1:
-        # Multiple independent madmom passes — run in parallel.
-        _progress(0.80, f"analysing {' + '.join(stem_labels)} in parallel ({madmom_pass_count} passes)")
-        workers = min(6, madmom_pass_count + 1)  # +1 for dependent downbeat pass
+    def _apply_beat_this_result(result) -> None:
+        nonlocal rough_bpm, tracker_beat_times, tracker_downbeat_times, beat_source
+        if result is not None and len(result.beat_times) >= 2:
+            tracker_beat_times = result.beat_times
+            tracker_downbeat_times = result.downbeat_times
+            beat_source = "beat_this"
+            rough_bpm = bpm_from_beat_times(tracker_beat_times)
+
+    if parallel_pass_count > 1:
+        # Multiple independent passes — run in parallel.
+        _progress(0.80, f"analysing {' + '.join(stem_labels)} in parallel ({parallel_pass_count} passes)")
+        workers = min(4, parallel_pass_count)
         with ProcessPoolExecutor(max_workers=workers) as pool:
             beat_future: Optional[Future] = None
             vocal_onset_future: Optional[Future] = None
 
-            # Submit all independent passes.
-            if audio_path is not None:
-                beat_future = pool.submit(
-                    _estimate_madmom_beats,
-                    audio_path=audio_path,
-                    min_bpm=min_bpm,
-                    max_bpm=max_bpm,
-                    ffmpeg_bin=ffmpeg_bin,
-                )
+            if need_beat_tracking:
+                beat_future = pool.submit(estimate_beats_this, audio_path=audio_path)
             if need_vocal_onsets:
                 vocal_onset_future = pool.submit(
                     detect_madmom_onsets,
@@ -236,65 +246,31 @@ def analyze_percussion(
                     **madmom_kwargs,
                 )
 
-            # Collect beat tracking first — downbeat detection depends on it.
-            downbeat_future: Optional[Future] = None
             if beat_future is not None:
                 try:
-                    madmom_bpm, madmom_beats, madmom_tempo_hypotheses = beat_future.result()
+                    _apply_beat_this_result(beat_future.result())
                     _future_done("beats")
-                    if madmom_bpm is not None and len(madmom_beats) >= 2:
-                        rough_bpm = madmom_bpm
-                        tracker_beat_times = madmom_beats
-                        beat_source = "madmom"
-                        # Submit dependent downbeat pass (other futures still running).
-                        downbeat_future = pool.submit(
-                            _detect_madmom_downbeat_phase,
-                            audio_path=audio_path,
-                            beat_times=madmom_beats,
-                            beats_per_bar=4,
-                            ffmpeg_bin=ffmpeg_bin,
-                        )
                 except Exception as exc:
                     print(f"[parallel] beat tracking failed: {exc}", file=sys.stderr)
 
-            # Collect remaining futures.
             if vocal_onset_future is not None:
                 try:
                     vocal_madmom_result = vocal_onset_future.result()
                     _future_done("vocals")
                 except Exception as exc:
                     print(f"[parallel] vocal onset detection failed: {exc}", file=sys.stderr)
-            if downbeat_future is not None:
-                try:
-                    madmom_downbeat_phase = downbeat_future.result()
-                except Exception as exc:
-                    print(f"[parallel] downbeat detection failed: {exc}", file=sys.stderr)
     else:
-        # Single pass or no madmom — run sequentially (no pool overhead).
-        if audio_path is not None:
-            _progress(0.80, "tracking beats (RNN)")
-            madmom_bpm, madmom_beats, madmom_tempo_hypotheses = _estimate_madmom_beats(
-                audio_path=audio_path,
-                min_bpm=min_bpm,
-                max_bpm=max_bpm,
-                ffmpeg_bin=ffmpeg_bin,
-            )
-            if madmom_bpm is not None and len(madmom_beats) >= 2:
-                rough_bpm = madmom_bpm
-                tracker_beat_times = madmom_beats
-                beat_source = "madmom"
-                _progress(0.82, "detecting downbeats")
-                madmom_downbeat_phase = _detect_madmom_downbeat_phase(
-                    audio_path=audio_path,
-                    beat_times=madmom_beats,
-                    beats_per_bar=4,
-                    ffmpeg_bin=ffmpeg_bin,
-                )
+        # Single pass — run sequentially (no pool overhead).
+        if need_beat_tracking:
+            _progress(0.80, "tracking beats (Beat This)")
+            _apply_beat_this_result(estimate_beats_this(audio_path))
 
     _progress(0.85, "processing drum events")
 
-    # --- Two-tier BPM cascade: autocorrelation fallback ---
-    if beat_source == "none":
+    # --- Pure-DSP autocorrelation fallback (D1) ---
+    # Only reached when Beat This inference failed or returned <2 beats —
+    # never silent: the BeatGrid is stamped tracker="autocorr_fallback".
+    if beat_source == "autocorr_fallback":
         rough_bands = {
             "kick": (30.0, 180.0),
             "snare": (180.0, 2800.0),
@@ -307,7 +283,7 @@ def analyze_percussion(
             0.5 * rough_onsets["perc"]
         )
         rough_bpm = estimate_bpm(rough_global, hop_time, min_bpm=min_bpm, max_bpm=max_bpm)
-        beat_source = "autocorrelation"
+        # beat_source stays "autocorr_fallback" — this IS that path.
 
     # Profile and onsets are always computed — global_onset is required for
     # BPM octave scoring and beat grid regardless of which instruments are requested.
@@ -341,8 +317,14 @@ def analyze_percussion(
             for e in drum_events if e.type == "snare"
         ]
 
-    # --- Multi-hypothesis octave scoring ---
-    if rough_bpm is not None and rough_bpm > 0:
+    # --- Multi-hypothesis octave scoring + autocorrelation refinement ---
+    # D1: "Grid is built from Beat This's beat/downbeat times" — when the
+    # tracker succeeded, its grid is trusted as-is and this DSP correction
+    # layer (built to compensate madmom's known octave/tempo imprecision) is
+    # skipped entirely. Only the autocorr_fallback path (no model beats at
+    # all) still needs octave resolution + integer-snap refinement against
+    # a single rough BPM guess.
+    if beat_source == "autocorr_fallback" and rough_bpm is not None and rough_bpm > 0:
         rough_bpm, tracker_beat_times = _score_octave_hypotheses(
             base_bpm=rough_bpm,
             beat_times=tracker_beat_times,
@@ -353,15 +335,12 @@ def analyze_percussion(
             duration_sec=float(len(audio)) / float(sample_rate),
             min_bpm=min_bpm,
             max_bpm=max_bpm,
-            tempo_hypotheses=madmom_tempo_hypotheses if beat_source == "madmom" else None,
             detection_config=detection_config,
         )
 
-    # --- Autocorrelation refinement + integer snap ---
-    # Narrow autocorrelation search around the octave-resolved BPM corrects
-    # model bias (madmom), then integer snap exploits the fact that
-    # electronic music is produced at whole-number tempos.
-    if rough_bpm is not None and rough_bpm > 0:
+        # Narrow autocorrelation search around the octave-resolved BPM,
+        # exploiting the fact that electronic music is produced at
+        # whole-number tempos.
         cfg = detection_config
         rough_bpm = _refine_bpm_via_autocorrelation(
             candidate_bpm=rough_bpm,
@@ -445,10 +424,11 @@ def analyze_percussion(
         kick_events=kick_scored_events,
         phase_offset_sec=phase_offset_sec,
         tracker_beat_times=tracker_beat_times,
-        mode_override=beat_source if beat_source not in ("autocorrelation", "none") else None,
+        mode_override=beat_source if beat_source == "beat_this" else None,
         min_bpm=min_bpm,
         max_bpm=max_bpm,
-        madmom_downbeat_phase=madmom_downbeat_phase,
+        tracker_downbeat_times=tracker_downbeat_times,
+        tracker_name=beat_source,
         detection_config=detection_config,
     )
 
@@ -556,6 +536,13 @@ def build_output(
     if beat_grid is not None and beat_grid.beat_times:
         payload["beatGrid"] = {
             "mode": beat_grid.mode,
+            # D1: which beat/downbeat source produced this grid — "beat_this"
+            # (CPJKU model) or "autocorr_fallback" (pure-DSP, no model). Never
+            # silent: a fallback run is always stamped, not inferred by the
+            # reader from "mode" (which also encodes tracker-vs-synthetic
+            # grid CONSTRUCTION and can diverge, e.g. a tracker that returned
+            # beats but no downbeats).
+            "tracker": beat_grid.tracker,
             "bpmDerived": round(float(beat_grid.bpm_derived), 3) if beat_grid.bpm_derived is not None else 0.0,
             "confidence": round(float(_clamp(beat_grid.confidence, 0.0, 1.0)), 4),
             "beatTimes": [round(float(t), 4) for t in beat_grid.beat_times],

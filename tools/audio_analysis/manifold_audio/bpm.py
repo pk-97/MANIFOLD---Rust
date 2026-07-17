@@ -1,4 +1,11 @@
-"""BPM estimation (madmom + autocorrelation) and beat grid construction."""
+"""BPM estimation (autocorrelation) and beat grid construction.
+
+Beats, downbeats, and tempo come from Beat This (manifold_audio.beat_tracking,
+CPJKU model) — see AUDIO_ANALYSIS_ACCURACY_DESIGN.md D1/D2, P2. The madmom
+RNN+DBN beat/downbeat arms and the madmom-tempo-hypothesis scoring arm that
+used to live in this module are deleted, not paralleled; the pure-DSP
+autocorrelation estimator below (`estimate_bpm`) is the explicit no-model
+fallback used only when Beat This inference fails."""
 
 from __future__ import annotations
 
@@ -17,25 +24,6 @@ from manifold_audio.math_utils import (
     robust_threshold,
 )
 from manifold_audio.models import BeatGrid, ScoredEvent
-
-try:
-    import madmom  # noqa: F401
-    from madmom.features.beats import (
-        DBNBeatTrackingProcessor,
-        RNNBeatProcessor,
-    )
-    from madmom.features.downbeats import (
-        DBNDownBeatTrackingProcessor,
-        RNNDownBeatProcessor,
-    )
-    from madmom.features.tempo import (
-        CombFilterTempoHistogramProcessor,
-        TempoEstimationProcessor,
-    )
-
-    _HAS_MADMOM = True
-except ImportError:
-    _HAS_MADMOM = False
 
 
 def estimate_bpm(
@@ -177,190 +165,28 @@ def _normalize_bpm(
     return float(_clamp(normalized, 20.0, 300.0))
 
 
-def _estimate_madmom_beats(
-    audio_path: str,
-    min_bpm: float = 55.0,
-    max_bpm: float = 215.0,
-    ffmpeg_bin: Optional[str] = None,
-) -> Tuple[Optional[float], List[float], List[Tuple[float, float]]]:
-    """Estimate beat times, BPM, and tempo hypotheses using madmom RNN+DBN.
-
-    Returns (bpm, beat_times, tempo_hypotheses) or (None, [], []) on failure.
-    tempo_hypotheses is a list of (bpm, strength) sorted descending by strength.
-    """
-    if not _HAS_MADMOM:
-        return None, [], []
-
-    try:
-        import os
-        # madmom loads audio via pysoundfile or ffmpeg subprocess.
-        # Ensure ffmpeg is on PATH so madmom can decode compressed formats.
-        if ffmpeg_bin and os.path.isfile(ffmpeg_bin):
-            ffmpeg_dir = os.path.dirname(os.path.abspath(ffmpeg_bin))
-            current_path = os.environ.get("PATH", "")
-            if ffmpeg_dir not in current_path.split(os.pathsep):
-                os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path
-
-        proc = RNNBeatProcessor()
-        activations = proc(audio_path)
-
-        beat_tracker = DBNBeatTrackingProcessor(
-            min_bpm=min_bpm,
-            max_bpm=max_bpm,
-            fps=100,
-        )
-        raw_beats = beat_tracker.process_offline(activations)
-
-        tempo_proc = TempoEstimationProcessor(
-            method=None,
-            fps=100,
-            histogram_processor=CombFilterTempoHistogramProcessor(
-                min_bpm=min_bpm,
-                max_bpm=max_bpm,
-                fps=100,
-            ),
-        )
-        raw_tempos = tempo_proc(activations)
-
-        # Convert beat times to sorted, deduplicated list.
-        beat_times: List[float] = sorted(
-            float(t)
-            for t in np.asarray(raw_beats, dtype=np.float64)
-            if np.isfinite(t) and t >= 0.0
-        )
-        deduped: List[float] = []
-        for t in beat_times:
-            if not deduped or abs(t - deduped[-1]) > 1e-4:
-                deduped.append(t)
-        beat_times = deduped
-
-        # Derive BPM from median inter-beat interval.
-        bpm: Optional[float] = None
-        if len(beat_times) >= 2:
-            intervals = np.diff(np.asarray(beat_times, dtype=np.float64))
-            intervals = intervals[intervals > 1e-6]
-            if intervals.size > 0:
-                bpm = 60.0 / float(np.median(intervals))
-
-        # Convert tempo hypotheses to (bpm, strength) tuples.
-        # NOTE: must build tempo_hypotheses before the refinement step below.
-        tempo_hypotheses: List[Tuple[float, float]] = []
-        if raw_tempos is not None:
-            arr = np.atleast_2d(raw_tempos)
-            for row_idx in range(arr.shape[0]):
-                t_bpm = float(arr[row_idx, 0])
-                t_str = float(arr[row_idx, 1]) if arr.shape[1] > 1 else 0.0
-                if np.isfinite(t_bpm) and t_bpm > 0.0:
-                    tempo_hypotheses.append((t_bpm, t_str))
-            tempo_hypotheses.sort(key=lambda x: x[1], reverse=True)
-
-        # Prefer comb-filter tempo over beat-interval median when close.
-        # The comb filter operates on the full activation function (global
-        # spectral analysis) and is far more stable than median(diff(beats))
-        # which suffers from individual beat position jitter in complex
-        # rhythms (e.g. DnB breakbeats with 5-15ms per-beat drift).
-        if bpm is not None and bpm > 0 and tempo_hypotheses:
-            best_hyp_bpm: Optional[float] = None
-            best_hyp_strength = 0.0
-            for t_bpm, t_strength in tempo_hypotheses:
-                if abs(t_bpm - bpm) / bpm < 0.05 and t_strength > best_hyp_strength:
-                    best_hyp_bpm = t_bpm
-                    best_hyp_strength = t_strength
-            if best_hyp_bpm is not None:
-                bpm = best_hyp_bpm
-
-        return bpm, beat_times, tempo_hypotheses
-    except Exception as exc:
-        import sys
-        import traceback
-        print(f"[bpm] madmom beat estimation failed: {exc}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        return None, [], []
-
-
-def _detect_madmom_downbeat_phase(
-    audio_path: str,
+def _downbeat_indices_from_times(
     beat_times: Sequence[float],
-    beats_per_bar: int = 4,
-    ffmpeg_bin: Optional[str] = None,
-    detection_config: Optional["AnalysisConfig"] = None,
-) -> Optional[int]:
-    """Detect downbeat phase offset using madmom's RNN downbeat tracker.
+    downbeat_times: Sequence[float],
+    tol_sec: float = 0.03,
+) -> List[int]:
+    """Map absolute downbeat times (Beat This) onto indices into beat_times.
 
-    Returns the phase offset (0 .. beats_per_bar-1) into *beat_times* that
-    best matches madmom's downbeat predictions, or None on failure.
-    """
-    if not _HAS_MADMOM or not audio_path or len(beat_times) < beats_per_bar:
-        return None
-
-    try:
-        import os
-
-        if ffmpeg_bin and os.path.isfile(ffmpeg_bin):
-            ffmpeg_dir = os.path.dirname(os.path.abspath(ffmpeg_bin))
-            current_path = os.environ.get("PATH", "")
-            if ffmpeg_dir not in current_path.split(os.pathsep):
-                os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path
-
-        proc = RNNDownBeatProcessor()
-        activations = proc(audio_path)
-
-        dbn = DBNDownBeatTrackingProcessor(
-            beats_per_bar=[beats_per_bar],
-            fps=100,
-        )
-        result = dbn(activations)
-
-        if result is None or len(result) == 0:
-            return None
-
-        # result is Nx2: [time, beat_position] where beat_position==1 means downbeat.
-        result = np.atleast_2d(result)
-        downbeat_times = [
-            float(row[0]) for row in result
-            if row.shape[0] >= 2 and int(round(row[1])) == 1
-        ]
-
-        if not downbeat_times:
-            return None
-
-        # Map each madmom downbeat to the nearest beat in our grid and
-        # accumulate votes for each phase offset.
-        cfg = detection_config
-        bt_arr = np.asarray(beat_times, dtype=np.float64)
-        tolerance = cfg.downbeat_tolerance if cfg and cfg.downbeat_tolerance is not None else 0.120
-        min_agreement = cfg.downbeat_min_agreement if cfg and cfg.downbeat_min_agreement is not None else 0.40
-        votes = [0] * beats_per_bar
-
-        for db_time in downbeat_times:
-            diffs = np.abs(bt_arr - db_time)
-            nearest_idx = int(np.argmin(diffs))
-            if diffs[nearest_idx] <= tolerance:
-                phase = nearest_idx % beats_per_bar
-                votes[phase] += 1
-
-        total_votes = sum(votes)
-        if total_votes == 0:
-            return None
-
-        best_phase = int(np.argmax(votes))
-        best_count = votes[best_phase]
-
-        if best_count / total_votes < min_agreement:
-            return None
-
-        import sys
-        print(
-            f"[bpm] madmom downbeat phase: {best_phase} "
-            f"(votes={votes}, total={total_votes})",
-            file=sys.stderr,
-        )
-        return best_phase
-
-    except Exception as exc:
-        import sys
-        print(f"[bpm] madmom downbeat detection failed: {exc}", file=sys.stderr)
-        return None
+    Beat This's downbeats are a subset of its beats (same float values); the
+    only thing that can shift indices afterward is _extend_beat_times_coverage
+    prepending/appending edge beats, which never alters interior values — so
+    nearest-value matching within a small tolerance is reliable. Pure DSP, no
+    modulo-phase voting needed (that heuristic — _infer_downbeat_indices below
+    — stays only for the no-downbeat-info fallback path)."""
+    if not beat_times or not downbeat_times:
+        return []
+    bt = np.asarray(beat_times, dtype=np.float64)
+    indices: List[int] = []
+    for db_time in downbeat_times:
+        idx = int(np.argmin(np.abs(bt - db_time)))
+        if abs(bt[idx] - db_time) <= tol_sec:
+            indices.append(idx)
+    return sorted(set(indices))
 
 
 def _score_octave_hypotheses(
@@ -373,13 +199,19 @@ def _score_octave_hypotheses(
     duration_sec: float,
     min_bpm: float = 55.0,
     max_bpm: float = 215.0,
-    tempo_hypotheses: Optional[List[Tuple[float, float]]] = None,
     detection_config: Optional["AnalysisConfig"] = None,
 ) -> Tuple[float, List[float]]:
     """Score octave-related BPM hypotheses and return the best BPM with adjusted beat times.
 
     Tests base_bpm * {0.5, 1.0, 2.0} against kick/snare onsets and autocorrelation.
     Returns (resolved_bpm, resolved_beat_times).
+
+    Only called on the autocorr_fallback path (D1) — when Beat This succeeds,
+    its grid is used as-is (analyzer.py gates this call to beat_source ==
+    "autocorr_fallback"). The madmom-tempo-hypothesis prior arm that used to
+    feed this function (a fourth score term reading madmom's comb-filter
+    tempo histogram) is deleted with the rest of D1/D2's madmom removal; only
+    the kick/snare/onset-autocorrelation DSP scoring remains.
     """
     if base_bpm is None or base_bpm <= 0.0 or duration_sec <= 0.0:
         return (base_bpm or 120.0), list(beat_times)
@@ -398,20 +230,12 @@ def _score_octave_hypotheses(
         bpm_out, factor = candidates[0]
         return bpm_out, _adjust_beat_times(beat_times, factor, global_onset, hop_time)
 
-    has_tempo_prior = tempo_hypotheses is not None and len(tempo_hypotheses) > 0
-
-    # Weight distribution — overridable via config.
+    # Weight distribution — overridable via config. No tempo-hypothesis prior
+    # arm since there is no model providing one on this (no-model) path.
     cfg = detection_config
-    if has_tempo_prior:
-        w_kick = cfg.octave_kick_weight if cfg and cfg.octave_kick_weight is not None else 0.35
-        w_snare = cfg.octave_snare_weight if cfg and cfg.octave_snare_weight is not None else 0.25
-        w_onset = cfg.octave_onset_weight if cfg and cfg.octave_onset_weight is not None else 0.20
-        w_prior = cfg.octave_prior_weight if cfg and cfg.octave_prior_weight is not None else 0.20
-    else:
-        w_kick = cfg.octave_kick_weight_no_prior if cfg and cfg.octave_kick_weight_no_prior is not None else 0.43
-        w_snare = cfg.octave_snare_weight_no_prior if cfg and cfg.octave_snare_weight_no_prior is not None else 0.31
-        w_onset = cfg.octave_onset_weight_no_prior if cfg and cfg.octave_onset_weight_no_prior is not None else 0.26
-        w_prior = 0.0
+    w_kick = cfg.octave_kick_weight_no_prior if cfg and cfg.octave_kick_weight_no_prior is not None else 0.43
+    w_snare = cfg.octave_snare_weight_no_prior if cfg and cfg.octave_snare_weight_no_prior is not None else 0.31
+    w_onset = cfg.octave_onset_weight_no_prior if cfg and cfg.octave_onset_weight_no_prior is not None else 0.26
 
     tol_factor = cfg.octave_tolerance if cfg and cfg.octave_tolerance is not None else 0.15
     tie_break = cfg.octave_tie_break_margin if cfg and cfg.octave_tie_break_margin is not None else 0.05
@@ -437,16 +261,10 @@ def _score_octave_hypotheses(
         # --- Onset autocorrelation at candidate SPB lag ---
         onset_score = _onset_autocorrelation_score(global_onset, spb, hop_time)
 
-        # --- Tempo hypothesis prior ---
-        prior_score = 0.0
-        if has_tempo_prior:
-            prior_score = _tempo_prior_score(c_bpm, tempo_hypotheses)
-
         total = (
             w_kick * kick_score
             + w_snare * snare_score
             + w_onset * onset_score
-            + w_prior * prior_score
         )
         scores.append((c_bpm, c_factor, total))
 
@@ -543,23 +361,6 @@ def _onset_autocorrelation_score(
     score = corr / norm
 
     return float(_clamp(score, 0.0, 1.0))
-
-
-def _tempo_prior_score(
-    candidate_bpm: float,
-    tempo_hypotheses: Optional[List[Tuple[float, float]]],
-) -> float:
-    """Score from madmom's tempo hypotheses. Returns the strength of the closest match."""
-    if not tempo_hypotheses:
-        return 0.0
-
-    best = 0.0
-    for t_bpm, t_strength in tempo_hypotheses:
-        # Match if within 3% of candidate.
-        if abs(t_bpm - candidate_bpm) / max(1.0, candidate_bpm) < 0.03:
-            best = max(best, t_strength)
-
-    return float(_clamp(best, 0.0, 1.0))
 
 
 def _adjust_beat_times(
@@ -810,7 +611,8 @@ def _build_beat_grid(
     mode_override: Optional[str] = None,
     min_bpm: float = 70.0,
     max_bpm: float = 180.0,
-    madmom_downbeat_phase: Optional[int] = None,
+    tracker_downbeat_times: Sequence[float] = (),
+    tracker_name: str = "autocorr_fallback",
     onset_to_peak_sec: float = 0.0,
     detection_config: Optional["AnalysisConfig"] = None,
 ) -> Optional[BeatGrid]:
@@ -848,12 +650,14 @@ def _build_beat_grid(
             if candidate_bpm is None or abs(bpm_from_grid - candidate_bpm) / max(1.0, candidate_bpm) > 0.02:
                 candidate_bpm = bpm_from_grid
 
-    # Prefer madmom's ML-based downbeat phase when available; fall back
-    # to the kick-correlation heuristic which can't distinguish beat 1
-    # from beat 3 in electronic music.
-    if madmom_downbeat_phase is not None and 0 <= madmom_downbeat_phase < 4:
-        downbeat_indices = [i for i in range(madmom_downbeat_phase, len(beat_times), 4)]
-    else:
+    # Prefer Beat This's own downbeat times (mapped onto this beat_times
+    # array by value) when available; fall back to the kick-correlation
+    # phase heuristic — which can't distinguish beat 1 from beat 3 in
+    # electronic music — only when the tracker gave no downbeat info at all
+    # (the autocorr_fallback path, or a tracker run with beats but zero
+    # detected downbeats).
+    downbeat_indices = _downbeat_indices_from_times(beat_times, tracker_downbeat_times)
+    if not downbeat_indices:
         downbeat_indices = _infer_downbeat_indices(beat_times, kick_events, detection_config)
     confidence = _estimate_grid_confidence(
         beat_times=beat_times,
@@ -875,4 +679,5 @@ def _build_beat_grid(
         bpm_derived=candidate_bpm,
         confidence=round(_clamp(confidence, 0.0, 1.0), 4),
         onset_to_peak_sec=round(float(max(0.0, onset_to_peak_sec)), 4),
+        tracker=tracker_name,
     )

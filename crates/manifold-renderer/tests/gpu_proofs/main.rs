@@ -21,6 +21,7 @@
 mod harness;
 
 mod alpha_contract;
+mod bug237_light_camera_commit_render_proof;
 mod camera_conformance;
 mod film_grain_decorrelation;
 mod fragment_storage;
@@ -38,4 +39,6 @@ mod render_scene_pcss;
 mod render_scene_shadow_cache;
 mod render_scene_shadows;
 mod scene_object_migration_round_trip;
+mod scene_viewport_navigate;
+mod scene_viewport_session;
 mod smoke;

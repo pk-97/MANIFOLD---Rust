@@ -1,0 +1,60 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "🌍 World" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Fog" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "+ Add Fog" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Fog" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.fog.density_track" } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 902.75, "y": 728.0 } }, "steps": 8 } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_driver_btn" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.mod.fog_density" } },
+      "check": "Exists"
+    }
+  }
+]

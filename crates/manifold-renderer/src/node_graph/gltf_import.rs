@@ -1027,6 +1027,15 @@ fn build_object_group(
             mesh_node
                 .params
                 .insert("source_bbox_radius".to_string(), float(bbox_radius));
+            // BUG-221: shift this object's OWN mesh so local (0,0,0)
+            // lands on ITS OWN bbox center (m.own_center), not the
+            // shared whole-scene center below — see build_object_group's
+            // doc comment on `transform_node` for the matching outer-
+            // transform compensation that keeps net world placement
+            // unchanged.
+            mesh_node.params.insert("translate_x".to_string(), float(-m.own_center[0]));
+            mesh_node.params.insert("translate_y".to_string(), float(-m.own_center[1]));
+            mesh_node.params.insert("translate_z".to_string(), float(-m.own_center[2]));
             group_nodes.push(mesh_node);
             None
         };
@@ -1438,6 +1447,21 @@ fn build_object_group(
         // transform sliders on the card by default: transforms are
         // performed via expose-what-you-need, gizmos (P6), or the group
         // face (D6), not a scene-editor slider wall.
+        //
+        // BUG-221: for a non-skinned object, the mesh source above was
+        // already shifted by -m.own_center (local (0,0,0) = this object's
+        // own visual center). This node's `pos` must place that recentered
+        // pivot at the SAME world position it sat at before the fix —
+        // `own_center - center` (own_center's location within the
+        // whole-scene recentered space) — so net placement at import time
+        // is unchanged and only the rotation pivot moves. A rotating
+        // `rot_*` on THIS node then spins the mesh about local (0,0,0),
+        // which is now the object's own visual center by construction.
+        // Skinned objects are excluded (no mesh-side shift was applied
+        // above — BUG-205's doctrine already excludes them from rigid
+        // transform_3d positioning; their world placement comes entirely
+        // from the joint palette), so they keep the pre-fix whole-scene
+        // `-center` recenter, unchanged.
         let transform_node_id = format!("transform_{k}");
         let transform_id = fresh_id();
         let mut transform_node = plain_node(
@@ -1446,9 +1470,18 @@ fn build_object_group(
             "node.transform_3d",
             &transform_node_id,
         );
-        transform_node.params.insert("pos_x".to_string(), float(-center[0]));
-        transform_node.params.insert("pos_y".to_string(), float(-center[1]));
-        transform_node.params.insert("pos_z".to_string(), float(-center[2]));
+        let transform_pos = if skinned_vertices_source.is_none() {
+            [
+                m.own_center[0] - center[0],
+                m.own_center[1] - center[1],
+                m.own_center[2] - center[2],
+            ]
+        } else {
+            [-center[0], -center[1], -center[2]]
+        };
+        transform_node.params.insert("pos_x".to_string(), float(transform_pos[0]));
+        transform_node.params.insert("pos_y".to_string(), float(transform_pos[1]));
+        transform_node.params.insert("pos_z".to_string(), float(transform_pos[2]));
         group_nodes.push(transform_node);
         group_wires.push(wire(transform_id, "transform", scene_object_id, "transform"));
 
@@ -1482,13 +1515,17 @@ fn build_object_group(
                 plain_node(anim_id, &anim_node_id, "node.gltf_animation_source", &anim_node_id);
             // The wire into transform_3d's pos_x/y/z port-shadows WINS
             // outright over that node's own static recenter param — see
-            // node.gltf_animation_source's `recenter_x` doc comment. Fold
-            // the same `-center` recenter offset in here so the animated
-            // object lands in the same recentered space as every static
-            // object in the scene.
-            anim_node.params.insert("recenter_x".to_string(), float(-center[0]));
-            anim_node.params.insert("recenter_y".to_string(), float(-center[1]));
-            anim_node.params.insert("recenter_z".to_string(), float(-center[2]));
+            // node.gltf_animation_source's `recenter_x` doc comment. BUG-221:
+            // this branch only runs when `skinned_vertices_source.is_none()`
+            // (the guard above), so the mesh source was already shifted by
+            // -m.own_center — fold the SAME `own_center - center` offset
+            // `transform_node` above uses (not the old whole-scene
+            // `-center`), so the animated object lands at the identical net
+            // world position, pivoting about its own visual center exactly
+            // like a static object of this same shape does.
+            anim_node.params.insert("recenter_x".to_string(), float(m.own_center[0] - center[0]));
+            anim_node.params.insert("recenter_y".to_string(), float(m.own_center[1] - center[1]));
+            anim_node.params.insert("recenter_z".to_string(), float(m.own_center[2] - center[2]));
 
             let mut translation_rows = Vec::new();
             let mut rotation_rows = Vec::new();
@@ -3680,6 +3717,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            own_center: [0.0, 0.0, 0.0],
         };
         let summary = GltfImportSummary {
             // Largest-vertex-first sort makes object 0 = Leaf (textured), 1 = Bark.
@@ -3921,6 +3959,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            own_center: [0.0, 0.0, 0.0],
         }
     }
 
@@ -3980,6 +4019,105 @@ mod tests {
         }
         seen_counts.sort_unstable();
         assert_eq!(seen_counts, vec![250, 900]);
+    }
+
+    /// BUG-221: composed per-object recenter. The mesh source is shifted
+    /// by `-own_center` (so local `(0,0,0)` becomes THIS object's own
+    /// visual center, not wherever the source file authored its local
+    /// origin) and the user-facing `node.transform_3d`'s `pos` is
+    /// repositioned to `own_center - scene_center`, so the two compose
+    /// back to the OLD whole-scene-only `-scene_center` recenter (net
+    /// world placement at import time is unchanged — only the rotation
+    /// pivot moves). A synthetic two-material summary with hand-picked
+    /// `own_center` values (a "minimal fixture constructed
+    /// programmatically" — no `.glb` on disk needed for this half of the
+    /// gate) makes every expected number computable by hand; the
+    /// companion `gpu-proofs` tests below prove the same claim against a
+    /// real multi-object asset by rendering it.
+    #[test]
+    fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
+        let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
+        big.own_center = [5.0, 1.0, -0.5];
+        let mut small = full_material(1, "Small", 1); // k=1
+        small.own_center = [-3.0, 0.0, 0.0];
+
+        let summary = GltfImportSummary {
+            materials: vec![big, small],
+            bbox_min: [-4.0, -1.0, -2.0],
+            bbox_max: [8.0, 3.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let center = [
+            (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+            (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+            (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+        ];
+        assert_eq!(center, [2.0, 1.0, -0.5], "sanity: scene-wide bbox center");
+
+        let path = std::path::Path::new("/tmp/synthetic_bug221_test.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+        let group = def.nodes.iter().find(|n| n.type_id == GROUP_TYPE_ID).expect("object 0's group");
+        let body = group.group.as_ref().expect("group has a body");
+        let mesh0 = body
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("mesh_0"))
+            .expect("mesh_0 node inside object 0's group");
+        let transform0 = body
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("transform_0"))
+            .expect("transform_0 node inside object 0's group");
+
+        fn float_param(node: &EffectGraphNode, name: &str) -> f32 {
+            match node.params.get(name) {
+                Some(SerializedParamValue::Float { value }) => *value,
+                other => panic!("expected a Float {name} param, got {other:?}"),
+            }
+        }
+
+        let translate = [
+            float_param(mesh0, "translate_x"),
+            float_param(mesh0, "translate_y"),
+            float_param(mesh0, "translate_z"),
+        ];
+        let pos = [
+            float_param(transform0, "pos_x"),
+            float_param(transform0, "pos_y"),
+            float_param(transform0, "pos_z"),
+        ];
+        let own_center = [5.0_f32, 1.0, -0.5];
+
+        for i in 0..3 {
+            assert!(
+                (translate[i] - (-own_center[i])).abs() < 1e-5,
+                "mesh_0.translate_{i} should be -own_center[{i}]: got {translate:?}"
+            );
+            assert!(
+                (pos[i] - (own_center[i] - center[i])).abs() < 1e-5,
+                "transform_0.pos_{i} should be own_center[{i}] - center[{i}]: got {pos:?}"
+            );
+            // The composed net offset must equal the OLD whole-scene-only
+            // recenter (-center) — this is the "layout preservation"
+            // claim at value level: mesh-side translate and outer pos
+            // cancel own_center out entirely, so net world placement is
+            // byte-identical to the pre-fix formula regardless of what
+            // own_center is.
+            assert!(
+                (translate[i] + pos[i] - (-center[i])).abs() < 1e-5,
+                "mesh_0.translate_{i} + transform_0.pos_{i} must equal -center[{i}] \
+                 (net world placement unchanged): translate={translate:?} pos={pos:?} center={center:?}"
+            );
+        }
+        // "Position ≈ the object's bounds center", expressed in the SAME
+        // recentered-scene coordinate space Position is shown in — a
+        // concrete, non-tautological check on top of the formula asserts
+        // above.
+        assert!((pos[0] - 3.0).abs() < 1e-5 && (pos[1] - 0.0).abs() < 1e-5 && (pos[2] - 0.0).abs() < 1e-5);
     }
 
     /// Regression for a duplicate-handle panic found via the IMPORT_ANYTHING_WAVE
@@ -5507,6 +5645,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            own_center: [0.0, 0.0, 0.0],
         };
         let summary = GltfImportSummary {
             materials: vec![mat(0, "Leaf", 1200, Some(0)), mat(1, "Bark", 800, None)],
@@ -7833,6 +7972,231 @@ mod tests {
         println!(
             "duplicate_demo_pair_renders_original_then_original_plus_offset_copy: wrote \
              {original_path} and {plus_path}"
+        );
+    }
+
+    // ── BUG-221 render proofs: composed per-object recenter ──
+    //
+    // Both tests below reconstruct the PRE-fix graph from the CURRENT
+    // (post-fix) `assemble_import_graph` output, rather than duplicating
+    // the old formula by hand: per-object recenter now splits into
+    // `mesh_k.translate_* = -own_center` and `transform_k.pos_* =
+    // own_center - center`, and BUG-221's own fix guarantees
+    // `translate + pos == -center` (the old whole-scene-only recenter) —
+    // proven independently, at value level, by
+    // `bug221_object_transform_recenters_about_own_bbox_center_not_scene_center`
+    // above. Reconstructing pre-fix behavior as `translate=0, pos =
+    // translate_old + pos_old` is therefore a faithful mechanical inverse
+    // of the fix, not a hand-typed duplicate of old code that could drift.
+
+    #[cfg(feature = "gpu-proofs")]
+    fn emissive_strength_test_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/EmissiveStrengthTest.glb")
+    }
+
+    /// Rebuild every object group's `mesh_k`/`transform_k` pair back to the
+    /// PRE-BUG-221 shape: `mesh_k.translate_* = 0`, `transform_k.pos_* =
+    /// (old mesh translate) + (old transform pos)`. See the module comment
+    /// above this function for why this reconstruction is faithful.
+    #[cfg(feature = "gpu-proofs")]
+    fn reconstruct_pre_bug221_fix(def: &EffectGraphDef) -> EffectGraphDef {
+        let mut out = def.clone();
+        for node in &mut out.nodes {
+            let Some(body) = node.group.as_mut() else { continue };
+            let mesh_handles: Vec<String> = body
+                .nodes
+                .iter()
+                .filter_map(|n| n.handle.clone())
+                .filter(|h| h.starts_with("mesh_"))
+                .collect();
+            for mesh_handle in mesh_handles {
+                let k = &mesh_handle["mesh_".len()..];
+                let transform_handle = format!("transform_{k}");
+                let Some(mi) = body.nodes.iter().position(|n| n.handle.as_deref() == Some(mesh_handle.as_str()))
+                else {
+                    continue;
+                };
+                let Some(ti) =
+                    body.nodes.iter().position(|n| n.handle.as_deref() == Some(transform_handle.as_str()))
+                else {
+                    continue;
+                };
+                for (mesh_param, transform_param) in
+                    [("translate_x", "pos_x"), ("translate_y", "pos_y"), ("translate_z", "pos_z")]
+                {
+                    let t = match body.nodes[mi].params.get(mesh_param) {
+                        Some(SerializedParamValue::Float { value }) => *value,
+                        _ => 0.0,
+                    };
+                    let p = match body.nodes[ti].params.get(transform_param) {
+                        Some(SerializedParamValue::Float { value }) => *value,
+                        _ => 0.0,
+                    };
+                    body.nodes[mi].params.insert(mesh_param.to_string(), float(0.0));
+                    body.nodes[ti].params.insert(transform_param.to_string(), float(t + p));
+                }
+            }
+        }
+        out
+    }
+
+    /// Mean absolute per-channel difference between two same-sized,
+    /// already-tonemapped RGBA8 buffers (`render_once`'s output format) —
+    /// same metric shape as `scene_object_migration_round_trip.rs`'s.
+    #[cfg(feature = "gpu-proofs")]
+    fn mean_abs_diff_u8(a: &[u8], b: &[u8]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        let sum: f64 = a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs() / 255.0).sum();
+        sum / a.len() as f64
+    }
+
+    /// BUG-221 layout-preservation gate: `EmissiveStrengthTest.glb` (6
+    /// distinct objects laid out in a world-space row, `translation.x`
+    /// from -6 to +6 — a real multi-object asset whose per-object
+    /// `own_center` differs substantially from the whole-scene center,
+    /// confirmed by direct measurement during triage) rendered at default
+    /// params (no rotation) must look the SAME whether every object's
+    /// pivot lives at its own visual center (post-fix, current code) or at
+    /// the shared whole-scene origin (pre-fix, reconstructed) — the fix is
+    /// a pivot-only change, never a placement change.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn bug221_layout_preserved_before_and_after_fix() {
+        let path = emissive_strength_test_fixture_path();
+        if !path.exists() {
+            eprintln!("bug221_layout_preserved_before_and_after_fix: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let (post_def, _report) = assemble_import_graph(&path).expect("assemble EmissiveStrengthTest");
+        let pre_def = reconstruct_pre_bug221_fix(&post_def);
+
+        let (w, h) = (512u32, 512u32);
+        let post_rgba = render_once(post_def, w, h, "bug221-post-fix-no-rotation");
+        let pre_rgba = render_once(pre_def, w, h, "bug221-pre-fix-no-rotation");
+
+        let out_dir = std::env::var("MESH_SNAP_OUT_DIR").unwrap_or_else(|_| "target/mesh-snap".to_string());
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+        let post_path = format!("{out_dir}/bug221_layout_post_fix.png");
+        let pre_path = format!("{out_dir}/bug221_layout_pre_fix.png");
+        image::save_buffer(&post_path, &post_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {post_path}: {e}"));
+        image::save_buffer(&pre_path, &pre_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {pre_path}: {e}"));
+
+        let diff = mean_abs_diff_u8(&post_rgba, &pre_rgba);
+        eprintln!("bug221_layout_preserved_before_and_after_fix: mean_abs_diff = {diff:.6}");
+        assert!(
+            diff < 0.01,
+            "BUG-221's fix must not change net world placement — pre-fix and post-fix renders \
+             at default (no-rotation) params should be pixel-comparable, got mean_abs_diff={diff:.6} \
+             (wrote {pre_path}, {post_path})"
+        );
+    }
+
+    /// BUG-221 pivot-behavior gate: a 45° `rot_y` applied to ONLY the
+    /// single object whose `own_center` sits farthest from the whole-scene
+    /// center (found the same way the summary-scan triage did —
+    /// `EmissiveStrengthTest.glb`'s cubes sit at world X from -6 to +6,
+    /// each translated away from the origin by its own glTF node, so one
+    /// of the five cube objects has a large own_center/scene-center
+    /// offset). Rotating only that one object (not the shared backdrop
+    /// mesh, which spans the whole scene and would confound the
+    /// comparison by visibly swinging in BOTH renders regardless of the
+    /// fix) isolates BUG-221's exact claim: pre-fix, that object's pivot
+    /// is the shared whole-scene origin, so a 45° spin swings it well out
+    /// of its original footprint; post-fix, its pivot is its own visual
+    /// center, so the same 45° spin rotates it in place.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
+        let path = emissive_strength_test_fixture_path();
+        if !path.exists() {
+            eprintln!("bug221_pivot_spins_in_place_after_fix_but_not_before: fixture not found at {}, skipping", path.display());
+            return;
+        }
+        let summary = gltf_load::gltf_import_summary(&path).expect("parse EmissiveStrengthTest for offset scan");
+        let center = [
+            (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
+            (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
+            (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
+        ];
+        // Same largest-vertex-count-first sort `build_import_graph` uses,
+        // so this index lines up with the `transform_{k}`/`mesh_{k}`
+        // handles in the built def.
+        let mut materials = summary.materials.clone();
+        materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
+        let (target_k, target) = materials
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                let mag = |m: &super::gltf_load::GltfMaterialInfo| {
+                    let d = [m.own_center[0] - center[0], m.own_center[1] - center[1], m.own_center[2] - center[2]];
+                    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+                };
+                mag(a).partial_cmp(&mag(b)).unwrap()
+            })
+            .expect("EmissiveStrengthTest has at least one material");
+        let offset = [
+            target.own_center[0] - center[0],
+            target.own_center[1] - center[1],
+            target.own_center[2] - center[2],
+        ];
+        let offset_mag = (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt();
+        eprintln!(
+            "bug221_pivot_spins_in_place_after_fix_but_not_before: rotating object {target_k} \
+             (own_center={:?}, scene center={center:?}, offset magnitude={offset_mag:.3})",
+            target.own_center
+        );
+        assert!(
+            offset_mag > 1.0,
+            "fixture must actually exercise a far-from-scene-center object for this gate to mean \
+             anything, got offset magnitude {offset_mag:.3}"
+        );
+
+        let (post_def, _report) = assemble_import_graph(&path).expect("assemble EmissiveStrengthTest");
+        let pre_def = reconstruct_pre_bug221_fix(&post_def);
+
+        fn rotate_one_object_y(mut def: EffectGraphDef, k: usize, radians: f32) -> EffectGraphDef {
+            let target_handle = format!("transform_{k}");
+            for node in &mut def.nodes {
+                let Some(body) = node.group.as_mut() else { continue };
+                for n in &mut body.nodes {
+                    if n.type_id == "node.transform_3d" && n.handle.as_deref() == Some(target_handle.as_str()) {
+                        n.params.insert("rot_y".to_string(), float(radians));
+                    }
+                }
+            }
+            def
+        }
+
+        let rot = std::f32::consts::FRAC_PI_4; // 45 degrees
+        let post_rot_def = rotate_one_object_y(post_def, target_k, rot);
+        let pre_rot_def = rotate_one_object_y(pre_def, target_k, rot);
+
+        let (w, h) = (512u32, 512u32);
+        let post_rot_rgba = render_once(post_rot_def, w, h, "bug221-post-fix-45deg");
+        let pre_rot_rgba = render_once(pre_rot_def, w, h, "bug221-pre-fix-45deg");
+
+        let out_dir = std::env::var("MESH_SNAP_OUT_DIR").unwrap_or_else(|_| "target/mesh-snap".to_string());
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+        let post_path = format!("{out_dir}/bug221_pivot_post_fix_45deg.png");
+        let pre_path = format!("{out_dir}/bug221_pivot_pre_fix_45deg.png");
+        image::save_buffer(&post_path, &post_rot_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {post_path}: {e}"));
+        image::save_buffer(&pre_path, &pre_rot_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {pre_path}: {e}"));
+
+        assert_ne!(
+            post_rot_rgba, pre_rot_rgba,
+            "pre-fix and post-fix 45deg-rotated renders must differ — different pivots must produce \
+             visibly different results, or the fix changed nothing"
+        );
+        println!(
+            "bug221_pivot_spins_in_place_after_fix_but_not_before: wrote {pre_path} and {post_path} \
+             — look at both: pre-fix should show cube(s) swung away from their unrotated footprint, \
+             post-fix should show every cube still occupying roughly its unrotated footprint, just \
+             with rotated faces"
         );
     }
 }

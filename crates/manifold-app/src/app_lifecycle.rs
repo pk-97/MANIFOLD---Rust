@@ -575,15 +575,145 @@ impl Application {
     /// default generator clip so it plays immediately — the "drop a model in
     /// and it renders" gesture.
     ///
-    /// The graph is assembled by
-    /// [`manifold_renderer::node_graph::gltf_import::assemble_import_graph`]
-    /// (one CPU parse here; the graph's `gltf_mesh_source`/`gltf_texture_source`
-    /// nodes re-parse on their own background threads at render time). The
-    /// layer install routes through [`ImportModelLayerCommand`], the clip
-    /// through the shared `AddClipCommand`.
+    /// `IMPORT_RESPONSIVENESS_DESIGN.md` D3: this is spawn+enqueue only. The
+    /// blocking work (optional Blender convert, the CPU glTF parse, and
+    /// `validate_def`'s trial build) runs on a background thread
+    /// (`crate::import_worker::run_import_worker`); this function never
+    /// blocks the UI thread. A drop while a worker is already in flight is
+    /// queued (`import_queue`), never run in parallel — one worker at a
+    /// time, drained FIFO by `drain_import_progress`.
     pub(crate) fn import_model_file(
         &mut self,
         path: &std::path::Path,
+        drop_beat: f32,
+        layer_under_cursor: Option<usize>,
+    ) {
+        if self.content_tx.is_none() {
+            return;
+        }
+
+        let req = crate::import_worker::ImportRequest {
+            path: path.to_path_buf(),
+            drop_beat,
+            layer_under_cursor,
+            blender_path_pref: self
+                .user_prefs
+                .get_string(crate::blender_import::BLENDER_PATH_PREF_KEY, ""),
+        };
+
+        if self.import_worker_busy {
+            self.import_queue.push_back(req);
+            return;
+        }
+        self.spawn_import_worker(req);
+    }
+
+    /// Spawn `import_worker::run_import_worker` on a background thread for
+    /// `req` and show the first stage toast immediately (D4) — never wait
+    /// for the worker's own first `Stage` event, so the toast appears in
+    /// the same frame the drop lands, not one frame later.
+    pub(crate) fn spawn_import_worker(&mut self, req: crate::import_worker::ImportRequest) {
+        self.import_worker_busy = true;
+        let device = self.validation_gpu_device();
+        let repo_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tx = self.import_progress_tx.clone();
+        let file_name = req
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "model".to_string());
+        let first_stage = if req
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|ext| crate::blender_import::is_blender_convertible_extension(&ext))
+        {
+            crate::import_worker::ImportStage::Converting
+        } else {
+            crate::import_worker::ImportStage::Parsing
+        };
+        self.ws
+            .ui_root
+            .toast
+            .show(format!("Importing {file_name} — {}…", first_stage.verb()));
+        std::thread::Builder::new()
+            .name("manifold-import-worker".into())
+            .spawn(move || crate::import_worker::run_import_worker(req, device, repo_root, tx))
+            .expect("failed to spawn import worker thread");
+    }
+
+    /// Drain the background-import progress channel — called once per frame
+    /// from the same site `tick_import_failures` is (`app_render.rs`).
+    /// `Stage` re-shows the toast; `Done` runs the (unchanged) UI-thread
+    /// command-dispatch tail; `Failed` shows an error toast — never silent.
+    /// On `Done`/`Failed`, starts the next queued import if any (D3).
+    pub(crate) fn drain_import_progress(&mut self) {
+        loop {
+            match self.import_progress_rx.try_recv() {
+                Ok(crate::import_worker::ImportProgress::Stage { path, stage }) => {
+                    let file_name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "model".to_string());
+                    self.ws
+                        .ui_root
+                        .toast
+                        .show(format!("Importing {file_name} — {}…", stage.verb()));
+                }
+                Ok(crate::import_worker::ImportProgress::Done {
+                    path,
+                    graph,
+                    report,
+                    conversion_report_line,
+                    drop_beat,
+                    layer_under_cursor,
+                }) => {
+                    self.finish_import_model(
+                        &path,
+                        *graph,
+                        report,
+                        conversion_report_line,
+                        drop_beat,
+                        layer_under_cursor,
+                    );
+                    self.import_worker_busy = false;
+                    if let Some(next) = self.import_queue.pop_front() {
+                        self.spawn_import_worker(next);
+                    }
+                }
+                Ok(crate::import_worker::ImportProgress::Failed { path, message }) => {
+                    let file_name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "model".to_string());
+                    log::warn!("[Import] {} failed: {message}", path.display());
+                    self.ws.ui_root.toast.show_with_accent(
+                        format!("Couldn't import {file_name}: {message}"),
+                        manifold_ui::color::RED_BASE,
+                    );
+                    self.import_worker_busy = false;
+                    if let Some(next) = self.import_queue.pop_front() {
+                        self.spawn_import_worker(next);
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    /// The UI-thread command-dispatch tail of a successful import — mint the
+    /// embedded-preset id, install the project-preset overlay, and dispatch
+    /// `ImportModelLayerCommand`/`AddClipCommand`. Unchanged from the old
+    /// synchronous `import_model_file`'s second half; now called from
+    /// `drain_import_progress` on `ImportProgress::Done` instead of inline.
+    fn finish_import_model(
+        &mut self,
+        path: &std::path::Path,
+        mut graph: manifold_core::effect_graph_def::EffectGraphDef,
+        report: manifold_renderer::node_graph::gltf_import::ImportReport,
+        conversion_report_line: Option<String>,
         drop_beat: f32,
         layer_under_cursor: Option<usize>,
     ) {
@@ -597,89 +727,6 @@ impl Application {
             return;
         };
         let content_tx = content_tx.clone();
-
-        // FBX/.obj/.dae (MANIFOLD is glTF-only internally, per
-        // IMPORT_ANYTHING_WAVE_DESIGN.md Lane W3): convert through the
-        // user's installed Blender first, then continue with the produced
-        // `.glb` through the exact same path a native glTF drop takes. This
-        // is a blocking subprocess call on the calling (UI) thread — the
-        // same shape `assemble_import_graph` below already uses for its
-        // blocking CPU parse, so it's one function seam, not new UI-thread
-        // plumbing.
-        let mut conversion_report_line: Option<String> = None;
-        let import_path: std::borrow::Cow<std::path::Path> = match path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-        {
-            Some(ext) if crate::blender_import::is_blender_convertible_extension(&ext) => {
-                let repo_root =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                match crate::blender_import::convert_via_blender(&self.user_prefs, &repo_root, path)
-                {
-                    Ok(outcome) => {
-                        conversion_report_line = Some(match &outcome.blender_version {
-                            Some(v) => format!(
-                                "converted from {} via Blender {v}",
-                                crate::blender_import::source_format_label(&ext)
-                            ),
-                            None => format!(
-                                "converted from {} via Blender",
-                                crate::blender_import::source_format_label(&ext)
-                            ),
-                        });
-                        std::borrow::Cow::Owned(outcome.glb_path)
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[Import] Blender conversion failed for {}: {e}",
-                            path.display()
-                        );
-                        return;
-                    }
-                }
-            }
-            _ => std::borrow::Cow::Borrowed(path),
-        };
-        let path = import_path.as_ref();
-
-        // Parse + assemble on the calling thread. Errors (no geometry with
-        // materials, unreadable file) abort the drop with a log rather than
-        // leaving a half-built layer behind.
-        let (mut graph, report) =
-            match manifold_renderer::node_graph::gltf_import::assemble_import_graph(path) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    log::warn!("[Import] glTF import failed for {}: {e}", path.display());
-                    return;
-                }
-            };
-
-        // The assembler is code and has bugs (GRAPH_TOOLING_DESIGN D6): run its
-        // output through the same validate_def pipeline the runtime loader
-        // takes BEFORE it reaches the project, and abort on the existing
-        // import-error path (log + return, same as the parse-failure branch
-        // above) rather than let a malformed def surface later as wrong pixels
-        // or a load failure far from the cause. Never a silent partial
-        // import — errors here are fatal to the drop, not warnings.
-        let validation_registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-        let validation_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
-        let validation = manifold_renderer::node_graph::validate_def(
-            &graph,
-            &validation_registry,
-            manifold_renderer::node_graph::ValidateKind::Generator,
-            &validation_device,
-        );
-        if !validation.is_valid() {
-            let messages: Vec<String> =
-                validation.errors.iter().map(|issue| issue.message.clone()).collect();
-            log::warn!(
-                "[Import] glTF import failed for {}: assembled graph failed validation: {}",
-                path.display(),
-                messages.join("; ")
-            );
-            return;
-        }
 
         let Some(meta) = graph.preset_metadata.as_ref() else {
             log::warn!("[Import] assembled glTF graph carries no preset metadata — aborting");

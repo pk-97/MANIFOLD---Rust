@@ -828,6 +828,28 @@ impl SetGraphNodeParamCommand {
         self.scope_path = scope_path;
         self
     }
+
+    /// Seed `previous_value` explicitly instead of letting `execute()`
+    /// self-capture it off whatever's in the graph at execute time.
+    ///
+    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D4): self-capture is
+    /// correct only when `execute()` runs exactly once, before any other
+    /// write has touched the same key — true for every existing call site
+    /// (one edit, one command). It is WRONG for a drag-cadence commit built
+    /// from a live-preview gesture: by the time the ONE commit command's
+    /// `execute()` actually runs (locally, or later on the content thread
+    /// once queued `MutateProjectLive` motion writes have already applied),
+    /// the graph already holds the POST-drag value, so self-capture would
+    /// record `previous_value == new_value` — an undo that restores
+    /// nothing. The caller already holds the true pre-drag value (captured
+    /// at `ParamSnapshot`, before any write); this lets it hand that value
+    /// to the command directly, so `execute()`'s self-capture guard
+    /// (`prev_already_captured`) skips and `undo()` restores the real
+    /// pre-drag state. `None` means "the key was absent before the drag."
+    pub fn with_previous(mut self, previous: Option<SerializedParamValue>) -> Self {
+        self.previous_value = Some(previous);
+        self
+    }
 }
 
 impl Command for SetGraphNodeParamCommand {
@@ -3110,6 +3132,122 @@ impl Command for AddSceneFogCommand {
 
     fn description(&self) -> &str {
         "Add Fog"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add Object Transform
+// (REALTIME_3D_DESIGN.md P6, D8 amendment "P6 entry state": an object whose
+// `transform` port is unwired — SCENE_BUILD_AND_GROUP_PARAMS P2 landed but
+// this particular `node.scene_object` was never given a `node.transform_3d`
+// — has nothing for the P6 gizmo to write. This command is what the gizmo's
+// first axis-grab dispatches before any `SetGraphNodeParamCommand` can
+// target the object: spawn a `node.transform_3d` at the scene's graph level
+// (identity params — the primitive's own defaults, so creating it alone is
+// never a visible surprise, same posture `AddSceneFogCommand` takes) and
+// wire its `transform` output into the target `node.scene_object`'s
+// `transform` input. Shaped exactly like `AddSceneEnvironmentCommand`
+// above; the one difference is the wire target is an object node, not
+// `render_scene` itself, and any PRE-EXISTING wire into that `transform`
+// port (shouldn't happen — the gizmo only offers this when the Vm traced
+// `transform: None` — but defended anyway, same posture
+// `override_camera_def` takes for its camera splice) is replaced rather
+// than left to dangle into two producers.
+// ---------------------------------------------------------------------------
+
+/// "Create transform" (P6): spawn a `node.transform_3d` at the scene's graph
+/// level and wire its `transform` output into `scene_object_node_id`'s
+/// `transform` input. One undo unit. `created_node_id()` reads back the new
+/// node's doc id right after `execute()` so the caller (the gizmo drag
+/// handler) can immediately target it with a `SetGraphNodeParamCommand` in
+/// the same input event — no round trip through a snapshot needed, since the
+/// id assignment (`max existing id + 1`) is exactly what `execute()` used.
+#[derive(Debug)]
+pub struct AddObjectTransformCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    scene_object_node_id: u32,
+    pos: (f32, f32),
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    created_node_id: Option<u32>,
+}
+
+impl AddObjectTransformCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        scene_object_node_id: u32,
+        pos: (f32, f32),
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            scene_object_node_id,
+            pos,
+            catalog_default,
+            prev: None,
+            created_node_id: None,
+        }
+    }
+
+    /// The new `node.transform_3d`'s doc id, valid after `execute()` ran
+    /// successfully (i.e. the target/scope resolved). `None` before
+    /// `execute()`, or if it failed to resolve (target/scope missing).
+    pub fn created_node_id(&self) -> Option<u32> {
+        self.created_node_id
+    }
+}
+
+impl Command for AddObjectTransformCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let object_id = self.scene_object_node_id;
+        let pos = self.pos;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let xf_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+            let params = BTreeMap::new();
+            let mut xf_node =
+                scene_build_node(xf_id, "node.transform_3d", Some("transform".to_string()), params);
+            xf_node.editor_pos = Some(pos);
+            nodes.push(xf_node);
+            wires.retain(|w| !(w.to_node == object_id && w.to_port == "transform"));
+            wires.push(scene_build_wire(xf_id, "transform", object_id, "transform"));
+
+            Some((prev, xf_id))
+        });
+        match result.flatten() {
+            Some((prev, xf_id)) => {
+                self.prev = Some(prev);
+                self.created_node_id = Some(xf_id);
+            }
+            None => {
+                self.prev = None;
+                self.created_node_id = None;
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+        self.created_node_id = None;
+    }
+
+    fn description(&self) -> &str {
+        "Add Object Transform"
     }
 }
 
@@ -7730,6 +7868,131 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    // ── REALTIME_3D_DESIGN P6: Add Object Transform (gizmo auto-create) ──
+
+    fn scene_object_graph() -> EffectGraphDef {
+        let render = EffectGraphNode {
+            id: 0,
+            node_id: manifold_core::NodeId::new("render"),
+            type_id: "node.render_scene".to_string(),
+            handle: Some("render".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let object = EffectGraphNode {
+            id: 1,
+            node_id: manifold_core::NodeId::new("obj"),
+            type_id: "node.scene_object".to_string(),
+            handle: Some("Statue".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![render, object],
+            wires: vec![EffectGraphWire {
+                from_node: 1,
+                from_port: "object".to_string(),
+                to_node: 0,
+                to_port: "object_0".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn add_object_transform_command_spawns_transform_3d_and_wires_it_into_scene_object() {
+        let (mut project, fx) = project_with_graph(scene_object_graph());
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = AddObjectTransformCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            (5.0, 6.0),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+        let xf_id = cmd.created_node_id().expect("command should resolve and create a node");
+
+        let def = graph_of(&project, &fx);
+        let xf = def.nodes.iter().find(|n| n.id == xf_id).expect("transform node exists");
+        assert_eq!(xf.type_id, "node.transform_3d");
+        assert_eq!(xf.editor_pos, Some((5.0, 6.0)));
+        assert!(def
+            .wires
+            .iter()
+            .any(|w| w.from_node == xf_id && w.from_port == "transform" && w.to_node == 1 && w.to_port == "transform"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn add_object_transform_then_gizmo_param_drag_round_trips_undo_redo() {
+        let (mut project, fx) = project_with_graph(scene_object_graph());
+        let before = graph_of(&project, &fx).clone();
+
+        let mut add_cmd = AddObjectTransformCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        add_cmd.execute(&mut project);
+        let xf_id = add_cmd.created_node_id().unwrap();
+        let after_create = graph_of(&project, &fx).clone();
+
+        // The gizmo's first move-axis drag: write pos_x on the freshly
+        // created transform atom (D8's drag-writes-the-transform-atom path).
+        let mut set_cmd = SetGraphNodeParamCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            xf_id,
+            "pos_x".to_string(),
+            SerializedParamValue::Float { value: 3.5 },
+            mirror_catalog_default(),
+        );
+        set_cmd.execute(&mut project);
+        let def = graph_of(&project, &fx);
+        let xf = def.nodes.iter().find(|n| n.id == xf_id).unwrap();
+        assert_eq!(xf.params.get("pos_x"), Some(&SerializedParamValue::Float { value: 3.5 }));
+
+        // Undo the drag: pos_x reverts (the transform atom itself, and its
+        // wire, stay — same as any other param undo).
+        set_cmd.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &after_create, "undo of the drag restores pre-drag graph");
+
+        // Redo the drag.
+        set_cmd.execute(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(
+            def.nodes.iter().find(|n| n.id == xf_id).unwrap().params.get("pos_x"),
+            Some(&SerializedParamValue::Float { value: 3.5 })
+        );
+
+        // Undo the drag AND the atom creation: back to the original,
+        // transform-less graph — the full round trip P6's gate names.
+        set_cmd.undo(&mut project);
+        add_cmd.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &before, "full undo restores the original graph");
     }
 
     // ── SCENE_SETUP_PANEL_DESIGN P4: Import Model into Scene (merge) ──

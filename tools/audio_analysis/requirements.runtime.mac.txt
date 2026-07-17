@@ -8,11 +8,20 @@ demucs==4.0.1
 torch<2.9
 torchaudio<2.9
 soundfile
+# Beat This (CPJKU) — beat/downbeat/tempo tracker, replaces madmom's
+# beat/downbeat/tempo arms (AUDIO_ANALYSIS_ACCURACY_DESIGN.md D1/D2, P2).
+# Code + published weights both MIT (verified 2026-07-17 from
+# github.com/CPJKU/beat_this's LICENSE file and README "## License" section).
+# Pin the version; re-verify the license text on any bump.
+beat-this==1.1.0
 # setuptools<81 keeps pkg_resources available (removed in 82+), required by madmom.
 setuptools<81
 # madmom 0.16.1 (PyPI) is broken on Python 3.10+.
 # Install from GitHub main which has the fix.
 # Requires --no-build-isolation (stage_runtime_mac.sh handles this).
+# Beats/downbeats/tempo no longer use madmom (see beat-this above, D1/D2) —
+# madmom stays only for the vocal onset CNN (onset_detection.py); full
+# removal is P6's job.
 madmom @ git+https://github.com/CPJKU/madmom.git@main
 # ADTOF drum transcription (PyTorch port of Zehren et al.)
 adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@main
@@ -20,3 +29,7 @@ pretty_midi
 librosa
 # Spotify Basic Pitch — polyphonic pitch detection for bass/synth/pad.
 basic-pitch
+# Eval harness (AUDIO_ANALYSIS_ACCURACY_DESIGN.md P1, tools/audio_analysis/eval/):
+# metrics.py uses mir_eval where its definitions match D10; pytest gates every phase.
+mir_eval
+pytest

@@ -1,0 +1,170 @@
+{
+  "label": "before",
+  "rows": [
+    {
+      "id": "liveshow_midnight_patience",
+      "split": "dev",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 131.0,
+      "n_truth_beats": 512,
+      "n_pred_beats": 432,
+      "beat_f1": 0.8898305084745762,
+      "beat_precision": 0.9722222222222222,
+      "beat_recall": 0.8203125,
+      "n_truth_downbeats": 128,
+      "n_pred_downbeats": 108,
+      "downbeat_f1": 0.17796610169491525,
+      "downbeat_precision": 0.19444444444444445,
+      "downbeat_recall": 0.1640625
+    },
+    {
+      "id": "liveshow_integer",
+      "split": "dev",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 132.0,
+      "n_truth_beats": 448,
+      "n_pred_beats": 460,
+      "beat_f1": 0.9295154185022027,
+      "beat_precision": 0.9173913043478261,
+      "beat_recall": 0.9419642857142857,
+      "n_truth_downbeats": 112,
+      "n_pred_downbeats": 115,
+      "downbeat_f1": 0.7665198237885462,
+      "downbeat_precision": 0.7565217391304347,
+      "downbeat_recall": 0.7767857142857143
+    },
+    {
+      "id": "liveshow_pattern",
+      "split": "dev",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 136.0,
+      "n_truth_beats": 192,
+      "n_pred_beats": 194,
+      "beat_f1": 0.6321243523316062,
+      "beat_precision": 0.6288659793814433,
+      "beat_recall": 0.6354166666666666,
+      "n_truth_downbeats": 48,
+      "n_pred_downbeats": 49,
+      "downbeat_f1": 0.6391752577319587,
+      "downbeat_precision": 0.6326530612244898,
+      "downbeat_recall": 0.6458333333333334
+    },
+    {
+      "id": "liveshow_stagnate",
+      "split": "heldout",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 150.0,
+      "n_truth_beats": 448,
+      "n_pred_beats": 451,
+      "beat_f1": 0.9966629588431591,
+      "beat_precision": 0.9933481152993349,
+      "beat_recall": 1.0,
+      "n_truth_downbeats": 112,
+      "n_pred_downbeats": 113,
+      "downbeat_f1": 0.9955555555555555,
+      "downbeat_precision": 0.9911504424778761,
+      "downbeat_recall": 1.0
+    },
+    {
+      "id": "liveshow_basalt",
+      "split": "heldout",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 153.8461538461536,
+      "n_truth_beats": 448,
+      "n_pred_beats": 807,
+      "beat_f1": 0.7139442231075697,
+      "beat_precision": 0.5551425030978935,
+      "beat_recall": 1.0,
+      "n_truth_downbeats": 112,
+      "n_pred_downbeats": 202,
+      "downbeat_f1": 0.0,
+      "downbeat_precision": 0.0,
+      "downbeat_recall": 0.0
+    },
+    {
+      "id": "liveshow_all_in_for_you",
+      "split": "dev",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 80.0,
+      "n_truth_beats": 240,
+      "n_pred_beats": 120,
+      "beat_f1": 0.5888888888888889,
+      "beat_precision": 0.8833333333333333,
+      "beat_recall": 0.44166666666666665,
+      "n_truth_downbeats": 60,
+      "n_pred_downbeats": 30,
+      "downbeat_f1": 0.2888888888888889,
+      "downbeat_precision": 0.43333333333333335,
+      "downbeat_recall": 0.21666666666666667
+    },
+    {
+      "id": "liveshow_oh_so_suddenly",
+      "split": "dev",
+      "domain": "electronic",
+      "tracker": "madmom",
+      "bpm": 134.0,
+      "n_truth_beats": 688,
+      "n_pred_beats": 540,
+      "beat_f1": 0.5162866449511401,
+      "beat_precision": 0.587037037037037,
+      "beat_recall": 0.46075581395348836,
+      "n_truth_downbeats": 172,
+      "n_pred_downbeats": 135,
+      "downbeat_f1": 0.41693811074918563,
+      "downbeat_precision": 0.4740740740740741,
+      "downbeat_recall": 0.37209302325581395
+    }
+  ],
+  "by_split": {
+    "dev": {
+      "beat_f1": {
+        "electronic": {
+          "mean": 0.7113291626296828,
+          "n": 5
+        },
+        "overall": {
+          "mean": 0.7113291626296828,
+          "n": 5
+        }
+      },
+      "downbeat_f1": {
+        "electronic": {
+          "mean": 0.45789763657069893,
+          "n": 5
+        },
+        "overall": {
+          "mean": 0.45789763657069893,
+          "n": 5
+        }
+      }
+    },
+    "heldout": {
+      "beat_f1": {
+        "electronic": {
+          "mean": 0.8553035909753643,
+          "n": 2
+        },
+        "overall": {
+          "mean": 0.8553035909753643,
+          "n": 2
+        }
+      },
+      "downbeat_f1": {
+        "electronic": {
+          "mean": 0.49777777777777776,
+          "n": 2
+        },
+        "overall": {
+          "mean": 0.49777777777777776,
+          "n": 2
+        }
+      }
+    }
+  }
+}

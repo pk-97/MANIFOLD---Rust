@@ -16,6 +16,11 @@ pub mod light;
 pub mod material;
 pub mod scene_object;
 pub mod transform;
+pub mod viewport_camera;
+pub mod viewport_gizmo;
+pub mod viewport_overlay;
+pub mod viewport_render;
+pub mod viewport_session;
 mod binding_migration;
 mod boundary_nodes;
 mod bound_graph;
@@ -67,6 +72,17 @@ pub use light::{Light, LightMode, ShadowSoftness};
 pub use material::{Material, MaterialKind};
 pub use scene_object::SceneObject;
 pub use transform::Transform;
+pub use viewport_camera::ViewportCamera;
+pub use viewport_overlay::{
+    ScreenLine, ViewportOverlayConfig, WorldLine, build_overlay_lines, camera_frustum_lines,
+    composite_overlay_lines_rgba8, grid_lines, light_billboard_lines, project_lines,
+};
+pub use viewport_gizmo::{
+    GizmoAxis, GizmoMode, GizmoTarget, drag_write, gizmo_lines, gizmo_target_for, move_drag_delta,
+    pick_axis, pick_object, rotate_drag_delta, scale_drag_delta,
+};
+pub use viewport_render::{ViewportRenderError, override_camera_def, render_viewport_frame};
+pub use viewport_session::ViewportSession;
 pub use boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
     Source,

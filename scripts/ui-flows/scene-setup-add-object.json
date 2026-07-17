@@ -18,7 +18,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Outliner"
+          "text": "Objects"
         }
       },
       "check": "Exists"

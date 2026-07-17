@@ -2,7 +2,7 @@
 
 # Audio Analysis Accuracy — measured detection, licensed models, sustained objects
 
-**Status:** APPROVED design, not built · 2026-07-08 · Fable
+**Status:** IN PROGRESS — P1–P4 SHIPPED (P4 landed 2026-07-18: truth-type-aware scoring; BUG-235 scorer calibration accepted, five-fixture kick 0.238→0.739; accepted production defaults kick thr×1.15 / snare ×1.3 / hat ×0.5 — dense F1 kick .858 snare .641 hat .303, heldout confirmed no recall regressions, hats +5.5pp; shape/cofire/phase knobs REJECTED for transcription, PARKED for trigger-selection layer; synth deferred n=1 coverage gap. Next: ADTOF bake-off addendum vs post-P4 numbers, then P5/P6) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -469,3 +469,67 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
   stands: the window is memory of *this* song; trained weights are a prior over
   *music* — beat/downbeat on unfamiliar material and drum-object naming remain
   model candidates (Beat This offline; Deferred #1 Stage 2).
+
+
+## Addendum 2026-07-18 — ADTOF bake-off ACTIVATED (Deferred #1 pulled forward; Fable, overnight orchestration)
+
+Peter's directive (2026-07-17, verbatim intent): *prove we are as good or better than
+ADTOF, or — if we fall short and can't measurably close — document the gap in numbers.*
+That is Deferred #1's "drum accuracy work resuming" trigger. The approach text in §7.1
+stands unchanged (Stage 1 DSP-on-drum-stem with per-track onset clustering; Stage 2 small
+own-trained CRNN with the demucs-separated-render domain-matching trick; both emit into
+the same Event JSON contract). This addendum adds the measured bar, the decision gate,
+and phasing.
+
+**The bar (post-P4 ADTOF, accepted defaults, truth-type-aware scoring):** dense-truth
+F1 kick **0.858** · snare **0.641** · hat **0.303** · perc **0.521**; calibrated
+five-fixture electronic kick mean **0.739**; liveshow sparse recall kick 0.77 / snare
+0.55 / hat 0.93. Candidates are scored by the identical harness, calibration, and
+truth-type rules — no bespoke scoring.
+
+**Decision gate (mechanical, per class):** candidate ≥ ADTOF − noise floor on HELDOUT
+dense electronic-domain truth (E-GMD/Slakh-drums heldout split + self-render holdbacks;
+liveshow heldout as sparse-recall confirmation) → that class ships the candidate and its
+ADTOF arm is deleted. Candidate falls short after ≤3 judged iteration rounds → the gap is
+recorded per class in the scoreboard and ADTOF stays until the commercialization gate
+forces Stage 2. Mixed outcomes ship mixed (per §7.1's own contract: kick may stay DSP
+while hats go learned — or vice versa).
+
+**Phasing:** **B1** — E-GMD fetch (license VERIFY-AT-FETCH) + Slakh drum-truth
+extraction with dev/heldout split; Stage-1 DSP implementation (cluster-first, per §7.1);
+first full scoreboard vs the bar. **B2** — judged iteration (Sonnet sweeps, orchestrator
+accepts; same rules as P4; ≤3 rounds/class). **B3** — verdict landing: per-class
+ship/keep decisions, BUG-069 status update, and — only if gaps remain that matter —
+a Stage-2 training proposal for Peter's explicit approval (compute + dataset build are
+his call; do NOT start training without it).
+
+Sequencing note: runs before P5/P6 by orchestrator decision — P6 (onset swap) touches the
+same drum path and should target whichever detector wins the bake-off, not the outgoing
+one.
+
+
+### B3 verdict (2026-07-18, Fable) — Stage 1 falls short; gap documented; Stage 2 is the parity path
+
+Two judged rounds (B1 `c566539a`, B2 `d55cb2f3`). Stage-1 DSP (cluster-first,
+dev-fitted signatures, real bugs fixed en route — including a wrong-input bug in the
+bake-off scorer itself) reaches, on dev dense truth, electronic slice: kick **0.311**
+vs ADTOF **0.702** · snare 0.250/0.653 (n=1) · hat **0.592 vs 0.426** (n=2, thin) ·
+perc 0.000/0.000 (n=1). Acoustic slice: kick 0.490/0.815, snare 0.492/0.774,
+hat 0.270/0.529, perc 0.256/0.553. Kick electronic < the 0.5 round-3 bar → verdict
+called without spending round 3; heldout not consumed (a dev shortfall is sufficient
+for a negative verdict; heldout spends only on ship candidates).
+
+**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; Stage-1's true kick ceiling is unknown until that's fixed and the kick line re-read. The verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug.) The per-class gap table above is the
+documented shortfall Peter asked for. The hat lead (n=2) and the lever-2 finding that
+fitted profiles regress on out-of-profile timbres both point the same way: signature
+labeling needs learned representations and much more per-class data — i.e. §7.1
+Stage 2 (small CRNN, permissive-only data, demucs-separated-render domain matching),
+which now has a quantified case: it must close kick +0.39, snare +0.40, perc +0.55
+electronic. **Stage 2 requires Peter's explicit approval (compute + dataset build)
+before any training starts** — decision pending. Meanwhile P6 (onset swap) targets
+the ADTOF path as the confirmed keeper, and BUG-069's ADTOF line remains open with
+the commercialization trigger unchanged.
+
+Stage-1 assets are NOT discarded: the multi-band onset front-end (live-kick logic,
+three real bug fixes in `spectral.py` land with this), per-track clustering, and the
+E-GMD Range-fetch infrastructure all feed Stage 2 directly.

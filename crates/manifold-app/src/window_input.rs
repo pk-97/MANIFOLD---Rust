@@ -39,6 +39,7 @@ use manifold_ui::node::Vec2;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
+use manifold_editing::command::Command;
 use crate::window_registry::WindowRole;
 
 /// One mouse-wheel notch in logical pixels. A `LineDelta` notch is this many
@@ -692,13 +693,21 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
-            // BUG-199: Audio Setup / Scene Setup docks — route through the
-            // generic `UIEvent::Scroll` pipeline (same mechanism the open-
-            // dropdown branch above uses) so the real app and the headless
-            // `Gesture::Scroll` harness share one path. `contains()` is
-            // already the open-check: a closed dock's rect is `Rect::ZERO`.
-            // No per-panel in-place offset here — the docks rebuild every
-            // frame, which is enough to re-apply the new scroll offset.
+            // BUG-199/BUG-223: Audio Setup / Scene Setup docks — route
+            // through the generic `UIEvent::Scroll` pipeline (same mechanism
+            // the open-dropdown branch above uses) so the real app and the
+            // headless `Gesture::Scroll` harness share one path. `contains()`
+            // is already the open-check: a closed dock's rect is
+            // `Rect::ZERO`. BUG-199's original fix assumed "the docks
+            // rebuild every frame" — false: `app_render.rs`'s
+            // `apply_ui_frame_invalidations` only rebuilds when
+            // `needs_rebuild`/`scroll_dirty` says so (BUG-223 escaped
+            // because the headless script harness always forces one rebuild
+            // on its first dispatched gesture, via `Inspector::
+            // skip_to_settled`'s `settled` flag — masking a scroll that
+            // updates internal offset state but never gets baked into node
+            // positions). Set `needs_rebuild` explicitly, same as the
+            // inspector branch below.
             if self.ws.ui_root.layout.scene_setup().contains(pos)
                 || self.ws.ui_root.layout.audio_setup().contains(pos)
             {
@@ -706,6 +715,7 @@ impl Application {
                     .ui_root
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                self.needs_rebuild = true;
                 return;
             }
 
@@ -855,6 +865,42 @@ impl Application {
             return;
         }
 
+        // P6 gizmo axis drag: claims the move outright, same precedence as
+        // the P5c orbit-drag block right below (an armed gizmo drag means
+        // `editor_mouse_input` deliberately did NOT arm `viewport_drag`, so
+        // this and that block are mutually exclusive per gesture).
+        if self.editor_viewport_gizmo_drag_move(logical_x, logical_y) {
+            return;
+        }
+
+        // P5c 3D viewport navigation: an active drag (started by a press
+        // inside `viewport_rect`, see `editor_mouse_input`) claims the move
+        // outright and routes it through `viewport_input` instead of canvas
+        // pan — same precedence tier as the dock-drag/timeline-scrub blocks
+        // above. The drag can leave the rect mid-gesture (fast mouse
+        // movement); it stays claimed until release, matching every other
+        // drag in this file.
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some((button, last_x, last_y)) = ed.viewport_drag
+        {
+            let dx = logical_x - last_x;
+            let dy = logical_y - last_y;
+            ed.viewport_drag = Some((button, logical_x, logical_y));
+            let shift = self.modifiers.shift;
+            if let Some(session) = ed.viewport_session.as_mut()
+                && let Some(gesture) =
+                    crate::viewport_input::classify_mouse_drag(button, shift, dx, dy)
+            {
+                crate::viewport_input::apply(
+                    session,
+                    gesture,
+                    &crate::viewport_input::ViewportInputSensitivity::default(),
+                );
+                ed.offscreen_dirty = true;
+            }
+            return;
+        }
+
         // Preview sidebar on the left, card lane on the right (matches the main
         // timeline's inspector docking right). Geometry from the same `Dock` the
         // present pass reads, so the canvas viewport tracks the dragged columns.
@@ -917,6 +963,201 @@ impl Application {
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.offscreen_dirty = true;
         }
+    }
+
+    /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
+    /// open 3D viewport, tried BEFORE the orbit-drag arm below — a gizmo
+    /// axis grab on the current selection first, then an object pick.
+    /// Returns `true` if the press was consumed (a drag armed, or a
+    /// pick/deselect happened) — the caller must not also arm an orbit
+    /// drag. A miss on empty space returns `false` so the existing
+    /// orbit-arm still fires (drag-on-nothing orbits, drag-on-an-object
+    /// doesn't — the usual DCC convention).
+    fn editor_viewport_gizmo_press(&mut self, cx: f32, cy: f32) -> bool {
+        let Some(manifold_core::GraphTarget::Generator(layer_id)) = self.watched_graph_target.clone() else {
+            return false;
+        };
+        let Some(def) = self.watched_def_cloned() else { return false };
+        let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
+            return false;
+        };
+        let (w, h, cam, mode, selected) = {
+            let Some(ed) = self.graph_editor.as_ref() else { return false };
+            let Some(session) = ed.viewport_session.as_ref() else { return false };
+            let (w, h) = session.dimensions();
+            (w, h, session.camera().to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected_object)
+        };
+
+        // Try the currently selected object's gizmo handles first.
+        if let Some(obj_id) = selected
+            && let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&scene, obj_id)
+            && let Some(axis) = manifold_renderer::node_graph::pick_axis(mode, &target, &cam, w, h, (cx, cy))
+        {
+            if let Some((_, _, driven)) = manifold_renderer::node_graph::drag_write(mode, axis, &target)
+                && driven
+            {
+                // D8: "the viewport never fights the graph" — refuse the
+                // drag (the axis already draws locked-gray via
+                // `gizmo_lines`); consume the press so it doesn't fall
+                // through to orbit.
+                return true;
+            }
+            if target.transform.is_none() {
+                // P6 entry state (D8 amendment): the object's `transform`
+                // port is unwired — create the atom now (one undo unit).
+                // The drag itself re-decodes the scene on every move
+                // (`editor_viewport_gizmo_drag_move`), so it picks up the
+                // freshly-wired atom without needing to remember its id
+                // here.
+                let Some(catalog) = crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
+                else {
+                    return true;
+                };
+                let mut cmd = manifold_editing::commands::graph::AddObjectTransformCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()),
+                    Vec::new(),
+                    obj_id,
+                    (0.0, 0.0),
+                    catalog,
+                );
+                cmd.execute(&mut self.local_project);
+                if cmd.created_node_id().is_none() {
+                    return true;
+                }
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                self.send_content_cmd(ContentCommand::Execute(boxed));
+            }
+            if let Some(ed) = self.graph_editor.as_mut() {
+                ed.viewport_gizmo_drag = Some(crate::workspace::GizmoDrag {
+                    axis,
+                    object_node_id: obj_id,
+                    layer_id,
+                    last_x: cx,
+                    last_y: cy,
+                });
+                ed.offscreen_dirty = true;
+            }
+            return true;
+        }
+
+        // No gizmo hit (or nothing selected yet) — try an object pick.
+        match manifold_renderer::node_graph::pick_object(&scene, &cam, w, h, (cx, cy)) {
+            Some(obj_id) => {
+                self.ws.ui_root.scene_setup_panel.set_selection(
+                    layer_id,
+                    manifold_ui::panels::scene_setup_panel::SceneSelection::Object(obj_id),
+                );
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.viewport_selected_object = Some(obj_id);
+                    ed.offscreen_dirty = true;
+                }
+                true
+            }
+            None => {
+                if let Some(ed) = self.graph_editor.as_mut()
+                    && ed.viewport_selected_object.take().is_some()
+                {
+                    ed.offscreen_dirty = true;
+                }
+                false
+            }
+        }
+    }
+
+    /// P6: feed one mouse-move delta through the armed gizmo drag (if any),
+    /// dispatching a `SetGraphNodeParamCommand` for the new axis value
+    /// through the SAME local-execute + `ContentCommand::Execute` path
+    /// `ui_bridge::project::dispatch_project`'s `SceneSetupParamChanged` arm
+    /// uses (P6's brief: that's the precedent for how the app routes
+    /// gizmo-written params). Re-decodes `SceneVm` fresh each call — an
+    /// editor-thread convenience read, not a hot-path allocation (the same
+    /// def is already cloned once per present frame for `sync_def`).
+    /// Returns `true` if a drag was armed and handled (whether or not the
+    /// axis turned out to be driven mid-drag, which just no-ops the write).
+    fn editor_viewport_gizmo_drag_move(&mut self, x: f32, y: f32) -> bool {
+        let Some(drag) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_gizmo_drag.clone()) else {
+            return false;
+        };
+        let Some(def) = self.watched_def_cloned() else { return true };
+        let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
+            return true;
+        };
+        let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&scene, drag.object_node_id) else {
+            // The object vanished mid-drag (deleted, or the graph edit that
+            // just ran wasn't self-consistent) — drop the drag rather than
+            // write against stale state (no-silent-fallbacks).
+            if let Some(ed) = self.graph_editor.as_mut() {
+                ed.viewport_gizmo_drag = None;
+            }
+            return true;
+        };
+        let (w, h, cam, mode) = {
+            let Some(ed) = self.graph_editor.as_ref() else { return true };
+            let Some(session) = ed.viewport_session.as_ref() else { return true };
+            let (w, h) = session.dimensions();
+            (w, h, session.camera().to_camera(), ed.viewport_gizmo_mode)
+        };
+        let Some((addr, current, driven)) =
+            manifold_renderer::node_graph::drag_write(mode, drag.axis, &target)
+        else {
+            return true;
+        };
+        if driven {
+            return true;
+        }
+        let mouse_delta = (x - drag.last_x, y - drag.last_y);
+        let new_value = match mode {
+            manifold_renderer::node_graph::GizmoMode::Move => {
+                manifold_renderer::node_graph::move_drag_delta(target.origin, drag.axis, &cam, w, h, mouse_delta)
+                    .map(|d| current + d)
+            }
+            manifold_renderer::node_graph::GizmoMode::Scale => {
+                manifold_renderer::node_graph::scale_drag_delta(target.origin, drag.axis, &cam, w, h, mouse_delta)
+                    .map(|d| (current + d).max(0.01))
+            }
+            manifold_renderer::node_graph::GizmoMode::Rotate => manifold_renderer::node_graph::rotate_drag_delta(
+                target.origin,
+                &cam,
+                w,
+                h,
+                (drag.last_x, drag.last_y),
+                (x, y),
+            )
+            .map(|d| current + d),
+        };
+        if let Some(new_value) = new_value {
+            let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                manifold_core::GraphTarget::Generator(drag.layer_id.clone()),
+                addr.node_doc_id,
+                addr.param_id.clone(),
+                manifold_core::effect_graph_def::SerializedParamValue::Float { value: new_value },
+                // `catalog_default` is only consulted by `with_target_graph_mut`
+                // when the target's def doesn't already exist in the project —
+                // impossible here (the drag only arms against a node the live
+                // def just resolved), so an empty def is a safe placeholder,
+                // same posture the panel's own drag-commit path would need if
+                // it ever hit this branch.
+                manifold_core::effect_graph_def::EffectGraphDef {
+                    version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+                    name: None,
+                    description: None,
+                    preset_metadata: None,
+                    nodes: Vec::new(),
+                    wires: Vec::new(),
+                },
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(&mut self.local_project);
+            self.send_content_cmd(ContentCommand::Execute(boxed));
+        }
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some(d) = ed.viewport_gizmo_drag.as_mut()
+        {
+            d.last_x = x;
+            d.last_y = y;
+            ed.offscreen_dirty = true;
+        }
+        true
     }
 
     /// `MouseInput` in the editor window: node-picker-modal routing first, then
@@ -1097,6 +1338,55 @@ impl Application {
                 }
             }
         }
+        // P5c 3D viewport: a release always clears any in-flight viewport
+        // drag first (so a mouse-up outside the rect — the drag left it, or
+        // the button changed — still ends the gesture cleanly), then a press
+        // inside `viewport_rect` on a bound button (left orbit, middle pan)
+        // starts one. Both consume the event outright, same precedence tier
+        // as the dock-drag/mini-timeline blocks above — the canvas never
+        // sees clicks the viewport claims.
+        // P6: a release also clears any in-flight gizmo axis drag — same
+        // "release always clears first" precedence the orbit/pan drag uses.
+        if state == ElementState::Released
+            && let Some(ed) = self.graph_editor.as_mut()
+            && ed.viewport_gizmo_drag.take().is_some()
+        {
+            ed.offscreen_dirty = true;
+            return;
+        }
+        if state == ElementState::Released
+            && let Some(ed) = self.graph_editor.as_mut()
+            && ed.viewport_drag.take().is_some()
+        {
+            ed.offscreen_dirty = true;
+            return;
+        }
+        if state == ElementState::Pressed
+            && matches!(button, MouseButton::Left | MouseButton::Middle)
+        {
+            let (cx, cy) = self
+                .graph_canvas
+                .as_ref()
+                .map(|c| c.cursor())
+                .unwrap_or((0.0, 0.0));
+            let in_viewport = self
+                .graph_editor
+                .as_ref()
+                .is_some_and(|ed| ed.viewport_session.is_some() && ed.viewport_rect.is_some_and(|r| r.contains(Vec2::new(cx, cy))));
+            if in_viewport {
+                // P6: Left tries a gizmo axis grab / object pick first — a
+                // hit consumes the press outright (no orbit-arm). Middle
+                // always pans (D7's binding), never gizmo.
+                if button == MouseButton::Left && self.editor_viewport_gizmo_press(cx, cy) {
+                    return;
+                }
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.viewport_drag = Some((button, cx, cy));
+                    ed.offscreen_dirty = true;
+                    return;
+                }
+            }
+        }
         if let Some(canvas) = self.graph_canvas.as_mut() {
             let window_size = self
                 .window_registry
@@ -1274,11 +1564,48 @@ impl Application {
         // The editor rebuilds its tree every present, so updating the scroll offset
         // here takes effect on the next build_inspector_in_rect. Cursor is tracked
         // by the canvas; column geometry from the same `Dock` the present reads.
-        let (cx, _cy) = self
+        let (cx, cy) = self
             .graph_canvas
             .as_ref()
             .map(|c| c.cursor())
             .unwrap_or((0.0, 0.0));
+        // P5c 3D viewport dolly: scroll while hovering the viewport pane
+        // dollies the editor camera instead of zooming the canvas. Checked
+        // before the inspector-scroll/canvas-zoom branches below — the two
+        // rects (far-left preview column vs. right card lane vs. the canvas
+        // in between) never overlap, so precedence order is cosmetic, but
+        // this keeps the viewport's own `apply` call site together with its
+        // press/drag/release handling in `editor_mouse_input`/
+        // `editor_cursor_moved`.
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some(rect) = ed.viewport_rect
+            && rect.contains(Vec2::new(cx, cy))
+            && let Some(session) = ed.viewport_session.as_mut()
+        {
+            // `LineDelta` is a physical mouse wheel notch → dolly. A trackpad
+            // reports `PixelDelta`: on macOS a pinch-to-zoom gesture arrives
+            // as a Ctrl-modified `PixelDelta` scroll (the OS-level pinch→
+            // scroll translation apps rely on absent a native magnify-gesture
+            // handler — this app has none), so Ctrl+PixelDelta is the pinch
+            // dolly and a bare PixelDelta is the two-finger trackpad pan.
+            let sens = crate::viewport_input::ViewportInputSensitivity::default();
+            let gesture = match delta {
+                MouseScrollDelta::LineDelta(_, y) => {
+                    Some(crate::viewport_input::classify_scroll(y * LINE_DELTA_PX))
+                }
+                MouseScrollDelta::PixelDelta(pos) if self.modifiers.ctrl => Some(
+                    crate::viewport_input::classify_trackpad_pinch_dolly(pos.y as f32),
+                ),
+                MouseScrollDelta::PixelDelta(pos) => Some(
+                    crate::viewport_input::classify_trackpad_pan(pos.x as f32, pos.y as f32),
+                ),
+            };
+            if let Some(gesture) = gesture {
+                crate::viewport_input::apply(session, gesture, &sens);
+            }
+            ed.offscreen_dirty = true;
+            return true;
+        }
         let card_x = self.graph_editor.as_ref().map(|ed| {
             let (s, sz) = {
                 let w = &self.window_registry.get(&window_id);
@@ -1609,6 +1936,12 @@ impl Application {
         //   Esc → leave the current group (pop one scope level), if
         //         the view is inside a group.
         //   `   → toggle the debug overlay HUD.
+        //   v   → toggle the P5c 3D viewport (`docs/REALTIME_3D_DESIGN.md`).
+        //         Only takes effect once the previewed node is a top-level
+        //         `node.render_scene` node (`app_render.rs`'s
+        //         `present_graph_editor_window` gates the actual session on
+        //         that + this bool) — pressing it otherwise just arms the
+        //         toggle for when a qualifying node is selected.
         // (Ctrl+G group / Ctrl+Shift+G ungroup are handled below.)
         if is_graph_editor {
             use winit::keyboard::{Key, NamedKey};
@@ -1631,6 +1964,43 @@ impl Application {
                 Key::Character(c) if c.as_str() == "`" => {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.toggle_debug_overlay();
+                    }
+                    handled = true;
+                }
+                Key::Character(c) if c.eq_ignore_ascii_case("v") => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.viewport_open = !ed.viewport_open;
+                        ed.viewport_drag = None;
+                        if !ed.viewport_open {
+                            // Tear down immediately — GPU resources release
+                            // this frame, not on some later poll.
+                            ed.viewport_session = None;
+                            ed.viewport_pane = None;
+                            ed.viewport_rect = None;
+                        }
+                    }
+                    handled = true;
+                }
+                // P6 (`docs/REALTIME_3D_DESIGN.md` D7 "industry-standard
+                // viewport bindings"): W/E/R cycles the gizmo mode
+                // move/rotate/scale — the Maya convention — only while the
+                // viewport is actually open (these letters are otherwise
+                // unbound in the editor, but scoping to "viewport open"
+                // keeps the door closed for a future collision).
+                Key::Character(c)
+                    if self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open)
+                        && (c.eq_ignore_ascii_case("w")
+                            || c.eq_ignore_ascii_case("e")
+                            || c.eq_ignore_ascii_case("r")) =>
+                {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.viewport_gizmo_mode = if c.eq_ignore_ascii_case("w") {
+                            manifold_renderer::node_graph::GizmoMode::Move
+                        } else if c.eq_ignore_ascii_case("e") {
+                            manifold_renderer::node_graph::GizmoMode::Rotate
+                        } else {
+                            manifold_renderer::node_graph::GizmoMode::Scale
+                        };
                     }
                     handled = true;
                 }

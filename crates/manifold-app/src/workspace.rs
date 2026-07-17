@@ -77,6 +77,75 @@ pub struct Workspace {
     /// playhead. Set on a press in the strip body, cleared on release; a move
     /// while set seeks the content thread.
     pub timeline_scrubbing: bool,
+
+    /// P5c (`docs/REALTIME_3D_DESIGN.md`): the persistent 3D-viewport
+    /// session backing the sidebar preview pane when the previewed node is a
+    /// top-level `node.render_scene` node and the viewport is toggled open
+    /// (the `v` editor shortcut, `window_input.rs`). `None` when the
+    /// viewport is closed, no render_scene node is previewed, or the
+    /// previewed node is nested inside a group (`override_camera_def` only
+    /// splices the camera into a node found in the TOP-LEVEL `def.nodes`
+    /// list — a known P5 constraint, not new to P5c). Only meaningful on the
+    /// graph-editor `Workspace`; the main window's never touches it.
+    pub viewport_session: Option<manifold_renderer::node_graph::ViewportSession>,
+    /// UI-device-local texture pane the viewport's composited RGBA8 blits
+    /// through — the same `TexturePane::local` + `blit_texture_pane`
+    /// pattern the audio spectrogram uses (`texture_pane.rs`), never an
+    /// IOSurface bridge: the session renders and the present pass presents
+    /// on the SAME (editor UI) thread, so there is no cross-thread hand-off
+    /// to bridge.
+    pub viewport_pane: Option<crate::texture_pane::TexturePane>,
+    /// User toggle (the `v` editor shortcut): true while the viewport is
+    /// requested open. The session itself only exists while this is `true`
+    /// AND the previewed node qualifies (see `viewport_session` doc) —
+    /// toggling this off always tears the session down immediately in the
+    /// same frame, releasing its GPU resources.
+    pub viewport_open: bool,
+    /// The viewport's screen rect in logical window pixels, as last computed
+    /// by the present pass — `None` when the viewport isn't showing this
+    /// frame. Input handlers (`window_input.rs`) hit-test against this to
+    /// route mouse events to `viewport_input::classify_*`/`apply` instead of
+    /// the canvas's own pan/zoom.
+    pub viewport_rect: Option<manifold_ui::Rect>,
+    /// Active viewport navigation drag: `(button, last_logical_x,
+    /// last_logical_y)`, set on a press inside `viewport_rect` while a
+    /// session is open, cleared on release. Drives the per-move delta fed to
+    /// `viewport_input::classify_mouse_drag`.
+    pub viewport_drag: Option<(winit::event::MouseButton, f32, f32)>,
+    /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): the currently active
+    /// gizmo mode (move/rotate/scale) — a plain toggle, not project state
+    /// (editor state per `docs/REALTIME_3D_DESIGN.md` §5's "Forbidden"
+    /// list: "viewport/gizmo state in `manifold-core`").
+    pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
+    /// The `node.scene_object` doc id the gizmo is attached to this session,
+    /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
+    /// cleared when the viewport closes or the def no longer resolves it
+    /// (`gizmo_target_for` returning `None`). Also routed into the Scene
+    /// Setup panel's own `SceneSelection` (`window_input.rs`) so Properties
+    /// follows a viewport click — one selection store, not two.
+    pub viewport_selected_object: Option<u32>,
+    /// Active gizmo axis drag: armed on a press that hits a gizmo handle
+    /// (`viewport_gizmo::pick_axis`), fed per-move deltas that dispatch
+    /// `SetGraphNodeParamCommand` writes (P6's undo-round-trips-per-write
+    /// gate), cleared on release. `transform_node_id` is resolved once at
+    /// arm time — either the object's existing `node.transform_3d` (D8) or
+    /// the id `AddObjectTransformCommand` just created (P6's "unwired
+    /// transform_n → offers to create the atom" entry state) — so every
+    /// subsequent move in the same gesture writes the SAME node without
+    /// re-resolving the wire each time.
+    pub viewport_gizmo_drag: Option<GizmoDrag>,
+}
+
+/// One active gizmo axis drag (P6). `transform_node_id` is resolved once at
+/// arm time (see `viewport_gizmo_drag`'s field doc) and reused for every
+/// `SetGraphNodeParamCommand` the gesture dispatches.
+#[derive(Debug, Clone)]
+pub struct GizmoDrag {
+    pub axis: manifold_renderer::node_graph::GizmoAxis,
+    pub object_node_id: u32,
+    pub layer_id: manifold_core::LayerId,
+    pub last_x: f32,
+    pub last_y: f32,
 }
 
 impl Workspace {
@@ -103,6 +172,14 @@ impl Workspace {
             surface_resized_this_frame: false,
             dock: manifold_ui::Dock::editor(),
             timeline_scrubbing: false,
+            viewport_session: None,
+            viewport_pane: None,
+            viewport_open: false,
+            viewport_rect: None,
+            viewport_drag: None,
+            viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode::default(),
+            viewport_selected_object: None,
+            viewport_gizmo_drag: None,
         }
     }
 }

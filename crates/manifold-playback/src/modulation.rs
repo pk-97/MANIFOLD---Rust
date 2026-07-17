@@ -2312,4 +2312,254 @@ mod tests {
             assert!(!stuck_at_top, "value plateaued near max instead of wrapping: {w:?}");
         }
     }
+
+    // ── UX-P3a (SCENE_PANEL_UX_DESIGN.md D8): exposure-on-demand → modulation ──
+    //
+    // The scene panel's mod button (`crates/manifold-ui/src/panels/
+    // scene_setup_panel.rs`) never targets the modulation pipeline directly —
+    // it dispatches the SAME `ToggleNodeParamExposeCommand` the graph editor's
+    // expose glyph uses, which mints a `UserParamBinding` (and its
+    // `ParamManifest` slot) on the layer's `gen_params`. Everything downstream
+    // — this file's `evaluate_all_drivers` included — is the existing system,
+    // untouched by P3a (D8's own claim). This test proves that claim isn't
+    // just asserted, it's true: expose an inner node's param through the real
+    // command, attach a driver to the id that command minted, and confirm
+    // `evaluate_all_drivers` moves it — the exact mechanism a scene row's mod
+    // button reaches, end to end, without needing the live UI/headless-render
+    // harness (which doesn't run a content-thread tick, so it can't observe
+    // per-frame driver output — see `scripts/ui-flows/
+    // scene-panel-ux-p3a-expose-modulate.json`'s own doc note).
+    #[test]
+    fn exposed_generator_param_is_driver_modulated_across_beats() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+        use manifold_core::effects::ParamConvert;
+        use manifold_core::{GraphTarget, NodeId};
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::graph::ToggleNodeParamExposeCommand;
+        use std::collections::BTreeMap;
+
+        // Minimal generator graph: one node with a "roughness" param, a
+        // stable `node_id` and `handle` (exposure needs both — see
+        // `ToggleNodeParamExposeCommand`'s own doc comment on why a handle
+        // is required to mint a readable user-param id).
+        let mut params = BTreeMap::new();
+        params.insert("roughness".to_string(), SerializedParamValue::Float { value: 0.3 });
+        let node = EffectGraphNode {
+            id: 10,
+            node_id: NodeId::new("mat_0"),
+            type_id: "node.pbr_material".to_string(),
+            handle: Some("mat_0".to_string()),
+            params,
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let mut layer = generator_layer();
+        layer.gen_params_or_init().graph = Some(def.clone());
+        let mut project = project_with(layer);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+
+        // The exact command the scene panel's mod button dispatches
+        // (`PanelAction::SceneSetupExposeParam`'s app-side handler,
+        // `ui_bridge/project.rs`).
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(layer_id),
+            NodeId::new("mat_0"),
+            10,
+            "mat_0".to_string(),
+            "roughness".to_string(),
+            true,
+            def,
+            "QS1694-W02-1-1 \u{b7} Roughness".to_string(),
+            0.01,
+            1.0,
+            0.3,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        cmd.execute(&mut project);
+
+        let gp = project.timeline.layers[0].gen_params().unwrap();
+        let bindings = gp.user_param_bindings();
+        assert_eq!(bindings.len(), 1, "expose must mint exactly one user param binding");
+        let user_param_id = bindings[0].id.clone();
+        assert!(
+            user_param_id.starts_with("user.mat_0.roughness"),
+            "id must be minted from the exposed node handle + param: {user_param_id}"
+        );
+        assert_eq!(bindings[0].label, "QS1694-W02-1-1 \u{b7} Roughness");
+        assert!(
+            gp.params.get(&user_param_id).is_some(),
+            "append_user_binding must grow the manifest with a slot for the new id"
+        );
+
+        // Attach a driver to the SAME id the expose command minted — the
+        // scene row's card, one click later in the real app.
+        let driver = manifold_core::effects::ParameterDriver {
+            param_id: user_param_id.clone().into(),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.3,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: None,
+            is_paused_by_user: false,
+        };
+        project.timeline.layers[0].gen_params_mut().unwrap().drivers = Some(vec![driver]);
+
+        // Quarter-note period (1 beat): beat 0.25 sits at the sine's quarter
+        // phase (peak), beat 0 at its zero-crossing (midpoint) — a beat pair
+        // guaranteed apart by symmetry, unlike e.g. 0 vs 0.5 (both land on a
+        // zero-crossing of a period-1 sine and alias to the same value).
+        assert!(evaluate_all_drivers(&mut project, Beats(0.0)), "driver must report itself active");
+        let v0 = project.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
+        evaluate_all_drivers(&mut project, Beats(0.25));
+        let v1 = project.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
+
+        assert!(
+            (v0 - v1).abs() > 0.05,
+            "a driver on the exposed param must move its value across beats: {v0} at beat 0, {v1} at beat 0.25"
+        );
+    }
+
+    /// UX-P3a's round-trip gate (BUG-036 rule): save → reload → the exposed
+    /// scene param still modulates AFTER reload, asserted — not assumed. The
+    /// param manifest's deserialize-then-reconcile split (BUG-036's own
+    /// class) is exactly the kind of thing that silently drops a freshly-
+    /// appended `UserParamBinding`'s manifest slot; round-tripping through
+    /// the REAL `serde_json` + `load_project_from_json` path (same migration
+    /// + reconcile pass a `.manifold` file goes through, per
+    /// `legacy_route_migrates_and_the_round_trip_survives_save_and_reload`'s
+    /// precedent in `manifold-io`) is the only honest way to prove it.
+    #[test]
+    fn exposed_generator_param_survives_save_reload_and_still_modulates() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+        use manifold_core::effects::ParamConvert;
+        use manifold_core::{GraphTarget, NodeId};
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::graph::ToggleNodeParamExposeCommand;
+        use std::collections::BTreeMap;
+
+        let mut params = BTreeMap::new();
+        params.insert("roughness".to_string(), SerializedParamValue::Float { value: 0.3 });
+        let node = EffectGraphNode {
+            id: 10,
+            node_id: NodeId::new("mat_0"),
+            type_id: "node.pbr_material".to_string(),
+            handle: Some("mat_0".to_string()),
+            params,
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let mut layer = generator_layer();
+        layer.gen_params_or_init().graph = Some(def.clone());
+        let mut project = project_with(layer);
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+
+        let mut cmd = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Generator(layer_id),
+            NodeId::new("mat_0"),
+            10,
+            "mat_0".to_string(),
+            "roughness".to_string(),
+            true,
+            def,
+            "QS1694-W02-1-1 \u{b7} Roughness".to_string(),
+            0.01,
+            1.0,
+            0.3,
+            ParamConvert::Float,
+            false,
+            Vec::new(),
+        );
+        cmd.execute(&mut project);
+        let user_param_id =
+            project.timeline.layers[0].gen_params().unwrap().user_param_bindings()[0].id.clone();
+
+        project.timeline.layers[0].gen_params_mut().unwrap().drivers = Some(vec![
+            manifold_core::effects::ParameterDriver {
+                param_id: user_param_id.clone().into(),
+                beat_division: BeatDivision::Quarter,
+                waveform: DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.3,
+                trim_min: 0.0,
+                trim_max: 1.0,
+                reversed: false,
+                free_period_beats: None,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            },
+        ]);
+
+        // ── Save → reload through the REAL serde + migrate/reconcile path ──
+        let json = serde_json::to_string(&project).expect("project serializes");
+        let mut reloaded =
+            manifold_io::loader::load_project_from_json(&json).expect("reloaded project parses");
+
+        let gp = reloaded.timeline.layers[0].gen_params().expect("gen_params survives reload");
+        let bindings = gp.user_param_bindings();
+        assert_eq!(bindings.len(), 1, "the exposed binding survives reload");
+        assert_eq!(bindings[0].id, user_param_id, "same stable id after reload");
+        assert_eq!(
+            bindings[0].label, "QS1694-W02-1-1 \u{b7} Roughness",
+            "the <ObjectName> · <ParamLabel> name survives reload"
+        );
+        assert!(
+            gp.params.get(&user_param_id).is_some(),
+            "BUG-036 class check: the manifest slot for the reloaded binding must exist, \
+             not just the binding record — a partial reconcile silently drops this"
+        );
+        assert_eq!(
+            gp.drivers.as_ref().map(|d: &Vec<_>| d.len()),
+            Some(1),
+            "the driver targeting the exposed param survives reload"
+        );
+
+        // ── Still modulates AFTER reload — not assumed. ──
+        assert!(
+            evaluate_all_drivers(&mut reloaded, Beats(0.0)),
+            "driver must still report itself active after reload"
+        );
+        let v0 = reloaded.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
+        evaluate_all_drivers(&mut reloaded, Beats(0.25));
+        let v1 = reloaded.timeline.layers[0].gen_params().unwrap().params.get(&user_param_id).unwrap().value;
+        assert!(
+            (v0 - v1).abs() > 0.05,
+            "the reloaded driver must still move the exposed param's value: {v0} at beat 0, {v1} at beat 0.25"
+        );
+    }
 }
