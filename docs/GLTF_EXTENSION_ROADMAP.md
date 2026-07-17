@@ -1,0 +1,52 @@
+# glTF Extension Coverage Roadmap
+
+**Status:** PROPOSED 2026-07-17 — Lane W6 of `docs/IMPORT_ANYTHING_WAVE_DESIGN.md` (analysis only, no code). Every priority tier below is a recommendation for Peter's review, not a decision — per `discuss-before-capturing-to-doc`, nothing here is scheduled until he calls it.
+
+**Scope and method:** this table covers exactly the extensions with verified evidence in this repo — the `gltf`/`gltf-json` 1.4.1 crate's own feature list (`~/.cargo/registry/.../gltf-1.4.1/Cargo.toml`, `gltf-json-1.4.1/src/extensions/mod.rs`), `MANIFOLD_SUPPORTED_EXTENSIONS` and the raw-JSON-sniffed extension reads in `crates/manifold-renderer/src/node_graph/gltf_load.rs`, and every extension named in a `xfail` note in `tests/fixtures/gltf/khronos/manifest.json`. No extension is listed here on recollection alone — deliberately, so this roadmap doesn't assert coverage claims this session couldn't check. Extensions that exist in the wild but appear in none of those three sources (e.g. Draco mesh compression, KHR_xmp_json_ld, EXT_texture_avif) are out of scope for this pass; flagging them is future work once a store asset or crate-feature bump actually surfaces one.
+
+**"Plausible on store assets" is a judgment call**, informed by what each extension is *for* (texture compression and geometry compression are default export options on most marketplaces; single-lobe material effects like sheen/anisotropy are common; some — diffuse transmission, mesh quantization — are optional exporter settings, present but not universal). Treat the tier column as a starting point for triage, not a committed backlog order.
+
+## The one finding that outranks every row below
+
+**MANIFOLD has no generic "this asset uses an extension we don't implement" report.** `document.extensions_used()` — the glTF field listing every *optional* extension an asset carries — is never called anywhere in `crates/manifold-renderer/src/node_graph/`. The only place unsupported extensions get caught is the `extensionsRequired` veto (`gltf_load.rs:110-116`), which by spec definition only fires when an asset says it *cannot* render correctly without an extension. Any *optional* material extension we don't implement — `KHR_materials_diffuse_transmission` today, and every extension the crate or Khronos ratifies after this doc is written — silently degrades to plain PBR with zero mention to the user. That is exactly the failure mode `docs/IMPORT_ANYTHING_WAVE_DESIGN.md`'s product bar rules out ("never wrong, never silent").
+
+The fix is generic and one-time: after import, diff `document.extensions_used()` against a `MANIFOLD_RECOGNIZED_EXTENSIONS` set (the union of `MANIFOLD_SUPPORTED_EXTENSIONS` plus every raw-JSON-sniffed extension `gltf_load.rs` reads without a required-list entry, e.g. `EXT_mesh_gpu_instancing`) and push one `report_lines` entry per unrecognized name, using the same `ImportReport::report_lines` channel the animation-drop paths already use (`gltf_load.rs:1265`, folded in by `gltf_import.rs:1849`). This retroactively covers `KHR_materials_diffuse_transmission` and every future gap without a per-extension patch. Filed as **BUG-213** (tier 1 below).
+
+## Roadmap table
+
+| Extension | Current MANIFOLD status | Plausible on store assets? | Tier | Notes |
+|---|---|---|---|---|
+| `EXT_mesh_gpu_instancing` | **Rendered** (full transform-instancing support, `gltf_load.rs:278-394`) but **missing from `MANIFOLD_SUPPORTED_EXTENSIONS`** — an asset marking it `extensionsRequired` (spec-legal for instancing-dependent geometry) would be falsely rejected as unsupported | Yes — common on scattered-vegetation / crowd / prop-array exports (Blender's glTF instancing exporter, Sketchfab scenes) | **1** (one-line fix, false-reject bug) | Filed as **BUG-214**. `SimpleInstancing.glb` in the local Khronos set lists it under `extensionsUsed`, not `extensionsRequired`, so today's fixture corpus never triggers the false-reject — latent, not yet observed in the wild. |
+| `KHR_materials_diffuse_transmission` (+ `KHR_materials_volume_scatter` for the one asset that pairs them) | Deferred by design (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md` §5) — renders as plain opaque, no crash, **no report line** (see finding above) | Moderate — skin, wax, leaves, thin cloth; a real but secondary material family next to sheen/clearcoat/transmission (all already shipped) | **1** for the report-line half (rides on BUG-213's generic fix); **2** for the full BTDF lobe itself | Tracked as **BUG-213**. 4 Khronos assets xfail on this today (`DiffuseTransmissionPlant/Teacup/Test.glb`, `ScatteringSkull.glb`). |
+| `KHR_mesh_quantization` + `EXT_meshopt_compression` | Correctly vetoed, clean message (`BUG-187`, already tracked, OPEN) | High — meshopt/quantization is a default Sketchfab/Fab "optimize for web" export toggle; more common than any single material extension on this list | **1** | No new entry needed — BUG-187 exists; this roadmap escalates its priority relative to the material-extension rows, since geometry compression gates the asset loading AT ALL (not a degraded-but-visible material). |
+| `KHR_animation_pointer` / `KHR_node_visibility` | Crate-level parse failure before MANIFOLD's importer runs (`BUG-170`, already tracked, OPEN — this wave's Lane W4) | Moderate — animation-pointer is a newer authoring pattern (procedural material/visibility animation), growing in exporter support | **1** | No new entry needed — BUG-170 exists and Lane W4 targets it directly. |
+| `KHR_materials_variants` | **Loads correctly** (base material renders — the extension only adds swap metadata) but **variant-switching is not implemented**; MANIFOLD never reads the `KHR_materials_variants` extension data at all | Low-moderate — mostly configurator-style assets (shoe/furniture color options) | **2** | Degrades gracefully today (first/base material always looks right), so this doesn't violate the "loads and looks good" bar — it's a missing *feature*, not a coverage gap. No report line either, but lower urgency than diffuse-transmission since nothing looks wrong. |
+| `KHR_texture_basisu` (Basis Universal / KTX2) | Gated behind the crate's `allow_empty_texture` feature, which MANIFOLD does not enable — an asset requiring it hits the clean `extensionsRequired` veto today | Moderate — an opt-in "compressed" download variant on some marketplaces, not the default | **2** | No local fixture exercises this; flagged for awareness, not scheduled. |
+| `MSFT_texture_dds` | Same as `KHR_texture_basisu` — allowlisted by the crate, not enabled, cleanly vetoed | Low — legacy DirectX format, mostly pre-existing real-time-engine asset libraries rather than general marketplace downloads | **3** | No local fixture; lowest priority of the texture-format gaps. |
+| `KHR_materials_sheen` / `iridescence` / `anisotropy` / `dispersion` / `clearcoat` / `pbrSpecularGlossiness` / `specular` / `ior` / `volume` / `transmission` / `unlit` / `emissive_strength` / `texture_transform` / `lights_punctual` | **Shipped** — full spec surface, certified against the Khronos suite (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md`, `docs/GLB_CONFORMANCE_STATUS.md`'s 134 `expect_pass` assets) | — | done | Listed for completeness — this is the "already covers the common case" baseline the roadmap builds on. |
+| `NodePerformanceTest`-class scale limits (not an extension — `OBJECT_SAFETY_MAX` design bound) | Correctly rejected by design (`BUG-173`, OPEN) | N/A — mega-scene stress test, not a real downloaded asset | **torture-test-never-ship** | Not extension coverage; listed because it's one of the 14 current xfails and needed a classification. |
+| Mesh primitive-mode bug (`MeshPrimitiveModes.gltf`) | A real bug, not an extension gap: the first non-`TRIANGLES` primitive on an object aborts the WHOLE object's geometry via `?` (`BUG-188`, OPEN) | Moderate — CAD-exported or debug-visualization assets sometimes mix point/line helper geometry with real meshes | **1** (real correctness bug — no new entry, BUG-188 exists) | Not extension coverage either; included for the same reason as BUG-173. |
+| `VirtualCity.glb`'s non-convergence (`BUG-165`, OPEN) | A throughput/convergence bug (167 materials/147 textures), not an extension gap | N/A | not roadmap — tracked separately | Included only to account for all 14 current xfails; no extension-coverage action follows from it. |
+
+## Reclassification of the 14 current xfails
+
+Verified against `docs/GLB_CONFORMANCE_STATUS.md` as of this doc's writing (148 assets: 134 `expect_pass`, 14 xfail across 7 reasons — **not** the wave doc's opening "92 xfails," which was the count at an earlier point in the conformance campaign and has since been burned down by `GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E6; per `verify-built-state-against-git`, the number in this doc's own intro is stale and this table is the current truth). None of the 14 promote to `expect_pass` in this session — each was independently investigated (not fixed) by prior sessions and already carries a precise `BUG-NNN`/named reason, so there is nothing to "actually-fix-already" here; the reclassification this lane performs is tier assignment, done above.
+
+| Reason | Assets | Classification |
+|---|---|---|
+| `BUG-165` | 1 | tracked bug, not extension coverage |
+| `BUG-170` | 5 | roadmap-tier 1 — Lane W4 (this wave) |
+| `BUG-173` | 1 | torture-test-never-ship |
+| `BUG-186` | 1 | roadmap-tier 1 — Lane W1 (this wave) |
+| `BUG-187` | 1 | roadmap-tier 1 — escalated priority (geometry compression), no lane yet |
+| `BUG-188` | 1 | tracked bug, not extension coverage |
+| `diffuse-transmission-deferred` | 4 | roadmap-tier 1 (report line) / tier 2 (full lobe) — BUG-213 |
+
+## New backlog entries filed by this lane
+
+- **BUG-213** — no generic unsupported-optional-extension report line (the finding above); also the tracking home for `KHR_materials_diffuse_transmission`'s missing report line specifically.
+- **BUG-214** — `EXT_mesh_gpu_instancing` implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS`, a latent false-reject risk for any asset marking it `extensionsRequired`.
+
+## Explicitly out of scope for this roadmap
+
+Per `docs/IMPORT_ANYTHING_WAVE_DESIGN.md` §"Explicitly OUT of this wave": huge-file OOM streaming (BUG-180) and animated-ancestor root motion (BUG-209) are architecture-level gaps, not extension-coverage gaps — they don't belong in this table and aren't reclassified here.
