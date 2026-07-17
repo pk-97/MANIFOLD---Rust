@@ -228,6 +228,50 @@ fn mat4_row(joint: usize, m: &gltf_load::Mat4) -> Vec<f32> {
     row
 }
 
+/// Push one Vec3 track row in the widened schema
+/// `[..prefix, time, val_x,val_y,val_z, mode, in_x,in_y,in_z, out_x,out_y,out_z]`
+/// (IMPORT_ANYTHING_WAVE_DESIGN.md W2) — `prefix` is whatever leading key
+/// columns the caller groups rows by (`[clip]` for the A1 rigid path,
+/// `[clip, joint]` for the A2 skeleton path); `gltf_anim_shared`'s samplers
+/// read the mode/tangent columns relative to the value column, so every
+/// caller gets STEP/CUBICSPLINE support for free by routing through this.
+fn push_vec3_row(
+    rows: &mut Vec<Vec<f32>>,
+    prefix: &[f32],
+    time: f32,
+    value: [f32; 3],
+    mode: gltf_load::GltfInterp,
+    in_tangent: [f32; 3],
+    out_tangent: [f32; 3],
+) {
+    let mut row = prefix.to_vec();
+    row.push(time);
+    row.extend_from_slice(&value);
+    row.push(mode.to_f32());
+    row.extend_from_slice(&in_tangent);
+    row.extend_from_slice(&out_tangent);
+    rows.push(row);
+}
+
+/// Same as [`push_vec3_row`] for a `[x, y, z, w]` quaternion track.
+fn push_quat_row(
+    rows: &mut Vec<Vec<f32>>,
+    prefix: &[f32],
+    time: f32,
+    value: [f32; 4],
+    mode: gltf_load::GltfInterp,
+    in_tangent: [f32; 4],
+    out_tangent: [f32; 4],
+) {
+    let mut row = prefix.to_vec();
+    row.push(time);
+    row.extend_from_slice(&value);
+    row.push(mode.to_f32());
+    row.extend_from_slice(&in_tangent);
+    row.extend_from_slice(&out_tangent);
+    rows.push(row);
+}
+
 /// Build the six flat Tables `node.gltf_skeleton_pose` needs from one
 /// object's resolved skin topology (`GltfSkinInfo`) plus EVERY parsed
 /// clip's per-node animation map (A4/D4: one row-group per `(clip_index,
@@ -274,40 +318,68 @@ fn build_skeleton_pose_tables(
         let mut duration_s: f32 = 0.0;
         for j in 0..n {
             let anim = node_anims.get(&skin.joint_node_indices[j]);
+            let prefix = [c as f32, j as f32];
             match anim.and_then(|a| a.translation.as_ref()) {
                 Some(t) if !t.times.is_empty() => {
-                    for (time, v) in t.times.iter().zip(t.values.iter()) {
-                        translation_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
+                        let (in_t, out_t) = t.tangents_at(i);
+                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_translation[j];
-                    translation_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2]]);
+                    push_vec3_row(
+                        &mut translation_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 3],
+                        [0.0; 3],
+                    );
                 }
             }
             match anim.and_then(|a| a.rotation.as_ref()) {
                 Some(r) if !r.times.is_empty() => {
-                    for (time, v) in r.times.iter().zip(r.values.iter()) {
-                        rotation_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2], v[3]]);
+                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
+                        let (in_t, out_t) = r.tangents_at(i);
+                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_rotation[j];
-                    rotation_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2], b[3]]);
+                    push_quat_row(
+                        &mut rotation_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 4],
+                        [0.0; 4],
+                    );
                 }
             }
             match anim.and_then(|a| a.scale.as_ref()) {
                 Some(s) if !s.times.is_empty() => {
-                    for (time, v) in s.times.iter().zip(s.values.iter()) {
-                        scale_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
+                        let (in_t, out_t) = s.tangents_at(i);
+                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_scale[j];
-                    scale_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2]]);
+                    push_vec3_row(
+                        &mut scale_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 3],
+                        [0.0; 3],
+                    );
                 }
             }
         }
@@ -614,11 +686,38 @@ fn sanitize_identifier(stem: &str) -> String {
     }
 }
 
+/// True when `name` matches one of `build_object_group`'s own deterministic
+/// inner-node handles for object `k` (`mesh_{k}`, `mat_{k}`, `pose_{k}`,
+/// `skinmesh_{k}`, `morphweights_{k}`, `morphdeltas_{k}`, `morphblend_{k}`,
+/// `transform_{k}`, `anim_{k}`, `tex_{k}`) or the group's own literal
+/// `"output"` boundary handle. Regression guard for the duplicate-handle
+/// panic a glTF material authored with a name like `"mat_0"` produces
+/// (`MetalRoughSpheresNoTextures.glb`, 98 materials named `mat_0..mat_97`):
+/// SCENE_OBJECT_AND_PANEL_V2's P3 stamps both the group and its inner
+/// `node.scene_object` with `group_name` (D6), so when `group_name` equals
+/// this object's own `mat_{k}` handle, the group's `node.pbr_material`
+/// (handle `mat_{k}`) and the `node.scene_object`/group-output boundary
+/// (handle `group_name`) collide once flattened under the group's own
+/// handle — `graph.rs`'s `add_node_named` rejects the duplicate.
+fn collides_with_object_group_inner_handle(name: &str, k: usize) -> bool {
+    name == "output"
+        || [
+            "mesh", "mat", "pose", "skinmesh", "morphweights", "morphdeltas", "morphblend",
+            "transform", "anim", "tex",
+        ]
+        .iter()
+        .any(|prefix| name == format!("{prefix}_{k}"))
+}
+
 /// Display / namespace name for one object's group: the glTF material name when
 /// present (with the reserved `/` swapped for a space — the flattener uses `/`
 /// as the handle namespace separator), else `"Object N"`. Deduped against
 /// siblings — two same-named materials would otherwise collide in the flattened
-/// handle map — by appending an index until unique.
+/// handle map — by appending an index until unique. Also deduped against this
+/// object's OWN inner-node handle vocabulary (`collides_with_object_group_inner_handle`)
+/// — a material literally named e.g. `"mat_0"` would otherwise stamp both the
+/// group/scene_object handle AND the sibling `node.pbr_material` handle with
+/// the same string, colliding once flattened (see that function's doc comment).
 fn unique_group_name(
     material_name: Option<&str>,
     index: usize,
@@ -631,7 +730,7 @@ fn unique_group_name(
         .unwrap_or_else(|| format!("Object {}", index + 1));
     let mut name = base.clone();
     let mut n = index + 1;
-    while used.contains(&name) {
+    while used.contains(&name) || collides_with_object_group_inner_handle(&name, index) {
         name = format!("{base} {n}");
         n += 1;
     }
@@ -1401,19 +1500,23 @@ fn build_object_group(
                     clip_durations_rows.push(vec![c as f32, 1e-6]);
                     continue;
                 };
+                let prefix = [c as f32];
                 if let Some(t) = &anim.translation {
-                    for (time, v) in t.times.iter().zip(t.values.iter()) {
-                        translation_rows.push(vec![c as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
+                        let (in_t, out_t) = t.tangents_at(i);
+                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
                     }
                 }
                 if let Some(r) = &anim.rotation {
-                    for (time, v) in r.times.iter().zip(r.values.iter()) {
-                        rotation_rows.push(vec![c as f32, *time, v[0], v[1], v[2], v[3]]);
+                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
+                        let (in_t, out_t) = r.tangents_at(i);
+                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
                     }
                 }
                 if let Some(s) = &anim.scale {
-                    for (time, v) in s.times.iter().zip(s.values.iter()) {
-                        scale_rows.push(vec![c as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
+                        let (in_t, out_t) = s.tangents_at(i);
+                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
                     }
                 }
                 let duration_s = anim.duration_s.max(1e-6);
@@ -3879,6 +3982,57 @@ mod tests {
         assert_eq!(seen_counts, vec![250, 900]);
     }
 
+    /// Regression for a duplicate-handle panic found via the IMPORT_ANYTHING_WAVE
+    /// Lane W5 conformance sweep on `MetalRoughSpheresNoTextures.glb` (98
+    /// materials authored `"mat_0".."mat_97"`): SCENE_OBJECT_AND_PANEL_V2's P3
+    /// stamps both the object's group node AND its inner `node.scene_object`
+    /// with `unique_group_name`'s output (D6), which previously took the
+    /// glTF material's name verbatim — so a material named `"mat_0"` collided
+    /// with that SAME object's own `node.pbr_material` handle (`format!("mat_{k}")`),
+    /// both flattening to `"mat_0/mat_0"` and panicking in `graph.rs`'s
+    /// `add_node_named`. `collides_with_object_group_inner_handle` now vetoes
+    /// this — build must succeed and the group must NOT be literally named
+    /// "mat_0".
+    #[test]
+    fn material_named_like_its_own_inner_handle_does_not_collide() {
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "mat_0", 100)],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
+        let (def, _report) =
+            build_import_graph(&summary, path).expect("build import graph for mat_0-named material");
+
+        let group = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == GROUP_TYPE_ID)
+            .expect("one object group");
+        assert_ne!(
+            group.handle.as_deref(),
+            Some("mat_0"),
+            "the group handle must be deduped away from this object's own mat_{{k}} inner handle"
+        );
+
+        // `flatten_groups` doesn't itself assert handle uniqueness (only
+        // `Graph::add_node_named`, at load time, does — graph.rs:137) — so
+        // reproduce that check directly on the flattened output, which is
+        // exactly what the panic message ("duplicate handle 'mat_0/mat_0'")
+        // was catching.
+        let flattened = manifold_core::flatten::flatten_groups(&def).expect("flatten must succeed");
+        let mut seen = std::collections::HashSet::new();
+        for n in &flattened.nodes {
+            if let Some(h) = &n.handle {
+                assert!(seen.insert(h.clone()), "duplicate flattened handle: '{h}'");
+            }
+        }
+    }
+
     // -----------------------------------------------------------------
     // SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
     // -----------------------------------------------------------------
@@ -4781,6 +4935,7 @@ mod tests {
             translation: Some(Vec3Track {
                 times: vec![0.0, 1.0],
                 values: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],
+                ..Default::default()
             }),
             rotation: Some(QuatTrack {
                 times: vec![0.0, 1.0],
@@ -4788,6 +4943,7 @@ mod tests {
                     [0.0, 0.0, 0.0, 1.0],
                     [0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2],
                 ],
+                ..Default::default()
             }),
             scale: None,
         })];
@@ -5098,7 +5254,7 @@ mod tests {
             for &phase in PHASES {
                 let (def, _report) = super::assemble_import_graph(&path)
                     .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
-                let duration_s = skeleton_pose_duration_s(&def);
+                let duration_s = skeleton_pose_duration_s_or_static(&def);
                 let rgba = render_skinned_import_at_progress(def, w, h, phase, duration_s);
 
                 let mut lit = 0u64;
@@ -5178,10 +5334,12 @@ mod tests {
             translation: Some(Vec3Track {
                 times: vec![0.0, 1.25, 2.5, 3.708_33],
                 values: vec![[0.0, 0.0, 0.0], [0.0, 2.52, 0.0], [0.0, 2.52, 0.0], [0.0, 0.0, 0.0]],
+                ..Default::default()
             }),
             rotation: Some(QuatTrack {
                 times: vec![1.25, 2.5],
                 values: vec![[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0]],
+                ..Default::default()
             }),
             scale: None,
         })];
@@ -6155,6 +6313,36 @@ mod tests {
             None
         }
         find(&def.nodes).expect("assembled graph has no node.gltf_skeleton_pose with a duration_s param")
+    }
+
+    /// Like [`skeleton_pose_duration_s`] but for the general hostile shelf
+    /// (IMPORT_ANYTHING_WAVE_DESIGN.md W1 added a plain unrigged fixture —
+    /// `webp_texture.glb` — alongside the skinned Mixamo-shaped ones):
+    /// `0.0` when the asset has no skeleton pose at all, which
+    /// `render_skinned_import_at_progress` renders as a static rest pose
+    /// regardless of `progress`. The strict panicking variant stays for
+    /// call sites that know their fixture is always skinned.
+    #[cfg(feature = "gpu-proofs")]
+    fn skeleton_pose_duration_s_or_static(
+        def: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) -> f32 {
+        fn find(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> Option<f32> {
+            for node in nodes {
+                if node.type_id.as_str() == "node.gltf_skeleton_pose"
+                    && let Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) =
+                        node.params.get("duration_s")
+                {
+                    return Some(*value);
+                }
+                if let Some(group) = &node.group
+                    && let Some(v) = find(&group.nodes)
+                {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        find(&def.nodes).unwrap_or(0.0)
     }
 
     /// Render an assembled skinned-import `def` at a chosen `progress`

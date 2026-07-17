@@ -28,7 +28,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "text": "■ QS1694-W02-1-1"
         }
       },
       "gesture": {
@@ -40,55 +40,33 @@
   },
   "Snapshot",
   {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "name": "scene_setup.light.intensity_value",
-          "text": "3.50"
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  {
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.light.intensity_value"
+          "under_text": "■ QS1694-W02-1-1",
+          "node_type": "Button"
         }
       },
       "gesture": {
-        "Drag": {
-          "to": {
-            "Point": {
-              "x": 1020.0,
-              "y": 684.0
-            }
-          },
-          "steps": 8
+        "Click": {
+          "modifiers": {}
         }
       }
     }
   },
   "Snapshot",
   {
-    "Assert": {
-      "selector": {
+    "Pointer": {
+      "target": {
         "Query": {
-          "name": "scene_setup.light.intensity_value",
-          "text": "3.50"
+          "under_text": "■ QS1694-W02-1-1",
+          "node_type": "Button"
         }
       },
-      "check": {
-        "Count": 0
-      }
-    }
-  },
-  {
-    "Key": {
-      "key": "Z",
-      "modifiers": {
-        "command": true
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },

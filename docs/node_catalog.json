@@ -18998,9 +18998,29 @@
             "4"
           ],
           "type": "float"
+        },
+        {
+          "default": "2",
+          "label": "Slices",
+          "name": "slices",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "4",
+          "label": "Steps",
+          "name": "steps",
+          "range": [
+            "1",
+            "16"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice visibility = ||N_p||*(a(h1)+a(h2)); pixel visibility = mean of the 2 slices; out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). 16 depth taps total, no temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
+      "purpose": "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice visibility = ||N_p||*(a(h1)+a(h2)); pixel visibility = mean of the 2 slices; out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way ambient light naturally would, more accurately than the retired hemisphere-sample SSAO.",

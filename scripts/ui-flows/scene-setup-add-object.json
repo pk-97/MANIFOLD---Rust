@@ -18,7 +18,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Objects"
+          "text": "Outliner"
         }
       },
       "check": "Exists"
@@ -38,7 +38,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Object 3"
+          "text": "■ Object 3"
         }
       },
       "check": {
@@ -65,7 +65,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Object 3"
+          "text": "■ Object 3"
         }
       },
       "check": "Exists"

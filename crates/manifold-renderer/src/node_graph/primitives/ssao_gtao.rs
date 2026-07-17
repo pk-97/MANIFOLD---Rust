@@ -40,10 +40,13 @@ use crate::node_graph::primitive::Primitive;
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
-/// Generated-codegen uniform layout: the two PARAMS (`radius`, `intensity`)
-/// in declaration order, then the three DERIVED fields (`fov_y`, `near`,
-/// `far`) in declaration order — one f32 word each, padded to a 16-byte
-/// (4-word) multiple. 5 words + 3 pad = 32 bytes. Mirrors
+/// Display labels for the `projection` enum, indexed by enum value.
+pub const GTAO_PROJECTIONS: &[&str] = &["Scene Depth", "Height Field"];
+
+/// Generated-codegen uniform layout: the four PARAMS (`radius`, `intensity`,
+/// `slices`, `steps`) in declaration order, then the three DERIVED fields
+/// (`fov_y`, `near`, `far`) in declaration order — one f32 word each, padded
+/// to a 16-byte (4-word) multiple. 7 words + 1 pad = 32 bytes. Mirrors
 /// `ssao_from_depth.rs`'s `SsaoFromDepthUniforms` layout note (minus the
 /// retired `bias` field).
 #[repr(C)]
@@ -51,6 +54,10 @@ const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.w
 struct SsaoGtaoUniforms {
     radius: f32,
     intensity: f32,
+    slices: f32,
+    steps: f32,
+    projection: u32,
+    relief: f32,
     fov_y: f32,
     near: f32,
     far: f32,
@@ -62,7 +69,7 @@ struct SsaoGtaoUniforms {
 crate::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
-    purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice visibility = ||N_p||*(a(h1)+a(h2)); pixel visibility = mean of the 2 slices; out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). 16 depth taps total, no temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice visibility = ||N_p||*(a(h1)+a(h2)); pixel visibility = mean of the 2 slices; out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -85,6 +92,50 @@ crate::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
+        // Quality knobs (2026-07-17): the original D9(a) budget (2 slices x
+        // 4 steps = 16 taps) stays the DEFAULT — existing graphs render
+        // bit-identically. Raising them buys real variance reduction (the
+        // 16-tap hash noise is the whole grain complaint), still fusable,
+        // still deterministic single-frame — no temporal accumulation.
+        ParamDef {
+            name: Cow::Borrowed("slices"),
+            label: "Slices",
+            ty: ParamType::Float,
+            default: ParamValue::Float(2.0),
+            range: Some((1.0, 8.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("steps"),
+            label: "Steps",
+            ty: ParamType::Float,
+            default: ParamValue::Float(4.0),
+            range: Some((1.0, 16.0)),
+            enum_values: &[],
+        },
+        // Heightfield mode (2026-07-17, depth-relight probe): `Scene Depth`
+        // (default) is the committed D9(a) perspective path, bit-identical.
+        // `Height Field` treats `depth` as a raw height map in an
+        // orthographic frame — position = (uv.x*aspect, uv.y, raw*relief),
+        // view = (0,0,-1), radius in uv units — no camera linearization, no
+        // depth-window shim. All math stays in fp32 registers in-kernel, so
+        // the fp16 quantization contours the shim chain produced can't occur.
+        ParamDef {
+            name: Cow::Borrowed("projection"),
+            label: "Projection",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 1.0)),
+            enum_values: GTAO_PROJECTIONS,
+        },
+        ParamDef {
+            name: Cow::Borrowed("relief"),
+            label: "Relief",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.2),
+            range: Some((0.01, 2.0)),
             enum_values: &[],
         },
     ],
@@ -135,6 +186,13 @@ impl Primitive for SsaoGtao {
         };
         let radius = read_f32(ctx, "radius", 0.5);
         let intensity = read_f32(ctx, "intensity", 1.0);
+        let slices = read_f32(ctx, "slices", 2.0);
+        let steps = read_f32(ctx, "steps", 4.0);
+        let projection = match ctx.params.get("projection") {
+            Some(ParamValue::Enum(v)) => *v,
+            _ => 0,
+        };
+        let relief = read_f32(ctx, "relief", 0.2);
 
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far] = derive_view_scalars(&cam);
@@ -167,6 +225,10 @@ impl Primitive for SsaoGtao {
         let uniforms = SsaoGtaoUniforms {
             radius,
             intensity,
+            slices,
+            steps,
+            projection,
+            relief,
             fov_y,
             near,
             far,
@@ -220,9 +282,9 @@ mod tests {
     }
 
     #[test]
-    fn has_radius_and_intensity_params_only_no_bias() {
+    fn has_radius_intensity_and_quality_params_no_bias() {
         let names: Vec<&str> = SsaoGtao::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["radius", "intensity"]);
+        assert_eq!(names, vec!["radius", "intensity", "slices", "steps", "projection", "relief"]);
     }
 
     #[test]
@@ -231,8 +293,8 @@ mod tests {
     }
 
     #[test]
-    fn uniform_struct_is_32_bytes() {
-        assert_eq!(std::mem::size_of::<SsaoGtaoUniforms>(), 32);
+    fn uniform_struct_is_48_bytes() {
+        assert_eq!(std::mem::size_of::<SsaoGtaoUniforms>(), 48);
     }
 
     #[test]
@@ -283,8 +345,6 @@ mod tests {
 pub(crate) mod cpu_reference {
     use crate::node_graph::camera::linearize_depth;
 
-    const GTAO_SLICES: usize = 2;
-    const GTAO_STEPS: usize = 4;
     const GTAO_HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
 
     /// A synthetic depth buffer: raw [0,1] depth values, row-major, `w*h` long.
@@ -311,6 +371,15 @@ pub(crate) mod cpu_reference {
     /// language builtins are avoided).
     fn gtao_round(x: f32) -> f32 {
         if x >= 0.0 { (x + 0.5).floor() } else { -(-x + 0.5).floor() }
+    }
+
+    fn height_pos(depth: &DepthBuffer<'_>, cx: i32, cy: i32, aspect: f32, relief: f32) -> [f32; 3] {
+        let raw = depth.load(cx, cy);
+        let ccx = cx.clamp(0, depth.w - 1);
+        let ccy = cy.clamp(0, depth.h - 1);
+        let u = (ccx as f32 + 0.5) / depth.w as f32;
+        let v = (ccy as f32 + 0.5) / depth.h as f32;
+        [u * aspect, 1.0 - v, (1.0 - raw) * relief]
     }
 
     fn view_pos(
@@ -374,33 +443,51 @@ pub(crate) mod cpu_reference {
         cy: i32,
         radius: f32,
         intensity: f32,
+        slices: usize,
+        steps: usize,
+        heightfield: bool,
+        relief: f32,
         fov_y: f32,
         near: f32,
         far: f32,
     ) -> f32 {
+        let slices = slices.max(1);
+        let steps = steps.max(1);
+        let pos = |cx: i32, cy: i32, tan_half_fov: f32, aspect: f32| -> [f32; 3] {
+            if heightfield {
+                height_pos(depth, cx, cy, aspect, relief)
+            } else {
+                view_pos(depth, cx, cy, tan_half_fov, aspect, near, far)
+            }
+        };
         let tan_half_fov = (fov_y * 0.5).tan();
         let aspect = depth.w as f32 / depth.h as f32;
 
-        let p_c = view_pos(depth, cx, cy, tan_half_fov, aspect, near, far);
+        let p_c = pos(cx, cy, tan_half_fov, aspect);
 
-        let p_xp = view_pos(depth, cx + 1, cy, tan_half_fov, aspect, near, far);
-        let p_xm = view_pos(depth, cx - 1, cy, tan_half_fov, aspect, near, far);
-        let p_yp = view_pos(depth, cx, cy + 1, tan_half_fov, aspect, near, far);
-        let p_ym = view_pos(depth, cx, cy - 1, tan_half_fov, aspect, near, far);
+        let p_xp = pos(cx + 1, cy, tan_half_fov, aspect);
+        let p_xm = pos(cx - 1, cy, tan_half_fov, aspect);
+        let p_yp = pos(cx, cy + 1, tan_half_fov, aspect);
+        let p_ym = pos(cx, cy - 1, tan_half_fov, aspect);
         let ddx = sub(p_xp, p_xm);
         let ddy = sub(p_yp, p_ym);
         let normal = normalize(cross(ddx, ddy));
 
-        let view_vec = normalize(neg(p_c));
-
-        let center_vz = p_c[2].max(1e-4);
-        let radius_px = (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5);
+        let (view_vec, radius_px) = if heightfield {
+            ([0.0, 0.0, -1.0], radius * depth.h as f32)
+        } else {
+            let center_vz = p_c[2].max(1e-4);
+            (
+                normalize(neg(p_c)),
+                (radius / (tan_half_fov * center_vz)) * (depth.h as f32 * 0.5),
+            )
+        };
 
         let rot = hash_angle(cx as f32, cy as f32);
 
         let mut visibility_sum = 0.0f32;
-        for s in 0..GTAO_SLICES {
-            let phi = rot * 0.5 + (s as f32) * GTAO_HALF_PI;
+        for s in 0..slices {
+            let phi = rot * 0.5 + (s as f32) * (2.0 * GTAO_HALF_PI / slices as f32);
             let dir2 = [phi.cos(), phi.sin()];
             let dir3 = [dir2[0], dir2[1], 0.0];
 
@@ -422,12 +509,12 @@ pub(crate) mod cpu_reference {
 
             let mut hcos_minus = -1.0f32;
             let mut hcos_plus = -1.0f32;
-            for j in 0..GTAO_STEPS {
-                let r_j = radius_px * ((j as f32) + 1.0) / (GTAO_STEPS as f32);
+            for j in 0..steps {
+                let r_j = radius_px * ((j as f32) + 1.0) / (steps as f32);
 
                 let off_plus_x = gtao_round(dir2[0] * r_j) as i32;
                 let off_plus_y = gtao_round(dir2[1] * r_j) as i32;
-                let s_plus = view_pos(depth, cx + off_plus_x, cy + off_plus_y, tan_half_fov, aspect, near, far);
+                let s_plus = pos(cx + off_plus_x, cy + off_plus_y, tan_half_fov, aspect);
                 let d_plus = sub(s_plus, p_c);
                 let len_plus = length(d_plus);
                 if len_plus > 1e-5 && len_plus <= radius {
@@ -436,7 +523,7 @@ pub(crate) mod cpu_reference {
 
                 let off_minus_x = gtao_round(-dir2[0] * r_j) as i32;
                 let off_minus_y = gtao_round(-dir2[1] * r_j) as i32;
-                let s_minus = view_pos(depth, cx + off_minus_x, cy + off_minus_y, tan_half_fov, aspect, near, far);
+                let s_minus = pos(cx + off_minus_x, cy + off_minus_y, tan_half_fov, aspect);
                 let d_minus = sub(s_minus, p_c);
                 let len_minus = length(d_minus);
                 if len_minus > 1e-5 && len_minus <= radius {
@@ -453,7 +540,7 @@ pub(crate) mod cpu_reference {
             visibility_sum += proj_len * arc;
         }
 
-        let visibility = (visibility_sum / GTAO_SLICES as f32).clamp(0.0, 1.0);
+        let visibility = (visibility_sum / slices as f32).clamp(0.0, 1.0);
         (1.0 - intensity * (1.0 - visibility)).clamp(0.0, 1.0)
     }
 }
@@ -494,10 +581,35 @@ mod analytic_sanity {
 
         for cy in 0..h {
             for cx in 0..w {
-                let vis = gtao_texel(&depth, cx, cy, radius, intensity, fov_y, near, far);
+                let vis = gtao_texel(&depth, cx, cy, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
                 assert!(
                     (vis - 1.0).abs() < 1e-3,
                     "texel ({cx},{cy}): flat plane must give ~full visibility (out.r~1), got {vis}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod heightfield_sanity {
+    use super::cpu_reference::{DepthBuffer, gtao_texel};
+
+    /// Heightfield mode on a flat height map: the ortho frame has no
+    /// perspective view/normal misalignment at all, so visibility must be
+    /// ~1 with NO narrow-FOV fixture trickery (contrast with the perspective
+    /// analytic test above, which needs fov=0.02 to get within 1e-3).
+    #[test]
+    fn heightfield_flat_plane_full_visibility_exact() {
+        let (w, h) = (16i32, 16i32);
+        let raw = vec![0.5f32; (w * h) as usize];
+        let depth = DepthBuffer { w, h, raw: &raw };
+        for cy in 0..h {
+            for cx in 0..w {
+                let vis = gtao_texel(&depth, cx, cy, 0.02, 1.0, 4, 8, true, 0.25, 0.9, 1.0, 3.0);
+                assert!(
+                    (vis - 1.0).abs() < 1e-4,
+                    "texel ({cx},{cy}): flat heightfield must be fully visible, got {vis}"
                 );
             }
         }
@@ -599,6 +711,10 @@ mod gpu_tests {
     struct GtaoUniforms {
         radius: f32,
         intensity: f32,
+        slices: f32,
+        steps: f32,
+        projection: u32,
+        relief: f32,
         fov_y: f32,
         near: f32,
         far: f32,
@@ -682,7 +798,7 @@ mod gpu_tests {
 
         let (radius, intensity) = (0.02f32, 1.0f32);
         let (fov_y, near, far) = (std::f32::consts::FRAC_PI_2, 0.1, 100.0);
-        let uniforms = GtaoUniforms { radius, intensity, fov_y, near, far, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
+        let uniforms = GtaoUniforms { radius, intensity, slices: 2.0, steps: 4.0, projection: 0, relief: 0.2, fov_y, near, far, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
         let bytes = bytemuck::bytes_of(&uniforms);
 
         let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
@@ -699,7 +815,7 @@ mod gpu_tests {
         let mut mismatches = 0usize;
         for y in 0..h as i32 {
             for x in 0..w as i32 {
-                let cpu = gtao_texel(&depth_buf, x, y, radius, intensity, fov_y, near, far);
+                let cpu = gtao_texel(&depth_buf, x, y, radius, intensity, 2, 4, false, 0.2, fov_y, near, far);
                 let gpu = gen_out[(y as u32 * w + x as u32) as usize][0];
                 let diff = (cpu - gpu).abs();
                 // Every disagreement, however large, must stay under the
@@ -744,6 +860,12 @@ mod gpu_tests {
         let uniforms = GtaoUniforms {
             radius: 0.5,
             intensity: 1.0,
+            // Non-default quality on purpose: the hand-vs-generated check
+            // must prove the DYNAMIC loop bounds agree, not just the default.
+            slices: 4.0,
+            steps: 8.0,
+            projection: 0,
+            relief: 0.2,
             fov_y: std::f32::consts::FRAC_PI_2,
             near: 0.1,
             far: 100.0,
@@ -779,6 +901,57 @@ mod gpu_tests {
         }
     }
 
+    /// Heightfield-mode hand-vs-generated parity — same fixture as the
+    /// perspective leg, projection=1: proves the new branch through the
+    /// codegen path, not just the default one.
+    #[test]
+    fn generated_gtao_heightfield_matches_hand_kernel() {
+        let device = crate::test_device();
+        let (w, h) = (24u32, 16u32);
+        let raw = depth_ramp_2d(w, h);
+        let depth_tex = upload_depth(&device, w, h, &raw);
+
+        let uniforms = GtaoUniforms {
+            radius: 0.02,
+            intensity: 1.0,
+            slices: 4.0,
+            steps: 8.0,
+            projection: 1,
+            relief: 0.25,
+            fov_y: std::f32::consts::FRAC_PI_2,
+            near: 0.1,
+            far: 100.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        let bytes = bytemuck::bytes_of(&uniforms);
+
+        let hand_wgsl = include_str!("shaders/ssao_gtao.wgsl");
+        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "gtao-hf-hand");
+        let hand_out = dispatch(&device, &hand_pipeline, &depth_tex, w, h, bytes);
+
+        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
+            .expect("node.ssao_gtao standalone codegen");
+        let gen_pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            crate::node_graph::freeze::codegen::ENTRY,
+            "gtao-hf-generated",
+        );
+        let gen_out = dispatch(&device, &gen_pipeline, &depth_tex, w, h, bytes);
+
+        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
+            for c in 0..3 {
+                assert!(
+                    (h_px[c] - g_px[c]).abs() < 1e-4,
+                    "heightfield texel {i} channel {c}: hand={} gen={}",
+                    h_px[c],
+                    g_px[c]
+                );
+            }
+        }
+    }
+
     /// **Analytic sanity, GPU path** (I8: `gtao_flat_plane_full_visibility`,
     /// GPU leg): the same flat-plane claim as
     /// `analytic_sanity::gtao_flat_plane_full_visibility`, dispatched on the
@@ -799,6 +972,10 @@ mod gpu_tests {
         let uniforms = GtaoUniforms {
             radius: 0.05,
             intensity: 1.0,
+            slices: 2.0,
+            steps: 4.0,
+            projection: 0,
+            relief: 0.2,
             fov_y: 0.02,
             near: 0.1,
             far: 1000.0,

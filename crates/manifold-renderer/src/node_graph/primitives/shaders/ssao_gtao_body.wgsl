@@ -69,8 +69,8 @@
 // (see ssao_from_depth.rs's `generated_ssao_matches_cpu_reference_on_
 // synthetic_ramp` doc comment for the precedent this avoids compounding).
 
-const GTAO_SLICES: u32 = 2u;
-const GTAO_STEPS: u32 = 4u;
+// Slice/step counts arrive as PARAMS since 2026-07-17 (quality knobs;
+// defaults 2/4 keep the original 16-tap D9(a) budget bit-identical).
 const GTAO_HALF_PI: f32 = 1.5707963267948966;
 
 // D2's committed per-pixel rotation hash (docs/CINEMATIC_POST_DESIGN.md D2) —
@@ -116,28 +116,70 @@ fn gtao_integrate_arc(h: f32, n: f32) -> f32 {
     return 0.25 * (-cos(2.0 * h - n) + cos(n) + 2.0 * h * sin(n));
 }
 
+// Heightfield-mode position: orthographic frame, `depth` read as a raw
+// height map. x/y in uv units (x aspect-corrected), z = (1 - raw) * relief
+// so brighter (taller) content sits nearer the ortho camera at z = -inf
+// side. All fp32, no linearization — the anti-banding mode.
+fn gtao_height_pos(
+    depth: texture_2d<f32>,
+    c: vec2<i32>,
+    dims_i: vec2<i32>,
+    aspect: f32,
+    relief: f32,
+) -> vec3<f32> {
+    let cc = clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+    let raw = textureLoad(depth, cc, 0).r;
+    let uv = (vec2<f32>(cc) + vec2<f32>(0.5, 0.5)) / vec2<f32>(dims_i);
+    return vec3<f32>(uv.x * aspect, 1.0 - uv.y, (1.0 - raw) * relief);
+}
+
+// Mode dispatch — `hf` >= 0.5 selects the heightfield frame.
+fn gtao_pos(
+    depth: texture_2d<f32>,
+    c: vec2<i32>,
+    dims_i: vec2<i32>,
+    tan_half_fov: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+    hf: f32,
+    relief: f32,
+) -> vec3<f32> {
+    if hf >= 0.5 {
+        return gtao_height_pos(depth, c, dims_i, aspect, relief);
+    }
+    return gtao_view_pos(depth, c, dims_i, tan_half_fov, aspect, near, far);
+}
+
 fn body(
     depth: texture_2d<f32>,
     uv: vec2<f32>,
     dims: vec2<f32>,
     radius: f32,
     intensity: f32,
+    slices: f32,
+    steps: f32,
+    projection: u32,
+    relief: f32,
     fov_y: f32,
     near: f32,
     far: f32,
 ) -> vec4<f32> {
+    let n_slices = max(1u, u32(gtao_round(slices)));
+    let n_steps = max(1u, u32(gtao_round(steps)));
+    let hf = select(0.0, 1.0, projection == 1u);
     let dims_i = vec2<i32>(dims);
     let c = vec2<i32>(uv * dims);
     let tan_half_fov = tan(fov_y * 0.5);
     let aspect = dims.x / dims.y;
 
-    let p_c = gtao_view_pos(depth, c, dims_i, tan_half_fov, aspect, near, far);
+    let p_c = gtao_pos(depth, c, dims_i, tan_half_fov, aspect, near, far, hf, relief);
 
     // Normal reconstruction — identical to D3 (ssao_from_depth).
-    let p_xp = gtao_view_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far);
-    let p_xm = gtao_view_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far);
-    let p_yp = gtao_view_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far);
-    let p_ym = gtao_view_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far);
+    let p_xp = gtao_pos(depth, c + vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_xm = gtao_pos(depth, c - vec2<i32>(1, 0), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_yp = gtao_pos(depth, c + vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
+    let p_ym = gtao_pos(depth, c - vec2<i32>(0, 1), dims_i, tan_half_fov, aspect, near, far, hf, relief);
     let ddx = p_xp - p_xm;
     let ddy = p_yp - p_ym;
     var normal = cross(ddx, ddy);
@@ -148,17 +190,23 @@ fn body(
         normal = vec3<f32>(0.0, 0.0, -1.0);
     }
 
-    let view_vec = normalize(-p_c);
-
-    // radius_px — transcribed projection (see file header point 3).
-    let center_vz = max(p_c.z, 1e-4);
-    let radius_px = (radius / (tan_half_fov * center_vz)) * (dims.y * 0.5);
+    // Heightfield mode: fixed ortho view direction + uv-unit radius; the
+    // perspective projection of `radius` to pixels doesn't apply.
+    var view_vec = vec3<f32>(0.0, 0.0, -1.0);
+    var radius_px = radius * dims.y;
+    if hf < 0.5 {
+        view_vec = normalize(-p_c);
+        let center_vz = max(p_c.z, 1e-4);
+        radius_px = (radius / (tan_half_fov * center_vz)) * (dims.y * 0.5);
+    }
 
     let rot = gtao_hash_angle(vec2<f32>(c));
 
     var visibility_sum = 0.0;
-    for (var s: u32 = 0u; s < GTAO_SLICES; s = s + 1u) {
-        let phi = rot * 0.5 + f32(s) * GTAO_HALF_PI;
+    for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
+        // Spread N slices across the semicircle (pi/N spacing) — reduces to
+        // the committed i*(pi/2) at the default N=2.
+        let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
         let dir3 = vec3<f32>(dir2, 0.0);
 
@@ -183,12 +231,12 @@ fn body(
 
         var hcos_minus = -1.0;
         var hcos_plus = -1.0;
-        for (var j: u32 = 0u; j < GTAO_STEPS; j = j + 1u) {
-            let r_j = radius_px * (f32(j) + 1.0) / f32(GTAO_STEPS);
+        for (var j: u32 = 0u; j < n_steps; j = j + 1u) {
+            let r_j = radius_px * (f32(j) + 1.0) / f32(n_steps);
 
             let off_plus = vec2<i32>(vec2<f32>(gtao_round(dir2.x * r_j), gtao_round(dir2.y * r_j)));
             let c_plus = clamp(c + off_plus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
-            let s_plus = gtao_view_pos(depth, c_plus, dims_i, tan_half_fov, aspect, near, far);
+            let s_plus = gtao_pos(depth, c_plus, dims_i, tan_half_fov, aspect, near, far, hf, relief);
             let d_plus = s_plus - p_c;
             let len_plus = length(d_plus);
             if len_plus > 1e-5 && len_plus <= radius {
@@ -197,7 +245,7 @@ fn body(
 
             let off_minus = vec2<i32>(vec2<f32>(gtao_round(-dir2.x * r_j), gtao_round(-dir2.y * r_j)));
             let c_minus = clamp(c + off_minus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
-            let s_minus = gtao_view_pos(depth, c_minus, dims_i, tan_half_fov, aspect, near, far);
+            let s_minus = gtao_pos(depth, c_minus, dims_i, tan_half_fov, aspect, near, far, hf, relief);
             let d_minus = s_minus - p_c;
             let len_minus = length(d_minus);
             if len_minus > 1e-5 && len_minus <= radius {
@@ -214,7 +262,7 @@ fn body(
         visibility_sum = visibility_sum + proj_len * arc;
     }
 
-    let visibility = clamp(visibility_sum / f32(GTAO_SLICES), 0.0, 1.0);
+    let visibility = clamp(visibility_sum / f32(n_slices), 0.0, 1.0);
     let ao = clamp(1.0 - intensity * (1.0 - visibility), 0.0, 1.0);
     return vec4<f32>(ao, ao, ao, 1.0);
 }

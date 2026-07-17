@@ -288,6 +288,10 @@ enum CalibrationDrag {
         send: AudioSendId,
         start_x: f32,
         start_db: f32,
+        /// Shift held at drag-start (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
+        /// P4, D8's audio-dock sibling): the applied per-pixel delta is
+        /// multiplied by 0.1 for the life of the drag.
+        fine: bool,
     },
     // `Sensitivity` (the matrix's per-band sensitivity drag) is deleted with
     // the Audio Setup Triggers matrix (P3, D2).
@@ -1907,6 +1911,27 @@ impl AudioSetupPanel {
                     (false, Vec::new())
                 }
             }
+            // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8's audio-dock
+            // sibling, `stepper.rs`'s contract-table amendment): double-click
+            // on the gain value cell opens its type-in box. The gain row IS
+            // this crate's one live `Stepper` instance (stepper.rs's own
+            // module doc), so its contract — not `value_cell.rs`'s — is the
+            // right one to consult here, same as the `RightClick` reset arm
+            // above. Uses the SAME `gain_drag_target` lookup `PointerDown`
+            // below uses to arm the calibration drag, so drag-arming and
+            // type-in registration can't drift apart.
+            UIEvent::DoubleClick { node_id, .. } => {
+                if let Some((send, db)) = self.gain_drag_target(*node_id)
+                    && let Some(crate::stepper::StepperIntent::EditValue) = crate::stepper::Stepper::intent_for(
+                        crate::stepper::StepperZone::Value,
+                        crate::intent::Gesture::DoubleClick,
+                    )
+                {
+                    (true, vec![PanelAction::AudioSendGainBeginTextInput(send, db, *node_id)])
+                } else {
+                    (false, Vec::new())
+                }
+            }
             // ── Band-divider drag (Low/Mid/High crossovers) + D7 gain-value
             // calibration drag ──────────────────────────────────────
             // Arm on press if it lands on a divider line or a value label;
@@ -1914,7 +1939,7 @@ impl AudioSetupPanel {
             // lines are drawn shader-side (hit-test by position); value
             // labels are real nodes (hit-test by node id). (The matrix's
             // sensitivity-value drag arm is deleted with the matrix, P3 D2.)
-            UIEvent::PointerDown { node_id, pos, .. } => {
+            UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let Some(band) = self.divider_at(*pos) {
                     self.drag.start(AudioSetupDrag::Band(band), *pos);
                     (true, vec![PanelAction::AudioCrossoverDragBegin])
@@ -1924,6 +1949,7 @@ impl AudioSetupPanel {
                             send: send.clone(),
                             start_x: pos.x,
                             start_db,
+                            fine: modifiers.shift,
                         }),
                         *pos,
                     );
@@ -1948,8 +1974,11 @@ impl AudioSetupPanel {
                 },
                 // 1 px = 0.1 dB / 0.5% (D7, `docs/AUDIO_SENDS_UX_DESIGN.md`
                 // §3.4); the host clamps the candidate to the real range.
-                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db })) => {
-                    let new_db = start_db + (pos.x - start_x) * 0.1;
+                // P4, D8: Shift held at drag-start ("fine") multiplies the
+                // applied per-pixel delta by 0.1.
+                Some(AudioSetupDrag::Calibration(CalibrationDrag::Gain { send, start_x, start_db, fine })) => {
+                    let db_per_px = if fine { 0.01 } else { 0.1 };
+                    let new_db = start_db + (pos.x - start_x) * db_per_px;
                     (true, vec![PanelAction::AudioSendGainDragChanged(send, new_db)])
                 }
                 None => (false, Vec::new()),
@@ -2244,6 +2273,7 @@ mod tests {
                 send: AudioSendId::new("s1"),
                 start_x: 0.0,
                 start_db: 0.0,
+                fine: false,
             }),
             Vec2::ZERO,
         );
@@ -2267,6 +2297,7 @@ mod tests {
                 send: AudioSendId::new("s1"),
                 start_x: 0.0,
                 start_db: 0.0,
+                fine: false,
             }),
             Vec2::ZERO,
         );

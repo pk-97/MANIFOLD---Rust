@@ -1500,6 +1500,18 @@ pub fn sync_inspector_data(
                                 driven,
                             };
                             let transform_row = |t: &manifold_renderer::node_graph::scene_vm::TransformVm| {
+                                // D12 fix: `t`'s own addresses already carry
+                                // the correct `scope_path` (empty for a
+                                // root/ungrouped atom, `[group_node_id]` for
+                                // one living inside an object's group) — use
+                                // it directly instead of the old `row()`
+                                // (root-only) helper, which silently wrote
+                                // to the wrong scope for any grouped
+                                // object's transform.
+                                let scope = t.pos_addr.0.scope_path.clone();
+                                let row = |node_doc_id: u32, param_id: &str, value: f32, driven: bool, min: f32, max: f32| {
+                                    scoped_row(scope.clone(), node_doc_id, param_id, value, driven, min, max)
+                                };
                                 Box::new(TransformRowVm {
                                     pos: (
                                         row(t.node_doc_id, "pos_x", t.pos_value.0, t.pos_driven.0, -100.0, 100.0),
@@ -1540,10 +1552,17 @@ pub fn sync_inspector_data(
                                 })
                             };
                             let material_row =
-                                |group_node_id: u32, m: &manifold_renderer::node_graph::scene_vm::MaterialVm| match m
+                                |m: &manifold_renderer::node_graph::scene_vm::MaterialVm| match m
                                 {
                                     manifold_renderer::node_graph::scene_vm::MaterialVm::Known(row_data) => {
-                                        let scope = vec![group_node_id];
+                                        // D12 fix: `row_data`'s own address
+                                        // already carries the correct scope
+                                        // (see `transform_row`'s identical
+                                        // fix above) — no external
+                                        // group_node_id needed, and it's
+                                        // correct for an ungrouped object
+                                        // too (empty scope).
+                                        let scope = row_data.base_color_addr.0.scope_path.clone();
                                         let color = (
                                             scoped_row(
                                                 scope.clone(),
@@ -1606,48 +1625,66 @@ pub fn sync_inspector_data(
                                 .objects
                                 .iter()
                                 .map(|o| match o {
-                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known {
-                                        index,
-                                        group_node_id,
-                                        name,
-                                        transform,
-                                        material,
-                                        modifier_chain,
-                                        modifier_chain_parseable,
-                                        ..
-                                    } => ObjectRowVm::Known(Box::new(
-                                        manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
-                                            index: *index,
-                                            group_node_id: *group_node_id,
-                                            name: name.clone(),
-                                            transform: transform.as_ref().map(&transform_row),
-                                            material: material_row(*group_node_id, material),
-                                            modifiers: modifier_chain
-                                                .iter()
-                                                .enumerate()
-                                                .map(|(i, m)| manifold_ui::panels::scene_setup_panel::ModifierKnownRow {
-                                                    index: i,
-                                                    node_doc_id: m.node_doc_id,
-                                                    display_name: modifier_display_name(&m.type_id),
-                                                    params: modifier_param_rows(
-                                                        *group_node_id,
-                                                        m.node_doc_id,
-                                                        &m.type_id,
-                                                        &m.params,
-                                                        &m.driven,
-                                                    ),
-                                                })
-                                                .collect(),
-                                            modifiers_addable: *modifier_chain_parseable,
-                                        },
-                                    )),
-                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Custom {
-                                        index,
-                                        transform,
-                                    } => ObjectRowVm::Custom {
-                                        index: *index,
-                                        transform: transform.as_ref().map(&transform_row),
-                                    },
+                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(known) => {
+                                        let manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow {
+                                            index,
+                                            object_node_id,
+                                            group_node_id,
+                                            name,
+                                            visible_addr,
+                                            visible_value,
+                                            visible_driven,
+                                            transform,
+                                            material,
+                                            modifier_chain,
+                                            modifier_chain_parseable,
+                                            ..
+                                        } = known.as_ref();
+                                        // D12: the modifier chain's own
+                                        // scope is the object's — the group
+                                        // when wrapped, else root (empty).
+                                        let modifier_scope =
+                                            group_node_id.map(|g| vec![g]).unwrap_or_default();
+                                        ObjectRowVm::Known(Box::new(
+                                            manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
+                                                index: *index,
+                                                object_node_id: *object_node_id,
+                                                group_node_id: *group_node_id,
+                                                name: name.clone(),
+                                                visible: scoped_row(
+                                                    visible_addr.scope_path.clone(),
+                                                    visible_addr.node_doc_id,
+                                                    &visible_addr.param_id,
+                                                    if *visible_value { 1.0 } else { 0.0 },
+                                                    *visible_driven,
+                                                    0.0,
+                                                    1.0,
+                                                ),
+                                                transform: transform.as_ref().map(&transform_row),
+                                                material: material_row(material),
+                                                modifiers: modifier_chain
+                                                    .iter()
+                                                    .enumerate()
+                                                    .map(|(i, m)| manifold_ui::panels::scene_setup_panel::ModifierKnownRow {
+                                                        index: i,
+                                                        node_doc_id: m.node_doc_id,
+                                                        display_name: modifier_display_name(&m.type_id),
+                                                        params: modifier_param_rows(
+                                                            modifier_scope.clone(),
+                                                            m.node_doc_id,
+                                                            &m.type_id,
+                                                            &m.params,
+                                                            &m.driven,
+                                                        ),
+                                                    })
+                                                    .collect(),
+                                                modifiers_addable: *modifier_chain_parseable,
+                                            },
+                                        ))
+                                    }
+                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Custom { index } => {
+                                        ObjectRowVm::Custom { index: *index }
+                                    }
                                 })
                                 .collect();
                             // P3: Lights + Camera. Enum-label arrays
@@ -1680,6 +1717,7 @@ pub fn sync_inspector_data(
                                             manifold_ui::panels::scene_setup_panel::LightKnownRow {
                                                 index: r.index,
                                                 node_doc_id: r.node_doc_id,
+                                                name: r.name.clone(),
                                                 mode: enum_row(r.node_doc_id, "mode", r.mode_value, r.mode_driven, LIGHT_MODE_LABELS),
                                                 color: (
                                                     row(r.node_doc_id, "color_r", r.color_value.0, r.color_driven.0, 0.0, 1.0),
@@ -3069,7 +3107,7 @@ fn modifier_display_name(type_id: &str) -> String {
 /// tolerant walk) renders no param rows — the display name alone still
 /// shows, never a panic or a blank crash.
 fn modifier_param_rows(
-    group_node_id: u32,
+    scope: Vec<u32>,
     node_doc_id: u32,
     type_id: &str,
     params: &std::collections::BTreeMap<String, f32>,
@@ -3077,7 +3115,6 @@ fn modifier_param_rows(
 ) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
     use manifold_ui::panels::scene_setup_panel::{EnumRowValue, ModifierParamRowVm, RowAddr, RowValue};
     const AXIS_LABELS: &[&str] = &["X", "Y", "Z"];
-    let scope = vec![group_node_id];
     let numeric = |label: &'static str, key: &str, default: f32, min: f32, max: f32| ModifierParamRowVm::Numeric {
         label,
         row: RowValue {
