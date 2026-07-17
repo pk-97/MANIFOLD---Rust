@@ -60,7 +60,17 @@ Consequences, stated honestly: mid-drag values are live on the content thread be
 
 Test scope per phase: `cargo nextest run -p manifold-ui -p manifold-app -p manifold-editing -p manifold-playback`; scoped clippy; full sweep at landing. No GPU runs (no shader/kernel).
 
-### C-P1 — the row swap (one session, HIGH effort)
+### Phasing amendment (2026-07-17, after two execution sessions stopped short)
+
+C-P1 as one session bundled seven coordinated pieces across the shared dispatch path; two sessions correctly refused it. Split, using session 2's resolved findings (design-doc status note, points 1–3: `resolve_graph_target` is shareable; `SetGraphNodeParamCommand` already self-captures `previous_value` — the undo bug is dispatch CADENCE, per-event `Execute` instead of the card's `MutateProjectLive`-during-drag + one `Execute` on release; the three insertion points are `inspector.rs:1083/1119/1145`):
+
+- **C-P1a — plumbing + Environment/Fog (one session).** Build ONCE: the panel id map (D2), `SceneCardState` (D3), the three `dispatch_inspector` branches, the card drag cadence for scene rows (D4). Convert ONLY the Environment/Fog family (4 rows) end-to-end: `build_param_row` rendering, `match_param_row_click` routing, inline drawer, bespoke-builder deletion for that family, id-map-totality + undo-granularity tests, imported-def value test, before/after fog-density render proof (looked at). Gate: the family is COMPLETE by every §3 invariant scoped to it; all other families untouched and still working via their old path (transitional state is acceptable ONLY between sub-phases of this split, and the old path per family dies in its own sub-phase — no family is half-converted, ever).
+- **C-P1b — Object family** (transforms, color, Metallic/Roughness, eye per the amendment) — reuses C-P1a's plumbing; adds the light Object eye verification.
+- **C-P1c — Light + Camera + Lens families** (+ empty trailing slots per the eye amendment; render-level light-intensity proof — expected to CLOSE BUG-231).
+- **C-P1d — Modifier family + full bespoke-layer deletion** (§3 row-1 rg gate goes to 0 here) + the four flow-script updates + the doc's acceptance flow (scrub → drawer → driver → ONE undo).
+- **C-P2 unchanged** (polish + paper).
+
+### C-P1 — the row swap (superseded by the split above; original brief kept for the deliverable inventory)
 - **Entry state:** `76251784`+. Re-verify: build_param_row signature (param_slider_shared.rs:2223), lookup_param_mod_for_id (state_sync.rs:2500), the card drag-protocol dispatch arms, P3a's expose dispatch (ui_bridge/project.rs).
 - **Read-back:** this doc whole; param_card.rs + param_slider_shared.rs module docs; the card's drag Begin/Changed/Commit arms end-to-end; DESIGN_DOC_STANDARD §5–§6.
 - **Deliverables:** D1 row swap for ALL param-row families; D2 id map; D3 `SceneCardState`; D4 drag protocol; D5 ranges; deletion of the bespoke layer (§3 row 1); un-suppress `lookup_param_mod_for_id`; updated flow scripts (`scene-setup-select-updates`, `scene-panel-ux-p3a-expose-modulate`, `scene-panel-ux-p3b-i-expose-light`, `scene-setup-modifier-stack` — selectors move to the card-row widget names); the §3 undo-granularity and id-map tests.
