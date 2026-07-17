@@ -519,7 +519,7 @@ hat 0.270/0.529, perc 0.256/0.553. Kick electronic < the 0.5 round-3 bar → ver
 called without spending round 3; heldout not consumed (a dev shortfall is sufficient
 for a negative verdict; heldout spends only on ship candidates).
 
-**Rulings:** ADTOF stays, per the gate. The per-class gap table above is the
+**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; Stage-1's true kick ceiling is unknown until that's fixed and the kick line re-read. The verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug.) The per-class gap table above is the
 documented shortfall Peter asked for. The hat lead (n=2) and the lever-2 finding that
 fitted profiles regress on out-of-profile timbres both point the same way: signature
 labeling needs learned representations and much more per-class data — i.e. §7.1
