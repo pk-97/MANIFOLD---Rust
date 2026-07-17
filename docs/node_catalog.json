@@ -7854,7 +7854,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
@@ -7999,6 +7999,22 @@
           "label": "Recenter",
           "name": "recenter",
           "type": "bool"
+        },
+        {
+          "default": "-1",
+          "label": "Source Vertex Count",
+          "name": "source_vertex_count",
+          "range": [
+            "-1",
+            "8000000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Source Bbox Radius",
+          "name": "source_bbox_radius",
+          "type": "float"
         }
       ],
       "purpose": "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform.",
@@ -8050,6 +8066,12 @@
             "16000000"
           ],
           "type": "int"
+        },
+        {
+          "default": "false",
+          "label": "Skinned",
+          "name": "skinned",
+          "type": "bool"
         }
       ],
       "purpose": "Read a glTF/.glb file's sole mesh-owning node contributing `material_index` and emit its morph-target POSITION/NORMAL deltas as a flattened target-major Array(MeshVertex) — deltas[target_index * vertex_count + vertex_index]. Wire into node.morph_targets_blend's `deltas` input alongside node.gltf_mesh_source's base geometry (`in`) and node.gltf_morph_weights' sampled weights.",
@@ -8151,7 +8173,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
@@ -8270,7 +8292,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
@@ -8376,6 +8398,22 @@
             "8000000"
           ],
           "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Source Vertex Count",
+          "name": "source_vertex_count",
+          "range": [
+            "-1",
+            "8000000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Source Bbox Radius",
+          "name": "source_bbox_radius",
+          "type": "float"
         }
       ],
       "purpose": "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame.",

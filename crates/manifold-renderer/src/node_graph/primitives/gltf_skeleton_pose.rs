@@ -105,9 +105,10 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("trigger_count"),
             label: "Retrigger",
-            ty: ParamType::Int,
+            ty: ParamType::Trigger,
             // Port-shadowed by the same-named input; unwired, an outer-card
-            // `is_trigger` button writes here directly.
+            // `is_trigger` button writes here directly. Trigger-typed (not
+            // Int) or card validation rejects the import's Retrigger button.
             default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],

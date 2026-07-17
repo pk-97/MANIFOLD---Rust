@@ -206,6 +206,9 @@ fn float(v: f32) -> SerializedParamValue {
 fn int(v: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value: v }
 }
+fn bool_val(v: bool) -> SerializedParamValue {
+    SerializedParamValue::Bool { value: v }
+}
 fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
@@ -709,6 +712,12 @@ fn build_object_group(
     node_anims_by_clip: &[BTreeMap<usize, gltf_load::GltfNodeAnimation>],
     used_group_names: &mut std::collections::HashSet<String>,
     fresh_id: &mut impl FnMut() -> u32,
+    // BUG-194/BUG-195: the whole-scene bbox radius from THIS parse (build_import_graph's
+    // `radius` / merge_import_into_graph's `incoming_radius`) — stamped onto every
+    // mesh-source node this call creates as `source_bbox_radius`, so SceneVm's
+    // header and a future merge's scale-sanity have a real per-node provenance
+    // fact to read instead of BUG-195's orbit-camera proxy.
+    bbox_radius: f32,
 ) -> ObjectGroupOutput {
     let k = local_k;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
@@ -804,6 +813,13 @@ fn build_object_group(
                     .insert("material_index".to_string(), int(m.material_index as i32));
                 n.params
                     .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+                // BUG-194/BUG-195: import-time provenance, read by SceneVm
+                // (header vertex count) + merge_import_into_graph (scale
+                // sanity's reference radius). Never read by evaluate()/run().
+                n.params
+                    .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
+                n.params
+                    .insert("source_bbox_radius".to_string(), float(bbox_radius));
                 n
             };
             group_nodes.push(skinned_src);
@@ -857,7 +873,12 @@ fn build_object_group(
             skinmesh_node.params.insert("joint_count".to_string(), int(joint_count as i32));
             group_nodes.push(skinmesh_node);
 
-            group_wires.push(wire(mesh_id, "vertices", skinmesh_id, "in"));
+            // BUG-208: skin_mesh's `in` wire is deferred until AFTER the
+            // morph block below decides whether this object is ALSO
+            // morphed — a skin+morph combination chains
+            // node.morph_targets_blend between this node's `vertices` and
+            // skin_mesh's `in` (glTF applies morph then skin, §3.7.2); a
+            // skin-only object wires directly, same as before.
             group_wires.push(wire(mesh_id, "joints", skinmesh_id, "joints"));
             group_wires.push(wire(mesh_id, "weights", skinmesh_id, "weights"));
             group_wires.push(wire(pose_id, "joint_matrices", skinmesh_id, "matrices"));
@@ -887,24 +908,35 @@ fn build_object_group(
             mesh_node
                 .params
                 .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+            // BUG-194/BUG-195: import-time provenance, read by SceneVm
+            // (header vertex count) + merge_import_into_graph (scale
+            // sanity's reference radius). Never read by evaluate()/run().
+            mesh_node
+                .params
+                .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
+            mesh_node
+                .params
+                .insert("source_bbox_radius".to_string(), float(bbox_radius));
             group_nodes.push(mesh_node);
             None
         };
 
         // GLTF_ANIMATION_DESIGN.md A3: a morphed object's base geometry
-        // comes from the EXISTING `node.gltf_mesh_source` built just above
-        // (the `mesh_id`/`mesh_node_id` slot) — unlike skinning, ordinary
-        // node transforms DO position a morphed mesh, so there is no
-        // separate "morph mesh source" analogous to
-        // `node.gltf_skinned_mesh_source`. A skin+morph COMBINATION on the
-        // same object is out of scope (neither gate fixture is also
-        // skinned; `skinned_vertices_source.is_some()` means `mesh_id`
-        // above was claimed by `node.gltf_skinned_mesh_source` instead, so
-        // morph wiring is skipped rather than double-purposing that node
-        // id — re-derive if a future asset needs both).
-        let morphed_vertices_source: Option<u32> = if skinned_vertices_source.is_none()
-            && let Some(morph) = &m.morph
-        {
+        // comes from the EXISTING `node.gltf_mesh_source` (rigid case) or
+        // `node.gltf_skinned_mesh_source` (BUG-208: skin+morph case) built
+        // just above (the `mesh_id`/`mesh_node_id` slot) — unlike skinning,
+        // ordinary node transforms DO position a morphed mesh, so there is
+        // no separate "morph mesh source" analogous to
+        // `node.gltf_skinned_mesh_source` for the rigid path. When the
+        // object is ALSO skinned, glTF applies morph THEN skin (§3.7.2):
+        // the blend is chained between the skinned source's vertices and
+        // node.skin_mesh's `in` further below, and
+        // node.gltf_morph_deltas_source's `skinned` param routes the
+        // loader into the SAME untransformed bind-pose space
+        // node.gltf_skinned_mesh_source already uses (see that param's doc
+        // comment) — without it the deltas would be world-transformed
+        // while the base bind-pose vertices are not, a space mismatch.
+        let morphed_vertices_source: Option<u32> = if let Some(morph) = &m.morph {
             let weights_node_id = format!("morphweights_{k}");
             let weights_id = fresh_id();
             let (weight_rows, weights_clip_durations_rows, weights_duration_s) =
@@ -944,6 +976,12 @@ fn build_object_group(
                 "max_capacity".to_string(),
                 int((morph.target_count.max(1) * m.vertex_count.max(1)) as i32),
             );
+            // BUG-208: see node.gltf_morph_deltas_source's `skinned` param
+            // doc comment — must match whether `mesh_id` above resolved to
+            // node.gltf_skinned_mesh_source or node.gltf_mesh_source.
+            deltas_node
+                .params
+                .insert("skinned".to_string(), bool_val(skinned_vertices_source.is_some()));
             group_nodes.push(deltas_node);
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
@@ -967,15 +1005,39 @@ fn build_object_group(
             group_wires.push(wire(mesh_id, "vertices", blend_id, "in"));
             group_wires.push(wire(deltas_id, "deltas", blend_id, "deltas"));
             group_wires.push(wire(weights_id, "weights", blend_id, "weights"));
-            report_lines.push(format!(
-                "{group_name}: morphed ({} targets) — node.gltf_mesh_source + \
-                 node.gltf_morph_deltas_source + node.gltf_morph_weights + node.morph_targets_blend",
-                morph.target_count
-            ));
+            if let Some(skinmesh_id) = skinned_vertices_source {
+                // BUG-208: morph applied BEFORE skin (glTF 2.0 §3.7.2) —
+                // the blend's output feeds skin_mesh's `in` instead of the
+                // group output directly (the group-output match further
+                // below already routes through skinmesh_id whenever
+                // skinned_vertices_source is Some, regardless of this
+                // node's value).
+                group_wires.push(wire(blend_id, "out", skinmesh_id, "in"));
+                report_lines.push(format!(
+                    "{group_name}: morphed ({} targets) on a skinned object — \
+                     node.gltf_skinned_mesh_source + node.gltf_morph_deltas_source + \
+                     node.gltf_morph_weights + node.morph_targets_blend + node.skin_mesh \
+                     (morph applied before skin, glTF 2.0 §3.7.2 — BUG-208)",
+                    morph.target_count
+                ));
+            } else {
+                report_lines.push(format!(
+                    "{group_name}: morphed ({} targets) — node.gltf_mesh_source + \
+                     node.gltf_morph_deltas_source + node.gltf_morph_weights + node.morph_targets_blend",
+                    morph.target_count
+                ));
+            }
             Some(blend_id)
         } else {
             None
         };
+
+        // BUG-208: a skinned object with NO morph targets still needs its
+        // skin_mesh `in` wired directly from the skinned source (the
+        // morph-branch above only wires it when a blend node exists).
+        if let (Some(skinmesh_id), None) = (skinned_vertices_source, morphed_vertices_source) {
+            group_wires.push(wire(mesh_id, "vertices", skinmesh_id, "in"));
+        }
 
         let mat_id = fresh_id();
         let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
@@ -1282,7 +1344,21 @@ fn build_object_group(
         // (the recenter stays as transform_3d's own pos_x/y/z param
         // default; the animation source's wired output overrides it at
         // runtime, same as any port-shadow).
-        if m.animations.iter().any(Option::is_some) {
+        //
+        // BUG-205: SKINNED objects are excluded. A skinned mesh's
+        // positioning comes ENTIRELY from its joint palette (the A2
+        // doctrine above) — the joint worlds already include the static
+        // ancestor chain via joint_root_world. resolve_object_animation
+        // walks the same ancestor chain, so a rig with an animated
+        // ancestor above the joint tree (Sketchfab FBX exports animate
+        // `Bip01`, whose static scale is ALSO in that chain) would apply
+        // that ancestor's transform a SECOND time through transform_3d —
+        // skeleton_animated.glb rendered at 0.0254² of its authored size
+        // (a ~12px speck). An ANIMATED ancestor prefix is still sampled
+        // statically by the pose path (the documented joint_root_world
+        // approximation); wiring it here rigidly was never the fix for
+        // that — it double-transforms instead.
+        if m.animations.iter().any(Option::is_some) && skinned_vertices_source.is_none() {
             let anim_node_id = format!("anim_{k}");
             let anim_id = fresh_id();
             let mut anim_node =
@@ -1964,7 +2040,31 @@ fn build_import_graph(
     ];
     let radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
-    let distance = 2.2 * radius;
+    // Camera vertical FOV — hoisted here so both the framing-distance fit
+    // below and the camera node's own `fov_y` param (set further down) read
+    // the SAME value; a duplicated literal is how BUG-206-style drift
+    // happens in the first place.
+    let fov_y = 0.9_f32;
+    // BUG-206 fix: `2.2 * radius` alone frames by the bbox half-DIAGONAL,
+    // which for an elongated (tall/thin) object barely exceeds its dominant
+    // axis — the frame's vertical span contains the object with almost no
+    // margin, and camera tilt + perspective push it past the top/bottom
+    // edges. Frame by PER-AXIS fit instead: for each axis, the distance
+    // required so that half the axis's extent subtends no more than the
+    // half-FOV, with a 1.15 safety margin. The render aspect isn't known at
+    // import time, so the horizontal half-angle is conservatively treated
+    // as equal to the vertical one (square-aspect assumption — never
+    // UNDER-frames a wider-than-tall render).
+    let half_fov_tan = (fov_y * 0.5).tan();
+    let per_axis_fit = dims
+        .iter()
+        .map(|&extent| (extent * 0.5) / half_fov_tan * 1.15)
+        .fold(0.0f32, f32::max);
+    // The `2.2 * radius` floor keeps every COMPACT asset's framing IDENTICAL
+    // to before this fix (the golden-stability guarantee: per_axis_fit is
+    // only ever larger than the floor for objects dominated by one axis,
+    // where the diagonal-based distance genuinely under-frames).
+    let distance = (2.2 * radius).max(per_axis_fit);
     // BUG-165/BUG-169 root cause (diagnosed via GLB_XFAIL_BURNDOWN_DESIGN.md
     // P1's `--trace` instrument): `node.orbit_camera`'s `near` clip plane
     // defaults to a fixed 0.05 (camera_orbit.rs), which was never scaled to
@@ -2074,7 +2174,7 @@ fn build_import_graph(
     cam_node.params.insert("orbit".to_string(), float(0.7));
     cam_node.params.insert("tilt".to_string(), float(0.3));
     cam_node.params.insert("distance".to_string(), float(distance));
-    cam_node.params.insert("fov_y".to_string(), float(0.9));
+    cam_node.params.insert("fov_y".to_string(), float(fov_y));
     cam_node.params.insert("look_y".to_string(), float(0.0));
     // BUG-165/BUG-169 fix — see `near_clip` computation above.
     cam_node.params.insert("near".to_string(), float(near_clip));
@@ -2170,6 +2270,7 @@ fn build_import_graph(
             &node_anims_by_clip,
             &mut used_group_names,
             &mut fresh_id,
+            radius,
         );
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
@@ -2567,6 +2668,39 @@ fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
         .unwrap_or(0)
 }
 
+/// BUG-195's real fix: the largest KNOWN `source_bbox_radius` (BUG-194's
+/// import-time provenance param, stamped on every `node.gltf_mesh_source`/
+/// `node.gltf_skinned_mesh_source` this session's importer creates) among
+/// every mesh-source node already in the target def, searched recursively
+/// (mesh-source nodes live inside each object's group, same nesting
+/// `max_node_id_recursive` walks). `-1.0` (the "unknown" sentinel — a
+/// hand-built node the importer never touched) is excluded, never treated
+/// as a real radius of zero. `None` when the def has no mesh-source node
+/// with a known radius at all (a hand-built scene with no glTF import in
+/// its history) — the caller falls back to the orbit-camera proxy.
+fn max_known_source_bbox_radius(nodes: &[EffectGraphNode]) -> Option<f32> {
+    nodes
+        .iter()
+        .filter_map(|n| {
+            let own = matches!(
+                n.type_id.as_str(),
+                "node.gltf_mesh_source" | "node.gltf_skinned_mesh_source"
+            )
+            .then(|| match n.params.get("source_bbox_radius") {
+                Some(SerializedParamValue::Float { value }) if *value >= 0.0 => Some(*value),
+                _ => None,
+            })
+            .flatten();
+            let inner = n.group.as_ref().and_then(|g| max_known_source_bbox_radius(&g.nodes));
+            match (own, inner) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
+            }
+        })
+        .fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
+}
+
 /// D5's merge plan: everything `ImportModelIntoSceneCommand`
 /// (`manifold-editing`) needs to splice a SECOND (third, nth) glTF's object
 /// groups into an EXISTING scene's `render_scene`, without touching that
@@ -2626,20 +2760,17 @@ pub struct MergePlan {
 /// new object's `transform_3d` is seeded with `pos = -center` (the
 /// importer's own recenter convention). A uniform `scale` is ALSO seeded,
 /// but only when the incoming bbox radius differs from a "scene reference
-/// radius" by more than 10× in either direction. **Escalated, not guessed:**
-/// the def stores no per-object bbox/vertex metadata (BUG-193/194 found the
-/// identical gap for object counts and vertex counts — geometry simply
-/// isn't tracked in the graph def), so there is no literal "largest existing
-/// object's radius" to read back. Logged as BUG-195
-/// (`docs/BUG_BACKLOG.md`); the proxy used here — defaulted, not
-/// invented from nothing — is the target's own synthesized
-/// `node.orbit_camera`'s `distance` param, inverted through the EXACT
-/// formula [`build_import_graph`] used to seed it (`distance = 2.2 *
-/// radius`), since that value already encodes "how big is everything in
-/// this scene" as of the last import/creation that mattered. No top-level
-/// `node.orbit_camera` found → normalization is skipped entirely (native
-/// units), never guessed. Revisit trigger: BUG-195's real fix (a stored
-/// per-object size signal).
+/// radius" by more than 10× in either direction. **BUG-195, fixed:** the
+/// reference radius is [`max_known_source_bbox_radius`] — the largest
+/// `source_bbox_radius` (BUG-194's import-time provenance param) among the
+/// target def's own existing mesh-source nodes, a real per-object size fact
+/// rather than an inversion of a camera value the user may have hand-retuned.
+/// The old proxy — the target's own synthesized `node.orbit_camera`'s
+/// `distance` param, inverted through the EXACT formula [`build_import_graph`]
+/// used to seed it (`distance = 2.2 * radius`) — is kept as the fallback for
+/// a scene with no known-radius mesh-source node at all (a hand-built scene
+/// with no glTF import in its history). No top-level `node.orbit_camera`
+/// either → normalization is skipped entirely (native units), never guessed.
 fn merge_import_into_graph(
     def: &EffectGraphDef,
     summary: &GltfImportSummary,
@@ -2709,16 +2840,25 @@ fn merge_import_into_graph(
     let incoming_radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
 
-    // See the doc comment above for why this is a proxy, not a stored fact.
-    let scene_reference_radius: Option<f32> = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.orbit_camera")
-        .and_then(|n| match n.params.get("distance") {
-            Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
-            _ => None,
-        })
-        .filter(|r| *r > 1e-6);
+    // BUG-195 real fix: prefer a STORED per-object radius (BUG-194's
+    // `source_bbox_radius` provenance param) over the orbit-camera proxy
+    // below — the largest known radius among the target's own existing
+    // mesh-source nodes is a real fact about the scene's geometry, not an
+    // inversion of a camera framing value the user may have hand-retuned.
+    // Only when no mesh-source node in the def has a known radius (e.g. a
+    // scene built entirely by hand, never touched by this importer) does
+    // the proxy apply — kept unchanged as the fallback, never removed.
+    let scene_reference_radius: Option<f32> =
+        max_known_source_bbox_radius(&def.nodes).filter(|r| *r > 1e-6).or_else(|| {
+            def.nodes
+                .iter()
+                .find(|n| n.type_id == "node.orbit_camera")
+                .and_then(|n| match n.params.get("distance") {
+                    Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
+                    _ => None,
+                })
+                .filter(|r| *r > 1e-6)
+        });
 
     let normalize_scale: Option<f32> = scene_reference_radius.and_then(|ref_radius| {
         let ratio = incoming_radius / ref_radius;
@@ -2766,6 +2906,7 @@ fn merge_import_into_graph(
             &node_anims_by_clip,
             &mut used_group_names,
             &mut fresh_id,
+            incoming_radius,
         );
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
@@ -2914,11 +3055,11 @@ mod tests {
         // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
         // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
         let mut json_padded = json_bytes;
-        while json_padded.len() % 4 != 0 {
+        while !json_padded.len().is_multiple_of(4) {
             json_padded.push(b' ');
         }
         let mut bin_padded = bin;
-        while bin_padded.len() % 4 != 0 {
+        while !bin_padded.len().is_multiple_of(4) {
             bin_padded.push(0);
         }
         let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
@@ -3056,11 +3197,11 @@ mod tests {
         let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
 
         let mut json_padded = json_bytes;
-        while json_padded.len() % 4 != 0 {
+        while !json_padded.len().is_multiple_of(4) {
             json_padded.push(b' ');
         }
         let mut bin_padded = bin;
-        while bin_padded.len() % 4 != 0 {
+        while !bin_padded.len().is_multiple_of(4) {
             bin_padded.push(0);
         }
         let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
@@ -3764,6 +3905,64 @@ mod tests {
         }
     }
 
+    /// BUG-194/BUG-195: `build_import_graph` stamps `source_vertex_count`
+    /// (exactly `GltfMaterialInfo::vertex_count`) and `source_bbox_radius`
+    /// (the whole-import bbox radius, the same value the synthesized
+    /// orbit camera's `distance` is derived from) onto every mesh-source
+    /// node it creates — read back by `SceneVm`'s header and by a future
+    /// merge's scale-sanity rule.
+    #[test]
+    fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
+        let half_extent = 3.0_f32;
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Leaf", 250), full_material(1, "Bark", 900)],
+            bbox_min: [-half_extent, -half_extent, -half_extent],
+            bbox_max: [half_extent, half_extent, half_extent],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+        // Same radius formula `build_import_graph` uses for the synthesized
+        // orbit camera (dims are the full cube, diag/2).
+        let dims = 2.0 * half_extent;
+        let expected_radius = ((3.0 * dims * dims).sqrt() * 0.5).max(1e-3);
+
+        let mesh_sources: Vec<&EffectGraphNode> = def
+            .nodes
+            .iter()
+            .filter_map(|n| n.group.as_ref())
+            .flat_map(|g| g.nodes.iter())
+            .filter(|n| n.type_id == "node.gltf_mesh_source")
+            .collect();
+        assert_eq!(mesh_sources.len(), 2, "one node.gltf_mesh_source per material");
+
+        // Largest-by-vertex-count-first ordering (build_import_graph sorts
+        // materials that way) — Bark (900) is object 0, Leaf (250) is
+        // object 1.
+        let mut seen_counts: Vec<i32> = Vec::new();
+        for mesh in &mesh_sources {
+            let vcount = match mesh.params.get("source_vertex_count") {
+                Some(SerializedParamValue::Int { value }) => *value,
+                other => panic!("expected an Int source_vertex_count, got {other:?}"),
+            };
+            seen_counts.push(vcount);
+            let radius = match mesh.params.get("source_bbox_radius") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                other => panic!("expected a Float source_bbox_radius, got {other:?}"),
+            };
+            assert!(
+                (radius - expected_radius).abs() < 1e-4,
+                "expected {expected_radius}, got {radius}"
+            );
+        }
+        seen_counts.sort_unstable();
+        assert_eq!(seen_counts, vec![250, 900]);
+    }
+
     // -----------------------------------------------------------------
     // SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
     // -----------------------------------------------------------------
@@ -4010,6 +4209,64 @@ mod tests {
         assert!(
             !plan.report_lines.iter().any(|l| l.contains("scaled ×")),
             "no normalize report line when the ratio is within bounds"
+        );
+    }
+
+    /// BUG-195 real fix: when the target's own mesh-source node carries a
+    /// KNOWN `source_bbox_radius` that disagrees with what the
+    /// orbit-camera-distance proxy would derive (e.g. the user hand-retuned
+    /// Camera Distance on the card after import, per the confessed BUG-195
+    /// blind spot), the stored radius wins — never the proxy.
+    #[test]
+    fn merge_scale_sanity_prefers_stored_radius_over_camera_proxy() {
+        let mut def = scene_def_with_bbox_half_extent(1.0);
+        // The proxy (unmutated orbit_camera.distance / 2.2) is ~= sqrt(3) ~=
+        // 1.732 — same as the stored radius build_import_graph seeded, by
+        // construction. Mutate ONLY the stored radius to something wildly
+        // different, simulating a scene whose stored provenance no longer
+        // agrees with the (user-editable) camera distance.
+        let group = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID)
+            .expect("one object group");
+        let mesh = group
+            .group
+            .as_mut()
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|n| n.type_id == "node.gltf_mesh_source")
+            .expect("object group has a mesh source");
+        mesh.params
+            .insert("source_bbox_radius".to_string(), SerializedParamValue::Float { value: 100.0 });
+
+        // Incoming asset has the SAME bbox as the (unmutated) target scene —
+        // against the proxy (~1.732) the ratio is 1.0 (no normalize); against
+        // the mutated stored radius (100.0) the ratio is ~0.017 (normalizes).
+        let summary = merge_summary(vec![full_material(0, "Same", 100)], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_prefers_stored_radius.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge");
+
+        let new_group = plan.new_nodes.first().unwrap();
+        let transform = new_group
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .expect("object group has a transform_3d");
+        let scale = match transform.params.get("scale_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!(
+                "expected a seeded scale_x — the stored radius (100.0), not the camera proxy \
+                 (~1.732), must have driven this decision, got {other:?}"
+            ),
+        };
+        assert!(
+            scale > 10.0,
+            "stored radius (100.0) vs incoming (~1.732) should normalize UP by ~57x, got {scale}"
         );
     }
 
@@ -4671,6 +4928,321 @@ mod tests {
             .expect("import graph with an animated object must build through PresetRuntime::from_def");
     }
 
+    /// BUG-204 regression: the A4 Retrigger card param is `is_trigger`
+    /// and binds to the animation nodes' `trigger_count` — which must be
+    /// `ParamType::Trigger`, or validate.rs card lint (d) rejects the
+    /// assembled graph and EVERY animated or rigged glb fails at import
+    /// (skeleton_animated.glb, 2026-07-17: A4 shipped `trigger_count` as
+    /// Int four days after the lint landed). Runs the real fixture through
+    /// the same lint the import path uses.
+    #[test]
+    fn animated_and_rigged_import_passes_card_lints() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let (def, _report) =
+            super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        let registry = PrimitiveRegistry::with_builtin();
+        let graph = def.clone().into_graph(&registry).expect("import graph must build");
+        let (errors, _warnings) =
+            crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+        assert!(
+            errors.is_empty(),
+            "card lints must accept the assembled animated+rigged import: {errors:?}"
+        );
+    }
+
+    /// BUG-205 regression (double-transform half): a SKINNED object must
+    /// NOT get a `node.gltf_animation_source` wired into its transform_3d.
+    /// skeleton_animated.glb animates `Bip01` — an ancestor ABOVE the
+    /// joint tree whose static 0.0254 scale is already inside the joint
+    /// palette via `joint_root_world` — so the rigid path re-applying that
+    /// chain shrank the render to 0.0254² of its authored size (a ~12px
+    /// speck at the framing distance).
+    #[test]
+    fn skinned_import_gets_no_rigid_animation_source() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let (def, _report) =
+            super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+        assert!(
+            flat.nodes.iter().any(|n| n.type_id == "node.gltf_skeleton_pose"),
+            "rigged import must drive its mesh through node.gltf_skeleton_pose"
+        );
+        assert!(
+            !flat.nodes.iter().any(|n| n.type_id == "node.gltf_animation_source"),
+            "a skinned object's positioning comes entirely from its joint palette — \
+             a rigid node.gltf_animation_source on the same object re-applies the \
+             ancestor chain a second time (BUG-205)"
+        );
+    }
+
+    /// BUG-208: an object with BOTH a skin and morph targets must import
+    /// with its morph animation COMPOSED, not silently dropped —
+    /// `node.morph_targets_blend` chained between
+    /// `node.gltf_skinned_mesh_source` and `node.skin_mesh`'s `in` (glTF
+    /// applies morph then skin, §3.7.2), and the deltas source's
+    /// `skinned` param set so its loaded deltas share the skinned
+    /// source's untransformed bind-pose space. `skin_morph.glb`: a
+    /// Blender-authored armature-skinned cylinder with a keyframed
+    /// "Bulge" shape key, carrying both a skin AND morph targets plus
+    /// animation channels for each.
+    #[test]
+    fn skin_and_morph_combination_composes_instead_of_dropping() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/hostile/skin_morph.glb");
+        let (def, report) = super::assemble_import_graph(&path).expect("assemble skin_morph.glb");
+
+        assert!(
+            report.report_lines.iter().any(|l| l.contains("BUG-208")),
+            "import report must call out the skin+morph composition explicitly: {:?}",
+            report.report_lines
+        );
+
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+        assert!(
+            flat.nodes.iter().any(|n| n.type_id == "node.gltf_skinned_mesh_source"),
+            "skin+morph object must still be driven by node.gltf_skinned_mesh_source"
+        );
+        let blend = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.morph_targets_blend")
+            .expect("skin+morph object must carry a node.morph_targets_blend — morph animation \
+                     dropped silently (BUG-208)");
+        let skinmesh = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.skin_mesh")
+            .expect("skinned object must carry node.skin_mesh");
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == blend.id && w.from_port == "out"
+                    && w.to_node == skinmesh.id && w.to_port == "in"),
+            "node.morph_targets_blend's `out` must feed node.skin_mesh's `in` directly — \
+             glTF applies morph before skin (§3.7.2)"
+        );
+        let deltas = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.gltf_morph_deltas_source")
+            .expect("skin+morph object must carry node.gltf_morph_deltas_source");
+        assert_eq!(
+            deltas.params.get("skinned"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "the deltas source must be told this object is skinned — otherwise its loader \
+             world-transforms the deltas while the skinned base vertices stay untransformed \
+             (a coordinate-space mismatch, BUG-208)"
+        );
+    }
+
+    /// The hostile fixture shelf: real-world-shaped assets (Sketchfab FBX
+    /// conversions, Mixamo rigs, Blender exports) whose traits the Khronos
+    /// suite doesn't exercise — transform-bearing ancestors above joint
+    /// trees, unit-conversion scales, animated prefixes. BUG-204 and
+    /// BUG-205 both shipped through green gates because no oracle ever fed
+    /// the import pipeline this input class; every glb under
+    /// `tests/fixtures/gltf/hostile/` runs the full CPU chain here
+    /// (assemble → graph build → card lints → PresetRuntime build), and
+    /// the gpu-proofs sibling below renders each one and checks framing
+    /// invariants. Add assets by dropping a glb in the directory —
+    /// `scripts/blender/fbx2glb.py` converts FBX-only sources.
+    fn hostile_fixture_paths() -> Vec<std::path::PathBuf> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/hostile");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read hostile fixture dir {}: {e}", dir.display()))
+            .filter_map(|entry| {
+                let p = entry.ok()?.path();
+                (p.extension().and_then(|e| e.to_str()) == Some("glb")).then_some(p)
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "hostile fixture shelf is empty — the sweep is vacuous");
+        paths
+    }
+
+    #[test]
+    fn hostile_fixtures_assemble_validate_and_build() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let (def, _report) = super::assemble_import_graph(&path)
+                .unwrap_or_else(|e| panic!("{name}: assemble_import_graph failed: {e}"));
+            let registry = PrimitiveRegistry::with_builtin();
+            let graph = def
+                .clone()
+                .into_graph(&registry)
+                .unwrap_or_else(|e| panic!("{name}: import graph failed to build: {e:?}"));
+            let (errors, _warnings) =
+                crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+            assert!(errors.is_empty(), "{name}: card lints rejected the import: {errors:?}");
+            PresetRuntime::from_def(def, &registry, None)
+                .unwrap_or_else(|e| panic!("{name}: PresetRuntime::from_def failed: {e:?}"));
+        }
+    }
+
+    /// Merge every hostile fixture into a real existing scene (the azalea
+    /// import) and run the merged def through the same CPU chain — merge
+    /// reuses `build_object_group`, but that sharing is exactly the kind
+    /// of claim this shelf exists to prove rather than assume (BUG-204's
+    /// class: two features correct alone, never composed). Also pins
+    /// BUG-205 through the merge path: a merged skinned object must get
+    /// its skeleton pose and must NOT get a rigid animation source.
+    #[test]
+    fn hostile_fixtures_merge_into_existing_scene() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        let (target, _report) = super::assemble_import_graph(&azalea_fixture_path())
+            .expect("assemble azalea target scene");
+        let (render_id, existing_objects) = render_scene_objects(&target);
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let plan = super::assemble_merge_plan(&target, &path)
+                .unwrap_or_else(|e| panic!("{name}: assemble_merge_plan failed: {e}"));
+
+            let had_skin =
+                plan.new_nodes.iter().any(|n| contains_type(n, "node.gltf_skeleton_pose"));
+            let has_rigid_anim =
+                plan.new_nodes.iter().any(|n| contains_type(n, "node.gltf_animation_source"));
+            if had_skin {
+                assert!(
+                    !has_rigid_anim,
+                    "{name}: merged skinned object carries a rigid gltf_animation_source — \
+                     BUG-205's double-transform through the merge path"
+                );
+            }
+
+            let mut merged = target.clone();
+            merged.nodes.extend(plan.new_nodes.clone());
+            merged.wires.extend(plan.new_wires.clone());
+            if let Some(node) = merged.nodes.iter_mut().find(|n| n.id == render_id) {
+                node.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+                );
+            }
+            if let Some(meta) = merged.preset_metadata.as_mut() {
+                meta.params.extend(plan.new_card_params.clone());
+                meta.bindings.extend(plan.new_card_bindings.clone());
+                meta.string_bindings.extend(plan.new_string_bindings.clone());
+            }
+
+            let registry = PrimitiveRegistry::with_builtin();
+            let graph = merged
+                .clone()
+                .into_graph(&registry)
+                .unwrap_or_else(|e| panic!("{name}: merged graph failed to build: {e:?}"));
+            let (errors, _warnings) =
+                crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+            assert!(errors.is_empty(), "{name}: card lints rejected the merged def: {errors:?}");
+            PresetRuntime::from_def(merged, &registry, None)
+                .unwrap_or_else(|e| panic!("{name}: merged PresetRuntime build failed: {e:?}"));
+            let _ = existing_objects;
+        }
+    }
+
+    /// Group-aware type search: merge plans emit one GROUP node per object
+    /// with the real producers in its `group.body`.
+    fn contains_type(node: &EffectGraphNode, type_id: &str) -> bool {
+        if node.type_id == type_id {
+            return true;
+        }
+        node.group
+            .as_ref()
+            .is_some_and(|g| g.nodes.iter().any(|inner| contains_type(inner, type_id)))
+    }
+
+    /// Render every hostile fixture and check framing invariants — the
+    /// automated form of "does it look plausibly right": enough lit pixels
+    /// to be a real render (BUG-205's speck fails), not a full-frame
+    /// blowout, and the lit centroid near frame center (wrong-space
+    /// framing fails). Edge-contact (object cropped at opposite frame
+    /// edges) is checked at TWO phases — 0.0 (straight/rest pose, the worst
+    /// case for an elongated skinned rig) and 0.25 (the original single
+    /// phase) — against an xfail list. BUG-206 fixed the framing distance
+    /// (per-axis fit, not bbox-diagonal), so the list is empty; a fixture
+    /// only goes back on it after investigation confirms the crop is a
+    /// distinct, unrelated bug (see BUG-206 backlog entry).
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn hostile_fixtures_render_within_framing_invariants() {
+        let (w, h) = (256u32, 256u32);
+        const EDGE_XFAIL: &[&str] = &[];
+        const PHASES: &[f32] = &[0.0, 0.25];
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            for &phase in PHASES {
+                let (def, _report) = super::assemble_import_graph(&path)
+                    .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
+                let duration_s = skeleton_pose_duration_s(&def);
+                let rgba = render_skinned_import_at_progress(def, w, h, phase, duration_s);
+
+                let mut lit = 0u64;
+                let (mut cx, mut cy) = (0.0f64, 0.0f64);
+                let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = ((y * w + x) * 4) as usize;
+                        if rgba[i].max(rgba[i + 1]).max(rgba[i + 2]) > 8 {
+                            lit += 1;
+                            cx += x as f64;
+                            cy += y as f64;
+                            top |= y == 0;
+                            bottom |= y == h - 1;
+                            left |= x == 0;
+                            right |= x == w - 1;
+                        }
+                    }
+                }
+                let fraction = lit as f64 / (w as u64 * h as u64) as f64;
+                assert!(
+                    (0.005..=0.95).contains(&fraction),
+                    "{name}@phase{phase}: lit fraction {fraction:.4} outside [0.005, 0.95] — \
+                     speck (BUG-205 class), black frame, or full-frame blowout"
+                );
+                let (cx, cy) = (cx / lit as f64 / w as f64, cy / lit as f64 / h as f64);
+                assert!(
+                    (0.2..=0.8).contains(&cx) && (0.2..=0.8).contains(&cy),
+                    "{name}@phase{phase}: lit centroid ({cx:.2}, {cy:.2}) outside the center \
+                     region — wrong-space framing/recenter"
+                );
+                let cropped = (top && bottom) || (left && right);
+                if !EDGE_XFAIL.contains(&name.as_str()) {
+                    assert!(
+                        !cropped,
+                        "{name}@phase{phase}: object touches opposite frame edges — default \
+                         framing crops it (BUG-206 class)"
+                    );
+                }
+            }
+        }
+    }
+
+    /// BUG-205 regression (bbox-space half): the import summary's bbox for
+    /// a skinned mesh must live in bind-pose SKINNED space (what
+    /// `node.skin_mesh` renders), not the mesh node's world space (which
+    /// glTF skinning ignores). skeleton_animated.glb's two spaces disagree
+    /// visibly: mesh-node-world y spans 0.36..2.22, bind-skinned y spans
+    /// -0.57..1.20 — the old bbox recentered/framed a box the skeleton
+    /// never occupies (feet cropped below frame).
+    #[test]
+    fn skinned_import_summary_bbox_is_in_bind_skinned_space() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let summary =
+            super::gltf_load::gltf_import_summary(&path).expect("parse skeleton_animated.glb");
+        assert!(
+            summary.bbox_min[1] < 0.0 && summary.bbox_max[1] < 1.5,
+            "bbox must be the bind-pose skinned one (y ≈ -0.57..1.20), got y {:.3}..{:.3} — \
+             the mesh-node-world bbox (y ≈ 0.36..2.22) means the summary regressed to \
+             treating the skinned mesh as static (BUG-205)",
+            summary.bbox_min[1],
+            summary.bbox_max[1]
+        );
+    }
+
     /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 (Table params + the new
     /// node type survive V1 JSON save→reload — the STANDARD §5 gate must
     /// PROVE this, not assume it, per the phase brief).
@@ -5190,12 +5762,9 @@ mod tests {
             "imported_azalea_renders_faithfully_to_png: non-black pixel fraction = {fraction:.4} \
              ({max_attempts} attempts budget, total {total})"
         );
-        assert!(
-            fraction > 0.02,
-            "expected >2% non-black pixels after polling for both background parses, got \
-             {fraction:.4} — likely a broken importer graph, a parse that never landed, or empty geometry"
-        );
-
+        // PNG is written BEFORE the coverage assert so a failing run still
+        // leaves the frame on disk — the assert message alone can't show
+        // WHERE the pixels went (tiny vs offset vs black, BUG-205's triage).
         let out_path = std::env::var("MESH_SNAP_OUT")
             .unwrap_or_else(|_| "target/mesh-snap/imported_azalea.png".to_string());
         if let Some(parent) = std::path::Path::new(&out_path).parent() {
@@ -5205,6 +5774,11 @@ mod tests {
             .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
         println!(
             "imported_azalea_renders_faithfully_to_png: wrote {out_path} (fraction {fraction:.4}, report {report:?})"
+        );
+        assert!(
+            fraction > 0.02,
+            "expected >2% non-black pixels after polling for both background parses, got \
+             {fraction:.4} — likely a broken importer graph, a parse that never landed, or empty geometry"
         );
     }
 
@@ -6213,12 +6787,12 @@ mod tests {
         bin.extend(uvs.iter().flatten().flat_map(|f| f.to_le_bytes()));
         let idx_off = bin.len();
         bin.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         let png_off = bin.len();
         bin.extend_from_slice(&png);
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
 
@@ -6257,7 +6831,7 @@ mod tests {
             "buffers": [{"byteLength": bin.len()}]
         });
         let mut json_bytes = serde_json::to_vec(&json).expect("fixture json");
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
 

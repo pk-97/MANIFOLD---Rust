@@ -60,7 +60,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use manifold_core::LayerId;
-use manifold_editing::command::Command;
+use manifold_editing::command::{Command, CompositeCommand};
+use manifold_editing::undo::UndoRedoManager;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::ui_cache_manager::UICacheManager;
 use manifold_renderer::ui_renderer::UIRenderer;
@@ -70,7 +71,7 @@ use manifold_ui::automation::{
 use manifold_ui::automation_hit_tester::AutomationHitTargets;
 use manifold_ui::clip_hit_tester::ClipHitTargets;
 use manifold_ui::hit_targets::HitTargets;
-use manifold_ui::input::{PointerAction, UIEvent};
+use manifold_ui::input::{Key, PointerAction, UIEvent};
 use manifold_ui::interaction_overlay::InteractionOverlay;
 use manifold_ui::node::{Rect, Vec2};
 use manifold_ui::panels::PanelAction;
@@ -294,6 +295,20 @@ struct Runner {
     needs_structural_sync: bool,
     scroll_dirty: ScrollDirty,
     pre_drag_commands: Vec<Box<dyn Command>>,
+    // BUG-198: the harness had no undo stack at all — commands executed
+    // straight against `data.project` via `AppEditingHost`/`ui_bridge` and
+    // were never recorded anywhere, so a headless `Key Z` step was a pure
+    // no-op that still reported "ok" (silently proving nothing). Real
+    // `UndoRedoManager`, same 200-command cap as the content thread's,
+    // fed by draining `_content_rx` after every step (see
+    // `record_executed_commands`) — every `ContentCommand::Execute`/
+    // `ExecuteBatch` sent through the seam this run already applied
+    // directly to `data.project` gets `record()`-ed here (NOT re-executed;
+    // `AppEditingHost`/`ui_bridge` always mutate the project synchronously
+    // before sending, matching the live app's `local_project` pattern —
+    // see the module doc). `Key`'s Cmd+Z / Cmd+Shift+Z arm dispatches
+    // against this directly.
+    undo: UndoRedoManager,
     clock: f32,
     modifiers: manifold_ui::input::Modifiers,
     // Scratch state `ui_bridge::dispatch` threads through the live
@@ -333,6 +348,7 @@ impl Runner {
             needs_structural_sync: false,
             scroll_dirty: ScrollDirty::default(),
             pre_drag_commands: Vec::new(),
+            undo: UndoRedoManager::new(),
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
@@ -362,7 +378,7 @@ impl Runner {
         render: &mut RenderState,
     ) -> StepResult {
         let action_desc = format!("{action:?}");
-        match action {
+        let outcome = match action {
             AutomationAction::Step { frames } => {
                 // P2 (D3, D9a): each stepped frame drives the REAL seam —
                 // `ui.update()` (advances any wall-clock-driven tween, e.g.
@@ -428,18 +444,67 @@ impl Runner {
             AutomationAction::Key { key, modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
-                ui.key_event(*key, *modifiers);
-                // Was `let _ = ui.process_events()` — key-triggered panel
-                // actions were resolved and then dropped on the floor (the
-                // same dormant seam as the pre-2026-07-07 apply_panel_actions).
-                self.drain_and_dispatch(ui, data);
-                self.advance_frame(ui, data, zoom_ppb, render, false);
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: format!("key {key:?}"),
-                    artifact: None,
+                // BUG-198: `UIRoot::key_event` only resolves text-focused
+                // widgets — every OTHER modifier-bearing key silently
+                // no-op'd through it and still reported "ok", which is the
+                // actual bug (a script asserting an undo/redo/shortcut
+                // "passed" when nothing happened). Cmd+Z / Cmd+Shift+Z are
+                // the one pair with a real headless seam (`self.undo`,
+                // above); every other modifier combo fails loudly instead
+                // of falling through, mirroring the `Text` arm's fail.
+                // Plain unmodified keys keep the existing `key_event` path.
+                if modifiers.is_command_only() && *key == Key::Z {
+                    let undone = self.undo.undo(&mut data.project);
+                    // Undo can add/remove nodes, layers, clips — always
+                    // force a structural resync rather than guessing per
+                    // command (same conservative call `commit_command_batch`
+                    // makes for a completed drag).
+                    self.needs_structural_sync = true;
+                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: format!("undo -> {undone} (undo_count={})", self.undo.undo_count()),
+                        artifact: None,
+                    }
+                } else if modifiers.is_command_shift() && *key == Key::Z {
+                    let redone = self.undo.redo(&mut data.project);
+                    self.needs_structural_sync = true;
+                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: format!("redo -> {redone} (redo_count={})", self.undo.redo_count()),
+                        artifact: None,
+                    }
+                } else if !modifiers.is_none() {
+                    self.fail(
+                        index,
+                        action_desc,
+                        ui,
+                        data,
+                        out_dir,
+                        format!(
+                            "no headless seam for modifier-bearing Key {key:?} ({modifiers:?}) — \
+                             only Cmd+Z (undo) / Cmd+Shift+Z (redo) are wired; see BUG-198"
+                        ),
+                    )
+                } else {
+                    ui.key_event(*key, *modifiers);
+                    // Was `let _ = ui.process_events()` — key-triggered panel
+                    // actions were resolved and then dropped on the floor (the
+                    // same dormant seam as the pre-2026-07-07 apply_panel_actions).
+                    self.drain_and_dispatch(ui, data);
+                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: format!("key {key:?}"),
+                        artifact: None,
+                    }
                 }
             }
             AutomationAction::Text { .. } => {
@@ -456,6 +521,37 @@ impl Runner {
             }
             AutomationAction::Assert { selector, check } => {
                 self.assert(ui, data, index, action_desc, selector, check, out_dir)
+            }
+        };
+        // BUG-198: whatever this step just sent over `content_tx` (via
+        // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
+        // directly to `data.project` — record it into the harness's own
+        // undo stack so `Key`'s Cmd+Z/Cmd+Shift+Z arm has something real to
+        // act on. Every step drains unconditionally (most steps sent
+        // nothing, so this is a no-op `try_recv` miss).
+        self.record_executed_commands();
+        outcome
+    }
+
+    /// Drains every `ContentCommand` this step's `AppEditingHost`/
+    /// `ui_bridge::dispatch` calls sent over `content_tx` (the receiver is
+    /// otherwise held only to keep the channel alive — see `Runner::new`)
+    /// and folds the editing ones into the harness's `undo` stack. NEVER
+    /// re-executes: `AppEditingHost`/`ui_bridge` always mutate
+    /// `data.project` synchronously before sending (mirroring the live
+    /// app's `local_project` pattern, module doc), so by the time this runs
+    /// the command has already taken effect — `record()`, not `execute()`.
+    /// Non-editing variants (`SeekTo`, `Undo`, …) are inert here; the
+    /// harness's headless `Key` arm drives `self.undo` directly instead of
+    /// routing through this channel.
+    fn record_executed_commands(&mut self) {
+        while let Ok(cmd) = self._content_rx.try_recv() {
+            match cmd {
+                ContentCommand::Execute(cmd) => self.undo.record(cmd),
+                ContentCommand::ExecuteBatch(cmds, desc) => {
+                    self.undo.record(Box::new(CompositeCommand::new(cmds, desc)));
+                }
+                _ => {}
             }
         }
     }
