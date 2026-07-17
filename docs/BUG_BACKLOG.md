@@ -172,7 +172,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-220 (scene-setup-close-button-bypasses-shared-toggle-action) — the Scene Setup dock's × button doesn't visibly close the panel — found 2026-07-17, Peter live-testing the dock ("The close button on the scene panel also doesn't work")
+### BUG-224 (scene-setup-close-button-bypasses-shared-toggle-action) — the Scene Setup dock's × button doesn't visibly close the panel — found 2026-07-17, Peter live-testing the dock ("The close button on the scene panel also doesn't work")
 
 **Status:** FIXED 2026-07-17 (`lane/panel-interaction-bugs`) — `ScenePanel::handle_event`'s `Click` arm for `close_id` now returns `(true, vec![PanelAction::OpenSceneSetup])` instead of calling `self.close()` directly, mirroring `AudioSetupPanel::handle_event`'s already-correct close arm (which has its own passing unit test, `close_toggles_audio_dock`, documenting the "one toggle path" pattern). Regression test added: `scene_setup_panel::tests::close_button_click_routes_through_the_shared_toggle_action`. L3 proof: new `scripts/ui-flows/scene-setup-close-button.json` (opens the dock, asserts "Outliner"/"×" exist, clicks "×", asserts both "Outliner" and "Scene Setup" are gone — green against the `gltfscene` fixture; the dispatch log shows `dispatched OpenSceneSetup (structural=true)` firing on the × click, confirming the correct action now flows).
 
@@ -182,7 +182,17 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Escaped:** SCENE_OBJECT_AND_PANEL_V2's P4/P5 (outliner + properties panel, landed 2026-07-17, `e78d97d2`) rebuilt this panel's body extensively but never added a close-button test or flow — the existing `scene-setup-add-fog-drag.json`/other flows all open the dock and never close it via the × (Escape/header-toggle paths, which route correctly through `toggle_scene_dock()`, were exercised instead). No flow or unit test ever drove `handle_event(Click { close_id })` before this session.
 
-### BUG-219 (scene-setup-dock-scroll-state-updates-but-never-repaints) — mouse-wheel scroll over the Scene Setup (and Audio Setup) dock updates internal scroll state but the screen never visibly moves — found 2026-07-17, Peter live-testing the dock ("Scrolling is still not working on the scene panel"), reopens BUG-199 (closed 2026-07-17 same day, `2f7c6331`) for the real-mouse path BUG-199's own headless proof never reached
+### BUG-225 (ui-flow-harness-first-gesture-free-rebuild-masks-missing-invalidation) — the headless flow harness cannot detect missing rebuild-invalidation bugs: the first dispatched gesture gets a free full rebuild, and `needs_structural_sync` never resets once set — found 2026-07-17, lane/panel-interaction-bugs, while root-causing BUG-223
+
+**Status:** OPEN — MED (verification infra; every L3 flow gate that asserts "the screen changed after an input" is potentially proving less than it claims for invalidation-class bugs).
+
+**Symptom:** BUG-199's two landing flows stayed green while the scroll fix they gated was visibly broken in the app (BUG-223). The harness masked it twice over: `Runner::advance_frame` forces one full `ui_root.build()` on the first dispatched gesture of any script (via `Inspector::skip_to_settled`), and `needs_structural_sync`, once set by any earlier step, is never reset to `false` — so every subsequent step also rebuilds. A flow can therefore never distinguish "this input correctly requested a rebuild" from "the harness rebuilt anyway."
+
+**Root cause:** harness-side rebuild gating diverges from the app's dirty-flag-gated rebuild (`apply_ui_frame_invalidations`) — the exact fidelity-by-construction drift `HARNESS_FIDELITY_INVARIANT_PROPOSAL.md` exists to kill; this is a new instance at the invalidation layer.
+
+**Fix shape:** make the harness honor the app's real invalidation gating (no free first-gesture rebuild; reset `needs_structural_sync` per frame exactly as the app does), then add a negative meta-flow that scrolls WITHOUT the fix's `needs_rebuild = true` and asserts the screen does NOT move — proving the harness can now see this bug class. Evidence and mechanism detail: BUG-223's Escaped note (same file), found by instrumented divergence-diffing, 2026-07-17.
+
+### BUG-223 (scene-setup-dock-scroll-state-updates-but-never-repaints) — mouse-wheel scroll over the Scene Setup (and Audio Setup) dock updates internal scroll state but the screen never visibly moves — found 2026-07-17, Peter live-testing the dock ("Scrolling is still not working on the scene panel"), reopens BUG-199 (closed 2026-07-17 same day, `2f7c6331`) for the real-mouse path BUG-199's own headless proof never reached
 
 **Status:** FIXED 2026-07-17 (`lane/panel-interaction-bugs`) — `window_input.rs`'s `primary_mouse_wheel` dock-scroll branch (added by BUG-199) now sets `self.needs_rebuild = true` after `process_scroll`, matching the inspector branch's own precedent three lines below it. Stale "the dock rebuilds every frame" comments in `scene_setup_panel.rs`/`audio_setup_panel.rs` corrected in the same diff.
 

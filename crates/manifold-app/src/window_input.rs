@@ -692,7 +692,7 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
-            // BUG-199/BUG-219: Audio Setup / Scene Setup docks — route
+            // BUG-199/BUG-223: Audio Setup / Scene Setup docks — route
             // through the generic `UIEvent::Scroll` pipeline (same mechanism
             // the open-dropdown branch above uses) so the real app and the
             // headless `Gesture::Scroll` harness share one path. `contains()`
@@ -700,7 +700,7 @@ impl Application {
             // `Rect::ZERO`. BUG-199's original fix assumed "the docks
             // rebuild every frame" — false: `app_render.rs`'s
             // `apply_ui_frame_invalidations` only rebuilds when
-            // `needs_rebuild`/`scroll_dirty` says so (BUG-219 escaped
+            // `needs_rebuild`/`scroll_dirty` says so (BUG-223 escaped
             // because the headless script harness always forces one rebuild
             // on its first dispatched gesture, via `Inspector::
             // skip_to_settled`'s `settled` flag — masking a scroll that

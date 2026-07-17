@@ -1997,7 +1997,7 @@ impl AudioSetupPanel {
             // before emitting this, so no further position check is needed here.
             // `window_input.rs`'s dock-scroll branch also sets
             // `needs_rebuild` so the next frame actually re-applies the
-            // new offset (BUG-219: it used to assume this happened for
+            // new offset (BUG-223: it used to assume this happened for
             // free every frame — it doesn't).
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);

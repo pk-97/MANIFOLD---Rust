@@ -2422,7 +2422,7 @@ impl ScenePanel {
         match event {
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
-                    // BUG-220: this used to call `self.close()` directly —
+                    // BUG-224: this used to call `self.close()` directly —
                     // that only flips the panel-local `open` flag, so
                     // `ui_root.layout.scene_setup_width` (the dock's actual
                     // screen footprint) never reset to 0, no rebuild ever
@@ -2753,7 +2753,7 @@ impl ScenePanel {
             // before emitting this, so no further position check is needed here.
             // `window_input.rs`'s dock-scroll branch also sets
             // `needs_rebuild` so the next frame actually re-applies the
-            // new offset (BUG-219: it used to assume this happened for
+            // new offset (BUG-223: it used to assume this happened for
             // free every frame — it doesn't).
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
@@ -3222,7 +3222,7 @@ mod tests {
         ));
     }
 
-    /// BUG-220 regression: the × close button used to call `self.close()`
+    /// BUG-224 regression: the × close button used to call `self.close()`
     /// directly, which only flips the panel-local `open` flag — it never
     /// told the app to reset `layout.scene_setup_width` back to 0 or to
     /// rebuild, so on the real app the dock's screen footprint and content
