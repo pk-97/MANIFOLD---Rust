@@ -1,0 +1,3755 @@
+{
+  "class": "perc",
+  "baseline": {
+    "params": {
+      "knob": "baseline",
+      "config": "all defaults"
+    },
+    "per_track": [
+      {
+        "id": "babyslakh_Track00001",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 637,
+        "n_truth": 166,
+        "perc_f1": 0.40099626400996263,
+        "precision": 0.25274725274725274,
+        "recall": 0.9698795180722891
+      },
+      {
+        "id": "babyslakh_Track00002",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 304,
+        "n_truth": 1070,
+        "perc_f1": 0.37409024745269287,
+        "precision": 0.8453947368421053,
+        "recall": 0.24018691588785046
+      },
+      {
+        "id": "babyslakh_Track00003",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 1172,
+        "n_truth": 144,
+        "perc_f1": 0.15957446808510642,
+        "precision": 0.08959044368600683,
+        "recall": 0.7291666666666666
+      },
+      {
+        "id": "babyslakh_Track00004",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 831,
+        "n_truth": 848,
+        "perc_f1": 0.8648004764740918,
+        "precision": 0.8736462093862816,
+        "recall": 0.8561320754716981
+      },
+      {
+        "id": "babyslakh_Track00005",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 1005,
+        "n_truth": 1098,
+        "perc_f1": 0.8264384213029006,
+        "precision": 0.8646766169154229,
+        "recall": 0.7914389799635702
+      },
+      {
+        "id": "babyslakh_Track00006",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 472,
+        "n_truth": 72,
+        "perc_f1": 0.18014705882352938,
+        "precision": 0.1038135593220339,
+        "recall": 0.6805555555555556
+      },
+      {
+        "id": "babyslakh_Track00007",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 883,
+        "n_truth": 500,
+        "perc_f1": 0.7013738250180767,
+        "precision": 0.549263873159683,
+        "recall": 0.97
+      },
+      {
+        "id": "babyslakh_Track00008",
+        "domain": "other",
+        "source": "babyslakh",
+        "n_pred": 617,
+        "n_truth": 982,
+        "perc_f1": 0.6579111944965602,
+        "precision": 0.8525121555915721,
+        "recall": 0.5356415478615071
+      }
+    ],
+    "mean_f1": 0.5206664944578651,
+    "by_domain": {
+      "other": {
+        "mean": 0.5206664944578651,
+        "n": 8
+      },
+      "overall": {
+        "mean": 0.5206664944578651,
+        "n": 8
+      }
+    },
+    "one_shot_recall_overall": null,
+    "one_shot_n_truth_total": 0,
+    "n_tracks_scored": 8
+  },
+  "per_family": {
+    "threshold": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.098
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 693,
+              "n_truth": 166,
+              "perc_f1": 0.37951105937136204,
+              "precision": 0.2352092352092352,
+              "recall": 0.9819277108433735
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 426,
+              "n_truth": 1070,
+              "perc_f1": 0.46390374331550804,
+              "precision": 0.8145539906103286,
+              "recall": 0.32429906542056075
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1309,
+              "n_truth": 144,
+              "perc_f1": 0.1445285615966965,
+              "precision": 0.08021390374331551,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 987,
+              "n_truth": 848,
+              "perc_f1": 0.8305177111716622,
+              "precision": 0.7720364741641338,
+              "recall": 0.8985849056603774
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1114,
+              "n_truth": 1098,
+              "perc_f1": 0.840867992766727,
+              "precision": 0.8348294434470377,
+              "recall": 0.8469945355191257
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 537,
+              "n_truth": 72,
+              "perc_f1": 0.17405582922824303,
+              "precision": 0.09869646182495345,
+              "recall": 0.7361111111111112
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 994,
+              "n_truth": 500,
+              "perc_f1": 0.6519410977242303,
+              "precision": 0.48993963782696176,
+              "recall": 0.974
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 690,
+              "n_truth": 982,
+              "perc_f1": 0.6949760765550239,
+              "precision": 0.8420289855072464,
+              "recall": 0.5916496945010183
+            }
+          ],
+          "mean_f1": 0.5225377589661816,
+          "by_domain": {
+            "other": {
+              "mean": 0.5225377589661816,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5225377589661816,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.11900000000000001
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 671,
+              "n_truth": 166,
+              "perc_f1": 0.38709677419354843,
+              "precision": 0.2414307004470939,
+              "recall": 0.9759036144578314
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 358,
+              "n_truth": 1070,
+              "perc_f1": 0.4187675070028012,
+              "precision": 0.835195530726257,
+              "recall": 0.2794392523364486
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1241,
+              "n_truth": 144,
+              "perc_f1": 0.1516245487364621,
+              "precision": 0.08460918614020951,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 904,
+              "n_truth": 848,
+              "perc_f1": 0.8470319634703196,
+              "precision": 0.8207964601769911,
+              "recall": 0.875
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1061,
+              "n_truth": 1098,
+              "perc_f1": 0.8300138953219083,
+              "precision": 0.8444863336475024,
+              "recall": 0.8160291438979964
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 496,
+              "n_truth": 72,
+              "perc_f1": 0.176056338028169,
+              "precision": 0.10080645161290322,
+              "recall": 0.6944444444444444
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 935,
+              "n_truth": 500,
+              "perc_f1": 0.6773519163763067,
+              "precision": 0.5197860962566845,
+              "recall": 0.972
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 656,
+              "n_truth": 982,
+              "perc_f1": 0.6788766788766789,
+              "precision": 0.8475609756097561,
+              "recall": 0.5661914460285132
+            }
+          ],
+          "mean_f1": 0.5208524527507743,
+          "by_domain": {
+            "other": {
+              "mean": 0.5208524527507743,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5208524527507743,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.0,
+            "threshold": 0.14
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.15,
+            "threshold": 0.161
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 619,
+              "n_truth": 166,
+              "perc_f1": 0.4025477707006369,
+              "precision": 0.2552504038772213,
+              "recall": 0.9518072289156626
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 274,
+              "n_truth": 1070,
+              "perc_f1": 0.3556547619047619,
+              "precision": 0.8722627737226277,
+              "recall": 0.22336448598130842
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1101,
+              "n_truth": 144,
+              "perc_f1": 0.16706827309236946,
+              "precision": 0.09445958219800181,
+              "recall": 0.7222222222222222
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 779,
+              "n_truth": 848,
+              "perc_f1": 0.8703134603564842,
+              "precision": 0.9088575096277278,
+              "recall": 0.8349056603773585
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 942,
+              "n_truth": 1098,
+              "perc_f1": 0.8088235294117646,
+              "precision": 0.8757961783439491,
+              "recall": 0.7513661202185792
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 438,
+              "n_truth": 72,
+              "perc_f1": 0.18431372549019606,
+              "precision": 0.10730593607305935,
+              "recall": 0.6527777777777778
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 837,
+              "n_truth": 500,
+              "perc_f1": 0.7225130890052357,
+              "precision": 0.5770609318996416,
+              "recall": 0.966
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 577,
+              "n_truth": 982,
+              "perc_f1": 0.6478511866581141,
+              "precision": 0.8752166377816292,
+              "recall": 0.5142566191446029
+            }
+          ],
+          "mean_f1": 0.5198857245774453,
+          "by_domain": {
+            "other": {
+              "mean": 0.5198857245774454,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5198857245774454,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.3,
+            "threshold": 0.18200000000000002
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 588,
+              "n_truth": 166,
+              "perc_f1": 0.4111405835543766,
+              "precision": 0.26360544217687076,
+              "recall": 0.9337349397590361
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 237,
+              "n_truth": 1070,
+              "perc_f1": 0.32134659525631215,
+              "precision": 0.8860759493670886,
+              "recall": 0.19626168224299065
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1045,
+              "n_truth": 144,
+              "perc_f1": 0.17493692178301096,
+              "precision": 0.09952153110047847,
+              "recall": 0.7222222222222222
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 727,
+              "n_truth": 848,
+              "perc_f1": 0.8673015873015874,
+              "precision": 0.9394773039889959,
+              "recall": 0.8054245283018868
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 882,
+              "n_truth": 1098,
+              "perc_f1": 0.7878787878787878,
+              "precision": 0.8843537414965986,
+              "recall": 0.7103825136612022
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 415,
+              "n_truth": 72,
+              "perc_f1": 0.19301848049281312,
+              "precision": 0.11325301204819277,
+              "recall": 0.6527777777777778
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 816,
+              "n_truth": 500,
+              "perc_f1": 0.7325227963525835,
+              "precision": 0.5906862745098039,
+              "recall": 0.964
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 538,
+              "n_truth": 982,
+              "perc_f1": 0.6276315789473684,
+              "precision": 0.8866171003717472,
+              "recall": 0.48574338085539714
+            }
+          ],
+          "mean_f1": 0.514472166445855,
+          "by_domain": {
+            "other": {
+              "mean": 0.514472166445855,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.514472166445855,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.098
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 693,
+              "n_truth": 166,
+              "perc_f1": 0.37951105937136204,
+              "precision": 0.2352092352092352,
+              "recall": 0.9819277108433735
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 426,
+              "n_truth": 1070,
+              "perc_f1": 0.46390374331550804,
+              "precision": 0.8145539906103286,
+              "recall": 0.32429906542056075
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1309,
+              "n_truth": 144,
+              "perc_f1": 0.1445285615966965,
+              "precision": 0.08021390374331551,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 987,
+              "n_truth": 848,
+              "perc_f1": 0.8305177111716622,
+              "precision": 0.7720364741641338,
+              "recall": 0.8985849056603774
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1114,
+              "n_truth": 1098,
+              "perc_f1": 0.840867992766727,
+              "precision": 0.8348294434470377,
+              "recall": 0.8469945355191257
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 537,
+              "n_truth": 72,
+              "perc_f1": 0.17405582922824303,
+              "precision": 0.09869646182495345,
+              "recall": 0.7361111111111112
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 994,
+              "n_truth": 500,
+              "perc_f1": 0.6519410977242303,
+              "precision": 0.48993963782696176,
+              "recall": 0.974
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 690,
+              "n_truth": 982,
+              "perc_f1": 0.6949760765550239,
+              "precision": 0.8420289855072464,
+              "recall": 0.5916496945010183
+            }
+          ],
+          "mean_f1": 0.5225377589661816,
+          "by_domain": {
+            "other": {
+              "mean": 0.5225377589661816,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5225377589661816,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.11900000000000001
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 671,
+              "n_truth": 166,
+              "perc_f1": 0.38709677419354843,
+              "precision": 0.2414307004470939,
+              "recall": 0.9759036144578314
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 358,
+              "n_truth": 1070,
+              "perc_f1": 0.4187675070028012,
+              "precision": 0.835195530726257,
+              "recall": 0.2794392523364486
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1241,
+              "n_truth": 144,
+              "perc_f1": 0.1516245487364621,
+              "precision": 0.08460918614020951,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 904,
+              "n_truth": 848,
+              "perc_f1": 0.8470319634703196,
+              "precision": 0.8207964601769911,
+              "recall": 0.875
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1061,
+              "n_truth": 1098,
+              "perc_f1": 0.8300138953219083,
+              "precision": 0.8444863336475024,
+              "recall": 0.8160291438979964
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 496,
+              "n_truth": 72,
+              "perc_f1": 0.176056338028169,
+              "precision": 0.10080645161290322,
+              "recall": 0.6944444444444444
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 935,
+              "n_truth": 500,
+              "perc_f1": 0.6773519163763067,
+              "precision": 0.5197860962566845,
+              "recall": 0.972
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 656,
+              "n_truth": 982,
+              "perc_f1": 0.6788766788766789,
+              "precision": 0.8475609756097561,
+              "recall": 0.5661914460285132
+            }
+          ],
+          "mean_f1": 0.5208524527507743,
+          "by_domain": {
+            "other": {
+              "mean": 0.5208524527507743,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5208524527507743,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.0,
+            "threshold": 0.14
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "dead_knob": false,
+      "best_delta_vs_baseline": 0.0018712645083165391
+    },
+    "refractory": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 15.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 30.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 50.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 633,
+              "n_truth": 166,
+              "perc_f1": 0.40300375469336663,
+              "precision": 0.25434439178515006,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1171,
+              "n_truth": 144,
+              "perc_f1": 0.1581749049429658,
+              "precision": 0.0888129803586678,
+              "recall": 0.7222222222222222
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 830,
+              "n_truth": 848,
+              "perc_f1": 0.8653158522050061,
+              "precision": 0.8746987951807229,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5208069073668873,
+          "by_domain": {
+            "other": {
+              "mean": 0.5208069073668873,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5208069073668873,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 80.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 630,
+              "n_truth": 166,
+              "perc_f1": 0.40452261306532655,
+              "precision": 0.25555555555555554,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1164,
+              "n_truth": 144,
+              "perc_f1": 0.15749235474006115,
+              "precision": 0.08848797250859107,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 830,
+              "n_truth": 848,
+              "perc_f1": 0.8653158522050061,
+              "precision": 0.8746987951807229,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5209114458880192,
+          "by_domain": {
+            "other": {
+              "mean": 0.5209114458880192,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5209114458880192,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 80.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 630,
+              "n_truth": 166,
+              "perc_f1": 0.40452261306532655,
+              "precision": 0.25555555555555554,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1164,
+              "n_truth": 144,
+              "perc_f1": 0.15749235474006115,
+              "precision": 0.08848797250859107,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 830,
+              "n_truth": 848,
+              "perc_f1": 0.8653158522050061,
+              "precision": 0.8746987951807229,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5209114458880192,
+          "by_domain": {
+            "other": {
+              "mean": 0.5209114458880192,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5209114458880192,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 50.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 633,
+              "n_truth": 166,
+              "perc_f1": 0.40300375469336663,
+              "precision": 0.25434439178515006,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1171,
+              "n_truth": 144,
+              "perc_f1": 0.1581749049429658,
+              "precision": 0.0888129803586678,
+              "recall": 0.7222222222222222
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 830,
+              "n_truth": 848,
+              "perc_f1": 0.8653158522050061,
+              "precision": 0.8746987951807229,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5208069073668873,
+          "by_domain": {
+            "other": {
+              "mean": 0.5208069073668873,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5208069073668873,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "dead_knob": false,
+      "best_delta_vs_baseline": 0.0002449514301541278
+    },
+    "median_adaptive": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "disabled"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=1.0,delta=0.02"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 311,
+              "n_truth": 1070,
+              "perc_f1": 0.3721940622737147,
+              "precision": 0.8263665594855305,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 832,
+              "n_truth": 848,
+              "perc_f1": 0.8654761904761904,
+              "precision": 0.8737980769230769,
+              "recall": 0.8573113207547169
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1011,
+              "n_truth": 1098,
+              "perc_f1": 0.8288288288288288,
+              "precision": 0.8644906033630069,
+              "recall": 0.7959927140255009
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 486,
+              "n_truth": 72,
+              "perc_f1": 0.1827956989247312,
+              "precision": 0.10493827160493827,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 884,
+              "n_truth": 500,
+              "perc_f1": 0.7008670520231214,
+              "precision": 0.5486425339366516,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 626,
+              "n_truth": 982,
+              "perc_f1": 0.6616915422885573,
+              "precision": 0.8498402555910544,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5211554374488889,
+          "by_domain": {
+            "other": {
+              "mean": 0.5211554374488889,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5211554374488889,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=1.3,delta=0.03"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 308,
+              "n_truth": 1070,
+              "perc_f1": 0.37300435413642963,
+              "precision": 0.8344155844155844,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 832,
+              "n_truth": 848,
+              "perc_f1": 0.8654761904761904,
+              "precision": 0.8737980769230769,
+              "recall": 0.8573113207547169
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1009,
+              "n_truth": 1098,
+              "perc_f1": 0.8286663502610346,
+              "precision": 0.865213082259663,
+              "recall": 0.7950819672131147
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 483,
+              "n_truth": 72,
+              "perc_f1": 0.1837837837837838,
+              "precision": 0.10559006211180125,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 884,
+              "n_truth": 500,
+              "perc_f1": 0.7008670520231214,
+              "precision": 0.5486425339366516,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 625,
+              "n_truth": 982,
+              "perc_f1": 0.6621032980709397,
+              "precision": 0.8512,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5214113941909334,
+          "by_domain": {
+            "other": {
+              "mean": 0.5214113941909334,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5214113941909334,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=0.8,delta=0.01"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 311,
+              "n_truth": 1070,
+              "perc_f1": 0.3721940622737147,
+              "precision": 0.8263665594855305,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1011,
+              "n_truth": 1098,
+              "perc_f1": 0.8288288288288288,
+              "precision": 0.8644906033630069,
+              "recall": 0.7959927140255009
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 486,
+              "n_truth": 72,
+              "perc_f1": 0.1827956989247312,
+              "precision": 0.10493827160493827,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 627,
+              "n_truth": 982,
+              "perc_f1": 0.6612802983219391,
+              "precision": 0.8484848484848485,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5210829143271687,
+          "by_domain": {
+            "other": {
+              "mean": 0.5210829143271688,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5210829143271688,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=1.3,delta=0.03"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 308,
+              "n_truth": 1070,
+              "perc_f1": 0.37300435413642963,
+              "precision": 0.8344155844155844,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 832,
+              "n_truth": 848,
+              "perc_f1": 0.8654761904761904,
+              "precision": 0.8737980769230769,
+              "recall": 0.8573113207547169
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1009,
+              "n_truth": 1098,
+              "perc_f1": 0.8286663502610346,
+              "precision": 0.865213082259663,
+              "recall": 0.7950819672131147
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 483,
+              "n_truth": 72,
+              "perc_f1": 0.1837837837837838,
+              "precision": 0.10559006211180125,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 884,
+              "n_truth": 500,
+              "perc_f1": 0.7008670520231214,
+              "precision": 0.5486425339366516,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 625,
+              "n_truth": 982,
+              "perc_f1": 0.6621032980709397,
+              "precision": 0.8512,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5214113941909334,
+          "by_domain": {
+            "other": {
+              "mean": 0.5214113941909334,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5214113941909334,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=1.0,delta=0.02"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 311,
+              "n_truth": 1070,
+              "perc_f1": 0.3721940622737147,
+              "precision": 0.8263665594855305,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 832,
+              "n_truth": 848,
+              "perc_f1": 0.8654761904761904,
+              "precision": 0.8737980769230769,
+              "recall": 0.8573113207547169
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1011,
+              "n_truth": 1098,
+              "perc_f1": 0.8288288288288288,
+              "precision": 0.8644906033630069,
+              "recall": 0.7959927140255009
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 486,
+              "n_truth": 72,
+              "perc_f1": 0.1827956989247312,
+              "precision": 0.10493827160493827,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 884,
+              "n_truth": 500,
+              "perc_f1": 0.7008670520231214,
+              "precision": 0.5486425339366516,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 626,
+              "n_truth": 982,
+              "perc_f1": 0.6616915422885573,
+              "precision": 0.8498402555910544,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5211554374488889,
+          "by_domain": {
+            "other": {
+              "mean": 0.5211554374488889,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5211554374488889,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "median_adaptive",
+            "config": "factor=0.8,delta=0.01"
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 638,
+              "n_truth": 166,
+              "perc_f1": 0.4004975124378109,
+              "precision": 0.25235109717868337,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 311,
+              "n_truth": 1070,
+              "perc_f1": 0.3721940622737147,
+              "precision": 0.8263665594855305,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1169,
+              "n_truth": 144,
+              "perc_f1": 0.15689261233815688,
+              "precision": 0.08810949529512403,
+              "recall": 0.7152777777777778
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1011,
+              "n_truth": 1098,
+              "perc_f1": 0.8288288288288288,
+              "precision": 0.8644906033630069,
+              "recall": 0.7959927140255009
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 486,
+              "n_truth": 72,
+              "perc_f1": 0.1827956989247312,
+              "precision": 0.10493827160493827,
+              "recall": 0.7083333333333334
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 627,
+              "n_truth": 982,
+              "perc_f1": 0.6612802983219391,
+              "precision": 0.8484848484848485,
+              "recall": 0.5417515274949084
+            }
+          ],
+          "mean_f1": 0.5210829143271687,
+          "by_domain": {
+            "other": {
+              "mean": 0.5210829143271688,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5210829143271688,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "dead_knob": false,
+      "best_delta_vs_baseline": 0.0007448997330683493
+    },
+    "beat_phase": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.1
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.2
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.3
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.1
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        },
+        {
+          "params": {
+            "knob": "beat_phase_strength",
+            "value": 0.2
+          },
+          "per_track": [
+            {
+              "id": "babyslakh_Track00001",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 637,
+              "n_truth": 166,
+              "perc_f1": 0.40099626400996263,
+              "precision": 0.25274725274725274,
+              "recall": 0.9698795180722891
+            },
+            {
+              "id": "babyslakh_Track00002",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 304,
+              "n_truth": 1070,
+              "perc_f1": 0.37409024745269287,
+              "precision": 0.8453947368421053,
+              "recall": 0.24018691588785046
+            },
+            {
+              "id": "babyslakh_Track00003",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1172,
+              "n_truth": 144,
+              "perc_f1": 0.15957446808510642,
+              "precision": 0.08959044368600683,
+              "recall": 0.7291666666666666
+            },
+            {
+              "id": "babyslakh_Track00004",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 831,
+              "n_truth": 848,
+              "perc_f1": 0.8648004764740918,
+              "precision": 0.8736462093862816,
+              "recall": 0.8561320754716981
+            },
+            {
+              "id": "babyslakh_Track00005",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 1005,
+              "n_truth": 1098,
+              "perc_f1": 0.8264384213029006,
+              "precision": 0.8646766169154229,
+              "recall": 0.7914389799635702
+            },
+            {
+              "id": "babyslakh_Track00006",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 472,
+              "n_truth": 72,
+              "perc_f1": 0.18014705882352938,
+              "precision": 0.1038135593220339,
+              "recall": 0.6805555555555556
+            },
+            {
+              "id": "babyslakh_Track00007",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 883,
+              "n_truth": 500,
+              "perc_f1": 0.7013738250180767,
+              "precision": 0.549263873159683,
+              "recall": 0.97
+            },
+            {
+              "id": "babyslakh_Track00008",
+              "domain": "other",
+              "source": "babyslakh",
+              "n_pred": 617,
+              "n_truth": 982,
+              "perc_f1": 0.6579111944965602,
+              "precision": 0.8525121555915721,
+              "recall": 0.5356415478615071
+            }
+          ],
+          "mean_f1": 0.5206664944578651,
+          "by_domain": {
+            "other": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            },
+            "overall": {
+              "mean": 0.5206664944578651,
+              "n": 8
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 8
+        }
+      ],
+      "dead_knob": true,
+      "best_delta_vs_baseline": 0.0
+    }
+  },
+  "top2_families_by_delta": [
+    "threshold",
+    "median_adaptive"
+  ],
+  "joint_top2_sweep": [
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "median_adaptive"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.11900000000000001
+          },
+          {
+            "knob": "median_adaptive",
+            "config": "factor=1.0,delta=0.02"
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "babyslakh_Track00001",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 666,
+          "n_truth": 166,
+          "perc_f1": 0.3870192307692308,
+          "precision": 0.24174174174174173,
+          "recall": 0.9698795180722891
+        },
+        {
+          "id": "babyslakh_Track00002",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 365,
+          "n_truth": 1070,
+          "perc_f1": 0.42229965156794425,
+          "precision": 0.8301369863013699,
+          "recall": 0.28317757009345795
+        },
+        {
+          "id": "babyslakh_Track00003",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1239,
+          "n_truth": 144,
+          "perc_f1": 0.1489515545914678,
+          "precision": 0.08313155770782889,
+          "recall": 0.7152777777777778
+        },
+        {
+          "id": "babyslakh_Track00004",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 910,
+          "n_truth": 848,
+          "perc_f1": 0.8486916951080774,
+          "precision": 0.8197802197802198,
+          "recall": 0.8797169811320755
+        },
+        {
+          "id": "babyslakh_Track00005",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1067,
+          "n_truth": 1098,
+          "perc_f1": 0.8323325635103926,
+          "precision": 0.8444236176194939,
+          "recall": 0.8205828779599271
+        },
+        {
+          "id": "babyslakh_Track00006",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 518,
+          "n_truth": 72,
+          "perc_f1": 0.18644067796610167,
+          "precision": 0.10617760617760617,
+          "recall": 0.7638888888888888
+        },
+        {
+          "id": "babyslakh_Track00007",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 935,
+          "n_truth": 500,
+          "perc_f1": 0.6773519163763067,
+          "precision": 0.5197860962566845,
+          "recall": 0.972
+        },
+        {
+          "id": "babyslakh_Track00008",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 668,
+          "n_truth": 982,
+          "perc_f1": 0.6812121212121213,
+          "precision": 0.8413173652694611,
+          "recall": 0.5723014256619144
+        }
+      ],
+      "mean_f1": 0.5230374263877053,
+      "by_domain": {
+        "other": {
+          "mean": 0.5230374263877053,
+          "n": 8
+        },
+        "overall": {
+          "mean": 0.5230374263877053,
+          "n": 8
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 8
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "median_adaptive"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.11900000000000001
+          },
+          {
+            "knob": "median_adaptive",
+            "config": "factor=1.3,delta=0.03"
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "babyslakh_Track00001",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 667,
+          "n_truth": 166,
+          "perc_f1": 0.38895558223289317,
+          "precision": 0.24287856071964017,
+          "recall": 0.9759036144578314
+        },
+        {
+          "id": "babyslakh_Track00002",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 361,
+          "n_truth": 1070,
+          "perc_f1": 0.42208245981830883,
+          "precision": 0.8365650969529086,
+          "recall": 0.2822429906542056
+        },
+        {
+          "id": "babyslakh_Track00003",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1238,
+          "n_truth": 144,
+          "perc_f1": 0.14905933429811868,
+          "precision": 0.08319870759289176,
+          "recall": 0.7152777777777778
+        },
+        {
+          "id": "babyslakh_Track00004",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 909,
+          "n_truth": 848,
+          "perc_f1": 0.8491747296528174,
+          "precision": 0.8206820682068207,
+          "recall": 0.8797169811320755
+        },
+        {
+          "id": "babyslakh_Track00005",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1062,
+          "n_truth": 1098,
+          "perc_f1": 0.8305555555555555,
+          "precision": 0.844632768361582,
+          "recall": 0.8169398907103825
+        },
+        {
+          "id": "babyslakh_Track00006",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 512,
+          "n_truth": 72,
+          "perc_f1": 0.18493150684931506,
+          "precision": 0.10546875,
+          "recall": 0.75
+        },
+        {
+          "id": "babyslakh_Track00007",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 935,
+          "n_truth": 500,
+          "perc_f1": 0.6773519163763067,
+          "precision": 0.5197860962566845,
+          "recall": 0.972
+        },
+        {
+          "id": "babyslakh_Track00008",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 666,
+          "n_truth": 982,
+          "perc_f1": 0.6820388349514562,
+          "precision": 0.8438438438438438,
+          "recall": 0.5723014256619144
+        }
+      ],
+      "mean_f1": 0.5230187399668464,
+      "by_domain": {
+        "other": {
+          "mean": 0.5230187399668464,
+          "n": 8
+        },
+        "overall": {
+          "mean": 0.5230187399668464,
+          "n": 8
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 8
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "median_adaptive"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.098
+          },
+          {
+            "knob": "median_adaptive",
+            "config": "factor=1.0,delta=0.02"
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "babyslakh_Track00001",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 691,
+          "n_truth": 166,
+          "perc_f1": 0.3780630105017503,
+          "precision": 0.23444283646888567,
+          "recall": 0.9759036144578314
+        },
+        {
+          "id": "babyslakh_Track00002",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 428,
+          "n_truth": 1070,
+          "perc_f1": 0.46595460614152207,
+          "precision": 0.8154205607476636,
+          "recall": 0.32616822429906545
+        },
+        {
+          "id": "babyslakh_Track00003",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1306,
+          "n_truth": 144,
+          "perc_f1": 0.14206896551724138,
+          "precision": 0.07886676875957122,
+          "recall": 0.7152777777777778
+        },
+        {
+          "id": "babyslakh_Track00004",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 994,
+          "n_truth": 848,
+          "perc_f1": 0.8284473398479912,
+          "precision": 0.7676056338028169,
+          "recall": 0.8997641509433962
+        },
+        {
+          "id": "babyslakh_Track00005",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1118,
+          "n_truth": 1098,
+          "perc_f1": 0.8429602888086644,
+          "precision": 0.8354203935599285,
+          "recall": 0.8506375227686703
+        },
+        {
+          "id": "babyslakh_Track00006",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 557,
+          "n_truth": 72,
+          "perc_f1": 0.17488076311605724,
+          "precision": 0.09874326750448834,
+          "recall": 0.7638888888888888
+        },
+        {
+          "id": "babyslakh_Track00007",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 994,
+          "n_truth": 500,
+          "perc_f1": 0.6519410977242303,
+          "precision": 0.48993963782696176,
+          "recall": 0.974
+        },
+        {
+          "id": "babyslakh_Track00008",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 707,
+          "n_truth": 982,
+          "perc_f1": 0.6998223801065719,
+          "precision": 0.8359264497878359,
+          "recall": 0.6018329938900203
+        }
+      ],
+      "mean_f1": 0.5230173064705036,
+      "by_domain": {
+        "other": {
+          "mean": 0.5230173064705036,
+          "n": 8
+        },
+        "overall": {
+          "mean": 0.5230173064705036,
+          "n": 8
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 8
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "median_adaptive"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.098
+          },
+          {
+            "knob": "median_adaptive",
+            "config": "factor=1.3,delta=0.03"
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "babyslakh_Track00001",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 693,
+          "n_truth": 166,
+          "perc_f1": 0.37951105937136204,
+          "precision": 0.2352092352092352,
+          "recall": 0.9819277108433735
+        },
+        {
+          "id": "babyslakh_Track00002",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 423,
+          "n_truth": 1070,
+          "perc_f1": 0.46617548559946415,
+          "precision": 0.8226950354609929,
+          "recall": 0.3252336448598131
+        },
+        {
+          "id": "babyslakh_Track00003",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1305,
+          "n_truth": 144,
+          "perc_f1": 0.14216701173222912,
+          "precision": 0.0789272030651341,
+          "recall": 0.7152777777777778
+        },
+        {
+          "id": "babyslakh_Track00004",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 990,
+          "n_truth": 848,
+          "perc_f1": 0.8302502720348204,
+          "precision": 0.7707070707070707,
+          "recall": 0.8997641509433962
+        },
+        {
+          "id": "babyslakh_Track00005",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 1111,
+          "n_truth": 1098,
+          "perc_f1": 0.8401991851516524,
+          "precision": 0.8352835283528353,
+          "recall": 0.8451730418943534
+        },
+        {
+          "id": "babyslakh_Track00006",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 550,
+          "n_truth": 72,
+          "perc_f1": 0.17363344051446947,
+          "precision": 0.09818181818181818,
+          "recall": 0.75
+        },
+        {
+          "id": "babyslakh_Track00007",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 994,
+          "n_truth": 500,
+          "perc_f1": 0.6519410977242303,
+          "precision": 0.48993963782696176,
+          "recall": 0.974
+        },
+        {
+          "id": "babyslakh_Track00008",
+          "domain": "other",
+          "source": "babyslakh",
+          "n_pred": 701,
+          "n_truth": 982,
+          "perc_f1": 0.6999405822935235,
+          "precision": 0.8402282453637661,
+          "recall": 0.59979633401222
+        }
+      ],
+      "mean_f1": 0.5229772668027189,
+      "by_domain": {
+        "other": {
+          "mean": 0.5229772668027189,
+          "n": 8
+        },
+        "overall": {
+          "mean": 0.5229772668027189,
+          "n": 8
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 8
+    }
+  ],
+  "generated_at": "2026-07-17T13:52:00.191191+00:00",
+  "corpus_summary": [
+    {
+      "id": "babyslakh_Track00001",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00002",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00003",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00004",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00005",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00006",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00007",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00008",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "self_render_kick_hat_128bpm",
+      "domain": "electronic",
+      "source": "self_render"
+    },
+    {
+      "id": "self_render_arp_16th_128bpm",
+      "domain": "electronic",
+      "source": "self_render"
+    },
+    {
+      "id": "liveshow_midnight_patience",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_integer",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_pattern",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_all_in_for_you",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_oh_so_suddenly",
+      "domain": "electronic",
+      "source": "liveshow"
+    }
+  ]
+}
