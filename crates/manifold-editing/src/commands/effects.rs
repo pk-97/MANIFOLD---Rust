@@ -297,6 +297,198 @@ impl Command for ChangeGraphParamCommand {
     }
 }
 
+// ─── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md, phase P5) ────
+//
+// Both commands address a [`GraphTarget`] (works uniformly for an effect
+// card or a generator card — `PresetInstance` is the shared home for
+// `relight`/`relight_params` on both kinds) and resolve it via
+// `Project::preset_instance_mut`, the same const-twin accessor
+// `ChangeGraphParamCommand` above reads through `with_preset_graph_mut`.
+// Neither the toggle nor a knob edit touches `PresetInstance::graph` — the
+// relight template is synthesized at splice time
+// (`relight::relight_augment`), not authored into the def — so there is no
+// topology to diff. `bump_graph_structure_version()` still runs on every
+// edit: it's what the renderer's rebuild-detection compares against for the
+// UI graph snapshot, and cheap insurance alongside the dedicated
+// `PresetInstance.relight`/`relight_params` comparison the renderer's
+// per-frame sweeps do (`preset_runtime::compute_topology_hash`,
+// `generator_renderer`'s `applied_relight`).
+
+/// Toggle the "3D Shading" card toggle. Undo-able like any other card
+/// control.
+#[derive(Debug)]
+pub struct ToggleRelightCommand {
+    target: GraphTarget,
+    old_relight: bool,
+    new_relight: bool,
+}
+
+impl ToggleRelightCommand {
+    pub fn new(target: GraphTarget, old_relight: bool, new_relight: bool) -> Self {
+        Self {
+            target,
+            old_relight,
+            new_relight,
+        }
+    }
+}
+
+impl Command for ToggleRelightCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            inst.relight = self.new_relight;
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            inst.relight = self.old_relight;
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Toggle 3D Shading"
+    }
+}
+
+/// Addresses one of [`manifold_core::effects::RelightParams`]'s numeric
+/// knobs (D3) — the card's Light X/Y, Relief, AO Intensity, Shadow
+/// Softness, and Gain sliders each drive one variant. One command type
+/// instead of six near-identical structs; `field` selects the target so
+/// undo/redo replay against the right slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelightField {
+    LightX,
+    LightY,
+    Relief,
+    AoIntensity,
+    ShadowSoftness,
+    Gain,
+}
+
+impl RelightField {
+    fn get(self, p: &manifold_core::effects::RelightParams) -> f32 {
+        match self {
+            Self::LightX => p.light_x,
+            Self::LightY => p.light_y,
+            Self::Relief => p.relief,
+            Self::AoIntensity => p.ao_intensity,
+            Self::ShadowSoftness => p.shadow_softness,
+            Self::Gain => p.gain,
+        }
+    }
+
+    fn set(self, p: &mut manifold_core::effects::RelightParams, value: f32) {
+        match self {
+            Self::LightX => p.light_x = value,
+            Self::LightY => p.light_y = value,
+            Self::Relief => p.relief = value,
+            Self::AoIntensity => p.ao_intensity = value,
+            Self::ShadowSoftness => p.shadow_softness = value,
+            Self::Gain => p.gain = value,
+        }
+    }
+}
+
+/// Change one relight knob (D3). Always live on the instance regardless of
+/// whether the toggle is on — see `RelightParams`'s doc: the card renders
+/// these rows greyed, never hidden, when the toggle is off, so editing while
+/// off must still take effect for when it's switched on.
+#[derive(Debug)]
+pub struct SetRelightParamCommand {
+    target: GraphTarget,
+    field: RelightField,
+    old_value: f32,
+    new_value: f32,
+}
+
+impl SetRelightParamCommand {
+    pub fn new(target: GraphTarget, field: RelightField, old_value: f32, new_value: f32) -> Self {
+        Self {
+            target,
+            field,
+            old_value,
+            new_value,
+        }
+    }
+
+    /// Build from the live instance's current value (so callers don't have
+    /// to read + clone `RelightParams` themselves before constructing).
+    pub fn from_current(
+        project: &Project,
+        target: GraphTarget,
+        field: RelightField,
+        new_value: f32,
+    ) -> Option<Self> {
+        let old_value = field.get(&project.preset_instance(&target)?.relight_params);
+        Some(Self::new(target, field, old_value, new_value))
+    }
+}
+
+impl Command for SetRelightParamCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            self.field.set(&mut inst.relight_params, self.new_value);
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            self.field.set(&mut inst.relight_params, self.old_value);
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Change 3D Shading Param"
+    }
+}
+
+/// Change the D4 "Height From" enum (Auto / Luminance / Inverted Luminance).
+#[derive(Debug)]
+pub struct SetRelightHeightFromCommand {
+    target: GraphTarget,
+    old_value: manifold_core::effects::RelightHeightFrom,
+    new_value: manifold_core::effects::RelightHeightFrom,
+}
+
+impl SetRelightHeightFromCommand {
+    pub fn new(
+        target: GraphTarget,
+        old_value: manifold_core::effects::RelightHeightFrom,
+        new_value: manifold_core::effects::RelightHeightFrom,
+    ) -> Self {
+        Self {
+            target,
+            old_value,
+            new_value,
+        }
+    }
+}
+
+impl Command for SetRelightHeightFromCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            inst.relight_params.height_from = self.new_value;
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(inst) = project.preset_instance_mut(&self.target) {
+            inst.relight_params.height_from = self.old_value;
+            inst.bump_graph_structure_version();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Change 3D Shading Height Source"
+    }
+}
+
 // ─── User-exposed parameter binding (Phase 3) ─────────────────
 
 /// Per-effect inner-node parameter description captured at command

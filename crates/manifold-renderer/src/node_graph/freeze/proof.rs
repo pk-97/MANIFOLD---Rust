@@ -1257,7 +1257,7 @@ fn infrared_preset_black_stays_black() {
     let mut graph = Graph::new();
     let src = graph.add_node(Box::new(Source::new()));
     let result =
-        splice_def_into_chain(&mut graph, (src, "out"), def, &registry, false).expect("splice");
+        splice_def_into_chain(&mut graph, (src, "out"), def, &registry, None).expect("splice");
     let names: Vec<&str> = result.handles.iter().map(|(n, _)| n.as_ref()).collect();
     eprintln!("handles: {names:?}");
     let find = |name: &str| -> Option<NodeInstanceId> {
