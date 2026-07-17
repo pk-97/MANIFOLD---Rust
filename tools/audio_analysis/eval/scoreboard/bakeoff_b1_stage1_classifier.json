@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-17T23:07:31.823207+00:00",
+  "generated_at": "2026-07-17T23:26:23.346515+00:00",
   "phase": "B1 -- first scoreboard, DEV ONLY, HELDOUT FORBIDDEN",
   "stage1_arm": "classifier",
   "classifier_weights": "/Users/peterkiemann/MANIFOLD - Rust/tools/audio_analysis/eval/data/models/audio_event_classifier_v1.pt",
@@ -415,80 +415,80 @@
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 182,
-            "n_pred": 55,
-            "kick_f1": 0.4219409282700422,
-            "precision": 0.9090909090909091,
-            "recall": 0.27472527472527475
+            "n_pred": 187,
+            "kick_f1": 0.840108401084011,
+            "precision": 0.8288770053475936,
+            "recall": 0.8516483516483516
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 265,
-            "n_pred": 277,
-            "kick_f1": 0.6863468634686346,
-            "precision": 0.6714801444043321,
-            "recall": 0.7018867924528301
+            "n_pred": 288,
+            "kick_f1": 0.9511754068716094,
+            "precision": 0.9131944444444444,
+            "recall": 0.9924528301886792
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 380,
-            "n_pred": 256,
-            "kick_f1": 0.7861635220125787,
-            "precision": 0.9765625,
-            "recall": 0.6578947368421053
+            "n_pred": 329,
+            "kick_f1": 0.8180535966149507,
+            "precision": 0.8814589665653495,
+            "recall": 0.7631578947368421
           },
           {
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 365,
-            "n_pred": 86,
-            "kick_f1": 0.30155210643015523,
-            "precision": 0.7906976744186046,
-            "recall": 0.1863013698630137
+            "n_pred": 194,
+            "kick_f1": 0.6368515205724509,
+            "precision": 0.9175257731958762,
+            "recall": 0.4876712328767123
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 348,
-            "n_pred": 87,
-            "kick_f1": 0.2896551724137931,
-            "precision": 0.7241379310344828,
-            "recall": 0.1810344827586207
+            "n_pred": 115,
+            "kick_f1": 0.3758099352051835,
+            "precision": 0.7565217391304347,
+            "recall": 0.25
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 140,
-            "n_pred": 155,
-            "kick_f1": 0.8745762711864405,
-            "precision": 0.832258064516129,
-            "recall": 0.9214285714285714
+            "n_pred": 161,
+            "kick_f1": 0.9302325581395349,
+            "precision": 0.8695652173913043,
+            "recall": 1.0
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 309,
-            "n_pred": 258,
-            "kick_f1": 0.5149911816578483,
-            "precision": 0.5658914728682171,
-            "recall": 0.47249190938511326
+            "n_pred": 422,
+            "kick_f1": 0.6757865937072502,
+            "precision": 0.5853080568720379,
+            "recall": 0.7993527508090615
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 205,
-            "n_pred": 188,
-            "kick_f1": 0.7837150127226462,
-            "precision": 0.8191489361702128,
-            "recall": 0.751219512195122
+            "n_pred": 262,
+            "kick_f1": 0.860813704496788,
+            "precision": 0.767175572519084,
+            "recall": 0.9804878048780488
           },
           {
             "id": "self_render_kick_hat_128bpm",
@@ -505,9 +505,9 @@
             "domain": "electronic",
             "source": "self_render",
             "n_truth": 32,
-            "n_pred": 35,
-            "kick_f1": 0.9253731343283582,
-            "precision": 0.8857142857142857,
+            "n_pred": 31,
+            "kick_f1": 0.9841269841269841,
+            "precision": 1.0,
             "recall": 0.96875
           },
           {
@@ -515,49 +515,49 @@
             "domain": "electronic",
             "source": "manifold_own",
             "n_truth": 16,
-            "n_pred": 60,
-            "kick_f1": 0.39473684210526316,
-            "precision": 0.25,
-            "recall": 0.9375
+            "n_pred": 27,
+            "kick_f1": 0.5116279069767441,
+            "precision": 0.4074074074074074,
+            "recall": 0.6875
           },
           {
             "id": "bad_guy_128bpm",
             "domain": "electronic",
             "source": "manifold_own",
             "n_truth": 17,
-            "n_pred": 44,
-            "kick_f1": 0.19672131147540983,
-            "precision": 0.13636363636363635,
-            "recall": 0.35294117647058826
+            "n_pred": 36,
+            "kick_f1": 0.18867924528301885,
+            "precision": 0.1388888888888889,
+            "recall": 0.29411764705882354
           },
           {
             "id": "feel_the_vibration_174bpm",
             "domain": "electronic",
             "source": "manifold_own",
             "n_truth": 16,
-            "n_pred": 28,
-            "kick_f1": 0.22727272727272727,
-            "precision": 0.17857142857142858,
-            "recall": 0.3125
+            "n_pred": 37,
+            "kick_f1": 0.3018867924528302,
+            "precision": 0.21621621621621623,
+            "recall": 0.5
           },
           {
             "id": "inhale_exhale_145bpm",
             "domain": "electronic",
             "source": "manifold_own",
             "n_truth": 14,
-            "n_pred": 24,
-            "kick_f1": 0.5789473684210527,
-            "precision": 0.4583333333333333,
-            "recall": 0.7857142857142857
+            "n_pred": 19,
+            "kick_f1": 0.7272727272727273,
+            "precision": 0.631578947368421,
+            "recall": 0.8571428571428571
           },
           {
             "id": "tears_140bpm",
             "domain": "electronic",
             "source": "manifold_own",
             "n_truth": 10,
-            "n_pred": 24,
-            "kick_f1": 0.35294117647058826,
-            "precision": 0.25,
+            "n_pred": 22,
+            "kick_f1": 0.37499999999999994,
+            "precision": 0.2727272727272727,
             "recall": 0.6
           },
           {
@@ -565,9 +565,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 20,
-            "kick_f1": 0.09523809523809523,
-            "precision": 0.05,
+            "n_pred": 2,
+            "kick_f1": 0.6666666666666666,
+            "precision": 0.5,
             "recall": 1.0
           },
           {
@@ -575,9 +575,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 7,
-            "kick_f1": 0.4444444444444445,
-            "precision": 0.2857142857142857,
+            "n_pred": 9,
+            "kick_f1": 0.3636363636363636,
+            "precision": 0.2222222222222222,
             "recall": 1.0
           },
           {
@@ -585,39 +585,39 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 7,
-            "kick_f1": 0.2,
-            "precision": 0.14285714285714285,
-            "recall": 0.3333333333333333
+            "n_pred": 9,
+            "kick_f1": 0.5,
+            "precision": 0.3333333333333333,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_230",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 8,
-            "kick_f1": 0.2222222222222222,
-            "precision": 0.125,
-            "recall": 1.0
+            "n_pred": 0,
+            "kick_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_132",
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 15,
-            "kick_f1": 0.11764705882352941,
-            "precision": 0.06666666666666667,
-            "recall": 0.5
+            "n_pred": 8,
+            "kick_f1": 0.4,
+            "precision": 0.25,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_15",
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 31,
-            "kick_f1": 0.2285714285714286,
-            "precision": 0.12903225806451613,
+            "n_pred": 14,
+            "kick_f1": 0.4444444444444445,
+            "precision": 0.2857142857142857,
             "recall": 1.0
           },
           {
@@ -626,16 +626,16 @@
             "source": "egmd",
             "n_truth": 5,
             "n_pred": 4,
-            "kick_f1": 0.4444444444444445,
-            "precision": 0.5,
-            "recall": 0.4
+            "kick_f1": 0.6666666666666665,
+            "precision": 0.75,
+            "recall": 0.6
           },
           {
             "id": "egmd_drummer1_session1_14",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 19,
+            "n_pred": 31,
             "kick_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -645,20 +645,20 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 13,
-            "kick_f1": 0.13333333333333336,
-            "precision": 0.07692307692307693,
-            "recall": 0.5
+            "n_pred": 14,
+            "kick_f1": 0.25,
+            "precision": 0.14285714285714285,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 4,
-            "kick_f1": 0.5714285714285715,
-            "precision": 0.5,
-            "recall": 0.6666666666666666
+            "n_pred": 5,
+            "kick_f1": 0.7499999999999999,
+            "precision": 0.6,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_192",
@@ -675,49 +675,49 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 1,
+            "n_pred": 4,
             "kick_f1": 0.6666666666666666,
-            "precision": 1.0,
-            "recall": 0.5
+            "precision": 0.5,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_195",
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 7,
-            "kick_f1": 0.22222222222222224,
-            "precision": 0.14285714285714285,
-            "recall": 0.5
+            "n_pred": 5,
+            "kick_f1": 0.5714285714285715,
+            "precision": 0.4,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 30,
-            "n_pred": 52,
-            "kick_f1": 0.7073170731707317,
-            "precision": 0.5576923076923077,
-            "recall": 0.9666666666666667
+            "n_pred": 60,
+            "kick_f1": 0.5777777777777778,
+            "precision": 0.43333333333333335,
+            "recall": 0.8666666666666667
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 52,
-            "n_pred": 42,
-            "kick_f1": 0.6595744680851063,
-            "precision": 0.7380952380952381,
-            "recall": 0.5961538461538461
+            "n_pred": 99,
+            "kick_f1": 0.6357615894039735,
+            "precision": 0.48484848484848486,
+            "recall": 0.9230769230769231
           },
           {
             "id": "egmd_drummer3_session1_21",
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 30,
-            "kick_f1": 0.18181818181818182,
-            "precision": 0.1,
+            "n_pred": 40,
+            "kick_f1": 0.13953488372093023,
+            "precision": 0.075,
             "recall": 1.0
           },
           {
@@ -725,39 +725,39 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 18,
-            "n_pred": 17,
-            "kick_f1": 0.9142857142857143,
-            "precision": 0.9411764705882353,
-            "recall": 0.8888888888888888
+            "n_pred": 29,
+            "kick_f1": 0.7659574468085107,
+            "precision": 0.6206896551724138,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 16,
-            "n_pred": 6,
-            "kick_f1": 0.45454545454545453,
-            "precision": 0.8333333333333334,
-            "recall": 0.3125
+            "n_pred": 9,
+            "kick_f1": 0.32,
+            "precision": 0.4444444444444444,
+            "recall": 0.25
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 12,
-            "kick_f1": 0.6363636363636365,
-            "precision": 0.5833333333333334,
-            "recall": 0.7
+            "n_pred": 29,
+            "kick_f1": 0.5128205128205129,
+            "precision": 0.3448275862068966,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
             "n_truth": 11,
-            "n_pred": 17,
-            "kick_f1": 0.7142857142857143,
-            "precision": 0.5882352941176471,
+            "n_pred": 10,
+            "kick_f1": 0.9523809523809523,
+            "precision": 1.0,
             "recall": 0.9090909090909091
           },
           {
@@ -765,9 +765,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 12,
-            "n_pred": 16,
-            "kick_f1": 0.7857142857142857,
-            "precision": 0.6875,
+            "n_pred": 15,
+            "kick_f1": 0.8148148148148148,
+            "precision": 0.7333333333333333,
             "recall": 0.9166666666666666
           },
           {
@@ -775,9 +775,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 14,
-            "n_pred": 50,
-            "kick_f1": 0.43750000000000006,
-            "precision": 0.28,
+            "n_pred": 35,
+            "kick_f1": 0.5714285714285715,
+            "precision": 0.4,
             "recall": 1.0
           },
           {
@@ -795,7 +795,7 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 1,
+            "n_pred": 2,
             "kick_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -805,9 +805,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 17,
-            "n_pred": 26,
-            "kick_f1": 0.7906976744186047,
-            "precision": 0.6538461538461539,
+            "n_pred": 41,
+            "kick_f1": 0.5862068965517241,
+            "precision": 0.4146341463414634,
             "recall": 1.0
           },
           {
@@ -815,9 +815,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 5,
-            "kick_f1": 0.7499999999999999,
-            "precision": 0.6,
+            "n_pred": 8,
+            "kick_f1": 0.5454545454545454,
+            "precision": 0.375,
             "recall": 1.0
           },
           {
@@ -825,57 +825,57 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 48,
-            "n_pred": 40,
-            "kick_f1": 0.04545454545454545,
-            "precision": 0.05,
-            "recall": 0.041666666666666664
+            "n_pred": 38,
+            "kick_f1": 0.13953488372093023,
+            "precision": 0.15789473684210525,
+            "recall": 0.125
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 18,
-            "n_pred": 16,
-            "kick_f1": 0.7647058823529411,
-            "precision": 0.8125,
-            "recall": 0.7222222222222222
+            "n_pred": 34,
+            "kick_f1": 0.6538461538461539,
+            "precision": 0.5,
+            "recall": 0.9444444444444444
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 11,
-            "n_pred": 9,
-            "kick_f1": 0.7000000000000001,
-            "precision": 0.7777777777777778,
-            "recall": 0.6363636363636364
+            "n_pred": 11,
+            "kick_f1": 0.9090909090909091,
+            "precision": 0.9090909090909091,
+            "recall": 0.9090909090909091
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 27,
-            "n_pred": 18,
-            "kick_f1": 0.5777777777777777,
-            "precision": 0.7222222222222222,
-            "recall": 0.48148148148148145
+            "n_pred": 34,
+            "kick_f1": 0.7213114754098361,
+            "precision": 0.6470588235294118,
+            "recall": 0.8148148148148148
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 15,
-            "kick_f1": 0.7142857142857142,
-            "precision": 0.6666666666666666,
-            "recall": 0.7692307692307693
+            "n_pred": 16,
+            "kick_f1": 0.8275862068965517,
+            "precision": 0.75,
+            "recall": 0.9230769230769231
           },
           {
             "id": "egmd_drummer7_session2_62",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 15,
+            "n_pred": 10,
             "kick_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -885,10 +885,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 27,
-            "n_pred": 6,
-            "kick_f1": 0.3636363636363636,
-            "precision": 1.0,
-            "recall": 0.2222222222222222
+            "n_pred": 14,
+            "kick_f1": 0.5365853658536585,
+            "precision": 0.7857142857142857,
+            "recall": 0.4074074074074074
           },
           {
             "id": "egmd_drummer7_session2_58",
@@ -905,9 +905,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 15,
-            "kick_f1": 0.6363636363636364,
-            "precision": 0.4666666666666667,
+            "n_pred": 18,
+            "kick_f1": 0.56,
+            "precision": 0.3888888888888889,
             "recall": 1.0
           },
           {
@@ -915,19 +915,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 5,
-            "kick_f1": 0.5333333333333333,
-            "precision": 0.8,
-            "recall": 0.4
+            "n_pred": 4,
+            "kick_f1": 0.4285714285714285,
+            "precision": 0.75,
+            "recall": 0.3
           },
           {
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 18,
-            "kick_f1": 0.10526315789473684,
-            "precision": 0.05555555555555555,
+            "n_pred": 13,
+            "kick_f1": 0.14285714285714288,
+            "precision": 0.07692307692307693,
             "recall": 1.0
           },
           {
@@ -935,9 +935,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 7,
-            "kick_f1": 0.923076923076923,
-            "precision": 0.8571428571428571,
+            "n_pred": 8,
+            "kick_f1": 0.8571428571428571,
+            "precision": 0.75,
             "recall": 1.0
           },
           {
@@ -945,9 +945,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 11,
-            "kick_f1": 0.42857142857142855,
-            "precision": 0.2727272727272727,
+            "n_pred": 7,
+            "kick_f1": 0.6,
+            "precision": 0.42857142857142855,
             "recall": 1.0
           },
           {
@@ -965,9 +965,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 4,
-            "kick_f1": 0.5,
-            "precision": 0.5,
+            "n_pred": 3,
+            "kick_f1": 0.5714285714285715,
+            "precision": 0.6666666666666666,
             "recall": 0.5
           },
           {
@@ -975,29 +975,29 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 5,
-            "kick_f1": 0.25,
-            "precision": 0.2,
-            "recall": 0.3333333333333333
+            "n_pred": 9,
+            "kick_f1": 0.3333333333333333,
+            "precision": 0.2222222222222222,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer7_session2_89",
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 7,
-            "kick_f1": 0.23529411764705882,
-            "precision": 0.2857142857142857,
-            "recall": 0.2
+            "n_pred": 8,
+            "kick_f1": 0.6666666666666665,
+            "precision": 0.75,
+            "recall": 0.6
           },
           {
             "id": "egmd_drummer9_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 27,
-            "kick_f1": 0.3125,
-            "precision": 0.18518518518518517,
+            "n_pred": 30,
+            "kick_f1": 0.2857142857142857,
+            "precision": 0.16666666666666666,
             "recall": 1.0
           },
           {
@@ -1005,39 +1005,39 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 15,
-            "n_pred": 50,
-            "kick_f1": 0.24615384615384614,
-            "precision": 0.16,
-            "recall": 0.5333333333333333
+            "n_pred": 75,
+            "kick_f1": 0.33333333333333337,
+            "precision": 0.2,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_4",
             "domain": "other",
             "source": "egmd",
             "n_truth": 15,
-            "n_pred": 6,
-            "kick_f1": 0.5714285714285715,
-            "precision": 1.0,
-            "recall": 0.4
+            "n_pred": 25,
+            "kick_f1": 0.7499999999999999,
+            "precision": 0.6,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
             "n_truth": 21,
-            "n_pred": 18,
-            "kick_f1": 0.923076923076923,
+            "n_pred": 20,
+            "kick_f1": 0.975609756097561,
             "precision": 1.0,
-            "recall": 0.8571428571428571
+            "recall": 0.9523809523809523
           },
           {
             "id": "egmd_drummer9_session1_15",
             "domain": "other",
             "source": "egmd",
             "n_truth": 23,
-            "n_pred": 26,
-            "kick_f1": 0.9387755102040816,
-            "precision": 0.8846153846153846,
+            "n_pred": 28,
+            "kick_f1": 0.9019607843137255,
+            "precision": 0.8214285714285714,
             "recall": 1.0
           },
           {
@@ -1045,9 +1045,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 23,
-            "kick_f1": 0.5625,
-            "precision": 0.391304347826087,
+            "n_pred": 17,
+            "kick_f1": 0.6923076923076924,
+            "precision": 0.5294117647058824,
             "recall": 1.0
           },
           {
@@ -1055,80 +1055,80 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 20,
-            "n_pred": 95,
-            "kick_f1": 0.34782608695652173,
-            "precision": 0.21052631578947367,
-            "recall": 1.0
+            "n_pred": 90,
+            "kick_f1": 0.32727272727272727,
+            "precision": 0.2,
+            "recall": 0.9
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
             "n_truth": 48,
-            "n_pred": 37,
-            "kick_f1": 0.5647058823529412,
-            "precision": 0.6486486486486487,
-            "recall": 0.5
+            "n_pred": 80,
+            "kick_f1": 0.6562500000000001,
+            "precision": 0.525,
+            "recall": 0.875
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
             "n_truth": 14,
-            "n_pred": 15,
-            "kick_f1": 0.7586206896551724,
-            "precision": 0.7333333333333333,
-            "recall": 0.7857142857142857
+            "n_pred": 19,
+            "kick_f1": 0.8484848484848484,
+            "precision": 0.7368421052631579,
+            "recall": 1.0
           },
           {
             "id": "liveshow_midnight_patience",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 72,
-            "n_pred": 391,
-            "n_pred_unwindowed": 847,
+            "n_pred": 431,
+            "n_pred_unwindowed": 908,
             "n_windows": 2,
-            "kick_f1": 0.2678185745140389,
-            "precision": 0.1585677749360614,
-            "recall": 0.8611111111111112
+            "kick_f1": 0.2544731610337972,
+            "precision": 0.14849187935034802,
+            "recall": 0.8888888888888888
           },
           {
             "id": "liveshow_integer",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 234,
-            "n_pred": 897,
-            "n_pred_unwindowed": 925,
+            "n_pred": 887,
+            "n_pred_unwindowed": 904,
             "n_windows": 2,
-            "kick_f1": 0.33952254641909807,
-            "precision": 0.2140468227424749,
-            "recall": 0.8205128205128205
+            "kick_f1": 0.36217662801070477,
+            "precision": 0.22886133032694475,
+            "recall": 0.8675213675213675
           },
           {
             "id": "liveshow_pattern",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 60,
-            "n_pred": 120,
-            "n_pred_unwindowed": 337,
+            "n_pred": 138,
+            "n_pred_unwindowed": 322,
             "n_windows": 1,
-            "kick_f1": 0.3333333333333333,
-            "precision": 0.25,
-            "recall": 0.5
+            "kick_f1": 0.43434343434343436,
+            "precision": 0.3115942028985507,
+            "recall": 0.7166666666666667
           }
         ],
-        "mean_f1": 0.4755272683205221,
+        "mean_f1": 0.5468369145547937,
         "by_domain": {
           "other": {
-            "mean": 0.4945040294682779,
+            "mean": 0.5689832856555886,
             "n": 60
           },
           "electronic": {
-            "mean": 0.361666701433987,
+            "mean": 0.4139586879500241,
             "n": 10
           },
           "overall": {
-            "mean": 0.475527268320522,
+            "mean": 0.5468369145547936,
             "n": 70
           }
         },
@@ -1869,29 +1869,29 @@
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 130,
-            "n_pred": 361,
-            "snare_f1": 0.5132382892057027,
-            "precision": 0.3490304709141274,
-            "recall": 0.9692307692307692
+            "n_pred": 411,
+            "snare_f1": 0.4066543438077634,
+            "precision": 0.26763990267639903,
+            "recall": 0.8461538461538461
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 184,
-            "n_pred": 358,
-            "snare_f1": 0.49446494464944646,
-            "precision": 0.3743016759776536,
-            "recall": 0.7282608695652174
+            "n_pred": 397,
+            "snare_f1": 0.43373493975903615,
+            "precision": 0.31738035264483627,
+            "recall": 0.6847826086956522
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 328,
-            "n_pred": 935,
-            "snare_f1": 0.503562945368171,
-            "precision": 0.34010695187165774,
+            "n_pred": 1077,
+            "snare_f1": 0.4526690391459074,
+            "precision": 0.29526462395543174,
             "recall": 0.9695121951219512
           },
           {
@@ -1899,70 +1899,70 @@
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 290,
-            "n_pred": 40,
-            "snare_f1": 0.2424242424242424,
+            "n_pred": 5,
+            "snare_f1": 0.03389830508474576,
             "precision": 1.0,
-            "recall": 0.13793103448275862
+            "recall": 0.017241379310344827
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 242,
-            "n_pred": 427,
-            "snare_f1": 0.6367713004484306,
-            "precision": 0.49882903981264637,
-            "recall": 0.8801652892561983
+            "n_pred": 254,
+            "snare_f1": 0.3024193548387097,
+            "precision": 0.2952755905511811,
+            "recall": 0.30991735537190085
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 108,
-            "n_pred": 293,
-            "snare_f1": 0.5336658354114713,
-            "precision": 0.3651877133105802,
-            "recall": 0.9907407407407407
+            "n_pred": 228,
+            "snare_f1": 0.5178571428571429,
+            "precision": 0.3815789473684211,
+            "recall": 0.8055555555555556
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 240,
-            "n_pred": 233,
-            "snare_f1": 0.3974630021141649,
-            "precision": 0.4034334763948498,
-            "recall": 0.39166666666666666
+            "n_pred": 204,
+            "snare_f1": 0.48648648648648646,
+            "precision": 0.5294117647058824,
+            "recall": 0.45
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 452,
-            "n_pred": 470,
-            "snare_f1": 0.6919739696312364,
-            "precision": 0.6787234042553192,
-            "recall": 0.7057522123893806
+            "n_pred": 410,
+            "snare_f1": 0.4918793503480278,
+            "precision": 0.5170731707317073,
+            "recall": 0.4690265486725664
           },
           {
             "id": "self_render_edm_kit_128bpm",
             "domain": "electronic",
             "source": "self_render",
             "n_truth": 32,
-            "n_pred": 16,
-            "snare_f1": 0.6666666666666666,
+            "n_pred": 32,
+            "snare_f1": 1.0,
             "precision": 1.0,
-            "recall": 0.5
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 17,
-            "snare_f1": 0.6399999999999999,
-            "precision": 0.47058823529411764,
-            "recall": 1.0
+            "n_pred": 21,
+            "snare_f1": 0.48275862068965514,
+            "precision": 0.3333333333333333,
+            "recall": 0.875
           },
           {
             "id": "egmd_drummer1_session1_266",
@@ -1970,9 +1970,9 @@
             "source": "egmd",
             "n_truth": 10,
             "n_pred": 18,
-            "snare_f1": 0.6428571428571429,
-            "precision": 0.5,
-            "recall": 0.9
+            "snare_f1": 0.5714285714285714,
+            "precision": 0.4444444444444444,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer1_session1_220",
@@ -1989,23 +1989,13 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 7,
-            "snare_f1": 0.5714285714285714,
-            "precision": 0.5714285714285714,
+            "n_pred": 8,
+            "snare_f1": 0.5333333333333333,
+            "precision": 0.5,
             "recall": 0.5714285714285714
           },
           {
             "id": "egmd_drummer1_session1_132",
-            "domain": "other",
-            "source": "egmd",
-            "n_truth": 5,
-            "n_pred": 16,
-            "snare_f1": 0.47619047619047616,
-            "precision": 0.3125,
-            "recall": 1.0
-          },
-          {
-            "id": "egmd_drummer1_session1_15",
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
@@ -2015,13 +2005,23 @@
             "recall": 1.0
           },
           {
+            "id": "egmd_drummer1_session1_15",
+            "domain": "other",
+            "source": "egmd",
+            "n_truth": 5,
+            "n_pred": 19,
+            "snare_f1": 0.4166666666666667,
+            "precision": 0.2631578947368421,
+            "recall": 1.0
+          },
+          {
             "id": "egmd_drummer1_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 8,
-            "snare_f1": 0.7999999999999999,
-            "precision": 0.75,
+            "n_pred": 7,
+            "snare_f1": 0.8571428571428571,
+            "precision": 0.8571428571428571,
             "recall": 0.8571428571428571
           },
           {
@@ -2029,9 +2029,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 17,
-            "n_pred": 7,
-            "snare_f1": 0.5,
-            "precision": 0.8571428571428571,
+            "n_pred": 9,
+            "snare_f1": 0.46153846153846156,
+            "precision": 0.6666666666666666,
             "recall": 0.35294117647058826
           },
           {
@@ -2039,9 +2039,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 20,
-            "snare_f1": 0.5714285714285715,
-            "precision": 0.4,
+            "n_pred": 21,
+            "snare_f1": 0.5517241379310345,
+            "precision": 0.38095238095238093,
             "recall": 1.0
           },
           {
@@ -2049,20 +2049,20 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 1,
-            "snare_f1": 0.2222222222222222,
+            "n_pred": 3,
+            "snare_f1": 0.5454545454545454,
             "precision": 1.0,
-            "recall": 0.125
+            "recall": 0.375
           },
           {
             "id": "egmd_drummer1_session1_14",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 15,
-            "snare_f1": 0.6428571428571429,
-            "precision": 0.6,
-            "recall": 0.6923076923076923
+            "n_pred": 8,
+            "snare_f1": 0.5714285714285714,
+            "precision": 0.75,
+            "recall": 0.46153846153846156
           },
           {
             "id": "egmd_drummer1_session1_106",
@@ -2079,19 +2079,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 10,
-            "snare_f1": 0.25,
-            "precision": 0.2,
-            "recall": 0.3333333333333333
+            "n_pred": 19,
+            "snare_f1": 0.23999999999999996,
+            "precision": 0.15789473684210525,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer1_session1_192",
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 11,
-            "snare_f1": 0.3076923076923077,
-            "precision": 0.18181818181818182,
+            "n_pred": 7,
+            "snare_f1": 0.4444444444444445,
+            "precision": 0.2857142857142857,
             "recall": 1.0
           },
           {
@@ -2109,9 +2109,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 6,
-            "snare_f1": 0.6666666666666666,
-            "precision": 0.5,
+            "n_pred": 10,
+            "snare_f1": 0.4615384615384615,
+            "precision": 0.3,
             "recall": 1.0
           },
           {
@@ -2119,29 +2119,29 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 31,
-            "n_pred": 64,
-            "snare_f1": 0.5263157894736842,
-            "precision": 0.390625,
-            "recall": 0.8064516129032258
+            "n_pred": 78,
+            "snare_f1": 0.4954128440366973,
+            "precision": 0.34615384615384615,
+            "recall": 0.8709677419354839
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 44,
-            "n_pred": 53,
-            "snare_f1": 0.8041237113402062,
-            "precision": 0.7358490566037735,
-            "recall": 0.8863636363636364
+            "n_pred": 91,
+            "snare_f1": 0.562962962962963,
+            "precision": 0.4175824175824176,
+            "recall": 0.8636363636363636
           },
           {
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
             "n_truth": 37,
-            "n_pred": 93,
-            "snare_f1": 0.5692307692307692,
-            "precision": 0.3978494623655914,
+            "n_pred": 88,
+            "snare_f1": 0.5920000000000001,
+            "precision": 0.42045454545454547,
             "recall": 1.0
           },
           {
@@ -2149,39 +2149,39 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 62,
-            "n_pred": 79,
-            "snare_f1": 0.6382978723404256,
-            "precision": 0.569620253164557,
-            "recall": 0.7258064516129032
+            "n_pred": 84,
+            "snare_f1": 0.6301369863013699,
+            "precision": 0.5476190476190477,
+            "recall": 0.7419354838709677
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 21,
-            "snare_f1": 0.5333333333333333,
-            "precision": 0.38095238095238093,
-            "recall": 0.8888888888888888
+            "n_pred": 34,
+            "snare_f1": 0.4186046511627907,
+            "precision": 0.2647058823529412,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 0,
-            "snare_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "n_pred": 9,
+            "snare_f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_23",
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 21,
-            "snare_f1": 0.32,
-            "precision": 0.19047619047619047,
+            "n_pred": 19,
+            "snare_f1": 0.34782608695652173,
+            "precision": 0.21052631578947367,
             "recall": 1.0
           },
           {
@@ -2189,9 +2189,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 14,
-            "snare_f1": 0.7272727272727273,
-            "precision": 0.5714285714285714,
+            "n_pred": 23,
+            "snare_f1": 0.5161290322580645,
+            "precision": 0.34782608695652173,
             "recall": 1.0
           },
           {
@@ -2199,9 +2199,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 19,
-            "n_pred": 45,
-            "snare_f1": 0.59375,
-            "precision": 0.4222222222222222,
+            "n_pred": 47,
+            "snare_f1": 0.5757575757575757,
+            "precision": 0.40425531914893614,
             "recall": 1.0
           },
           {
@@ -2209,9 +2209,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 6,
-            "snare_f1": 0.5,
-            "precision": 0.3333333333333333,
+            "n_pred": 7,
+            "snare_f1": 0.4444444444444445,
+            "precision": 0.2857142857142857,
             "recall": 1.0
           },
           {
@@ -2219,9 +2219,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 19,
-            "snare_f1": 0.4166666666666667,
-            "precision": 0.2631578947368421,
+            "n_pred": 16,
+            "snare_f1": 0.47619047619047616,
+            "precision": 0.3125,
             "recall": 1.0
           },
           {
@@ -2229,49 +2229,49 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 75,
-            "n_pred": 127,
-            "snare_f1": 0.6237623762376238,
-            "precision": 0.49606299212598426,
-            "recall": 0.84
+            "n_pred": 126,
+            "snare_f1": 0.6169154228855721,
+            "precision": 0.49206349206349204,
+            "recall": 0.8266666666666667
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 34,
-            "n_pred": 10,
-            "snare_f1": 0.40909090909090906,
-            "precision": 0.9,
-            "recall": 0.2647058823529412
+            "n_pred": 16,
+            "snare_f1": 0.4,
+            "precision": 0.625,
+            "recall": 0.29411764705882354
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 27,
-            "n_pred": 5,
-            "snare_f1": 0.3125,
-            "precision": 1.0,
-            "recall": 0.18518518518518517
+            "n_pred": 4,
+            "snare_f1": 0.19354838709677416,
+            "precision": 0.75,
+            "recall": 0.1111111111111111
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 38,
-            "n_pred": 11,
-            "snare_f1": 0.3673469387755102,
-            "precision": 0.8181818181818182,
-            "recall": 0.23684210526315788
+            "n_pred": 13,
+            "snare_f1": 0.392156862745098,
+            "precision": 0.7692307692307693,
+            "recall": 0.2631578947368421
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 13,
-            "snare_f1": 0.631578947368421,
-            "precision": 0.46153846153846156,
+            "n_pred": 12,
+            "snare_f1": 0.6666666666666666,
+            "precision": 0.5,
             "recall": 1.0
           },
           {
@@ -2289,9 +2289,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 22,
-            "n_pred": 40,
-            "snare_f1": 0.48387096774193555,
-            "precision": 0.375,
+            "n_pred": 39,
+            "snare_f1": 0.4918032786885246,
+            "precision": 0.38461538461538464,
             "recall": 0.6818181818181818
           },
           {
@@ -2309,9 +2309,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 21,
-            "n_pred": 30,
-            "snare_f1": 0.6666666666666666,
-            "precision": 0.5666666666666667,
+            "n_pred": 33,
+            "snare_f1": 0.6296296296296297,
+            "precision": 0.5151515151515151,
             "recall": 0.8095238095238095
           },
           {
@@ -2319,19 +2319,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 28,
-            "n_pred": 25,
-            "snare_f1": 0.7547169811320756,
-            "precision": 0.8,
-            "recall": 0.7142857142857143
+            "n_pred": 17,
+            "snare_f1": 0.5777777777777777,
+            "precision": 0.7647058823529411,
+            "recall": 0.4642857142857143
           },
           {
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 14,
-            "n_pred": 31,
-            "snare_f1": 0.5333333333333333,
-            "precision": 0.3870967741935484,
+            "n_pred": 34,
+            "snare_f1": 0.5,
+            "precision": 0.35294117647058826,
             "recall": 0.8571428571428571
           },
           {
@@ -2339,9 +2339,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 11,
-            "n_pred": 4,
-            "snare_f1": 0.5333333333333333,
-            "precision": 1.0,
+            "n_pred": 5,
+            "snare_f1": 0.5000000000000001,
+            "precision": 0.8,
             "recall": 0.36363636363636365
           },
           {
@@ -2349,49 +2349,49 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 36,
-            "n_pred": 20,
-            "snare_f1": 0.42857142857142855,
-            "precision": 0.6,
-            "recall": 0.3333333333333333
+            "n_pred": 29,
+            "snare_f1": 0.46153846153846156,
+            "precision": 0.5172413793103449,
+            "recall": 0.4166666666666667
           },
           {
             "id": "egmd_drummer7_session2_43",
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 1,
-            "snare_f1": 0.18181818181818182,
-            "precision": 1.0,
-            "recall": 0.1
+            "n_pred": 7,
+            "snare_f1": 0.588235294117647,
+            "precision": 0.7142857142857143,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer7_session2_118",
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 8,
-            "snare_f1": 0.6153846153846154,
-            "precision": 0.5,
-            "recall": 0.8
+            "n_pred": 6,
+            "snare_f1": 0.3636363636363636,
+            "precision": 0.3333333333333333,
+            "recall": 0.4
           },
           {
             "id": "egmd_drummer7_session3_97",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 20,
-            "snare_f1": 0.7272727272727274,
-            "precision": 0.6,
-            "recall": 0.9230769230769231
+            "n_pred": 24,
+            "snare_f1": 0.5945945945945945,
+            "precision": 0.4583333333333333,
+            "recall": 0.8461538461538461
           },
           {
             "id": "egmd_drummer7_session3_121",
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 27,
-            "snare_f1": 0.39999999999999997,
-            "precision": 0.25925925925925924,
+            "n_pred": 31,
+            "snare_f1": 0.358974358974359,
+            "precision": 0.22580645161290322,
             "recall": 0.875
           },
           {
@@ -2399,9 +2399,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 25,
-            "snare_f1": 0.29411764705882354,
-            "precision": 0.2,
+            "n_pred": 30,
+            "snare_f1": 0.2564102564102564,
+            "precision": 0.16666666666666666,
             "recall": 0.5555555555555556
           },
           {
@@ -2409,19 +2409,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 15,
-            "n_pred": 15,
-            "snare_f1": 0.7333333333333333,
-            "precision": 0.7333333333333333,
-            "recall": 0.7333333333333333
+            "n_pred": 11,
+            "snare_f1": 0.6153846153846153,
+            "precision": 0.7272727272727273,
+            "recall": 0.5333333333333333
           },
           {
             "id": "egmd_drummer7_session3_18",
             "domain": "other",
             "source": "egmd",
             "n_truth": 12,
-            "n_pred": 18,
-            "snare_f1": 0.6666666666666667,
-            "precision": 0.5555555555555556,
+            "n_pred": 22,
+            "snare_f1": 0.5882352941176471,
+            "precision": 0.45454545454545453,
             "recall": 0.8333333333333334
           },
           {
@@ -2429,9 +2429,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 16,
-            "n_pred": 24,
-            "snare_f1": 0.75,
-            "precision": 0.625,
+            "n_pred": 25,
+            "snare_f1": 0.7317073170731707,
+            "precision": 0.6,
             "recall": 0.9375
           },
           {
@@ -2439,9 +2439,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 14,
-            "snare_f1": 0.4444444444444445,
-            "precision": 0.2857142857142857,
+            "n_pred": 22,
+            "snare_f1": 0.3076923076923077,
+            "precision": 0.18181818181818182,
             "recall": 1.0
           },
           {
@@ -2449,9 +2449,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 13,
-            "snare_f1": 0.631578947368421,
-            "precision": 0.46153846153846156,
+            "n_pred": 20,
+            "snare_f1": 0.4615384615384615,
+            "precision": 0.3,
             "recall": 1.0
           },
           {
@@ -2460,18 +2460,18 @@
             "source": "egmd",
             "n_truth": 9,
             "n_pred": 10,
-            "snare_f1": 0.8421052631578948,
-            "precision": 0.8,
-            "recall": 0.8888888888888888
+            "snare_f1": 0.9473684210526316,
+            "precision": 0.9,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
             "n_truth": 25,
-            "n_pred": 40,
-            "snare_f1": 0.6153846153846154,
-            "precision": 0.5,
+            "n_pred": 41,
+            "snare_f1": 0.6060606060606061,
+            "precision": 0.4878048780487805,
             "recall": 0.8
           },
           {
@@ -2479,10 +2479,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 42,
-            "n_pred": 53,
-            "snare_f1": 0.33684210526315794,
-            "precision": 0.3018867924528302,
-            "recall": 0.38095238095238093
+            "n_pred": 57,
+            "snare_f1": 0.36363636363636365,
+            "precision": 0.3157894736842105,
+            "recall": 0.42857142857142855
           },
           {
             "id": "egmd_drummer9_session1_10",
@@ -2490,38 +2490,38 @@
             "source": "egmd",
             "n_truth": 11,
             "n_pred": 13,
-            "snare_f1": 0.7500000000000001,
-            "precision": 0.6923076923076923,
-            "recall": 0.8181818181818182
+            "snare_f1": 0.8333333333333333,
+            "precision": 0.7692307692307693,
+            "recall": 0.9090909090909091
           },
           {
             "id": "egmd_drummer9_session1_29",
             "domain": "other",
             "source": "egmd",
             "n_truth": 36,
-            "n_pred": 85,
-            "snare_f1": 0.46280991735537186,
-            "precision": 0.32941176470588235,
-            "recall": 0.7777777777777778
+            "n_pred": 96,
+            "snare_f1": 0.43939393939393945,
+            "precision": 0.3020833333333333,
+            "recall": 0.8055555555555556
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
             "n_truth": 34,
-            "n_pred": 26,
-            "snare_f1": 0.7333333333333334,
-            "precision": 0.8461538461538461,
-            "recall": 0.6470588235294118
+            "n_pred": 19,
+            "snare_f1": 0.5660377358490566,
+            "precision": 0.7894736842105263,
+            "recall": 0.4411764705882353
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 25,
-            "snare_f1": 0.631578947368421,
-            "precision": 0.48,
+            "n_pred": 27,
+            "snare_f1": 0.6,
+            "precision": 0.4444444444444444,
             "recall": 0.9230769230769231
           },
           {
@@ -2529,32 +2529,32 @@
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 327,
-            "n_pred": 111,
-            "n_pred_unwindowed": 111,
+            "n_pred": 249,
+            "n_pred_unwindowed": 251,
             "n_windows": 2,
-            "snare_f1": 0.4429223744292237,
-            "precision": 0.8738738738738738,
-            "recall": 0.2966360856269113
+            "snare_f1": 0.4305555555555556,
+            "precision": 0.4979919678714859,
+            "recall": 0.37920489296636084
           },
           {
             "id": "liveshow_integer",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 124,
-            "n_pred": 99,
-            "n_pred_unwindowed": 136,
+            "n_pred": 228,
+            "n_pred_unwindowed": 289,
             "n_windows": 2,
-            "snare_f1": 0.5829596412556054,
-            "precision": 0.6565656565656566,
-            "recall": 0.5241935483870968
+            "snare_f1": 0.3579545454545454,
+            "precision": 0.27631578947368424,
+            "recall": 0.5080645161290323
           },
           {
             "id": "liveshow_pattern",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 4,
-            "n_pred": 17,
-            "n_pred_unwindowed": 171,
+            "n_pred": 16,
+            "n_pred_unwindowed": 235,
             "n_windows": 1,
             "snare_f1": 0.0,
             "precision": 0.0,
@@ -2565,38 +2565,38 @@
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 11,
-            "n_pred": 21,
-            "n_pred_unwindowed": 115,
+            "n_pred": 37,
+            "n_pred_unwindowed": 148,
             "n_windows": 1,
-            "snare_f1": 0.25,
-            "precision": 0.19047619047619047,
-            "recall": 0.36363636363636365
+            "snare_f1": 0.33333333333333337,
+            "precision": 0.21621621621621623,
+            "recall": 0.7272727272727273
           },
           {
             "id": "liveshow_oh_so_suddenly",
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 60,
-            "n_pred": 286,
-            "n_pred_unwindowed": 321,
+            "n_pred": 348,
+            "n_pred_unwindowed": 380,
             "n_windows": 2,
-            "snare_f1": 0.3468208092485549,
-            "precision": 0.2097902097902098,
-            "recall": 1.0
+            "snare_f1": 0.25980392156862747,
+            "precision": 0.15229885057471265,
+            "recall": 0.8833333333333333
           }
         ],
-        "mean_f1": 0.5253076142946949,
+        "mean_f1": 0.5051912083860495,
         "by_domain": {
           "other": {
-            "mean": 0.5385764788203581,
+            "mean": 0.5151835144538067,
             "n": 65
           },
           "electronic": {
-            "mean": 0.3815615819333418,
+            "mean": 0.3969412259853436,
             "n": 6
           },
           "overall": {
-            "mean": 0.5253076142946949,
+            "mean": 0.5051912083860494,
             "n": 71
           }
         },
@@ -3351,80 +3351,80 @@
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 598,
-            "n_pred": 847,
-            "hat_f1": 0.4332179930795848,
-            "precision": 0.3695395513577332,
-            "recall": 0.5234113712374582
+            "n_pred": 626,
+            "hat_f1": 0.2042483660130719,
+            "precision": 0.19968051118210864,
+            "recall": 0.20903010033444816
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 725,
-            "n_pred": 73,
-            "hat_f1": 0.17293233082706766,
-            "precision": 0.9452054794520548,
-            "recall": 0.09517241379310344
+            "n_pred": 2,
+            "hat_f1": 0.0027510316368638235,
+            "precision": 0.5,
+            "recall": 0.001379310344827586
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 969,
-            "n_pred": 72,
-            "hat_f1": 0.12103746397694526,
-            "precision": 0.875,
-            "recall": 0.06501547987616099
+            "n_pred": 25,
+            "hat_f1": 0.020120724346076462,
+            "precision": 0.4,
+            "recall": 0.010319917440660475
           },
           {
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 406,
-            "n_pred": 17,
-            "hat_f1": 0.0047281323877068565,
-            "precision": 0.058823529411764705,
-            "recall": 0.0024630541871921183
+            "n_pred": 1,
+            "hat_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 767,
-            "n_pred": 80,
-            "hat_f1": 0.08264462809917357,
-            "precision": 0.4375,
-            "recall": 0.04563233376792699
+            "n_pred": 50,
+            "hat_f1": 0.048959608323133424,
+            "precision": 0.4,
+            "recall": 0.02607561929595828
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 408,
-            "n_pred": 14,
-            "hat_f1": 0.02843601895734597,
-            "precision": 0.42857142857142855,
-            "recall": 0.014705882352941176
+            "n_pred": 9,
+            "hat_f1": 0.023980815347721826,
+            "precision": 0.5555555555555556,
+            "recall": 0.012254901960784314
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 745,
-            "n_pred": 43,
-            "hat_f1": 0.01015228426395939,
-            "precision": 0.09302325581395349,
-            "recall": 0.005369127516778523
+            "n_pred": 64,
+            "hat_f1": 0.007416563658838073,
+            "precision": 0.046875,
+            "recall": 0.004026845637583893
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 537,
-            "n_pred": 177,
-            "hat_f1": 0.3277310924369748,
-            "precision": 0.6610169491525424,
-            "recall": 0.21787709497206703
+            "n_pred": 75,
+            "hat_f1": 0.11111111111111112,
+            "precision": 0.4533333333333333,
+            "recall": 0.0633147113594041
           },
           {
             "id": "self_render_kick_hat_128bpm",
@@ -3441,29 +3441,29 @@
             "domain": "electronic",
             "source": "self_render",
             "n_truth": 128,
-            "n_pred": 128,
-            "hat_f1": 1.0,
+            "n_pred": 112,
+            "hat_f1": 0.9333333333333333,
             "precision": 1.0,
-            "recall": 1.0
+            "recall": 0.875
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 5,
-            "hat_f1": 0.6,
-            "precision": 0.6,
-            "recall": 0.6
+            "n_pred": 2,
+            "hat_f1": 0.28571428571428575,
+            "precision": 0.5,
+            "recall": 0.2
           },
           {
             "id": "egmd_drummer1_session1_266",
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 3,
-            "hat_f1": 0.3333333333333333,
-            "precision": 0.3333333333333333,
+            "n_pred": 1,
+            "hat_f1": 0.5,
+            "precision": 1.0,
             "recall": 0.3333333333333333
           },
           {
@@ -3481,9 +3481,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 11,
-            "hat_f1": 0.3,
-            "precision": 0.2727272727272727,
+            "n_pred": 9,
+            "hat_f1": 0.3333333333333333,
+            "precision": 0.3333333333333333,
             "recall": 0.3333333333333333
           },
           {
@@ -3511,7 +3511,7 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 0,
+            "n_pred": 2,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3521,20 +3521,20 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 4,
-            "hat_f1": 0.4,
-            "precision": 0.25,
-            "recall": 1.0
+            "n_pred": 3,
+            "hat_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 16,
-            "hat_f1": 0.2,
-            "precision": 0.125,
-            "recall": 0.5
+            "n_pred": 5,
+            "hat_f1": 0.22222222222222224,
+            "precision": 0.2,
+            "recall": 0.25
           },
           {
             "id": "egmd_drummer1_session1_192",
@@ -3551,9 +3551,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 8,
-            "hat_f1": 0.2222222222222222,
-            "precision": 0.125,
+            "n_pred": 5,
+            "hat_f1": 0.33333333333333337,
+            "precision": 0.2,
             "recall": 1.0
           },
           {
@@ -3561,19 +3561,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 15,
-            "hat_f1": 0.2105263157894737,
-            "precision": 0.13333333333333333,
-            "recall": 0.5
+            "n_pred": 17,
+            "hat_f1": 0.09523809523809523,
+            "precision": 0.058823529411764705,
+            "recall": 0.25
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 16,
-            "n_pred": 60,
-            "hat_f1": 0.13157894736842105,
-            "precision": 0.08333333333333333,
+            "n_pred": 44,
+            "hat_f1": 0.16666666666666666,
+            "precision": 0.11363636363636363,
             "recall": 0.3125
           },
           {
@@ -3581,7 +3581,7 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 267,
+            "n_pred": 172,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3591,70 +3591,70 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 20,
-            "hat_f1": 0.2608695652173913,
-            "precision": 0.15,
-            "recall": 1.0
+            "n_pred": 8,
+            "hat_f1": 0.18181818181818182,
+            "precision": 0.125,
+            "recall": 0.3333333333333333
           },
           {
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
             "n_truth": 60,
-            "n_pred": 67,
-            "hat_f1": 0.6929133858267716,
-            "precision": 0.6567164179104478,
-            "recall": 0.7333333333333333
+            "n_pred": 61,
+            "hat_f1": 0.6611570247933883,
+            "precision": 0.6557377049180327,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer3_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 19,
-            "hat_f1": 0.1904761904761905,
-            "precision": 0.10526315789473684,
-            "recall": 1.0
+            "n_pred": 14,
+            "hat_f1": 0.125,
+            "precision": 0.07142857142857142,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
             "n_truth": 9,
-            "n_pred": 77,
-            "hat_f1": 0.09302325581395349,
-            "precision": 0.05194805194805195,
-            "recall": 0.4444444444444444
+            "n_pred": 44,
+            "hat_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
             "n_truth": 34,
-            "n_pred": 24,
-            "hat_f1": 0.6551724137931034,
-            "precision": 0.7916666666666666,
-            "recall": 0.5588235294117647
+            "n_pred": 22,
+            "hat_f1": 0.6071428571428571,
+            "precision": 0.7727272727272727,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer3_session2_23",
             "domain": "other",
             "source": "egmd",
             "n_truth": 23,
-            "n_pred": 3,
-            "hat_f1": 0.15384615384615383,
-            "precision": 0.6666666666666666,
-            "recall": 0.08695652173913043
+            "n_pred": 5,
+            "hat_f1": 0.21428571428571427,
+            "precision": 0.6,
+            "recall": 0.13043478260869565
           },
           {
             "id": "egmd_drummer3_session2_38",
             "domain": "other",
             "source": "egmd",
             "n_truth": 44,
-            "n_pred": 20,
-            "hat_f1": 0.40625,
-            "precision": 0.65,
-            "recall": 0.29545454545454547
+            "n_pred": 25,
+            "hat_f1": 0.5797101449275363,
+            "precision": 0.8,
+            "recall": 0.45454545454545453
           },
           {
             "id": "egmd_drummer3_session2_34",
@@ -3671,9 +3671,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 26,
-            "n_pred": 25,
-            "hat_f1": 0.27450980392156865,
-            "precision": 0.28,
+            "n_pred": 22,
+            "hat_f1": 0.2916666666666667,
+            "precision": 0.3181818181818182,
             "recall": 0.2692307692307692
           },
           {
@@ -3681,10 +3681,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 27,
-            "n_pred": 97,
-            "hat_f1": 0.2096774193548387,
-            "precision": 0.13402061855670103,
-            "recall": 0.48148148148148145
+            "n_pred": 78,
+            "hat_f1": 0.05714285714285715,
+            "precision": 0.038461538461538464,
+            "recall": 0.1111111111111111
           },
           {
             "id": "egmd_drummer3_session2_33",
@@ -3692,46 +3692,46 @@
             "source": "egmd",
             "n_truth": 12,
             "n_pred": 15,
-            "hat_f1": 0.3703703703703704,
-            "precision": 0.3333333333333333,
-            "recall": 0.4166666666666667
+            "hat_f1": 0.4444444444444445,
+            "precision": 0.4,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
             "n_truth": 19,
-            "n_pred": 44,
-            "hat_f1": 0.3492063492063492,
-            "precision": 0.25,
-            "recall": 0.5789473684210527
+            "n_pred": 24,
+            "hat_f1": 0.186046511627907,
+            "precision": 0.16666666666666666,
+            "recall": 0.21052631578947367
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 18,
-            "hat_f1": 0.3870967741935484,
-            "precision": 0.3333333333333333,
-            "recall": 0.46153846153846156
+            "n_pred": 13,
+            "hat_f1": 0.15384615384615385,
+            "precision": 0.15384615384615385,
+            "recall": 0.15384615384615385
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 22,
-            "n_pred": 30,
-            "hat_f1": 0.6153846153846153,
-            "precision": 0.5333333333333333,
-            "recall": 0.7272727272727273
+            "n_pred": 13,
+            "hat_f1": 0.5142857142857142,
+            "precision": 0.6923076923076923,
+            "recall": 0.4090909090909091
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 16,
+            "n_pred": 17,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3741,19 +3741,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 3,
-            "hat_f1": 0.4444444444444444,
-            "precision": 0.6666666666666666,
-            "recall": 0.3333333333333333
+            "n_pred": 1,
+            "hat_f1": 0.2857142857142857,
+            "precision": 1.0,
+            "recall": 0.16666666666666666
           },
           {
             "id": "egmd_drummer7_session2_102",
             "domain": "other",
             "source": "egmd",
             "n_truth": 12,
-            "n_pred": 39,
-            "hat_f1": 0.07843137254901959,
-            "precision": 0.05128205128205128,
+            "n_pred": 31,
+            "hat_f1": 0.09302325581395349,
+            "precision": 0.06451612903225806,
             "recall": 0.16666666666666666
           },
           {
@@ -3761,9 +3761,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 4,
-            "hat_f1": 0.6666666666666666,
-            "precision": 0.5,
+            "n_pred": 3,
+            "hat_f1": 0.8,
+            "precision": 0.6666666666666666,
             "recall": 1.0
           },
           {
@@ -3771,9 +3771,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 18,
-            "hat_f1": 0.16666666666666666,
-            "precision": 0.1111111111111111,
+            "n_pred": 11,
+            "hat_f1": 0.23529411764705885,
+            "precision": 0.18181818181818182,
             "recall": 0.3333333333333333
           },
           {
@@ -3791,9 +3791,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 3,
-            "hat_f1": 0.6666666666666666,
-            "precision": 0.6666666666666666,
+            "n_pred": 2,
+            "hat_f1": 0.8,
+            "precision": 1.0,
             "recall": 0.6666666666666666
           },
           {
@@ -3801,7 +3801,7 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 7,
+            "n_pred": 6,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3811,9 +3811,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 12,
-            "hat_f1": 0.14285714285714285,
-            "precision": 0.08333333333333333,
+            "n_pred": 7,
+            "hat_f1": 0.22222222222222224,
+            "precision": 0.14285714285714285,
             "recall": 0.5
           },
           {
@@ -3831,10 +3831,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 10,
-            "hat_f1": 0.888888888888889,
-            "precision": 0.8,
-            "recall": 1.0
+            "n_pred": 7,
+            "hat_f1": 0.5333333333333333,
+            "precision": 0.5714285714285714,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer7_session2_89",
@@ -3851,17 +3851,17 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 29,
-            "n_pred": 74,
-            "hat_f1": 0.4077669902912622,
-            "precision": 0.28378378378378377,
-            "recall": 0.7241379310344828
+            "n_pred": 62,
+            "hat_f1": 0.4835164835164835,
+            "precision": 0.3548387096774194,
+            "recall": 0.7586206896551724
           },
           {
             "id": "egmd_drummer9_session1_17",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 7,
+            "n_pred": 2,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3871,7 +3871,7 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 57,
+            "n_pred": 36,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3881,17 +3881,17 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 32,
-            "n_pred": 42,
-            "hat_f1": 0.5405405405405405,
-            "precision": 0.47619047619047616,
-            "recall": 0.625
+            "n_pred": 41,
+            "hat_f1": 0.4931506849315069,
+            "precision": 0.43902439024390244,
+            "recall": 0.5625
           },
           {
             "id": "egmd_drummer9_session1_15",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 13,
+            "n_pred": 8,
             "hat_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -3911,29 +3911,29 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 47,
-            "n_pred": 47,
-            "hat_f1": 0.3191489361702128,
-            "precision": 0.3191489361702128,
-            "recall": 0.3191489361702128
+            "n_pred": 31,
+            "hat_f1": 0.30769230769230765,
+            "precision": 0.3870967741935484,
+            "recall": 0.2553191489361702
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
             "n_truth": 110,
-            "n_pred": 198,
-            "hat_f1": 0.44155844155844154,
-            "precision": 0.3434343434343434,
-            "recall": 0.6181818181818182
+            "n_pred": 162,
+            "hat_f1": 0.4117647058823529,
+            "precision": 0.345679012345679,
+            "recall": 0.509090909090909
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 19,
-            "hat_f1": 0.17391304347826086,
-            "precision": 0.10526315789473684,
+            "n_pred": 13,
+            "hat_f1": 0.23529411764705882,
+            "precision": 0.15384615384615385,
             "recall": 0.5
           },
           {
@@ -3941,26 +3941,26 @@
             "domain": "electronic",
             "source": "liveshow",
             "n_truth": 42,
-            "n_pred": 71,
-            "n_pred_unwindowed": 360,
+            "n_pred": 51,
+            "n_pred_unwindowed": 138,
             "n_windows": 5,
-            "hat_f1": 0.6017699115044247,
-            "precision": 0.4788732394366197,
-            "recall": 0.8095238095238095
+            "hat_f1": 0.6881720430107526,
+            "precision": 0.6274509803921569,
+            "recall": 0.7619047619047619
           }
         ],
-        "mean_f1": 0.29777944437565984,
+        "mean_f1": 0.2664043868130119,
         "by_domain": {
           "other": {
-            "mean": 0.2680854345071611,
+            "mean": 0.2347128219001692,
             "n": 57
           },
           "electronic": {
-            "mean": 0.8619656318771364,
+            "mean": 0.8685441201570233,
             "n": 3
           },
           "overall": {
-            "mean": 0.2977794443756599,
+            "mean": 0.2664043868130119,
             "n": 60
           }
         },
@@ -4597,100 +4597,100 @@
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 166,
-            "n_pred": 152,
-            "perc_f1": 0.1886792452830189,
-            "precision": 0.19736842105263158,
-            "recall": 0.18072289156626506
+            "n_pred": 192,
+            "perc_f1": 0.2793296089385475,
+            "precision": 0.2604166666666667,
+            "recall": 0.30120481927710846
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 1070,
-            "n_pred": 274,
-            "perc_f1": 0.3020833333333333,
-            "precision": 0.7408759124087592,
-            "recall": 0.1897196261682243
+            "n_pred": 295,
+            "perc_f1": 0.3487179487179487,
+            "precision": 0.8067796610169492,
+            "recall": 0.22242990654205608
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 144,
-            "n_pred": 145,
-            "perc_f1": 0.18685121107266434,
-            "precision": 0.18620689655172415,
-            "recall": 0.1875
+            "n_pred": 184,
+            "perc_f1": 0.25,
+            "precision": 0.22282608695652173,
+            "recall": 0.2847222222222222
           },
           {
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 848,
-            "n_pred": 547,
-            "perc_f1": 0.5405017921146953,
-            "precision": 0.6892138939670932,
-            "recall": 0.44457547169811323
+            "n_pred": 490,
+            "perc_f1": 0.42600896860986553,
+            "precision": 0.5816326530612245,
+            "recall": 0.33608490566037735
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 1098,
-            "n_pred": 715,
-            "perc_f1": 0.5736348593491452,
-            "precision": 0.7272727272727273,
-            "recall": 0.47358834244080145
+            "n_pred": 894,
+            "perc_f1": 0.5783132530120482,
+            "precision": 0.6442953020134228,
+            "recall": 0.5245901639344263
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 72,
-            "n_pred": 38,
-            "perc_f1": 0.3818181818181819,
-            "precision": 0.5526315789473685,
-            "recall": 0.2916666666666667
+            "n_pred": 104,
+            "perc_f1": 0.3181818181818182,
+            "precision": 0.2692307692307692,
+            "recall": 0.3888888888888889
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 500,
-            "n_pred": 354,
-            "perc_f1": 0.7002341920374706,
-            "precision": 0.844632768361582,
-            "recall": 0.598
+            "n_pred": 200,
+            "perc_f1": 0.44285714285714284,
+            "precision": 0.775,
+            "recall": 0.31
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
             "n_truth": 982,
-            "n_pred": 112,
-            "perc_f1": 0.1590493601462523,
-            "precision": 0.7767857142857143,
-            "recall": 0.08859470468431772
+            "n_pred": 200,
+            "perc_f1": 0.20473773265651438,
+            "precision": 0.605,
+            "recall": 0.12321792260692464
           },
           {
             "id": "self_render_edm_kit_128bpm",
             "domain": "electronic",
             "source": "self_render",
             "n_truth": 4,
-            "n_pred": 0,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "n_pred": 4,
+            "perc_f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 3,
-            "perc_f1": 0.125,
-            "precision": 0.3333333333333333,
-            "recall": 0.07692307692307693
+            "n_pred": 18,
+            "perc_f1": 0.5161290322580646,
+            "precision": 0.4444444444444444,
+            "recall": 0.6153846153846154
           },
           {
             "id": "egmd_drummer1_session1_266",
@@ -4707,9 +4707,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 5,
-            "perc_f1": 0.33333333333333337,
-            "precision": 0.2,
+            "n_pred": 3,
+            "perc_f1": 0.5,
+            "precision": 0.3333333333333333,
             "recall": 1.0
           },
           {
@@ -4717,9 +4717,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 6,
-            "perc_f1": 0.8,
-            "precision": 0.6666666666666666,
+            "n_pred": 13,
+            "perc_f1": 0.47058823529411764,
+            "precision": 0.3076923076923077,
             "recall": 1.0
           },
           {
@@ -4727,9 +4727,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 12,
-            "perc_f1": 0.26666666666666666,
-            "precision": 0.16666666666666666,
+            "n_pred": 19,
+            "perc_f1": 0.18181818181818182,
+            "precision": 0.10526315789473684,
             "recall": 0.6666666666666666
           },
           {
@@ -4737,9 +4737,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 11,
-            "perc_f1": 0.5714285714285713,
-            "precision": 0.5454545454545454,
+            "n_pred": 24,
+            "perc_f1": 0.35294117647058826,
+            "precision": 0.25,
             "recall": 0.6
           },
           {
@@ -4747,9 +4747,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 8,
-            "n_pred": 12,
-            "perc_f1": 0.8,
-            "precision": 0.6666666666666666,
+            "n_pred": 14,
+            "perc_f1": 0.7272727272727273,
+            "precision": 0.5714285714285714,
             "recall": 1.0
           },
           {
@@ -4767,19 +4767,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 21,
-            "n_pred": 35,
-            "perc_f1": 0.6428571428571428,
-            "precision": 0.5142857142857142,
-            "recall": 0.8571428571428571
+            "n_pred": 60,
+            "perc_f1": 0.4938271604938272,
+            "precision": 0.3333333333333333,
+            "recall": 0.9523809523809523
           },
           {
             "id": "egmd_drummer1_session1_182",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 6,
-            "perc_f1": 0.2857142857142857,
-            "precision": 0.16666666666666666,
+            "n_pred": 3,
+            "perc_f1": 0.5,
+            "precision": 0.3333333333333333,
             "recall": 1.0
           },
           {
@@ -4787,27 +4787,27 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 10,
-            "n_pred": 31,
-            "perc_f1": 0.3902439024390244,
-            "precision": 0.25806451612903225,
-            "recall": 0.8
+            "n_pred": 25,
+            "perc_f1": 0.5714285714285715,
+            "precision": 0.4,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_106",
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 21,
-            "perc_f1": 0.3076923076923077,
-            "precision": 0.19047619047619047,
-            "recall": 0.8
+            "n_pred": 23,
+            "perc_f1": 0.3571428571428571,
+            "precision": 0.21739130434782608,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
             "n_truth": 2,
-            "n_pred": 0,
+            "n_pred": 1,
             "perc_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
@@ -4817,10 +4817,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 2,
-            "perc_f1": 0.22222222222222224,
-            "precision": 0.5,
-            "recall": 0.14285714285714285
+            "n_pred": 6,
+            "perc_f1": 0.7692307692307692,
+            "precision": 0.8333333333333334,
+            "recall": 0.7142857142857143
           },
           {
             "id": "egmd_drummer1_session1_195",
@@ -4837,10 +4837,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 5,
-            "n_pred": 12,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "n_pred": 6,
+            "perc_f1": 0.5454545454545454,
+            "precision": 0.5,
+            "recall": 0.6
           },
           {
             "id": "egmd_drummer10_session1_8",
@@ -4848,19 +4848,19 @@
             "source": "egmd",
             "n_truth": 9,
             "n_pred": 8,
-            "perc_f1": 0.47058823529411764,
-            "precision": 0.5,
-            "recall": 0.4444444444444444
+            "perc_f1": 0.823529411764706,
+            "precision": 0.875,
+            "recall": 0.7777777777777778
           },
           {
             "id": "egmd_drummer3_session1_21",
             "domain": "other",
             "source": "egmd",
             "n_truth": 31,
-            "n_pred": 43,
-            "perc_f1": 0.5945945945945946,
-            "precision": 0.5116279069767442,
-            "recall": 0.7096774193548387
+            "n_pred": 58,
+            "perc_f1": 0.6516853932584269,
+            "precision": 0.5,
+            "recall": 0.9354838709677419
           },
           {
             "id": "egmd_drummer3_session2_13",
@@ -4887,19 +4887,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 19,
-            "n_pred": 29,
+            "n_pred": 35,
             "perc_f1": 0.6666666666666666,
-            "precision": 0.5517241379310345,
-            "recall": 0.8421052631578947
+            "precision": 0.5142857142857142,
+            "recall": 0.9473684210526315
           },
           {
             "id": "egmd_drummer4_session1_9",
             "domain": "other",
             "source": "egmd",
             "n_truth": 60,
-            "n_pred": 98,
-            "perc_f1": 0.5569620253164558,
-            "precision": 0.4489795918367347,
+            "n_pred": 107,
+            "perc_f1": 0.5269461077844312,
+            "precision": 0.411214953271028,
             "recall": 0.7333333333333333
           },
           {
@@ -4907,29 +4907,29 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 13,
-            "n_pred": 22,
-            "perc_f1": 0.6285714285714286,
-            "precision": 0.5,
-            "recall": 0.8461538461538461
+            "n_pred": 20,
+            "perc_f1": 0.7272727272727274,
+            "precision": 0.6,
+            "recall": 0.9230769230769231
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
             "n_truth": 1,
-            "n_pred": 0,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "n_pred": 4,
+            "perc_f1": 0.4,
+            "precision": 0.25,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
             "n_truth": 11,
-            "n_pred": 23,
-            "perc_f1": 0.6470588235294118,
-            "precision": 0.4782608695652174,
+            "n_pred": 22,
+            "perc_f1": 0.6666666666666666,
+            "precision": 0.5,
             "recall": 1.0
           },
           {
@@ -4937,9 +4937,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 3,
-            "n_pred": 7,
-            "perc_f1": 0.6,
-            "precision": 0.42857142857142855,
+            "n_pred": 6,
+            "perc_f1": 0.6666666666666666,
+            "precision": 0.5,
             "recall": 1.0
           },
           {
@@ -4947,9 +4947,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 11,
-            "n_pred": 17,
-            "perc_f1": 0.6428571428571428,
-            "precision": 0.5294117647058824,
+            "n_pred": 24,
+            "perc_f1": 0.5142857142857142,
+            "precision": 0.375,
             "recall": 0.8181818181818182
           },
           {
@@ -4957,19 +4957,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 29,
-            "n_pred": 22,
-            "perc_f1": 0.7450980392156864,
-            "precision": 0.8636363636363636,
-            "recall": 0.6551724137931034
+            "n_pred": 25,
+            "perc_f1": 0.7407407407407408,
+            "precision": 0.8,
+            "recall": 0.6896551724137931
           },
           {
             "id": "egmd_drummer7_session2_128",
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 9,
-            "perc_f1": 0.8,
-            "precision": 0.6666666666666666,
+            "n_pred": 13,
+            "perc_f1": 0.631578947368421,
+            "precision": 0.46153846153846156,
             "recall": 1.0
           },
           {
@@ -4977,9 +4977,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 19,
-            "n_pred": 19,
-            "perc_f1": 0.5263157894736842,
-            "precision": 0.5263157894736842,
+            "n_pred": 29,
+            "perc_f1": 0.4166666666666667,
+            "precision": 0.3448275862068966,
             "recall": 0.5263157894736842
           },
           {
@@ -4987,29 +4987,29 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 21,
-            "n_pred": 30,
-            "perc_f1": 0.7058823529411764,
-            "precision": 0.6,
-            "recall": 0.8571428571428571
+            "n_pred": 39,
+            "perc_f1": 0.6333333333333333,
+            "precision": 0.48717948717948717,
+            "recall": 0.9047619047619048
           },
           {
             "id": "egmd_drummer7_session2_43",
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 2,
-            "perc_f1": 0.4444444444444445,
-            "precision": 1.0,
-            "recall": 0.2857142857142857
+            "n_pred": 6,
+            "perc_f1": 0.7692307692307692,
+            "precision": 0.8333333333333334,
+            "recall": 0.7142857142857143
           },
           {
             "id": "egmd_drummer7_session2_118",
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 4,
-            "perc_f1": 0.75,
-            "precision": 0.75,
+            "n_pred": 6,
+            "perc_f1": 0.6,
+            "precision": 0.5,
             "recall": 0.75
           },
           {
@@ -5028,18 +5028,18 @@
             "source": "egmd",
             "n_truth": 8,
             "n_pred": 22,
-            "perc_f1": 0.4666666666666667,
-            "precision": 0.3181818181818182,
-            "recall": 0.875
+            "perc_f1": 0.5333333333333333,
+            "precision": 0.36363636363636365,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_34",
             "domain": "other",
             "source": "egmd",
             "n_truth": 6,
-            "n_pred": 29,
-            "perc_f1": 0.34285714285714286,
-            "precision": 0.20689655172413793,
+            "n_pred": 32,
+            "perc_f1": 0.3157894736842105,
+            "precision": 0.1875,
             "recall": 1.0
           },
           {
@@ -5047,19 +5047,19 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 14,
-            "n_pred": 26,
-            "perc_f1": 0.55,
-            "precision": 0.4230769230769231,
-            "recall": 0.7857142857142857
+            "n_pred": 28,
+            "perc_f1": 0.38095238095238093,
+            "precision": 0.2857142857142857,
+            "recall": 0.5714285714285714
           },
           {
             "id": "egmd_drummer7_session3_18",
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 22,
-            "perc_f1": 0.4827586206896552,
-            "precision": 0.3181818181818182,
+            "n_pred": 23,
+            "perc_f1": 0.4666666666666667,
+            "precision": 0.30434782608695654,
             "recall": 1.0
           },
           {
@@ -5067,9 +5067,9 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 4,
-            "n_pred": 7,
-            "perc_f1": 0.7272727272727273,
-            "precision": 0.5714285714285714,
+            "n_pred": 9,
+            "perc_f1": 0.6153846153846153,
+            "precision": 0.4444444444444444,
             "recall": 1.0
           },
           {
@@ -5077,10 +5077,10 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 23,
-            "n_pred": 79,
-            "perc_f1": 0.45098039215686275,
-            "precision": 0.2911392405063291,
-            "recall": 1.0
+            "n_pred": 53,
+            "perc_f1": 0.5789473684210527,
+            "precision": 0.41509433962264153,
+            "recall": 0.9565217391304348
           },
           {
             "id": "egmd_drummer9_session1_11",
@@ -5097,34 +5097,34 @@
             "domain": "other",
             "source": "egmd",
             "n_truth": 7,
-            "n_pred": 13,
-            "perc_f1": 0.4,
-            "precision": 0.3076923076923077,
-            "recall": 0.5714285714285714
+            "n_pred": 30,
+            "perc_f1": 0.32432432432432434,
+            "precision": 0.2,
+            "recall": 0.8571428571428571
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
             "n_truth": 20,
-            "n_pred": 20,
-            "perc_f1": 0.75,
-            "precision": 0.75,
+            "n_pred": 21,
+            "perc_f1": 0.7317073170731706,
+            "precision": 0.7142857142857143,
             "recall": 0.75
           }
         ],
-        "mean_f1": 0.48354331474467005,
+        "mean_f1": 0.5314042632317402,
         "by_domain": {
           "other": {
-            "mean": 0.4930245562102519,
+            "mean": 0.5222161115304018,
             "n": 51
           },
           "electronic": {
-            "mean": 0.0,
+            "mean": 1.0,
             "n": 1
           },
           "overall": {
-            "mean": 0.4835433147446701,
+            "mean": 0.5314042632317403,
             "n": 52
           }
         },
