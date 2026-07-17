@@ -376,6 +376,20 @@ impl ProjectIOService {
                     &mut project,
                 );
 
+                // D5 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md): the Scene Setup
+                // panel reads a generator layer's stored graph override
+                // directly (`Layer::generator_graph`), never through
+                // `instantiate_def` — so the legacy per-object wire shape
+                // must be migrated here, at project load, not only at graph
+                // instantiation (`graph_loader.rs` handles that path
+                // separately, for runtime playback). Idempotent, per-layer;
+                // a def with no legacy wires is untouched.
+                for layer in &mut project.timeline.layers {
+                    if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
+                        manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+                    }
+                }
+
                 // Overlay install happened in the pre-deserialize hook above;
                 // `apply_project_io_action` re-installs on every project apply
                 // (unconditionally, even when empty) so a previous project's

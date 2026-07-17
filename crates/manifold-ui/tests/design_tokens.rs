@@ -73,7 +73,11 @@ use std::path::{Path, PathBuf};
 // port-pin-colour const (`PORT_OBJECT_COLOR`) in graph_canvas for the new
 // `PortType::Object` wire — same grandfathered defined-once-const pattern as
 // the nine pin colours beside it, folded into the same §15 ramp.
-const COLOR_BASELINE: usize = 210;
+// 210→214, 2026-07-17: SCENE_OBJECT_AND_PANEL_V2_DESIGN P5 added the
+// outliner's eye-toggle/selection-highlight colours (`scene_setup_panel.rs`)
+// — same inherited not-yet-tokenized-chrome pattern as P1's dock column,
+// folded into the same §15 ramp.
+const COLOR_BASELINE: usize = 214;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

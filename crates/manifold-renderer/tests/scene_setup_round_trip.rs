@@ -203,7 +203,17 @@ fn scene_setup_mesh_source_vertex_count_survives_save_reload_and_header_resums_i
 
     let reloaded = manifold_io::loader::load_project(&path);
     let _ = std::fs::remove_file(&path);
-    let reloaded = reloaded.expect("reload");
+    let mut reloaded = reloaded.expect("reload");
+    // A real project load additionally migrates legacy per-object wires
+    // (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5, wired at the app's
+    // `ProjectIOService::load`, not this crate's raw `load_project`) before
+    // the panel's `SceneVm` ever sees the graph — mirror that step here so
+    // this round-trip gate matches what a real reload actually shows.
+    for layer in &mut reloaded.timeline.layers {
+        if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
+            manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+        }
+    }
     let layer = reloaded
         .timeline
         .layers

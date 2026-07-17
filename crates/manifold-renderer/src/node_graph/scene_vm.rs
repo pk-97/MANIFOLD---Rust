@@ -611,6 +611,39 @@ fn find_scene_object_in_group<'a>(
     (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
 }
 
+/// Resolve `to_node`'s `to_port` producer, transparently crossing ONE level
+/// of `GROUP_TYPE_ID` boundary when the direct producer is a bare group
+/// re-exporting the same-named port from its own `system.group_output` —
+/// the shape `migrate_scene_object_wires` produces for every pre-existing
+/// (migrated) project: the minted `node.scene_object` stays a ROOT-level
+/// sibling of the mesh producer's group rather than nested inside it (D5's
+/// "same-scope re-point", confirmed against the shipped `SceneStarter.json`:
+/// `scene_object` id 32/33 at root, `vertices` wired straight from group
+/// node 10/20's own boundary port). Returns the [`Level`] the resolved node
+/// actually lives in (root, or the crossed group's own body — callers must
+/// use THIS level for any further tracing) plus the crossed group's node id
+/// (for `ParamAddr::scope_path`, `None` when no crossing happened). `None`
+/// when unwired, or when a bare group doesn't have the expected
+/// group-output/re-export shape — the caller degrades to `Custom`/absent,
+/// never errors (same tolerance doctrine as `find_scene_object_in_group`).
+fn resolve_producer_through_group<'a>(
+    level: &Level<'a>,
+    to_node: u32,
+    to_port: &str,
+) -> Option<(Level<'a>, Option<u32>, &'a EffectGraphNode, &'a str)> {
+    let (producer_id, producer_port) = level.producer(to_node, to_port)?;
+    let producer = level.node(producer_id)?;
+    if producer.type_id != GROUP_TYPE_ID {
+        return Some((Level { nodes: level.nodes, wires: level.wires }, None, producer, producer_port));
+    }
+    let group = producer.group.as_ref()?;
+    let inner = Level { nodes: &group.nodes, wires: &group.wires };
+    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let (inner_producer_id, inner_producer_port) = inner.producer(out_node.id, producer_port)?;
+    let inner_producer = inner.node(inner_producer_id)?;
+    Some((inner, Some(producer_id), inner_producer, inner_producer_port))
+}
+
 /// BUG-194 (D4) + D12: alongside the objects themselves, returns the summed
 /// vertex count and whether that sum is exact (`true`) or a lower bound
 /// (`false` — at least one object's mesh source didn't resolve to a known
@@ -677,17 +710,24 @@ fn trace_scene_object(
     let visible_value = param_f32(node, "visible", 1.0) > 0.5;
     let visible_driven = level.producer(object_node_id, "visible").is_some();
 
-    let transform = level
-        .producer(object_node_id, "transform")
-        .filter(|(n, _)| level.node(*n).is_some_and(|nn| nn.type_id == TRANSFORM_3D_TYPE_ID))
-        .map(|(n, _)| trace_transform(level, scope_path.clone(), n));
+    let transform = resolve_producer_through_group(level, object_node_id, "transform")
+        .filter(|(_, _, n, _)| n.type_id == TRANSFORM_3D_TYPE_ID)
+        .map(|(lvl, crossed_group, n, _)| {
+            let mut sp = scope_path.clone();
+            if let Some(g) = crossed_group {
+                sp.push(g);
+            }
+            trace_transform(&lvl, sp, n.id)
+        });
 
-    let material = level
-        .producer(object_node_id, "material")
-        .and_then(|(n, _)| level.node(n))
-        .filter(|n| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
-        .map(|n| {
-            let driven = |name: &str| level.producer(n.id, name).is_some();
+    let material = resolve_producer_through_group(level, object_node_id, "material")
+        .filter(|(_, _, n, _)| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
+        .map(|(lvl, crossed_group, n, _)| {
+            let mut scope_path = scope_path.clone();
+            if let Some(g) = crossed_group {
+                scope_path.push(g);
+            }
+            let driven = |name: &str| lvl.producer(n.id, name).is_some();
             let addr =
                 |name: &str| ParamAddr { scope_path: scope_path.clone(), node_doc_id: n.id, param_id: name.to_string() };
             let metallic_roughness = (n.type_id == "node.pbr_material").then(|| MetallicRoughnessRow {
@@ -715,9 +755,13 @@ fn trace_scene_object(
 
     // Modifier chain (D6, re-anchored per D12): walk backward from the
     // scene_object's OWN `vertices` input instead of a group output's
-    // `vertices` port.
+    // `vertices` port. `current_level` can switch mid-walk when the chain
+    // crosses a bare-group boundary (the migrated-project shape,
+    // `resolve_producer_through_group`'s doc comment) — a group is always
+    // treated as a transparent re-export, never a modifier itself.
     let mut chain = Vec::new();
-    let mut cursor = level.producer(object_node_id, "vertices");
+    let mut current_level = Level { nodes: level.nodes, wires: level.wires };
+    let mut cursor = current_level.producer(object_node_id, "vertices");
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
     let mut guard = 0;
@@ -727,16 +771,39 @@ fn trace_scene_object(
             parseable = false; // cycle guard — never hang the panel on malformed JSON.
             break;
         }
-        let Some(n) = level.node(node_id) else {
+        let Some(n) = current_level.node(node_id) else {
             parseable = false; // dangling wire — genuinely malformed.
             break;
         };
+        if n.type_id == GROUP_TYPE_ID {
+            let Some(group) = n.group.as_ref() else {
+                parseable = false;
+                break;
+            };
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            let Some(out_node) = inner.nodes.iter().find(|gn| gn.type_id == GROUP_OUTPUT_TYPE_ID)
+            else {
+                parseable = false;
+                break;
+            };
+            let Some((inner_id, inner_port)) = inner.producer(out_node.id, "vertices") else {
+                parseable = false;
+                break;
+            };
+            current_level = inner;
+            cursor = Some((inner_id, inner_port));
+            continue;
+        }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
-        let driven: HashSet<String> =
-            level.wires.iter().filter(|w| w.to_node == n.id).map(|w| w.to_port.clone()).collect();
+        let driven: HashSet<String> = current_level
+            .wires
+            .iter()
+            .filter(|w| w.to_node == n.id)
+            .map(|w| w.to_port.clone())
+            .collect();
         let params: BTreeMap<String, f32> = n
             .params
             .iter()
@@ -748,7 +815,7 @@ fn trace_scene_object(
             })
             .collect();
         chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone(), params, driven });
-        cursor = level.producer(n.id, "in");
+        cursor = current_level.producer(n.id, "in");
     }
     chain.reverse(); // wire order: source → … → scene_object.
 
@@ -1979,5 +2046,39 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.header.vertex_count, 36 + 8 * 4);
         assert!(vm.header.vertex_count_exact);
+    }
+
+    /// Regression gate for the migrated-project shape `migrate_scene_object_wires`
+    /// actually produces (D5's "same-scope re-point"): a minted `node.scene_object`
+    /// stays a ROOT-level sibling of the mesh producer's group, `vertices`/
+    /// `material`/`transform` wired straight from the GROUP's own boundary port —
+    /// not nested inside it (the shape a fresh glTF import produces instead,
+    /// already covered by this file's `grouped_scene_object_def`-style tests).
+    /// Found 2026-07-17 during P5 landing: without `resolve_producer_through_group`,
+    /// every already-shipped, already-migrated bundled preset (SceneStarter and
+    /// the ~9 others P2 regenerated) silently showed no transform/material
+    /// controls and a wrong vertex count in the panel, despite rendering
+    /// correctly (the render path reads through `SceneObject`'s resolved Slots,
+    /// never through this trace).
+    #[test]
+    fn bundled_scene_starter_preset_resolves_transform_material_and_vertex_count() {
+        let preset_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
+        let d = crate::node_graph::bundled_presets::bundled_preset_def(&preset_type)
+            .expect("SceneStarter is a bundled preset");
+        let vm = SceneVm::from_def(d).expect("SceneStarter resolves");
+        assert_eq!(vm.objects.len(), 2, "Floor + Cube");
+        for obj in &vm.objects {
+            let SceneObjectVm::Known(row) = obj else {
+                panic!("SceneStarter's objects must resolve Known, not Custom — migration shape unparsed");
+            };
+            assert!(row.transform.is_some(), "{}: transform must resolve through the group boundary", row.name);
+            assert!(
+                !matches!(row.material, MaterialVm::None),
+                "{}: material must resolve through the group boundary",
+                row.name
+            );
+        }
+        assert!(vm.header.vertex_count > 0, "vertex count must resolve through the group boundary, not silently 0");
+        assert!(vm.header.vertex_count_exact, "SceneStarter's mesh sources have known vertex counts");
     }
 }
