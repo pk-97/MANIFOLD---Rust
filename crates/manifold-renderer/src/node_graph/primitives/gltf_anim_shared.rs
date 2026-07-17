@@ -203,11 +203,54 @@ pub(crate) fn row_range_for_compound_key(
     }
 }
 
+/// glTF sampler interpolation mode, read from a track table's trailing
+/// `mode` column (IMPORT_ANYTHING_WAVE_DESIGN.md W2). The column sits right
+/// after the value block (`val_col + N`, `N` = 3 for vec3 / 4 for quat) and
+/// is optional: a table built before W2 (or any table that just never
+/// widened) has no column there at all, and reads as `Linear` — this is a
+/// purely additive format, every pre-W2 table keeps behaving exactly as it
+/// always did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Interp {
+    Linear,
+    Step,
+    CubicSpline,
+}
+
+impl Interp {
+    fn from_row(row: &[f32], mode_col: usize) -> Self {
+        match row.get(mode_col).map(|v| v.round() as i64) {
+            Some(1) => Interp::Step,
+            Some(2) => Interp::CubicSpline,
+            _ => Interp::Linear,
+        }
+    }
+}
+
+/// glTF spec Appendix C cubic Hermite spline, generalized over `N` scalar
+/// components (3 for vec3, 4 for quat): `p0`/`p1` are the bracketing
+/// keyframes' values, `m0` is `p0`'s OUT-tangent, `m1` is `p1`'s IN-tangent,
+/// `t` the normalized `[0,1]` fraction between them, `td` the real keyframe
+/// time delta (tangents are scaled by the interval, not by `t`).
+fn hermite<const N: usize>(p0: [f32; N], m0: [f32; N], p1: [f32; N], m1: [f32; N], t: f32, td: f32) -> [f32; N] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    std::array::from_fn(|i| h00 * p0[i] + h10 * td * m0[i] + h01 * p1[i] + h11 * td * m1[i])
+}
+
 /// Sample a vec3 track within `range`, time in column `time_col`, xyz
-/// starting at `val_col`. Lerps between bracketing keyframes, holds boundary
-/// values outside the range (the glTF spec's own before-first/after-last
-/// rule — independent of this primitive's own progress wrap, which happens
-/// one level up).
+/// starting at `val_col`. LINEAR lerps between bracketing keyframes; STEP
+/// holds the lower keyframe's value; CUBICSPLINE runs the glTF Hermite
+/// formula against the tangent columns immediately following the mode
+/// column (`val_col+4..val_col+7` = in-tangent, `val_col+7..val_col+10` =
+/// out-tangent — IMPORT_ANYTHING_WAVE_DESIGN.md W2). Holds boundary values
+/// outside the range (the glTF spec's own before-first/after-last rule —
+/// independent of this primitive's own progress wrap, which happens one
+/// level up).
 pub(crate) fn sample_vec3_range(
     table: Option<&TableData>,
     range: (usize, usize),
@@ -245,12 +288,37 @@ pub(crate) fn sample_vec3_range(
     }
     let (t0, t1) = (time(lo), time(hi));
     let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    let (a, b) = (row(lo), row(hi));
-    [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
+    let mode_col = val_col + 3;
+    let mode = if table.col_count() > mode_col {
+        Interp::from_row(table.row(start + lo).unwrap(), mode_col)
+    } else {
+        Interp::Linear
+    };
+    match mode {
+        Interp::Step => row(lo),
+        Interp::CubicSpline => {
+            let in_col = mode_col + 1;
+            let out_col = in_col + 3;
+            let r_lo = table.row(start + lo).unwrap();
+            let r_hi = table.row(start + hi).unwrap();
+            let p0 = [r_lo[val_col], r_lo[val_col + 1], r_lo[val_col + 2]];
+            let p1 = [r_hi[val_col], r_hi[val_col + 1], r_hi[val_col + 2]];
+            let m0 = [r_lo[out_col], r_lo[out_col + 1], r_lo[out_col + 2]];
+            let m1 = [r_hi[in_col], r_hi[in_col + 1], r_hi[in_col + 2]];
+            hermite(p0, m0, p1, m1, f, t1 - t0)
+        }
+        Interp::Linear => {
+            let (a, b) = (row(lo), row(hi));
+            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
+        }
+    }
 }
 
-/// Same as [`sample_vec3_range`] for a `[x, y, z, w]` quaternion, slerping
-/// between keyframes.
+/// Same as [`sample_vec3_range`] for a `[x, y, z, w]` quaternion. LINEAR
+/// slerps; STEP holds; CUBICSPLINE runs the Hermite formula over the 4-wide
+/// tangent columns (`val_col+5..val_col+9` in, `val_col+9..val_col+13` out)
+/// and re-normalizes the result (a Hermite blend of unit quaternions isn't
+/// itself unit length).
 pub(crate) fn sample_quat_range(
     table: Option<&TableData>,
     range: (usize, usize),
@@ -288,7 +356,27 @@ pub(crate) fn sample_quat_range(
     }
     let (t0, t1) = (time(lo), time(hi));
     let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
-    slerp(row(lo), row(hi), f)
+    let mode_col = val_col + 4;
+    let mode = if table.col_count() > mode_col {
+        Interp::from_row(table.row(start + lo).unwrap(), mode_col)
+    } else {
+        Interp::Linear
+    };
+    match mode {
+        Interp::Step => row(lo),
+        Interp::CubicSpline => {
+            let in_col = mode_col + 1;
+            let out_col = in_col + 4;
+            let r_lo = table.row(start + lo).unwrap();
+            let r_hi = table.row(start + hi).unwrap();
+            let p0 = [r_lo[val_col], r_lo[val_col + 1], r_lo[val_col + 2], r_lo[val_col + 3]];
+            let p1 = [r_hi[val_col], r_hi[val_col + 1], r_hi[val_col + 2], r_hi[val_col + 3]];
+            let m0 = [r_lo[out_col], r_lo[out_col + 1], r_lo[out_col + 2], r_lo[out_col + 3]];
+            let m1 = [r_hi[in_col], r_hi[in_col + 1], r_hi[in_col + 2], r_hi[in_col + 3]];
+            normalize_quat(hermite(p0, m0, p1, m1, f, t1 - t0))
+        }
+        Interp::Linear => slerp(row(lo), row(hi), f),
+    }
 }
 
 /// Sample a scalar track within `range`, time in column `time_col`, value in
@@ -479,5 +567,71 @@ mod tests {
         let range = row_range_for_key(Some(&table), 0);
         let mid = sample_vec3_range(Some(&table), range, 1, 2, 0.5, [0.0, 0.0, 0.0]);
         assert!((mid[0] - 5.0).abs() < 1e-4);
+    }
+
+    // ─── IMPORT_ANYTHING_WAVE_DESIGN.md W2 — STEP + CUBICSPLINE ────────────
+    // Both tests use the design doc's own fixture shape: a 4-keyframe
+    // translation channel, times 0/0.5/1.0/1.5, values
+    // (0,0,0)->(1,0,0)->(1,1,0)->(0,0,0). Row layout: [clip, time, x,y,z,
+    // mode, in_x,in_y,in_z, out_x,out_y,out_z] — mode_col = val_col+3 = 5.
+
+    fn interp_track_table(mode: f32) -> TableData {
+        let row = |time: f32, v: [f32; 3]| {
+            vec![0.0, time, v[0], v[1], v[2], mode, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        };
+        TableData::new(vec![
+            row(0.0, [0.0, 0.0, 0.0]),
+            row(0.5, [1.0, 0.0, 0.0]),
+            row(1.0, [1.0, 1.0, 0.0]),
+            row(1.5, [0.0, 0.0, 0.0]),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn step_holds_the_lower_keyframe_value() {
+        let table = interp_track_table(1.0); // STEP
+        let range = row_range_for_key(Some(&table), 0);
+        let at_025 = sample_vec3_range(Some(&table), range, 1, 2, 0.25, [9.0, 9.0, 9.0]);
+        assert!(
+            (at_025[0] - 0.0).abs() < 1e-4 && (at_025[1] - 0.0).abs() < 1e-4,
+            "STEP at t=0.25 must hold keyframe0's (0,0,0), got {at_025:?}"
+        );
+        let at_06 = sample_vec3_range(Some(&table), range, 1, 2, 0.6, [9.0, 9.0, 9.0]);
+        assert!(
+            (at_06[0] - 1.0).abs() < 1e-4 && (at_06[1] - 0.0).abs() < 1e-4,
+            "STEP at t=0.6 must hold keyframe1's (1,0,0), got {at_06:?}"
+        );
+    }
+
+    #[test]
+    fn cubicspline_with_zero_tangents_hermite_blends_the_bracketing_values() {
+        let table = interp_track_table(2.0); // CUBICSPLINE
+        let range = row_range_for_key(Some(&table), 0);
+        let at_025 = sample_vec3_range(Some(&table), range, 1, 2, 0.25, [9.0, 9.0, 9.0]);
+        assert!(
+            (at_025[0] - 0.5).abs() < 1e-4 && (at_025[1] - 0.0).abs() < 1e-4,
+            "CUBICSPLINE (zero tangents) at t=0.25 must equal the smoothstep blend (0.5,0,0), \
+             got {at_025:?}"
+        );
+    }
+
+    #[test]
+    fn cubicspline_quat_hermite_result_is_renormalized() {
+        // Two keyframes 90-degrees apart about Z, zero tangents — a bare
+        // Hermite blend of two unit quaternions is not itself unit length,
+        // so the sampler must renormalize.
+        let row = |time: f32, v: [f32; 4]| {
+            vec![0.0, time, v[0], v[1], v[2], v[3], 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        };
+        let table = TableData::new(vec![
+            row(0.0, [0.0, 0.0, 0.0, 1.0]),
+            row(1.0, [0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2]),
+        ])
+        .unwrap();
+        let range = row_range_for_key(Some(&table), 0);
+        let q = sample_quat_range(Some(&table), range, 1, 2, 0.5);
+        let len_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        assert!((len_sq - 1.0).abs() < 1e-4, "Hermite quat blend must be renormalized, got {q:?}");
     }
 }

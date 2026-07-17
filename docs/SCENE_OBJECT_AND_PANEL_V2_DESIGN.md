@@ -9,7 +9,7 @@ implemented this session, worktree `.claude/worktrees/slot-1`, not yet
 landed to main — full gate green (2188 focused tests, clippy clean, 9/10 UI
 flows passing, held-out merged-scene render verified) EXCEPT the "Add
 modifier" chip, which is a confirmed dead affordance against any real
-grouped object — see BUG-216 (the D6 modifier-stack commands still splice
+grouped object — see BUG-218 (the D6 modifier-stack commands still splice
 at the pre-D12 group_output.vertices port, out of this phase's blast
 radius, fix owed to `manifold-editing`). BUG-210 (AddSceneObjectCommand
 pre-migration wires) FIXED by P3. BUG-212 opened by P3

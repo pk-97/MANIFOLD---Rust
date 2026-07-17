@@ -50,6 +50,7 @@ fn main() -> ExitCode {
         "validate" => run_validate(rest),
         "fusion" => run_fusion(rest),
         "migrate" => run_migrate(rest),
+        "render" => run_render(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -67,6 +68,7 @@ fn print_usage() {
         "usage: graph_tool validate <file.json> --kind effect|generator [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool fusion <file.json> [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool migrate <file.json> [--in-place]\n\
+         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png]\n\
          \n\
          validate: runs a graph document JSON file through the same load +\n\
          compile pipeline the runtime loader takes. Exit codes: 0 valid,\n\
@@ -168,6 +170,98 @@ fn run_validate(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+/// `render <file.json> --kind effect|generator [--size N] [--out out.png]`
+/// — headless warmed-up render of a graph document through the exact
+/// `preset_thumbnail` path the browser thumbnails use (60 warmup frames,
+/// state committed per frame, effects fed the standard source fixture).
+/// The look-probe verb: author JSON, render it, Read the PNG.
+fn run_render(args: &[String]) -> ExitCode {
+    let mut file: Option<PathBuf> = None;
+    let mut kind: Option<manifold_core::preset_def::PresetKind> = None;
+    let mut size: u32 = 512;
+    let mut out: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--kind" => {
+                let Some(val) = args.get(i + 1) else {
+                    eprintln!("error: --kind requires a value (effect|generator)");
+                    return ExitCode::from(2);
+                };
+                kind = match val.as_str() {
+                    "effect" => Some(manifold_core::preset_def::PresetKind::Effect),
+                    "generator" => Some(manifold_core::preset_def::PresetKind::Generator),
+                    other => {
+                        eprintln!("error: unknown --kind '{other}' (want effect|generator)");
+                        return ExitCode::from(2);
+                    }
+                };
+                i += 2;
+            }
+            "--size" => {
+                let Some(val) = args.get(i + 1).and_then(|v| v.parse::<u32>().ok()) else {
+                    eprintln!("error: --size requires an integer pixel value");
+                    return ExitCode::from(2);
+                };
+                size = val;
+                i += 2;
+            }
+            "--out" => {
+                let Some(val) = args.get(i + 1) else {
+                    eprintln!("error: --out requires a path");
+                    return ExitCode::from(2);
+                };
+                out = Some(PathBuf::from(val));
+                i += 2;
+            }
+            positional if file.is_none() => {
+                file = Some(PathBuf::from(positional));
+                i += 1;
+            }
+            other => {
+                eprintln!("error: unexpected argument '{other}'");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let (Some(file), Some(kind)) = (file, kind) else {
+        eprintln!("error: render needs <file.json> and --kind effect|generator");
+        return ExitCode::from(2);
+    };
+    let out = out.unwrap_or_else(|| file.with_extension("png"));
+
+    let bytes = match std::fs::read_to_string(&file) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {e}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+    let def: EffectGraphDef = match serde_json::from_str(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {}: parse failed: {e}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    let device = std::sync::Arc::new(GpuDevice::new());
+    match manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+        &device, kind, &def, size, &out,
+    ) {
+        Ok(()) => {
+            println!("rendered {} -> {}", file.display(), out.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: render failed: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 

@@ -69,8 +69,8 @@
 // (see ssao_from_depth.rs's `generated_ssao_matches_cpu_reference_on_
 // synthetic_ramp` doc comment for the precedent this avoids compounding).
 
-const GTAO_SLICES: u32 = 2u;
-const GTAO_STEPS: u32 = 4u;
+// Slice/step counts arrive as PARAMS since 2026-07-17 (quality knobs;
+// defaults 2/4 keep the original 16-tap D9(a) budget bit-identical).
 const GTAO_HALF_PI: f32 = 1.5707963267948966;
 
 // D2's committed per-pixel rotation hash (docs/CINEMATIC_POST_DESIGN.md D2) —
@@ -122,10 +122,14 @@ fn body(
     dims: vec2<f32>,
     radius: f32,
     intensity: f32,
+    slices: f32,
+    steps: f32,
     fov_y: f32,
     near: f32,
     far: f32,
 ) -> vec4<f32> {
+    let n_slices = max(1u, u32(gtao_round(slices)));
+    let n_steps = max(1u, u32(gtao_round(steps)));
     let dims_i = vec2<i32>(dims);
     let c = vec2<i32>(uv * dims);
     let tan_half_fov = tan(fov_y * 0.5);
@@ -157,8 +161,10 @@ fn body(
     let rot = gtao_hash_angle(vec2<f32>(c));
 
     var visibility_sum = 0.0;
-    for (var s: u32 = 0u; s < GTAO_SLICES; s = s + 1u) {
-        let phi = rot * 0.5 + f32(s) * GTAO_HALF_PI;
+    for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
+        // Spread N slices across the semicircle (pi/N spacing) — reduces to
+        // the committed i*(pi/2) at the default N=2.
+        let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
         let dir3 = vec3<f32>(dir2, 0.0);
 
@@ -183,8 +189,8 @@ fn body(
 
         var hcos_minus = -1.0;
         var hcos_plus = -1.0;
-        for (var j: u32 = 0u; j < GTAO_STEPS; j = j + 1u) {
-            let r_j = radius_px * (f32(j) + 1.0) / f32(GTAO_STEPS);
+        for (var j: u32 = 0u; j < n_steps; j = j + 1u) {
+            let r_j = radius_px * (f32(j) + 1.0) / f32(n_steps);
 
             let off_plus = vec2<i32>(vec2<f32>(gtao_round(dir2.x * r_j), gtao_round(dir2.y * r_j)));
             let c_plus = clamp(c + off_plus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
@@ -214,7 +220,7 @@ fn body(
         visibility_sum = visibility_sum + proj_len * arc;
     }
 
-    let visibility = clamp(visibility_sum / f32(GTAO_SLICES), 0.0, 1.0);
+    let visibility = clamp(visibility_sum / f32(n_slices), 0.0, 1.0);
     let ao = clamp(1.0 - intensity * (1.0 - visibility), 0.0, 1.0);
     return vec4<f32>(ao, ao, ao, 1.0);
 }
