@@ -275,26 +275,46 @@ fn resolve_scene_write(
     Some((addr, target, catalog_default))
 }
 
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a/C-P1b: descend into
+/// `nodes` at `scope` (a path of group-node ids from the document root),
+/// same recursive walk as `manifold-editing::commands::graph`'s private
+/// `descend_level` — duplicated here because that helper isn't `pub` and
+/// this crate has no other way to resolve a `RowAddr`'s `scope_path` into
+/// the group body it actually lives in. `scope.split_first()`'s `None` case
+/// (root) returns `nodes` unchanged; C-P1b is the first caller to actually
+/// exercise a non-empty scope — Object rows living inside their own
+/// `AddSceneObjectCommand` group (Color/Metallic/Roughness, D12).
+fn descend_to_scope<'a>(
+    nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    scope: &[u32],
+) -> Option<&'a [manifold_core::effect_graph_def::EffectGraphNode]> {
+    match scope.split_first() {
+        None => Some(nodes),
+        Some((gid, rest)) => {
+            let group = nodes.iter().find(|n| n.id == *gid)?;
+            descend_to_scope(group.group.as_ref()?.nodes.as_slice(), rest)
+        }
+    }
+}
+
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: read a converted scene
 /// row's CURRENT value straight off the resolved `EffectGraphDef` node —
 /// the read half of `SetGraphNodeParamCommand`'s write, used by `ParamCommit`
 /// to compute the post-drag value to diff against the pre-drag snapshot.
-/// C-P1a only converts root-scoped rows (empty `scope_path`); a non-empty
-/// scope returns `None` rather than guessing — a later family's own
-/// sub-phase extends this the same way `descend_level` (manifold-editing)
-/// does, if/when a scoped row is converted.
+/// C-P1b: walks `addr.scope_path` via `descend_to_scope` — C-P1a's
+/// root-only version silently no-op'd `ParamCommit` for any scoped row,
+/// which C-P1b's Color/Metallic/Roughness rows (living inside the object's
+/// own group, D12) actually need.
 fn read_scene_node_param(
     project: &mut Project,
     target: &manifold_core::GraphTarget,
     addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
 ) -> Option<f32> {
-    if !addr.scope_path.is_empty() {
-        return None;
-    }
     project
         .with_preset_graph_mut(target, |host| {
             let def = host.graph_def_mut().as_ref()?;
-            let node = def.nodes.iter().find(|n| n.id == addr.node_doc_id)?;
+            let nodes = descend_to_scope(&def.nodes, &addr.scope_path)?;
+            let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
             match node.params.get(&addr.param_id) {
                 Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => Some(*value),
                 _ => None,
@@ -3769,6 +3789,269 @@ mod scene_card_convergence_tests {
                 assert!((value - 1.0).abs() < 1e-3, "post-AddFog commit must land 1.0, got {value}");
             }
             other => panic!("expected a Float fog_density, got {other:?}"),
+        }
+    }
+
+    // ── C-P1b: Object family ────────────────────────────────────────
+    // SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1b gates, mirroring C-P1a's
+    // fog-density gates above for the converted Object family. Uses the
+    // REAL `AddSceneObjectCommand` (via `dispatch_project`'s
+    // `SceneSetupAddObject` arm, the panel's own "+ Object" button path) —
+    // this command wraps the new object in a `GROUP_TYPE_ID` node and nests
+    // its `node.transform_3d`/material inside that group
+    // (`crates/manifold-editing/src/commands/graph.rs`'s
+    // `AddSceneObjectCommand::execute`), so Position/Rotation/Scale are
+    // ALREADY the D12 group-`scope_path` case for every object this command
+    // creates — the same shape a gltfscene import produces. This is the
+    // family C-P1a's own `read_scene_node_param` explicitly left
+    // unsupported (root-scope only); C-P1b extends it via
+    // `descend_to_scope` (see that fn's doc comment) — these tests are what
+    // would have caught the gap silently no-op'ing `ParamCommit`.
+
+    use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm};
+
+    /// Add one object to a fresh SceneStarter layer via the REAL
+    /// `SceneSetupAddObject` dispatch path, and resolve its transform's
+    /// write address off the SAME `SceneVm::from_def` production code walks.
+    /// SceneStarter ships with 2 objects already wired — `next_index` must
+    /// be the REAL current count (mirrors `project.rs`'s own
+    /// `scene_setup_add_object_dispatches_add_scene_object_command` fixture,
+    /// `before as u32`), or the new object's `object_k` wire collides with
+    /// an existing one. Returns `(project, layer_id, object_node_id,
+    /// transform_node_doc_id, group_node_id)` for the NEWLY ADDED object
+    /// (the last one in `vm.objects`) — `object_node_id` is needed to
+    /// explicitly select it (D7's default selection resolves the FIRST
+    /// Known object, which for SceneStarter is one of its own 2 built-in
+    /// objects, not the one this fixture adds).
+    fn scene_layer_with_one_object() -> (Project, LayerId, u32, u32, u32) {
+        let (mut project, layer_id) = scene_layer_project();
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let def = manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
+            .cloned()
+            .expect("SceneStarter is a bundled preset");
+        let render_scene_id = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .expect("SceneStarter has a render_scene node")
+            .id;
+        let next_index = match def.nodes.iter().find(|n| n.id == render_scene_id).and_then(|n| n.params.get("objects")) {
+            Some(SerializedParamValue::Float { value }) => *value as u32,
+            _ => 0,
+        };
+
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = Some(layer_id.clone());
+        let mut user_prefs = crate::user_prefs::UserPrefs::load();
+        let add_object = PanelAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, next_index);
+        let result = super::super::project::dispatch_project(
+            &add_object, &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        assert!(result.structural_change, "AddObject is a structural graph edit");
+        content_rx.try_iter().for_each(drop);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst_def = layer.generator_graph().expect("AddObject must lift an instance override");
+        let vm = SceneVm::from_def(inst_def).expect("the layer still resolves as a scene");
+        let SceneObjectVm::Known(obj) = vm.objects.last().expect("the new object was added") else {
+            panic!("the added object must resolve Known");
+        };
+        let group_node_id = obj.group_node_id.expect("AddSceneObjectCommand wraps the object in a group (D12)");
+        let transform = obj.transform.as_ref().expect("the added object has a transform_3d");
+        assert_eq!(
+            transform.pos_addr.0.scope_path,
+            vec![group_node_id],
+            "AddSceneObjectCommand nests transform_3d INSIDE the group — pos_x is scope_path=[group_node_id], not root"
+        );
+        (project, layer_id, obj.object_node_id, transform.node_doc_id, group_node_id)
+    }
+
+    /// Build a real `Live` scene VM for `layer_id` via the actual
+    /// `sync_inspector_data` production path (not a hand-rolled VM),
+    /// explicitly selects `object_node_id` (D7's default selection resolves
+    /// the FIRST Known object, not necessarily the one under test), then
+    /// builds the panel's real tree so `ui.scene_setup_panel`'s
+    /// `object_card` id map is populated by `build_object_card_row`.
+    fn open_scene_panel_via_sync(ui: &mut UIRoot, project: &Project, layer_id: &LayerId, object_node_id: u32) {
+        let layer_idx = project.timeline.find_layer_index_by_id(layer_id).unwrap();
+        ui.scene_setup_panel.open();
+        ui.scene_setup_panel.set_selection(
+            layer_id.clone(),
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id),
+        );
+        super::super::state_sync::sync_inspector_data(ui, project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
+        let mut tree = manifold_ui::tree::UITree::new();
+        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
+        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
+        let start = tree.count();
+        ui.scene_setup_panel.build_docked(&mut tree, dock);
+        tree.end_region(region, start);
+    }
+
+    /// Gate 2 (undo-granularity), Object family: a Position-X drag session
+    /// through the group-scoped card row yields exactly ONE undo entry that
+    /// restores the pre-drag value — same shape as C-P1a's fog-density gate,
+    /// proven on a row whose `scope_path` is non-empty (the case C-P1a never
+    /// exercised).
+    #[test]
+    fn object_position_x_drag_session_yields_exactly_one_undo_entry() {
+        let (mut project, layer_id, object_node_id, transform_node_doc_id, _group_node_id) =
+            scene_layer_with_one_object();
+        let mut h = Harness::new(Some(layer_id.clone()));
+        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
+
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(transform_node_doc_id, "pos_x");
+        let target = manifold_ui::GraphParamTarget::Generator;
+        let before = 0.0_f32; // AddSceneObjectCommand's fresh transform_3d has no pos_x override.
+
+        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
+        assert!(h.drain().is_empty(), "Snapshot sends no ContentCommand");
+
+        for v in [1.0, 2.0, 3.0] {
+            h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), v), &mut project);
+        }
+        let mid_commands = h.drain();
+        assert_eq!(mid_commands.len(), 3, "3 live ticks");
+        assert!(
+            mid_commands.iter().all(|c| matches!(c, ContentCommand::MutateProjectLive(_))),
+            "every motion tick is a live (non-undoable) write, never Execute"
+        );
+
+        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+        let commit_commands = h.drain();
+        assert_eq!(commit_commands.len(), 1, "exactly ONE command on release — the undo unit");
+        let ContentCommand::Execute(mut cmd) = commit_commands.into_iter().next().unwrap() else {
+            panic!("the commit command must be undo-tracked (Execute), not MutateProjectLive");
+        };
+
+        cmd.execute(&mut project);
+        let read_pos_x = |p: &Project| {
+            let (_, layer) = p.timeline.find_layer_by_id(&layer_id).unwrap();
+            let vm = SceneVm::from_def(layer.generator_graph().unwrap()).unwrap();
+            let SceneObjectVm::Known(obj) = vm.objects.last().unwrap() else { panic!("must be Known") };
+            obj.transform.as_ref().unwrap().pos_value.0
+        };
+        assert!((read_pos_x(&project) - 3.0).abs() < 1e-4, "commit lands the final dragged value");
+
+        cmd.undo(&mut project);
+        assert!(
+            (read_pos_x(&project) - before).abs() < 1e-4,
+            "undo must restore the PRE-DRAG value ({before}), got {}",
+            read_pos_x(&project)
+        );
+    }
+
+    /// Gate 4 (imported-def value test), Object family: a Position-X commit
+    /// lands in the layer's OWN instance def, AT THE CORRECT GROUP SCOPE —
+    /// this is the family where D12 scoping actually bites (C-P1a's own
+    /// `read_scene_node_param` was root-scope-only; a naive port would have
+    /// silently no-op'd every Object-family `ParamCommit`, per that fn's own
+    /// doc comment).
+    #[test]
+    fn object_position_x_commit_writes_the_layer_instance_def_at_group_scope() {
+        let (mut project, layer_id, object_node_id, transform_node_doc_id, group_node_id) =
+            scene_layer_with_one_object();
+        let mut h = Harness::new(Some(layer_id.clone()));
+        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
+
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(transform_node_doc_id, "pos_x");
+        let target = manifold_ui::GraphParamTarget::Generator;
+
+        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
+        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 5.5), &mut project);
+        h.drain();
+        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
+            panic!("expected Execute");
+        };
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst_def = layer.generator_graph().expect("the write must land in the layer's OWN instance def");
+        let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).expect("the group node must still exist");
+        let body = group.group.as_ref().expect("the group must carry a body");
+        let node = body.nodes.iter().find(|n| n.id == transform_node_doc_id).expect(
+            "the transform node must be found INSIDE the group body — a root-only lookup would miss it entirely",
+        );
+        match node.params.get("pos_x") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert!((value - 5.5).abs() < 1e-4, "instance def must carry the committed value, got {value}");
+            }
+            other => panic!("expected a Float pos_x in the group-scoped instance def, got {other:?}"),
+        }
+    }
+
+    /// Gate 4's Roughness half: `AddSceneObjectCommand` spawns a
+    /// `node.phong_material` (no metallic/roughness — D4's "the atom's own
+    /// params otherwise"), so this test converts the added object's
+    /// material node to `node.pbr_material` directly on the instance def
+    /// (the same shape a PBR-material gltf import produces) to exercise the
+    /// Roughness card row specifically, at the SAME group scope Position-X
+    /// proved above.
+    #[test]
+    fn object_roughness_commit_writes_the_layer_instance_def_at_group_scope() {
+        let (mut project, layer_id, object_node_id, _transform_node_doc_id, group_node_id) =
+            scene_layer_with_one_object();
+        let mat_node_doc_id = {
+            let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+            let inst_def = layer.generator_graph().unwrap();
+            let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).unwrap();
+            let body = group.group.as_ref().unwrap();
+            body.nodes
+                .iter()
+                .find(|n| n.type_id == "node.phong_material")
+                .expect("AddSceneObjectCommand spawns a phong material")
+                .id
+        };
+        {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
+            let inst_def = layer.gen_params_or_init().graph.as_mut().unwrap();
+            let group = inst_def.nodes.iter_mut().find(|n| n.id == group_node_id).unwrap();
+            let body = group.group.as_mut().unwrap();
+            let mat_node = body.nodes.iter_mut().find(|n| n.id == mat_node_doc_id).unwrap();
+            mat_node.type_id = "node.pbr_material".to_string();
+            mat_node.params.insert("metallic".to_string(), SerializedParamValue::Float { value: 0.0 });
+            mat_node.params.insert("roughness".to_string(), SerializedParamValue::Float { value: 0.5 });
+        }
+        // Sanity: the def now resolves Roughness as a real Pbr material row
+        // before driving any dispatch.
+        {
+            let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+            let vm = SceneVm::from_def(layer.generator_graph().unwrap()).unwrap();
+            let SceneObjectVm::Known(obj) = vm.objects.last().unwrap() else { panic!("must be Known") };
+            let MaterialVm::Known(m) = &obj.material else { panic!("must resolve Known material") };
+            assert!(m.metallic_roughness.is_some(), "converted material must resolve metallic_roughness");
+        }
+
+        let mut h = Harness::new(Some(layer_id.clone()));
+        open_scene_panel_via_sync(&mut h.ui, &project, &layer_id, object_node_id);
+
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(mat_node_doc_id, "roughness");
+        let target = manifold_ui::GraphParamTarget::Generator;
+
+        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
+        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), 0.9), &mut project);
+        h.drain();
+        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().unwrap() else {
+            panic!("expected Execute");
+        };
+        cmd.execute(&mut project);
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst_def = layer.generator_graph().unwrap();
+        let group = inst_def.nodes.iter().find(|n| n.id == group_node_id).unwrap();
+        let body = group.group.as_ref().unwrap();
+        let node = body.nodes.iter().find(|n| n.id == mat_node_doc_id).unwrap();
+        match node.params.get("roughness") {
+            Some(SerializedParamValue::Float { value }) => {
+                assert!((value - 0.9).abs() < 1e-4, "instance def must carry the committed roughness, got {value}");
+            }
+            other => panic!("expected a Float roughness in the group-scoped instance def, got {other:?}"),
         }
     }
 }

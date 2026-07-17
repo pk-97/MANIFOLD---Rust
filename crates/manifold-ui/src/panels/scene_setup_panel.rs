@@ -61,27 +61,16 @@ const OBJ_KEY_BASE: u64 = 82_000;
 // real scene (`typical-project-scale`: dozens of layers, not objects).
 const OBJ_KEY_STRIDE: u64 = 44;
 const OBJ_OFF_NAME: u64 = 1;
-// Triplet rows (`build_triplet_row`) take only the FIRST offset — Y/Z cells
-// key off `base_offset + 1`/`+ 2` (the cell loop's `i`), so only the X/R
-// anchor needs a named constant.
-const OBJ_OFF_POS_X: u64 = 2;
-const OBJ_OFF_ROT_X: u64 = 5;
-const OBJ_OFF_SCALE_X: u64 = 8;
-const OBJ_OFF_COLOR_R: u64 = 11;
-// UX-P2 (D2 of SCENE_PANEL_UX_DESIGN.md): Metallic/Roughness are now single
-// `BitmapSlider` rows (`build_object_slider_row`), one key per row — the old
-// `[-] value [+]` stepper's `+1`/`+2` value/plus slots are unused now, kept
-// reserved (harmless) rather than renumbering every offset below.
-const OBJ_OFF_METALLIC: u64 = 14;
-const OBJ_OFF_ROUGHNESS: u64 = 17;
 /// BUG-193 per-row "✕" remove button, on the title row next to the name.
 const OBJ_OFF_REMOVE: u64 = 20;
 // UX-P3a: mod-button keys, one per exposable field — offsets 22..32 (11
 // slots), clear of `obj_key(row.index, OBJ_OFF_REMOVE) + 1` (the
 // properties-header Duplicate button, offset 21) and under the bumped
-// `OBJ_KEY_STRIDE` (44). Triplet mod buttons take the axis-0 anchor here
-// and key off `+0/+1/+2` (the cell loop's `i`), same convention
-// `OBJ_OFF_POS_X` etc. already use for their value cells.
+// `OBJ_KEY_STRIDE` (44). C-P1b: these now key the converted card rows'
+// exposure-lane mod buttons (`object_row_mod_offset`) — the old triplet/
+// slider VALUE-cell offsets these used to sit alongside (`OBJ_OFF_POS_X`
+// etc.) are gone; the card rows' own keys come from `build_param_row`'s
+// `row_key_base` (`slot << 8`) instead.
 const OBJ_OFF_POS_X_MOD: u64 = 22;
 const OBJ_OFF_ROT_X_MOD: u64 = 25;
 const OBJ_OFF_SCALE_X_MOD: u64 = 28;
@@ -92,59 +81,28 @@ const fn obj_key(index: usize, offset: u64) -> u64 {
     OBJ_KEY_BASE + index as u64 * OBJ_KEY_STRIDE + offset
 }
 
-/// Stable automation name for one triplet cell (a `build_triplet_row` value
-/// box), by control kind + axis — `nth` (per-object) still disambiguates
-/// which object a flow means, mirroring the audio dock's `name` + `nth`
-/// convention. Same fix as `world_row_automation_name` — a bare `text` +
-/// `under_text` selector can't tell two "0.00" cells apart in this flat
-/// (no per-section container) panel.
-const fn triplet_cell_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
-    match (base_offset, axis) {
-        (OBJ_OFF_POS_X, 0) => Some("scene_setup.object.pos_x"),
-        (OBJ_OFF_POS_X, 1) => Some("scene_setup.object.pos_y"),
-        (OBJ_OFF_POS_X, 2) => Some("scene_setup.object.pos_z"),
-        (OBJ_OFF_ROT_X, 0) => Some("scene_setup.object.rot_x"),
-        (OBJ_OFF_ROT_X, 1) => Some("scene_setup.object.rot_y"),
-        (OBJ_OFF_ROT_X, 2) => Some("scene_setup.object.rot_z"),
-        (OBJ_OFF_SCALE_X, 0) => Some("scene_setup.object.scale_x"),
-        (OBJ_OFF_SCALE_X, 1) => Some("scene_setup.object.scale_y"),
-        (OBJ_OFF_SCALE_X, 2) => Some("scene_setup.object.scale_z"),
-        (OBJ_OFF_COLOR_R, 0) => Some("scene_setup.object.color_r"),
-        (OBJ_OFF_COLOR_R, 1) => Some("scene_setup.object.color_g"),
-        (OBJ_OFF_COLOR_R, 2) => Some("scene_setup.object.color_b"),
-        _ => None,
-    }
-}
-
 /// UX-P3a: stable automation name for one exposable OBJECT row's mod button
-/// (triplet/slider rows, keyed the same way `triplet_cell_automation_name`/
-/// `object_slider_row_automation_name` key their own value cells) — same
-/// "flat panel, no per-section container, `nth` disambiguates" convention
-/// every other automation name in this file follows. `None` for a row this
-/// phase doesn't wire a button onto (Color's per-channel cells).
-const fn mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
-    match (base_offset, axis) {
-        (OBJ_OFF_POS_X_MOD, 0) => Some("scene_setup.mod.pos_x"),
-        (OBJ_OFF_POS_X_MOD, 1) => Some("scene_setup.mod.pos_y"),
-        (OBJ_OFF_POS_X_MOD, 2) => Some("scene_setup.mod.pos_z"),
-        (OBJ_OFF_ROT_X_MOD, 0) => Some("scene_setup.mod.rot_x"),
-        (OBJ_OFF_ROT_X_MOD, 1) => Some("scene_setup.mod.rot_y"),
-        (OBJ_OFF_ROT_X_MOD, 2) => Some("scene_setup.mod.rot_z"),
-        (OBJ_OFF_SCALE_X_MOD, 0) => Some("scene_setup.mod.scale_x"),
-        (OBJ_OFF_SCALE_X_MOD, 1) => Some("scene_setup.mod.scale_y"),
-        (OBJ_OFF_SCALE_X_MOD, 2) => Some("scene_setup.mod.scale_z"),
-        (OBJ_OFF_METALLIC_MOD, 0) => Some("scene_setup.mod.metallic"),
-        (OBJ_OFF_ROUGHNESS_MOD, 0) => Some("scene_setup.mod.roughness"),
-        _ => None,
-    }
-}
-
-/// Stable automation name for an object-row slider's value cell
-/// (metallic/roughness, UX-P2 D2).
-const fn object_slider_row_automation_name(base_offset: u64) -> Option<&'static str> {
-    match base_offset {
-        OBJ_OFF_METALLIC => Some("scene_setup.object.metallic_value"),
-        OBJ_OFF_ROUGHNESS => Some("scene_setup.object.roughness_value"),
+/// — same "flat panel, no per-section container, `nth` disambiguates"
+/// convention every other automation name in this file follows. `None` for
+/// a row this phase doesn't wire a button onto (Color's per-channel cells).
+/// C-P1b: `offset` is the row's FULL, already axis-resolved
+/// `object_row_mod_offset(slot)` value (`OBJ_OFF_POS_X_MOD`, `+1`, `+2`, …
+/// each a distinct constant) — the old (base, axis) pair collapsed into one
+/// argument since `object_row_mod_offset` bakes the axis into the offset
+/// itself.
+const fn mod_button_automation_name(offset: u64) -> Option<&'static str> {
+    match offset {
+        OBJ_OFF_POS_X_MOD => Some("scene_setup.mod.pos_x"),
+        x if x == OBJ_OFF_POS_X_MOD + 1 => Some("scene_setup.mod.pos_y"),
+        x if x == OBJ_OFF_POS_X_MOD + 2 => Some("scene_setup.mod.pos_z"),
+        OBJ_OFF_ROT_X_MOD => Some("scene_setup.mod.rot_x"),
+        x if x == OBJ_OFF_ROT_X_MOD + 1 => Some("scene_setup.mod.rot_y"),
+        x if x == OBJ_OFF_ROT_X_MOD + 2 => Some("scene_setup.mod.rot_z"),
+        OBJ_OFF_SCALE_X_MOD => Some("scene_setup.mod.scale_x"),
+        x if x == OBJ_OFF_SCALE_X_MOD + 1 => Some("scene_setup.mod.scale_y"),
+        x if x == OBJ_OFF_SCALE_X_MOD + 2 => Some("scene_setup.mod.scale_z"),
+        OBJ_OFF_METALLIC_MOD => Some("scene_setup.mod.metallic"),
+        OBJ_OFF_ROUGHNESS_MOD => Some("scene_setup.mod.roughness"),
         _ => None,
     }
 }
@@ -478,6 +436,133 @@ const fn world_row_driver_btn_automation_name(slot: usize) -> Option<&'static st
     }
 }
 
+// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the Object family's own
+// FIXED slot indices into `self.object_card` — same identity-stability
+// rationale as `WORLD_ENV_INTENSITY`..`WORLD_FOG_HEIGHT_FALLOFF` above (a
+// driver/envelope/audio mod armed on Roughness can't silently jump onto
+// Position X's slot just because the selected object's material section
+// changed shape between frames). Sized to the union of every row an object
+// can show — Position/Rotation/Scale (9) + Color (3) + Metallic + Roughness
+// (2) — even though a given object may only populate a subset (`Other`/
+// `None` material skip Metallic/Roughness; an object with no `transform`
+// skips the first 9). Unpopulated slots for the CURRENT object are simply
+// never written this frame (their `param_info`/`id_map` entries carry no
+// row) — same "only every WIRED row lands in the map" contract D2 already
+// established for World's `EnvironmentRowVm::None`/`Custom` cases.
+const OBJ_ROW_POS_X: usize = 0;
+const OBJ_ROW_POS_Y: usize = 1;
+const OBJ_ROW_POS_Z: usize = 2;
+const OBJ_ROW_ROT_X: usize = 3;
+const OBJ_ROW_ROT_Y: usize = 4;
+const OBJ_ROW_ROT_Z: usize = 5;
+const OBJ_ROW_SCALE_X: usize = 6;
+const OBJ_ROW_SCALE_Y: usize = 7;
+const OBJ_ROW_SCALE_Z: usize = 8;
+const OBJ_ROW_COLOR_R: usize = 9;
+const OBJ_ROW_COLOR_G: usize = 10;
+const OBJ_ROW_COLOR_B: usize = 11;
+const OBJ_ROW_METALLIC: usize = 12;
+const OBJ_ROW_ROUGHNESS: usize = 13;
+const OBJ_ROW_COUNT: usize = 14;
+
+/// Stable automation name for one Object row's value-TEXT cell (type-in
+/// target) — reuses the EXACT strings the old bespoke triplet/slider rows
+/// already published (`triplet_cell_automation_name`/
+/// `object_slider_row_automation_name`), so existing flow-script selectors
+/// that only assert/read this cell's text keep resolving unchanged.
+const fn object_row_value_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        OBJ_ROW_POS_X => Some("scene_setup.object.pos_x"),
+        OBJ_ROW_POS_Y => Some("scene_setup.object.pos_y"),
+        OBJ_ROW_POS_Z => Some("scene_setup.object.pos_z"),
+        OBJ_ROW_ROT_X => Some("scene_setup.object.rot_x"),
+        OBJ_ROW_ROT_Y => Some("scene_setup.object.rot_y"),
+        OBJ_ROW_ROT_Z => Some("scene_setup.object.rot_z"),
+        OBJ_ROW_SCALE_X => Some("scene_setup.object.scale_x"),
+        OBJ_ROW_SCALE_Y => Some("scene_setup.object.scale_y"),
+        OBJ_ROW_SCALE_Z => Some("scene_setup.object.scale_z"),
+        OBJ_ROW_COLOR_R => Some("scene_setup.object.color_r"),
+        OBJ_ROW_COLOR_G => Some("scene_setup.object.color_g"),
+        OBJ_ROW_COLOR_B => Some("scene_setup.object.color_b"),
+        OBJ_ROW_METALLIC => Some("scene_setup.object.metallic_value"),
+        OBJ_ROW_ROUGHNESS => Some("scene_setup.object.roughness_value"),
+        _ => None,
+    }
+}
+
+/// C-P1b: stable automation name for one Object row's SLIDER TRACK — the
+/// real card drag target (mirrors `world_row_track_automation_name`). NEW
+/// names (the old bespoke rows had no track — they were delta-dragged
+/// directly off the value cell); flow scripts that used to drag the value
+/// cell now target this name instead.
+const fn object_row_track_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        OBJ_ROW_POS_X => Some("scene_setup.object.pos_x_track"),
+        OBJ_ROW_POS_Y => Some("scene_setup.object.pos_y_track"),
+        OBJ_ROW_POS_Z => Some("scene_setup.object.pos_z_track"),
+        OBJ_ROW_ROT_X => Some("scene_setup.object.rot_x_track"),
+        OBJ_ROW_ROT_Y => Some("scene_setup.object.rot_y_track"),
+        OBJ_ROW_ROT_Z => Some("scene_setup.object.rot_z_track"),
+        OBJ_ROW_SCALE_X => Some("scene_setup.object.scale_x_track"),
+        OBJ_ROW_SCALE_Y => Some("scene_setup.object.scale_y_track"),
+        OBJ_ROW_SCALE_Z => Some("scene_setup.object.scale_z_track"),
+        OBJ_ROW_COLOR_R => Some("scene_setup.object.color_r_track"),
+        OBJ_ROW_COLOR_G => Some("scene_setup.object.color_g_track"),
+        OBJ_ROW_COLOR_B => Some("scene_setup.object.color_b_track"),
+        OBJ_ROW_METALLIC => Some("scene_setup.object.metallic_track"),
+        OBJ_ROW_ROUGHNESS => Some("scene_setup.object.roughness_track"),
+        _ => None,
+    }
+}
+
+/// C-P1b: stable automation name for one Object row's driver ("D") arm
+/// button — mirrors `world_row_driver_btn_automation_name`.
+const fn object_row_driver_btn_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        OBJ_ROW_POS_X => Some("scene_setup.object.pos_x_driver_btn"),
+        OBJ_ROW_POS_Y => Some("scene_setup.object.pos_y_driver_btn"),
+        OBJ_ROW_POS_Z => Some("scene_setup.object.pos_z_driver_btn"),
+        OBJ_ROW_ROT_X => Some("scene_setup.object.rot_x_driver_btn"),
+        OBJ_ROW_ROT_Y => Some("scene_setup.object.rot_y_driver_btn"),
+        OBJ_ROW_ROT_Z => Some("scene_setup.object.rot_z_driver_btn"),
+        OBJ_ROW_SCALE_X => Some("scene_setup.object.scale_x_driver_btn"),
+        OBJ_ROW_SCALE_Y => Some("scene_setup.object.scale_y_driver_btn"),
+        OBJ_ROW_SCALE_Z => Some("scene_setup.object.scale_z_driver_btn"),
+        OBJ_ROW_COLOR_R => Some("scene_setup.object.color_r_driver_btn"),
+        OBJ_ROW_COLOR_G => Some("scene_setup.object.color_g_driver_btn"),
+        OBJ_ROW_COLOR_B => Some("scene_setup.object.color_b_driver_btn"),
+        OBJ_ROW_METALLIC => Some("scene_setup.object.metallic_driver_btn"),
+        OBJ_ROW_ROUGHNESS => Some("scene_setup.object.roughness_driver_btn"),
+        _ => None,
+    }
+}
+
+/// The exposure-lane mod-button offset for a converted Object row, by slot —
+/// reuses the SAME `OBJ_OFF_*_MOD` constants (and therefore the same
+/// `mod_button_automation_name` strings) the old bespoke builders already
+/// published, so the exposure mechanism (P3a, unchanged by this design) and
+/// its flow-script selectors keep resolving unchanged. `None` for Color
+/// (the old bespoke `build_color_row` never wired an exposure button onto
+/// its per-channel cells either — `mod_button_automation_name`'s own doc
+/// comment: "`None` for a row this phase doesn't wire a button onto (Color's
+/// per-channel cells)" — preserved as-is, not a new gap this phase opens).
+const fn object_row_mod_offset(slot: usize) -> Option<u64> {
+    match slot {
+        OBJ_ROW_POS_X => Some(OBJ_OFF_POS_X_MOD),
+        OBJ_ROW_POS_Y => Some(OBJ_OFF_POS_X_MOD + 1),
+        OBJ_ROW_POS_Z => Some(OBJ_OFF_POS_X_MOD + 2),
+        OBJ_ROW_ROT_X => Some(OBJ_OFF_ROT_X_MOD),
+        OBJ_ROW_ROT_Y => Some(OBJ_OFF_ROT_X_MOD + 1),
+        OBJ_ROW_ROT_Z => Some(OBJ_OFF_ROT_X_MOD + 2),
+        OBJ_ROW_SCALE_X => Some(OBJ_OFF_SCALE_X_MOD),
+        OBJ_ROW_SCALE_Y => Some(OBJ_OFF_SCALE_X_MOD + 1),
+        OBJ_ROW_SCALE_Z => Some(OBJ_OFF_SCALE_X_MOD + 2),
+        OBJ_ROW_METALLIC => Some(OBJ_OFF_METALLIC_MOD),
+        OBJ_ROW_ROUGHNESS => Some(OBJ_OFF_ROUGHNESS_MOD),
+        _ => None,
+    }
+}
+
 const PANEL_W_MIN: f32 = 320.0;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
@@ -553,18 +638,6 @@ pub struct RowValue {
     /// panel (exposure is a graph-side toggle via
     /// `PanelAction::SceneSetupExposeParam`, never a direct field write).
     pub exposed: bool,
-}
-
-/// UX-P2 (D2): which of the panel's two persistent slider widgets a call to
-/// `build_object_slider_row` is targeting — selects the `SliderDragState` +
-/// row-presence flag pair, same idea as `layer_header.rs`'s per-row `index`
-/// but degenerate to two named slots (Metallic/Roughness are the only two
-/// bounded material scalars the VM exposes today; a third would need this
-/// generalized to a `Vec`, per D2's own "any future 0..1 material scalar").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ObjSlider {
-    Metallic,
-    Roughness,
 }
 
 /// The outliner row template's trailing affordance slot (D5 of
@@ -656,21 +729,25 @@ pub enum AtmosphereRowVm {
 }
 
 /// One `node.transform_3d`'s "3 compact triplets" (D4): Position/Rotation/
-/// Scale, each X/Y/Z a [`RowValue`].
+/// Scale, each X/Y/Z a [`ModulatedRow`] — C-P1b (SCENE_PANEL_CARD_CONVERGENCE_
+/// DESIGN.md): promoted from a bare `RowValue` so the Object family's
+/// converted rows can carry driver/envelope/audio-mod facts through the same
+/// `ModulatedRow` shape the Environment/Fog family already uses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransformRowVm {
-    pub pos: (RowValue, RowValue, RowValue),
-    pub rot: (RowValue, RowValue, RowValue),
-    pub scale: (RowValue, RowValue, RowValue),
+    pub pos: (ModulatedRow, ModulatedRow, ModulatedRow),
+    pub rot: (ModulatedRow, ModulatedRow, ModulatedRow),
+    pub scale: (ModulatedRow, ModulatedRow, ModulatedRow),
 }
 
 /// The Objects section's material quick-knob row (D3/D4): base color always,
 /// metallic/roughness only for `pbr_material` (phong/unlit/cel don't have
-/// that param — "the atom's own params otherwise").
+/// that param — "the atom's own params otherwise"). C-P1b: `ModulatedRow`,
+/// same promotion as [`TransformRowVm`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectMaterialVm {
-    Pbr { color: (RowValue, RowValue, RowValue), metallic: RowValue, roughness: RowValue },
-    Other { color: (RowValue, RowValue, RowValue) },
+    Pbr { color: (ModulatedRow, ModulatedRow, ModulatedRow), metallic: ModulatedRow, roughness: ModulatedRow },
+    Other { color: (ModulatedRow, ModulatedRow, ModulatedRow) },
     /// No material resolved on this object.
     None,
 }
@@ -1169,6 +1246,14 @@ pub struct ScenePanel {
     /// `row_ids: [RowIds; 4]` — see `SceneCardState`'s doc comment for the
     /// fixed-slot convention.
     world_card: SceneCardState,
+    /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted Object
+    /// family's card-shaped row state — same `SceneCardState` shape as
+    /// `world_card`, sized to `OBJ_ROW_COUNT` FIXED slots (`OBJ_ROW_POS_X`..
+    /// `OBJ_ROW_ROUGHNESS`) rather than World's 4, since only ONE object's
+    /// Properties body renders at a time (the outliner selection), same as
+    /// World only ever shows one Environment/Fog section. Replaces the
+    /// deleted `object_value_cells`/`metallic_slider`/`roughness_slider`.
+    object_card: SceneCardState,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
@@ -1192,11 +1277,12 @@ pub struct ScenePanel {
     /// `!(value > 0.5)` as 0.0/1.0) through the same
     /// `SceneSetupParamChanged` fourth-surface path every other row uses.
     outliner_eye_ids: Vec<(NodeId, RowValue)>,
-    /// Every Objects-row drag-armable value cell built this frame: triplet
-    /// axes (pos/rot/scale/color) + the metallic/roughness value boxes.
-    /// Rebuilt fresh every `build_nodes` call — Objects is a variable-length
-    /// list, so (unlike the fixed `row_ids` above) there's no fixed index
-    /// table to key by; PointerDown/Drag look the control up directly here.
+    /// C-P1b: Objects-row drag-armable value cells built this frame — as of
+    /// this phase, ONLY the Modifier-stack's own numeric param rows
+    /// (`build_modifier_numeric_row`; Modifier stays on the old bespoke path
+    /// until C-P1d). Transform/color/material moved onto `object_card`'s
+    /// card-row protocol; their old pushes here are deleted along with
+    /// `build_triplet_row`/`build_color_row`/`build_object_slider_row`.
     object_value_cells: Vec<(NodeId, RowValue)>,
     /// Every Objects-row stepper (+/-) built this frame, with its fixed step
     /// delta (mirrors `stepper_hit` for the fixed rows above).
@@ -1275,22 +1361,6 @@ pub struct ScenePanel {
     /// an unrelated `configure`, per D1 "no staleness": the drag itself
     /// still targets the layer it started on).
     drag_layer_id: Option<LayerId>,
-    /// UX-P2 (D2): the Metallic slider's widget infra — shared `BitmapSlider`
-    /// drag machinery, same pattern as `layer_header.rs`'s gain slider.
-    /// Persists across rebuilds (unlike the `Vec`-based cell tables above)
-    /// so a drag survives the panel's per-frame tree rebuild; `set_ids` is
-    /// called fresh every frame the row renders, which keeps its
-    /// `track_rect` current without disturbing `drag`'s active state.
-    metallic_slider: crate::slider::SliderDragState,
-    /// The Metallic row's write address for the currently-built frame, or
-    /// `None` when the selected object has no PBR material this frame — the
-    /// signal `build_nodes` uses to `clear()` the slider above instead of
-    /// leaving it pointing at a stale (possibly since-reused) `NodeId`.
-    metallic_slider_row: Option<RowValue>,
-    /// Same as `metallic_slider`, for Roughness.
-    roughness_slider: crate::slider::SliderDragState,
-    /// Same as `metallic_slider_row`, for Roughness.
-    roughness_slider_row: Option<RowValue>,
     /// UX-P3a (SCENE_PANEL_UX_DESIGN.md): every LIVE (non-driven) mod-button
     /// node built this frame, paired with the click-time context
     /// `ToggleNodeParamExposeCommand` needs. One vector across every row
@@ -1319,6 +1389,7 @@ impl Default for ScenePanel {
             new_scene_id: None,
             open_graph_editor_id: None,
             world_card: SceneCardState::new(),
+            object_card: SceneCardState::new(),
             add_object_id: None,
             add_light_id: None,
             import_model_id: None,
@@ -1344,10 +1415,6 @@ impl Default for ScenePanel {
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             drag: DragController::new(),
             drag_layer_id: None,
-            metallic_slider: crate::slider::SliderDragState::with_range(0.0, 1.0, false),
-            metallic_slider_row: None,
-            roughness_slider: crate::slider::SliderDragState::with_range(0.0, 1.0, false),
-            roughness_slider_row: None,
             mod_button_ids: Vec::new(),
         }
     }
@@ -1447,6 +1514,11 @@ impl ScenePanel {
         // leave stale ids — `build_world_properties` resizes back to
         // `WORLD_ROW_COUNT` when it does run.
         self.world_card.resize(0);
+        // C-P1b: same "cleared here, resized back by whichever build_*
+        // branch runs" contract as `world_card` above — `object_card` only
+        // ever grows back to `OBJ_ROW_COUNT` when an Object is selected AND
+        // its Properties body actually builds.
+        self.object_card.resize(0);
         self.add_object_id = None;
         self.add_light_id = None;
         self.import_model_id = None;
@@ -1469,15 +1541,6 @@ impl ScenePanel {
         self.camera_value_cells.clear();
         self.camera_steppers.clear();
         self.mod_button_ids.clear();
-        // UX-P2: the row-presence flags below are cleared here and only set
-        // back by `build_object_slider_row` if the selected object still has
-        // a PBR material this frame; the end-of-`build_nodes` check clears
-        // the slider `ids` (not the drag machinery) when the row didn't
-        // rebuild, so a stale `NodeId` from a since-reused tree slot can
-        // never resolve as a hit.
-        self.metallic_slider_row = None;
-        self.roughness_slider_row = None;
-
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
         let content_top = y + PAD + TITLE_H;
@@ -1495,22 +1558,6 @@ impl ScenePanel {
             SceneSetupState::NoScene { .. } => self.build_no_scene(tree, inner_x, inner_w, cy),
             SceneSetupState::Live(vm) => self.build_live(tree, inner_x, inner_w, cy, &vm),
         };
-
-        // UX-P2: a slider whose row didn't rebuild this frame (selection
-        // moved off a PBR object, or off Objects entirely) has a stale
-        // `ids` pointing at a `NodeId` slot the fresh tree may have handed
-        // to something else — `clear()` drops `ids` to `None` so
-        // `try_start_drag` can never false-hit it. A slider whose row DID
-        // rebuild got a fresh `set_ids` already, so this is a no-op for it —
-        // and since a live drag keeps rebuilding at the same row every
-        // frame (the user's mouse is busy, selection can't move mid-scrub),
-        // `clear()` here never interrupts an in-progress drag.
-        if self.metallic_slider_row.is_none() {
-            self.metallic_slider.clear();
-        }
-        if self.roughness_slider_row.is_none() {
-            self.roughness_slider.clear();
-        }
 
         let content_height = (cy - content_top + PAD).max(0.0);
         self.scroll.set_content_height(content_height);
@@ -1910,7 +1957,7 @@ impl ScenePanel {
                     return cy;
                 };
                 cy = self.build_object_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_object_properties_body(tree, inner_x, inner_w, cy, row, &vm.layer_id)
+                self.build_object_properties_body(tree, inner_x, inner_w, cy, row)
             }
             SceneSelection::Light(id) => {
                 let Some(row) = vm.lights.iter().find_map(|l| match l {
@@ -1993,38 +2040,38 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         row: &ObjectKnownRow,
-        layer_id: &LayerId,
     ) -> f32 {
         let index = row.index;
-        let obj_label = row.name.as_str();
+        let obj_label = row.name.to_string();
+        // C-P1b: `object_card` regrows to its full fixed slot count every
+        // time an Object's Properties body builds — mirrors
+        // `build_world_properties`'s `self.world_card.resize(WORLD_ROW_COUNT)`.
+        // A slot this object doesn't populate this frame (e.g. `Other`/
+        // `None` material skips Metallic/Roughness) simply never gets a
+        // `build_object_card_row` call — its `param_info`/`slider_ids` stay
+        // at the placeholder `resize` wrote, same "unpopulated slot, never
+        // clicked" contract World's `EnvironmentRowVm::None` case already
+        // established.
+        self.object_card.resize(OBJ_ROW_COUNT);
         if let Some(t) = &row.transform {
-            cy = self.build_triplet_row(
-                tree, inner_x, inner_w, cy, "Position", &t.pos, index, OBJ_OFF_POS_X,
-                Some(obj_label), Some(OBJ_OFF_POS_X_MOD),
-            );
-            cy = self.build_triplet_row(
-                tree, inner_x, inner_w, cy, "Rotation", &t.rot, index, OBJ_OFF_ROT_X,
-                Some(obj_label), Some(OBJ_OFF_ROT_X_MOD),
-            );
-            cy = self.build_triplet_row(
-                tree, inner_x, inner_w, cy, "Scale", &t.scale, index, OBJ_OFF_SCALE_X,
-                Some(obj_label), Some(OBJ_OFF_SCALE_X_MOD),
-            );
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position X", &t.pos.0, OBJ_ROW_POS_X, "pos_x", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Y", &t.pos.1, OBJ_ROW_POS_Y, "pos_y", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Z", &t.pos.2, OBJ_ROW_POS_Z, "pos_z", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation X", &t.rot.0, OBJ_ROW_ROT_X, "rot_x", index, &obj_label, true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Y", &t.rot.1, OBJ_ROW_ROT_Y, "rot_y", index, &obj_label, true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Z", &t.rot.2, OBJ_ROW_ROT_Z, "rot_z", index, &obj_label, true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale X", &t.scale.0, OBJ_ROW_SCALE_X, "scale_x", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Y", &t.scale.1, OBJ_ROW_SCALE_Y, "scale_y", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Z", &t.scale.2, OBJ_ROW_SCALE_Z, "scale_z", index, &obj_label, false);
         }
         match &row.material {
             ObjectMaterialVm::Pbr { color, metallic, roughness } => {
-                cy = self.build_color_row(tree, inner_x, inner_w, cy, color, index, OBJ_OFF_COLOR_R);
-                cy = self.build_object_slider_row(
-                    tree, inner_x, inner_w, cy, "Metallic", metallic, layer_id, OBJ_OFF_METALLIC, ObjSlider::Metallic,
-                    index, obj_label, OBJ_OFF_METALLIC_MOD,
-                );
-                cy = self.build_object_slider_row(
-                    tree, inner_x, inner_w, cy, "Roughness", roughness, layer_id, OBJ_OFF_ROUGHNESS, ObjSlider::Roughness,
-                    index, obj_label, OBJ_OFF_ROUGHNESS_MOD,
-                );
+                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color, index);
+                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Metallic", metallic, OBJ_ROW_METALLIC, "metallic", index, &obj_label, false);
+                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Roughness", roughness, OBJ_ROW_ROUGHNESS, "roughness", index, &obj_label, false);
             }
             ObjectMaterialVm::Other { color } => {
-                cy = self.build_color_row(tree, inner_x, inner_w, cy, color, index, OBJ_OFF_COLOR_R);
+                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color, index);
             }
             ObjectMaterialVm::None => {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No material", label_style());
@@ -2044,7 +2091,7 @@ impl ScenePanel {
                     row.group_node_id.unwrap_or(row.object_node_id),
                     m,
                     row.modifiers.len(),
-                    obj_label,
+                    &obj_label,
                 );
             }
             cy = self.build_add_modifier_button(
@@ -2416,6 +2463,226 @@ impl ScenePanel {
     /// layer (`row_modulation_for_id`).
     fn sync_world_modulation(&mut self, slot: usize, m: &RowModulation) {
         let ms = &mut self.world_card.mod_state;
+        ms.driver_expanded[slot] = m.driver_active;
+        ms.envelope_expanded[slot] = m.envelope_active;
+        ms.trim_min[slot] = m.trim_min;
+        ms.trim_max[slot] = m.trim_max;
+        ms.target_norm[slot] = m.target_norm;
+        ms.env_decay[slot] = m.env_decay;
+        ms.driver_beat_div_idx[slot] = m.driver_beat_div_idx;
+        ms.driver_waveform_idx[slot] = m.driver_waveform_idx;
+        ms.driver_reversed[slot] = m.driver_reversed;
+        ms.driver_dotted[slot] = m.driver_dotted;
+        ms.driver_triplet[slot] = m.driver_triplet;
+        ms.driver_free_period[slot] = m.driver_free_period;
+        ms.automation_active[slot] = m.automation_active;
+        ms.automation_overridden[slot] = m.automation_overridden;
+        ms.audio_active[slot] = m.audio_active;
+        ms.audio_kind_idx[slot] = m.audio_kind_idx;
+        ms.audio_band_idx[slot] = m.audio_band_idx;
+        ms.audio_range_min[slot] = m.audio_range_min;
+        ms.audio_range_max[slot] = m.audio_range_max;
+        ms.audio_invert[slot] = m.audio_invert;
+        ms.audio_rate[slot] = m.audio_rate;
+        ms.audio_sensitivity[slot] = m.audio_sensitivity;
+        ms.audio_attack_ms[slot] = m.audio_attack_ms;
+        ms.audio_release_ms[slot] = m.audio_release_ms;
+        ms.audio_mode_idx[slot] = m.audio_trigger_mode_idx;
+        ms.audio_action_idx[slot] = m.audio_action_idx;
+        ms.audio_step_amount[slot] = m.audio_step_amount;
+        ms.audio_wrap_idx[slot] = m.audio_wrap_idx;
+        ms.audio_send_idx[slot] = m
+            .audio_send_id
+            .as_ref()
+            .and_then(|sid| ms.audio_send_ids.iter().position(|s| s == sid))
+            .map(|p| p as i32)
+            .unwrap_or(-1);
+    }
+
+    /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): one Object row, built
+    /// through the shared card row core — the Object-family twin of
+    /// `build_world_param_row`, generalized with `is_angle` (World has no
+    /// angle rows; Object's Rotation X/Y/Z do) and `mod_offset: Option<u64>`
+    /// (Color's per-channel cells never get an exposure button — see
+    /// `object_row_mod_offset`'s doc comment). `slot` is the row's FIXED
+    /// index into `self.object_card` (`OBJ_ROW_POS_X`..`OBJ_ROW_ROUGHNESS`).
+    /// `param_key` is the graph node's own param name, used ONLY to
+    /// synthesize this row's stable owned `ParamId` (D2) — the actual write
+    /// address is `row.value.addr` (already correctly scoped by
+    /// `state_sync`'s `scoped_row`/`transform_row`/`material_row`, D12).
+    #[allow(clippy::too_many_arguments)]
+    fn build_object_card_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        row: &ModulatedRow,
+        slot: usize,
+        param_key: &str,
+        index: usize,
+        object_label: &str,
+        is_angle: bool,
+    ) -> f32 {
+        let mod_offset = object_row_mod_offset(slot);
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let usable_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
+
+        if row.value.driven {
+            tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+            let text = if is_angle {
+                format!("{:.1}\u{00b0} (driven)", row.value.value.to_degrees())
+            } else {
+                format!("{:.2} (driven)", row.value.value)
+            };
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                usable_w - LABEL_W,
+                ROW_H,
+                &text,
+                driven_label_style(),
+            );
+            self.object_card.slider_ids[slot] = None;
+            self.object_card.param_info[slot] = placeholder_param_info();
+            if let Some(offset) = mod_offset {
+                self.build_mod_button(
+                    tree, mod_x, cy, &row.value, object_label, label, is_angle,
+                    obj_key(index, offset),
+                    mod_button_automation_name(offset),
+                );
+            }
+            return cy + ROW_H;
+        }
+
+        let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
+        let (min, max) = (row.value.min, row.value.max);
+        let info = ParamInfo {
+            param_id: param_id.clone(),
+            name: label.to_string(),
+            min,
+            max,
+            default: row.value.value,
+            whole_numbers: false,
+            is_angle,
+            exposed: row.value.exposed,
+            is_toggle: false,
+            is_trigger: false,
+            is_trigger_gate: false,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+            section: None,
+        };
+        self.object_card.param_info[slot] = info.clone();
+        self.object_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
+        self.sync_object_modulation(slot, &row.modulation);
+
+        let content_w = if mod_offset.is_some() { usable_w - MOD_BTN_W - MOD_BTN_GAP } else { usable_w };
+        let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
+        let built = build_param_row(
+            tree,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            slider_w,
+            &info,
+            &self.object_card.mod_state,
+            slot,
+            GraphParamTarget::Generator,
+            &crate::slider::SliderColors::default_slider(),
+            color::FONT_LABEL,
+            true,
+            label_width,
+            self.object_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
+            true,
+            Some((slot as u64) << 8),
+            None,
+        );
+        self.object_card.row_catcher_ids[slot] = Some(built.row_catcher);
+        self.object_card.trim_ids[slot] = built.trim;
+        self.object_card.target_ids[slot] = built.target;
+        self.object_card.envelope_config_ids[slot] = built.envelope_config;
+        self.object_card.envelope_btn_ids[slot] = built.envelope_btn;
+        self.object_card.driver_btn_ids[slot] = Some(built.driver_btn);
+        self.object_card.driver_config_ids[slot] = built.driver_config;
+        self.object_card.audio_btn_ids[slot] = Some(built.audio_btn);
+        self.object_card.audio_configs[slot] = built.audio_config;
+        self.object_card.mod_tab_ids[slot] = built.mod_tabs;
+        self.object_card.slider_ids[slot] = built.slider;
+        if let Some(name) = object_row_driver_btn_automation_name(slot) {
+            tree.set_name(built.driver_btn, name);
+        }
+        if let Some(ids) = built.slider {
+            self.object_card.drag_sliders[slot].set_ids(ids);
+            self.object_card.drag_sliders[slot].set_range(min, max, false);
+            if let Some(name) = object_row_value_automation_name(slot) {
+                tree.set_name(ids.value_text, name);
+            }
+            if let Some(name) = object_row_track_automation_name(slot) {
+                tree.set_name(ids.track, name);
+            }
+        }
+
+        if let Some(offset) = mod_offset {
+            self.build_mod_button(
+                tree, mod_x, cy, &row.value, object_label, label, is_angle,
+                obj_key(index, offset),
+                mod_button_automation_name(offset),
+            );
+        }
+
+        built.new_cy
+    }
+
+    /// C-P1b: the Color row — a live square swatch (unchanged from the old
+    /// `build_color_row`'s D4 rendering — display-only, no picker) left of
+    /// three card rows, one per channel (no exposure button on any of the
+    /// three — see `object_row_mod_offset`'s doc comment).
+    fn build_object_color_rows(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        triplet: &(ModulatedRow, ModulatedRow, ModulatedRow),
+        index: usize,
+    ) -> f32 {
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let swatch_color =
+            Color32::new(to_u8(triplet.0.value.value), to_u8(triplet.1.value.value), to_u8(triplet.2.value.value), 255);
+        tree.add_panel(
+            Some(self.content_parent),
+            inner_x,
+            cy + (ROW_H - SWATCH_W) * 0.5,
+            SWATCH_W,
+            SWATCH_W,
+            UIStyle {
+                bg_color: swatch_color,
+                border_color: color::BORDER,
+                border_width: 1.0,
+                corner_radius: color::SMALL_RADIUS,
+                ..UIStyle::default()
+            },
+        );
+        let row_x = inner_x + SWATCH_W + ROW_GAP;
+        let row_w = inner_w - SWATCH_W - ROW_GAP;
+        let object_label = ""; // never used — Color never wires a mod button.
+        let mut cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color R", &triplet.0, OBJ_ROW_COLOR_R, "color_r", index, object_label, false);
+        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color G", &triplet.1, OBJ_ROW_COLOR_G, "color_g", index, object_label, false);
+        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color B", &triplet.2, OBJ_ROW_COLOR_B, "color_b", index, object_label, false);
+        cy
+    }
+
+    /// C-P1b: copy one Object row's [`RowModulation`] facts into
+    /// `self.object_card.mod_state` at `slot` — the Object-family twin of
+    /// `sync_world_modulation`.
+    fn sync_object_modulation(&mut self, slot: usize, m: &RowModulation) {
+        let ms = &mut self.object_card.mod_state;
         ms.driver_expanded[slot] = m.driver_active;
         ms.envelope_expanded[slot] = m.envelope_active;
         ms.trim_min[slot] = m.trim_min;
@@ -3280,273 +3547,6 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// A "3 compact triplet" row (D4): label + X/Y/Z drag-value cells, no
-    /// steppers (Position/Rotation/Scale/Color all use this shape). Driven
-    /// axes render read-only with the same styling `build_numeric_row` uses.
-    /// `mod_base_offset`/`object_label` are `None`/unused when this triplet
-    /// isn't exposable — `build_color_row`'s internal R/G/B cells (per-
-    /// channel exposure isn't part of UX-P3a's scope; the swatch itself is
-    /// display-only, D4). When exposable, each axis is independently
-    /// exposable (`transform_3d.pos_x`/`pos_y`/`pos_z` are three distinct
-    /// inner params) — one small mod button sits right of each cell, not
-    /// one shared button for the row.
-    #[allow(clippy::too_many_arguments)]
-    fn build_triplet_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        triplet: &(RowValue, RowValue, RowValue),
-        index: usize,
-        base_offset: u64,
-        object_label: Option<&str>,
-        mod_base_offset: Option<u64>,
-    ) -> f32 {
-        let reserve = mod_base_offset.is_some();
-        let per_cell_reserve = if reserve { MOD_BTN_W + MOD_BTN_GAP } else { 0.0 };
-        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-        let cell_x = inner_x + LABEL_W;
-        let cell_total_w = (inner_w - LABEL_W) / 3.0 - 2.0;
-        let cell_w = (cell_total_w - per_cell_reserve).max(20.0);
-        const AXIS: [&str; 3] = ["X", "Y", "Z"];
-        for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
-            // Each cell's slot is `cell_total_w` wide (value cell + its own
-            // reserved mod-button strip, when exposable); `+2.0` is the same
-            // inter-cell gap the un-reserved layout always used.
-            let x = cell_x + i as f32 * (cell_total_w + 2.0);
-            let mod_x = x + cell_w + MOD_BTN_GAP;
-            let degrees = is_degrees_param(&row.addr.param_id);
-            if row.driven {
-                let text = if degrees {
-                    format!("{:.1}\u{00b0}\u{2022}", row.value.to_degrees())
-                } else {
-                    format!("{:.2}\u{2022}", row.value)
-                };
-                tree.add_label(
-                    Some(self.content_parent),
-                    x,
-                    cy,
-                    cell_w,
-                    ROW_H,
-                    &text,
-                    driven_label_style(),
-                );
-                if let (Some(obj), Some(mod_base)) = (object_label, mod_base_offset) {
-                    let param_label = format!("{label} {}", AXIS[i]);
-                    self.build_mod_button(
-                        tree,
-                        mod_x,
-                        cy,
-                        row,
-                        obj,
-                        &param_label,
-                        degrees,
-                        obj_key(index, mod_base + i as u64),
-                        mod_button_automation_name(mod_base, i),
-                    );
-                }
-                continue;
-            }
-            // D10: the committed degrees rows (`transform_3d.rot_*`) display
-            // `%.1f°`; storage/commit still speak radians (`row.value`).
-            let text = if degrees {
-                format!("{:.1}\u{00b0}", row.value.to_degrees())
-            } else {
-                format!("{:.2}", row.value)
-            };
-            let cell_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                cy,
-                cell_w,
-                ROW_H,
-                drag_value_style(),
-                &text,
-                obj_key(index, base_offset + i as u64),
-            );
-            // Stable automation name (same fix as `build_numeric_row`'s
-            // fixed rows) — `nth` picks which object's cell a flow means,
-            // per the audio dock's own `name` + `nth` convention.
-            if let Some(name) = triplet_cell_automation_name(base_offset, i) {
-                tree.set_name(cell_id, name);
-            }
-            // UX-P2 (D3b): a thin accent hairline while THIS cell is the
-            // one being scrubbed — the `MOD_TAB_INK_H`-scale idiom
-            // (param_card.rs:47), a static 2px bar rather than that idiom's
-            // sliding tween (there's nothing to slide between: one cell is
-            // either being scrubbed or it isn't). No new style constant —
-            // the fill reuses the slider rows' own accent
-            // (`color::SLIDER_FILL_C32`), tying the two value shapes'
-            // "active" language together (D7).
-            if self.drag.is_active() && self.drag.payload().is_some_and(|d| d.addr == row.addr) {
-                tree.add_panel(
-                    Some(cell_id),
-                    x,
-                    cy + ROW_H - 2.0,
-                    cell_w,
-                    2.0,
-                    UIStyle { bg_color: color::SLIDER_FILL_C32, ..UIStyle::default() },
-                );
-            }
-            self.object_value_cells.push((cell_id, row.clone()));
-            if let (Some(obj), Some(mod_base)) = (object_label, mod_base_offset) {
-                let param_label = format!("{label} {}", AXIS[i]);
-                self.build_mod_button(
-                    tree,
-                    mod_x,
-                    cy,
-                    row,
-                    obj,
-                    &param_label,
-                    degrees,
-                    obj_key(index, mod_base + i as u64),
-                    mod_button_automation_name(mod_base, i),
-                );
-            }
-        }
-        cy + ROW_H
-    }
-
-    /// UX-P2 (D4 of SCENE_PANEL_UX_DESIGN.md): the Color row — a live
-    /// square swatch (display-only, no picker: D4's rejected alternative)
-    /// left of the SAME R/G/B `build_triplet_row` cells every other object
-    /// uses. The swatch reads the identical `triplet` values the R/G/B
-    /// cells render, so it updates on the exact same cadence — live during
-    /// a scrub, with no new state or sync path.
-    fn build_color_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        triplet: &(RowValue, RowValue, RowValue),
-        index: usize,
-        base_offset: u64,
-    ) -> f32 {
-        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let swatch_color = Color32::new(to_u8(triplet.0.value), to_u8(triplet.1.value), to_u8(triplet.2.value), 255);
-        tree.add_panel(
-            Some(self.content_parent),
-            inner_x,
-            cy + (ROW_H - SWATCH_W) * 0.5,
-            SWATCH_W,
-            SWATCH_W,
-            UIStyle {
-                bg_color: swatch_color,
-                border_color: color::BORDER,
-                border_width: 1.0,
-                corner_radius: color::SMALL_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-        self.build_triplet_row(
-            tree,
-            inner_x + SWATCH_W + ROW_GAP,
-            inner_w - SWATCH_W - ROW_GAP,
-            cy,
-            "Color",
-            triplet,
-            index,
-            base_offset,
-            None,
-            None,
-        )
-    }
-
-    /// UX-P2 (D2 of SCENE_PANEL_UX_DESIGN.md): a bounded material scalar
-    /// (Metallic/Roughness) as a real `BitmapSlider` row — shaped like
-    /// param_card.rs's scalar rows (label left, fill bar, value right),
-    /// replacing the old `[−] value [+]` stepper triplet
-    /// (`build_object_numeric_row`). Drag lifecycle is the shared
-    /// `SliderDragState` machine (`layer_header.rs`'s gain-slider
-    /// precedent): `PointerDown`/`Drag`/`DragEnd` in `handle_event` drive
-    /// `which`'s slider directly by track id, absolute-position (not
-    /// delta), so one drag can sweep the full range — the performer
-    /// gesture this design names.
-    #[allow(clippy::too_many_arguments)]
-    fn build_object_slider_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        row: &RowValue,
-        layer_id: &LayerId,
-        base_offset: u64,
-        which: ObjSlider,
-        index: usize,
-        object_label: &str,
-        mod_key_offset: u64,
-    ) -> f32 {
-        // UX-P3a: reserve the mod-button slot out of the row's width before
-        // laying out the slider — same convention as the numeric/triplet
-        // rows.
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
-        if row.driven {
-            tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x + LABEL_W,
-                cy,
-                inner_w - LABEL_W,
-                ROW_H,
-                &format!("{:.2} (driven)", row.value),
-                driven_label_style(),
-            );
-            self.build_mod_button(
-                tree, mod_x, cy, row, object_label, label, false, obj_key(index, mod_key_offset),
-                mod_button_automation_name(mod_key_offset, 0),
-            );
-            return cy + ROW_H;
-        }
-        let norm = crate::slider::BitmapSlider::value_to_normalized(row.value, row.min, row.max);
-        let text = format!("{:.2}", row.value);
-        // The reset action is structurally required by `BitmapSlider::build`
-        // but this phase wires no right-click gesture for it (the panel has
-        // never had a reset gesture on any row — D2 doesn't add one); it
-        // writes the row's own current value back to itself, an inert no-op
-        // unless a later phase registers the gesture.
-        let inert_reset = PanelAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            row.addr.scope_path.clone(),
-            row.addr.node_doc_id,
-            row.addr.param_id.clone(),
-            row.value,
-        );
-        let built = crate::slider::BitmapSlider::build(
-            tree,
-            Some(self.content_parent),
-            Rect::new(inner_x, cy, inner_w, ROW_H),
-            Some(label),
-            norm,
-            &text,
-            &crate::slider::SliderColors::default_slider(),
-            color::FONT_LABEL,
-            LABEL_W,
-            norm,
-            inert_reset,
-        );
-        if let Some(name) = object_slider_row_automation_name(base_offset) {
-            tree.set_name(built.ids.value_text, name);
-        }
-        let (slider, slider_row) = match which {
-            ObjSlider::Metallic => (&mut self.metallic_slider, &mut self.metallic_slider_row),
-            ObjSlider::Roughness => (&mut self.roughness_slider, &mut self.roughness_slider_row),
-        };
-        slider.set_range(row.min, row.max, false);
-        slider.set_ids(built.ids);
-        *slider_row = Some(row.clone());
-        self.build_mod_button(
-            tree, mod_x, cy, row, object_label, label, false, obj_key(index, mod_key_offset),
-            mod_button_automation_name(mod_key_offset, 0),
-        );
-        cy + ROW_H
-    }
-
     /// Mouse-wheel scroll for the docked body.
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
         self.scroll.apply_scroll_delta(-delta)
@@ -3806,6 +3806,68 @@ impl ScenePanel {
                     } else if let Some((pi, tab)) = self.world_card.mod_tab_hit(*node_id) {
                         self.world_card.focus_mod_tab(pi, tab);
                         actions.push(PanelAction::ModConfigTabChanged);
+                    } else if let Some(rc) = match_param_row_click(
+                        *node_id,
+                        &self.object_card.driver_btn_ids,
+                        &self.object_card.envelope_btn_ids,
+                        &self.object_card.driver_config_ids,
+                        &self.object_card.ableton_config_ids,
+                        &self.object_card.audio_btn_ids,
+                        &self.object_card.audio_configs,
+                        &self.object_card.slider_ids,
+                        &self.object_card.osc_addresses,
+                        &self.object_card.param_info,
+                        &self.object_card.mod_state,
+                    ) {
+                        // C-P1b: the converted Object family's D/E/A buttons
+                        // + config drawers — same dispatch shape as
+                        // `world_card`'s branch above, generalized.
+                        let target = GraphParamTarget::Generator;
+                        actions.extend(match rc {
+                            RowClick::DriverToggle(pi) => {
+                                self.object_card.focus_mod_tab(pi, ModTab::Driver);
+                                vec![PanelAction::DriverToggle(target, self.object_card.pid_at(pi))]
+                            }
+                            RowClick::EnvelopeToggle(pi) => {
+                                self.object_card.focus_mod_tab(pi, ModTab::Envelope);
+                                vec![PanelAction::EnvelopeToggle(target, self.object_card.pid_at(pi))]
+                            }
+                            RowClick::DriverConfig(pi, action) => {
+                                vec![PanelAction::DriverConfig(target, self.object_card.pid_at(pi), action)]
+                            }
+                            RowClick::AbletonInvert(pi) => {
+                                vec![PanelAction::AbletonInvertToggle(target, self.object_card.pid_at(pi))]
+                            }
+                            RowClick::AudioToggle(pi) => {
+                                self.object_card.focus_mod_tab(pi, ModTab::Audio);
+                                self.object_card.audio_toggle_action(target, pi)
+                            }
+                            RowClick::AudioSelectSend(pi, k) => {
+                                self.object_card.audio_set_source_action(target, pi, Some(k), None, None)
+                            }
+                            RowClick::AudioSelectKind(pi, k) => {
+                                self.object_card.audio_set_source_action(target, pi, None, Some(k), None)
+                            }
+                            RowClick::AudioSelectBand(pi, b) => {
+                                self.object_card.audio_set_source_action(target, pi, None, None, Some(b))
+                            }
+                            RowClick::AudioToggleInvert(pi) => {
+                                vec![PanelAction::AudioModSetInvert(target, self.object_card.pid_at(pi))]
+                            }
+                            RowClick::AudioSelectTriggerMode(pi, m) => {
+                                vec![PanelAction::AudioModSetTriggerMode(target, self.object_card.pid_at(pi), m)]
+                            }
+                            RowClick::AudioSelectAction(pi, k) => {
+                                vec![PanelAction::AudioModSetActionKind(target, self.object_card.pid_at(pi), k)]
+                            }
+                            RowClick::AudioSelectWrap(pi, w) => {
+                                vec![PanelAction::AudioModSetWrap(target, self.object_card.pid_at(pi), w)]
+                            }
+                            RowClick::LabelCopy(_) => Vec::new(),
+                        });
+                    } else if let Some((pi, tab)) = self.object_card.mod_tab_hit(*node_id) {
+                        self.object_card.focus_mod_tab(pi, tab);
+                        actions.push(PanelAction::ModConfigTabChanged);
                     } else if let Some((cell_id, row_value, labels)) = self
                         .object_enum_cells
                         .iter()
@@ -3882,25 +3944,11 @@ impl ScenePanel {
                         .chain(self.camera_value_cells.iter())
                         .find(|(id, _)| *id == *node_id)
                         .map(|(_, rv)| rv.clone())
-                        .or_else(|| {
-                            // UX-P2 (D2): the slider's own value-box node —
-                            // `BitmapSlider`'s contract defines the SAME
-                            // ValueCell+DoubleClick→EditValue intent
-                            // (slider.rs `intent_for`), so double-click-to-
-                            // type keeps working on Metallic/Roughness now
-                            // that they're sliders, not value cells.
-                            self.metallic_slider
-                                .ids()
-                                .filter(|ids| ids.value_text == *node_id)
-                                .and(self.metallic_slider_row.clone())
-                                .or_else(|| {
-                                    self.roughness_slider
-                                        .ids()
-                                        .filter(|ids| ids.value_text == *node_id)
-                                        .and(self.roughness_slider_row.clone())
-                                })
-                        })
-                        .or_else(|| self.world_row_value_for_value_text(*node_id));
+                        .or_else(|| self.world_row_value_for_value_text(*node_id))
+                        // C-P1b: the converted Object family's own card
+                        // slider value-text cells — same lookup shape as
+                        // `world_row_value_for_value_text`, generalized.
+                        .or_else(|| self.object_row_value_for_value_text(*node_id));
                     if let Some(row_value) = row_value
                         && !row_value.driven
                         && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
@@ -3923,48 +3971,17 @@ impl ScenePanel {
             }
             UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let SceneSetupState::Live(vm) = &self.state {
-                    // UX-P2 (D2): Metallic/Roughness sliders — track-hit,
-                    // absolute-position (not delta), so one drag sweeps the
-                    // row's full range. Checked before the delta-drag value
-                    // cells below since a slider's track is a distinct node.
-                    if let Some(new_value) = self.metallic_slider.try_start_drag(*node_id, pos.x)
-                        && let Some(row) = &self.metallic_slider_row
-                    {
-                        self.drag_layer_id = Some(vm.layer_id.clone());
-                        return (
-                            true,
-                            vec![PanelAction::SceneSetupParamChanged(
-                                vm.layer_id.clone(),
-                                row.addr.scope_path.clone(),
-                                row.addr.node_doc_id,
-                                row.addr.param_id.clone(),
-                                new_value,
-                            )],
-                        );
-                    }
-                    if let Some(new_value) = self.roughness_slider.try_start_drag(*node_id, pos.x)
-                        && let Some(row) = &self.roughness_slider_row
-                    {
-                        self.drag_layer_id = Some(vm.layer_id.clone());
-                        return (
-                            true,
-                            vec![PanelAction::SceneSetupParamChanged(
-                                vm.layer_id.clone(),
-                                row.addr.scope_path.clone(),
-                                row.addr.node_doc_id,
-                                row.addr.param_id.clone(),
-                                new_value,
-                            )],
-                        );
-                    }
                     // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D4): the
                     // converted Environment/Fog rows' slider tracks —
-                    // absolute-position track-hit, same as Metallic/
-                    // Roughness above, but dispatching the card drag
-                    // protocol (`ParamSnapshot` + `ParamChanged`) instead of
-                    // the old per-tick `SceneSetupParamChanged` so a whole
-                    // scrub gesture is ONE undo unit (`ParamCommit` on
-                    // release, in the `DragEnd`/`PointerUp` arm below).
+                    // absolute-position track-hit (a click anywhere on the
+                    // track jumps straight to that value; drag continues
+                    // absolute-position), dispatching the card drag protocol
+                    // (`ParamSnapshot` + `ParamChanged`) instead of a bespoke
+                    // per-tick command, so a whole scrub gesture is ONE undo
+                    // unit (`ParamCommit` on release, in the `DragEnd`/
+                    // `PointerUp` arm below). Checked before the delta-drag
+                    // value cells below since a slider's track is a distinct
+                    // node.
                     if let Some((pi, new_value)) = self
                         .world_card
                         .drag_sliders
@@ -3975,6 +3992,26 @@ impl ScenePanel {
                         self.drag_layer_id = Some(vm.layer_id.clone());
                         let target = GraphParamTarget::Generator;
                         let pid = self.world_card.pid_at(pi);
+                        return (
+                            true,
+                            vec![
+                                PanelAction::ParamSnapshot(target, pid.clone()),
+                                PanelAction::ParamChanged(target, pid, new_value),
+                            ],
+                        );
+                    }
+                    // C-P1b: the converted Object rows' slider tracks — same
+                    // shape as `world_card` above, generalized.
+                    if let Some((pi, new_value)) = self
+                        .object_card
+                        .drag_sliders
+                        .iter_mut()
+                        .enumerate()
+                        .find_map(|(pi, sl)| sl.try_start_drag(*node_id, pos.x).map(|v| (pi, v)))
+                    {
+                        self.drag_layer_id = Some(vm.layer_id.clone());
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.object_card.pid_at(pi);
                         return (
                             true,
                             vec![
@@ -4010,48 +4047,17 @@ impl ScenePanel {
             }
             UIEvent::DragBegin { .. } => (
                 self.drag.is_active()
-                    || self.metallic_slider.is_dragging()
-                    || self.roughness_slider.is_dragging()
-                    || self.world_card.drag_sliders.iter().any(|s| s.is_dragging()),
+                    || self.world_card.drag_sliders.iter().any(|s| s.is_dragging())
+                    || self.object_card.drag_sliders.iter().any(|s| s.is_dragging()),
                 Vec::new(),
             ),
             UIEvent::Drag { pos, .. } => {
-                // UX-P2 (D2): continue an active slider drag first (distinct
+                // C-P1a: continue an active slider drag first (distinct
                 // machinery from the delta-drag `self.drag` below — see
                 // `slider_drag_value`'s doc for why there's no local tree
-                // update here).
-                if let Some(layer_id) = self.drag_layer_id.clone() {
-                    if let Some(new_value) = slider_drag_value(&self.metallic_slider, pos.x)
-                        && let Some(row) = &self.metallic_slider_row
-                    {
-                        return (
-                            true,
-                            vec![PanelAction::SceneSetupParamChanged(
-                                layer_id,
-                                row.addr.scope_path.clone(),
-                                row.addr.node_doc_id,
-                                row.addr.param_id.clone(),
-                                new_value,
-                            )],
-                        );
-                    }
-                    if let Some(new_value) = slider_drag_value(&self.roughness_slider, pos.x)
-                        && let Some(row) = &self.roughness_slider_row
-                    {
-                        return (
-                            true,
-                            vec![PanelAction::SceneSetupParamChanged(
-                                layer_id,
-                                row.addr.scope_path.clone(),
-                                row.addr.node_doc_id,
-                                row.addr.param_id.clone(),
-                                new_value,
-                            )],
-                        );
-                    }
-                    // C-P1a: continue an active Environment/Fog slider drag
-                    // — live `ParamChanged` only, no undo unit (the card
-                    // cadence: one `ParamCommit` fires on release, below).
+                // update here). Live `ParamChanged` only, no undo unit (the
+                // card cadence: one `ParamCommit` fires on release, below).
+                if self.drag_layer_id.is_some() {
                     if let Some((pi, new_value)) = self
                         .world_card
                         .drag_sliders
@@ -4061,6 +4067,18 @@ impl ScenePanel {
                     {
                         let target = GraphParamTarget::Generator;
                         let pid = self.world_card.pid_at(pi);
+                        return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
+                    }
+                    // C-P1b: the converted Object rows — same shape.
+                    if let Some((pi, new_value)) = self
+                        .object_card
+                        .drag_sliders
+                        .iter()
+                        .enumerate()
+                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
+                    {
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.object_card.pid_at(pi);
                         return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
                     }
                 }
@@ -4099,8 +4117,6 @@ impl ScenePanel {
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 self.drag.release();
-                self.metallic_slider.end_drag();
-                self.roughness_slider.end_drag();
                 // C-P1a (D4): release commits ONE undo unit for whichever
                 // Environment/Fog row was mid-drag, if any — the card
                 // protocol's Commit step.
@@ -4108,6 +4124,13 @@ impl ScenePanel {
                 for pi in 0..self.world_card.drag_sliders.len() {
                     if self.world_card.drag_sliders[pi].end_drag() {
                         let pid = self.world_card.pid_at(pi);
+                        actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
+                    }
+                }
+                // C-P1b: the converted Object rows — same shape.
+                for pi in 0..self.object_card.drag_sliders.len() {
+                    if self.object_card.drag_sliders[pi].end_drag() {
+                        let pid = self.object_card.pid_at(pi);
                         actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
                     }
                 }
@@ -4153,15 +4176,29 @@ impl ScenePanel {
         Some(RowValue { addr: addr.clone(), value: *value, min: 0.0, max: 0.0, driven: false, exposed: false })
     }
 
+    /// C-P1b: the Object-family twin of `world_row_value_for_value_text`.
+    fn object_row_value_for_value_text(&self, node_id: NodeId) -> Option<RowValue> {
+        let pi = self
+            .object_card
+            .slider_ids
+            .iter()
+            .position(|ids| ids.is_some_and(|ids| ids.value_text == node_id))?;
+        let pid = self.object_card.pid_at(pi);
+        let (addr, value) = self.object_card.id_map.get(&pid)?;
+        Some(RowValue { addr: addr.clone(), value: *value, min: 0.0, max: 0.0, driven: false, exposed: false })
+    }
+
     /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: resolve a card-shaped
     /// action's synthesized `ParamId` back to this frame's write address +
     /// snapshot value. `dispatch_inspector`'s `ParamSnapshot`/`ParamChanged`/
     /// `ParamCommit` arms check this FIRST — a hit means the id addresses a
     /// converted scene row (routes through `SetGraphNodeParamCommand`); a
     /// miss falls through to the existing `with_preset_graph_mut` exposed-
-    /// param path unchanged.
+    /// param path unchanged. C-P1b: checks `object_card` too — the two maps
+    /// are disjoint by construction (`synth_world_param_id`'s `node_doc_id`
+    /// is document-wide unique).
     pub fn resolve_scene_param(&self, id: &manifold_foundation::ParamId) -> Option<(RowAddr, f32)> {
-        self.world_card.id_map.get(id).cloned()
+        self.world_card.id_map.get(id).or_else(|| self.object_card.id_map.get(id)).cloned()
     }
 
     /// The name label's rect for `group_node_id`, if a row for it was built
@@ -4376,6 +4413,21 @@ mod tests {
         )
     }
 
+    /// C-P1b: `triplet` wrapped element-wise in idle `mrow`s — the shape
+    /// `TransformRowVm`/`ObjectMaterialVm` now carry for every converted
+    /// Object row.
+    fn mtriplet(
+        node_doc_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        min: f32,
+        max: f32,
+    ) -> (ModulatedRow, ModulatedRow, ModulatedRow) {
+        let (rx, ry, rz) = triplet(node_doc_id, x, y, z, min, max);
+        (mrow(rx), mrow(ry), mrow(rz))
+    }
+
     #[test]
     fn closed_panel_builds_nothing() {
         let mut panel = ScenePanel::new();
@@ -4502,6 +4554,56 @@ mod tests {
         }
     }
 
+    /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): id-map totality for
+    /// the Object family — the twin of `world_id_map_is_total_over_every_
+    /// built_row` above, extended over `object_card`. The azalea fixture's
+    /// PBR object wires every one of the 14 fixed slots
+    /// (`OBJ_ROW_POS_X`..`OBJ_ROW_ROUGHNESS`), so every slot's synthesized
+    /// id must resolve back through `resolve_scene_param` to its own
+    /// (node_doc_id, param_key) write address.
+    #[test]
+    fn object_id_map_is_total_over_every_built_row() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        assert_eq!(panel.object_card.id_map.len(), OBJ_ROW_COUNT, "every Object row is wired and non-driven for a PBR object");
+        // The shared `triplet()`/`mtriplet()` fixture helpers stamp a
+        // generic "x"/"y"/"z" `RowAddr.param_id` for every triplet (pos/rot/
+        // scale/color alike, node ids 50/50/50/51) — the SYNTHESIZED id
+        // (what `resolve_scene_param` is keyed by) uses the real
+        // `pos_x`/`rot_x`/… name from `build_object_card_row`'s own
+        // `param_key` argument, but the resolved WRITE ADDRESS this table
+        // checks is the fixture's own (generic-named) `RowAddr` — same
+        // distinction `rotation_row_displays_degrees_not_radians` calls out.
+        let expected = [
+            (OBJ_ROW_POS_X, 50u32, "x"),
+            (OBJ_ROW_POS_Y, 50u32, "y"),
+            (OBJ_ROW_POS_Z, 50u32, "z"),
+            (OBJ_ROW_ROT_X, 50u32, "x"),
+            (OBJ_ROW_ROT_Y, 50u32, "y"),
+            (OBJ_ROW_ROT_Z, 50u32, "z"),
+            (OBJ_ROW_SCALE_X, 50u32, "x"),
+            (OBJ_ROW_SCALE_Y, 50u32, "y"),
+            (OBJ_ROW_SCALE_Z, 50u32, "z"),
+            (OBJ_ROW_COLOR_R, 51u32, "x"),
+            (OBJ_ROW_COLOR_G, 51u32, "y"),
+            (OBJ_ROW_COLOR_B, 51u32, "z"),
+            (OBJ_ROW_METALLIC, 51u32, "metallic"),
+            (OBJ_ROW_ROUGHNESS, 51u32, "roughness"),
+        ];
+        for (slot, node_doc_id, param_key) in expected {
+            let pid = panel.object_card.pid_at(slot);
+            let (addr, _value) = panel
+                .resolve_scene_param(&pid)
+                .unwrap_or_else(|| panic!("slot {slot} id {pid:?} must resolve through the id map"));
+            assert_eq!(addr.node_doc_id, node_doc_id, "slot {slot} write address must target its own node");
+            assert_eq!(addr.param_id, param_key, "slot {slot} write address must target its own param");
+        }
+    }
+
     /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
     /// a full transform + pbr material + a Bend modifier, one Custom object,
     /// and header counts — proves the Objects section renders both shapes,
@@ -4529,14 +4631,14 @@ mod tests {
                     name: "Azalea".to_string(),
                     visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
                     transform: Some(Box::new(TransformRowVm {
-                        pos: triplet(50, 1.0, 2.0, 3.0, -100.0, 100.0),
-                        rot: triplet(50, 0.0, 0.0, 0.0, -6.28, 6.28),
-                        scale: triplet(50, 1.0, 1.0, 1.0, 0.01, 10.0),
+                        pos: mtriplet(50, 1.0, 2.0, 3.0, -100.0, 100.0),
+                        rot: mtriplet(50, 0.0, 0.0, 0.0, -6.28, 6.28),
+                        scale: mtriplet(50, 1.0, 1.0, 1.0, 0.01, 10.0),
                     })),
                     material: ObjectMaterialVm::Pbr {
-                        color: triplet(51, 0.8, 0.8, 0.82, 0.0, 1.0),
-                        metallic: RowValue { addr: RowAddr::root(51, "metallic"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                        roughness: RowValue { addr: RowAddr::root(51, "roughness"), value: 0.5, min: 0.01, max: 1.0, driven: false, exposed: false },
+                        color: mtriplet(51, 0.8, 0.8, 0.82, 0.0, 1.0),
+                        metallic: mrow(RowValue { addr: RowAddr::root(51, "metallic"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false }),
+                        roughness: mrow(RowValue { addr: RowAddr::root(51, "roughness"), value: 0.5, min: 0.01, max: 1.0, driven: false, exposed: false }),
                     },
                     modifiers: vec![ModifierKnownRow {
                         index: 0,
@@ -4618,19 +4720,22 @@ mod tests {
         assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // The full body always renders (no fold state left — the outliner
-        // IS the fold): 3 transform triplets (9 cells) + 1 color triplet (3
-        // cells) = 12 drag cells; the one Bend modifier's Angle param
-        // (Numeric) adds 1 more (its Axis param is an Enum row — no
-        // drag-value cell). UX-P2 (D2): metallic/roughness moved OFF this
-        // vector onto the two `BitmapSlider` rows (`metallic_slider`/
-        // `roughness_slider`) — asserted separately below.
+        // IS the fold). C-P1b: Position/Rotation/Scale (9)/Color (3)/
+        // Metallic/Roughness (2) moved OFF `object_value_cells` onto the
+        // card-row protocol (`object_card`, asserted below) — the ONLY
+        // thing left in `object_value_cells` for this fixture is the one
+        // Bend modifier's Angle param (Numeric; its Axis param is an Enum
+        // row — no drag-value cell), which stays on the old bespoke path
+        // until C-P1d.
         assert_eq!(
             panel.object_value_cells.len(),
-            13,
-            "9 transform + 3 color + 1 modifier numeric param value cell"
+            1,
+            "1 modifier numeric param value cell (Modifier family unconverted until C-P1d)"
         );
-        assert!(panel.metallic_slider_row.is_some(), "Metallic renders as a slider row");
-        assert!(panel.roughness_slider_row.is_some(), "Roughness renders as a slider row");
+        // 9 transform + 3 color + Metallic + Roughness = 14 wired card rows
+        // — every `OBJ_ROW_*` slot the azalea fixture's PBR material
+        // populates.
+        assert_eq!(panel.object_card.id_map.len(), OBJ_ROW_COUNT, "every Object card row is wired for a PBR object");
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
     }
@@ -4690,22 +4795,26 @@ mod tests {
         ));
     }
 
-    /// UX-P2 (D2): the Roughness slider's track is drag-armable (a click
-    /// anywhere on the track jumps straight to that value, then Drag
-    /// continues absolute-position — the "sweep full-range in one drag"
-    /// performer gesture the phase brief names), and its separate
-    /// value-text box still opens the type-in box on double-click (D8
-    /// parity, `dock_numeric_cells_register_full_contract`'s sibling for
-    /// the two-node slider shape that test's single-node loop can't cover).
+    /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D4): the Roughness card
+    /// row's slider track is drag-armable (a click anywhere on the track
+    /// jumps straight to that value via `ParamSnapshot`+`ParamChanged`, Drag
+    /// continues live `ParamChanged` only, release commits ONE
+    /// `ParamCommit` — the "sweep full-range in one drag, one undo unit"
+    /// performer gesture D4 names), and its separate value-text box still
+    /// opens the type-in box on double-click (D8 parity,
+    /// `dock_numeric_cells_register_full_contract`'s sibling for the
+    /// two-node slider shape that test's single-node loop can't cover).
     #[test]
-    fn roughness_slider_sweeps_full_range_and_value_box_opens_typein() {
+    fn roughness_card_row_sweeps_full_range_and_value_box_opens_typein() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let ids = panel.roughness_slider.ids().expect("Roughness renders a slider").clone();
+        let ids = panel.object_card.slider_ids[OBJ_ROW_ROUGHNESS].expect("Roughness renders a slider");
         let track = ids.track_rect;
+        let target = GraphParamTarget::Generator;
+        let pid = panel.object_card.pid_at(OBJ_ROW_ROUGHNESS);
 
         // PointerDown at the track's left edge — jumps to (near) min.
         let (consumed, actions) = panel.handle_event(&UIEvent::PointerDown {
@@ -4714,11 +4823,11 @@ mod tests {
             modifiers: crate::input::Modifiers::default(),
         });
         assert!(consumed, "the slider track must be drag-armable");
-        let PanelAction::SceneSetupParamChanged(_, _, _, param, low_value) = &actions[0] else {
-            panic!("expected SceneSetupParamChanged, got {actions:?}");
-        };
-        assert_eq!(param, "roughness");
-        assert!(*low_value < 0.05, "PointerDown at the track's left edge lands near min, got {low_value}");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::ParamSnapshot(t, p), PanelAction::ParamChanged(_, _, low)]
+                if *t == target && *p == pid && *low < 0.05
+        ), "PointerDown at the track's left edge must snapshot + land near min, got {actions:?}");
 
         // Drag to the track's right edge — one gesture sweeps to (near) max,
         // continuing off the SAME `try_start_drag` arm via `slider_drag_value`.
@@ -4728,13 +4837,19 @@ mod tests {
             delta: Vec2::ZERO,
         });
         assert!(drag_consumed);
-        let PanelAction::SceneSetupParamChanged(_, _, _, _, high_value) = &drag_actions[0] else {
-            panic!("expected SceneSetupParamChanged, got {drag_actions:?}");
-        };
-        assert!(*high_value > 0.95, "dragging to the track's right edge lands near max, got {high_value}");
+        assert!(matches!(
+            drag_actions.as_slice(),
+            [PanelAction::ParamChanged(_, _, high)] if *high > 0.95
+        ), "dragging to the track's right edge must land near max, got {drag_actions:?}");
 
-        panel.handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::new(track.x + track.width, 0.0) });
-        assert!(!panel.roughness_slider.is_dragging(), "PointerUp ends the drag");
+        let (up_consumed, up_actions) = panel
+            .handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::new(track.x + track.width, 0.0) });
+        assert!(up_consumed);
+        assert!(
+            matches!(up_actions.as_slice(), [PanelAction::ParamCommit(t, p)] if *t == target && *p == pid),
+            "release must commit ONE ParamCommit, got {up_actions:?}"
+        );
+        assert!(!panel.object_card.drag_sliders[OBJ_ROW_ROUGHNESS].is_dragging(), "PointerUp ends the drag");
 
         // The value box (a different node than the track) opens type-in.
         let (typein_consumed, typein_actions) = panel.handle_event(&UIEvent::DoubleClick {
@@ -5019,7 +5134,7 @@ mod tests {
         let mut vm = azalea_shaped_vm();
         let SceneSetupVm { objects, .. } = &mut vm;
         let ObjectRowVm::Known(obj) = &mut objects[0] else { panic!("Azalea must be Known") };
-        obj.transform.as_mut().unwrap().pos.0.driven = true;
+        obj.transform.as_mut().unwrap().pos.0.value.driven = true;
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(vm)));
@@ -5176,16 +5291,15 @@ mod tests {
             }
         }
 
+        // C-P1b: the value-cell offsets (`OBJ_OFF_POS_X`/`ROT_X`/`SCALE_X`/
+        // `COLOR_R`/`METALLIC`/`ROUGHNESS`) are gone — those rows' widgets
+        // now key off `build_param_row`'s own `row_key_base` (`slot << 8`),
+        // a disjoint key space from `obj_key`'s. Only the exposure-lane mod
+        // buttons still key through `obj_key`.
         assert_no_dupes_and_fits_stride(
             "OBJECT",
             &[
                 OBJ_OFF_NAME,
-                OBJ_OFF_POS_X, OBJ_OFF_POS_X + 1, OBJ_OFF_POS_X + 2,
-                OBJ_OFF_ROT_X, OBJ_OFF_ROT_X + 1, OBJ_OFF_ROT_X + 2,
-                OBJ_OFF_SCALE_X, OBJ_OFF_SCALE_X + 1, OBJ_OFF_SCALE_X + 2,
-                OBJ_OFF_COLOR_R, OBJ_OFF_COLOR_R + 1, OBJ_OFF_COLOR_R + 2,
-                OBJ_OFF_METALLIC,
-                OBJ_OFF_ROUGHNESS,
                 OBJ_OFF_REMOVE, OBJ_OFF_REMOVE + 1,
                 OBJ_OFF_POS_X_MOD, OBJ_OFF_POS_X_MOD + 1, OBJ_OFF_POS_X_MOD + 2,
                 OBJ_OFF_ROT_X_MOD, OBJ_OFF_ROT_X_MOD + 1, OBJ_OFF_ROT_X_MOD + 2,
@@ -5362,10 +5476,12 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Default selection = Azalea: object body cells present, no
+        // Default selection = Azalea: object body cells present (C-P1b: the
+        // card rows, not `object_value_cells` — Position/Rotation/Scale/
+        // Color/Metallic/Roughness all moved onto `object_card`), no
         // environment/fog "add" affordances (azalea fixture's environment
         // is None — but World isn't selected, so neither button builds).
-        assert!(!panel.object_value_cells.is_empty(), "Azalea's body renders by default");
+        assert!(!panel.object_card.id_map.is_empty(), "Azalea's body renders by default");
         assert!(panel.add_environment_id.is_none(), "World isn't selected — no Environment row built yet");
 
         let (world_row_id, _) = *panel
@@ -5384,7 +5500,7 @@ mod tests {
 
         let mut tree2 = UITree::new();
         panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.object_value_cells.is_empty(), "World selected — no object body renders");
+        assert!(panel.object_card.id_map.is_empty(), "World selected — no object body renders");
         assert!(panel.add_environment_id.is_some(), "World selected — Environment's Add affordance renders");
     }
 
@@ -5763,36 +5879,41 @@ mod tests {
         assert!(actions.is_empty(), "a 2-label enum cell's VALUE click stays a dead stop (steppers cycle it)");
     }
 
-    /// P4, D10: the rotation triplet displays degrees (`%.1f°`), not the
-    /// stored radians — the conversion happens ONLY at this display
-    /// boundary (the underlying `RowValue.value` stays radians).
+    /// P4, D10: the rotation row displays degrees, not the stored radians —
+    /// the conversion happens ONLY at this display boundary (the underlying
+    /// `RowValue.value` stays radians). C-P1b: the converted card row's own
+    /// `is_angle` flag (set structurally by `build_object_card_row`, not
+    /// derived from `param_id`) drives the conversion now — `format_param_value`'s
+    /// is_angle branch rounds to whole degrees (`"{:.0}°"`), not the old
+    /// bespoke triplet formatter's one-decimal `"{:.1}°"`.
     #[test]
-    fn rotation_triplet_displays_degrees_not_radians() {
+    fn rotation_row_displays_degrees_not_radians() {
         let mut vm = azalea_shaped_vm();
         if let ObjectRowVm::Known(row) = &mut vm.objects[0]
             && let Some(t) = &mut row.transform
         {
-            // The shared `triplet()` fixture helper stamps a generic "x"/"y"/"z"
-            // param_id for every triplet (pos/rot/scale alike) — production
-            // (`scene_vm.rs`) distinguishes `rot_x`/`rot_y`/`rot_z`; fix the
-            // addr up so this test exercises the real degrees-row name.
-            t.rot.0.addr.param_id = "rot_x".to_string();
-            t.rot.0.value = std::f32::consts::FRAC_PI_2; // 90°
+            t.rot.0.value.value = std::f32::consts::FRAC_PI_2; // 90°
         }
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(vm)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (rot_x_id, rot_x_row) = panel
-            .object_value_cells
-            .iter()
-            .find(|(_, row)| row.addr.param_id == "rot_x")
-            .cloned()
-            .expect("azalea fixture has a rot_x cell");
-        assert!((rot_x_row.value - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "stored value stays radians");
-        let text = tree.get_node(rot_x_id).unwrap().text.clone().unwrap();
-        assert_eq!(text, "90.0\u{00b0}", "display converts to degrees at the panel boundary");
+        let rot_x_row = panel
+            .object_card
+            .param_info
+            .get(OBJ_ROW_ROT_X)
+            .expect("Rotation X is a wired card row");
+        assert!(rot_x_row.is_angle, "Rotation X's card row must set is_angle");
+        let (_, rot_x_stored_value) = panel
+            .object_card
+            .id_map
+            .get(&rot_x_row.param_id)
+            .expect("Rotation X's synthesized id resolves in the id map");
+        assert!((rot_x_stored_value - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "stored value stays radians");
+        let rot_x_ids = panel.object_card.slider_ids[OBJ_ROW_ROT_X].expect("Rotation X renders a slider");
+        let text = tree.get_node(rot_x_ids.value_text).unwrap().text.clone().unwrap();
+        assert_eq!(text, "90\u{00b0}", "display converts to degrees at the panel boundary");
     }
 
     /// P4, D10: typing "45" into a rot cell must land 0.7853981 rad (π/4) —
