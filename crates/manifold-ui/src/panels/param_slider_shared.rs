@@ -699,6 +699,10 @@ pub(crate) enum ParamDragTarget {
     /// not `AudioModShape`, so `AudioShapeParam` doesn't apply here. Was
     /// `dragging_step_amount: Option<usize>`.
     StepAmount { index: usize },
+    /// A D3 "3D Shading" relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// P5b) — the six always-visible rows below the normal params, not
+    /// indexed into `param_info`/`ParamId` at all.
+    Relight { field: crate::panels::UiRelightField },
 }
 
 /// Drag tracking state for the unified `ParamCardPanel` (both kinds). A thin
@@ -769,6 +773,13 @@ impl ParamDragState {
     pub(crate) fn step_amount(&self) -> Option<usize> {
         match self.drag.payload() {
             Some(ParamDragTarget::StepAmount { index }) => Some(*index),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn relight_field(&self) -> Option<crate::panels::UiRelightField> {
+        match self.drag.payload() {
+            Some(ParamDragTarget::Relight { field }) => Some(*field),
             _ => None,
         }
     }

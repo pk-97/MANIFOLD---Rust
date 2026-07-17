@@ -26,7 +26,7 @@ use manifold_editing::commands::audio_setup::{
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
-    ToggleEffectCommand,
+    SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
 use manifold_editing::commands::envelopes::{
     ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
@@ -3095,6 +3095,89 @@ pub(super) fn dispatch_inspector(
                 }
             }
             DispatchResult::handled()
+        }
+
+        // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ─────
+        // Both the toggle and a knob commit bump `bump_graph_structure_version`
+        // (`ToggleRelightCommand`/`SetRelightParamCommand`'s own `execute` —
+        // see their doc comments), so every arm here returns `structural()`:
+        // the D3 template is spliced in at compile time from the instance's
+        // CURRENT `relight`/`relight_params`, never a per-frame runtime knob,
+        // so a live drag preview needs the same re-splice a commit does.
+        PanelAction::RelightToggle(gpt) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let old = project.with_preset_graph_mut(&target, |inst| inst.relight).unwrap_or(false);
+                let mut cmd = ToggleRelightCommand::new(target, old, !old);
+                cmd.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::RelightParamSnapshot(gpt, field) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let f = crate::ui_translate::relight_field_to_editing(*field);
+                *drag_snapshot =
+                    project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::RelightParamChanged(gpt, field, val) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let f = crate::ui_translate::relight_field_to_editing(*field);
+                let v = *val;
+                project.with_preset_graph_mut(&target, |inst| {
+                    f.set(&mut inst.relight_params, v);
+                    inst.bump_graph_structure_version();
+                });
+                let t = target.clone();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        p.with_preset_graph_mut(&t, |inst| {
+                            f.set(&mut inst.relight_params, v);
+                            inst.bump_graph_structure_version();
+                        });
+                    })),
+                );
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::RelightParamCommit(gpt, field) => {
+            if let Some(old_val) = drag_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let f = crate::ui_translate::relight_field_to_editing(*field);
+                let new_val =
+                    project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                if let Some(new_val) = new_val
+                    && (old_val - new_val).abs() > f32::EPSILON
+                {
+                    let cmd = SetRelightParamCommand::new(target, f, old_val, new_val);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::RelightHeightFromChanged(gpt, height_from) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let old = project
+                    .with_preset_graph_mut(&target, |inst| inst.relight_params.height_from)
+                    .unwrap_or_default();
+                let new = crate::ui_translate::relight_height_from_to_core(*height_from);
+                let mut cmd = SetRelightHeightFromCommand::new(target, old, new);
+                cmd.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+            DispatchResult::structural()
         }
 
         PanelAction::AddEffect(tab, effect_type) => {

@@ -19,7 +19,7 @@
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
+use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind, UiRelightField, UiRelightHeightFrom};
 use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -40,6 +40,11 @@ const KEY_CHANGE: u64 = 90_007;
 const KEY_DRAG: u64 = 90_008;
 const KEY_NAME_CLIP: u64 = 90_009;
 const KEY_TOGGLE: u64 = 90_010;
+/// The "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
+/// sits right of the ON/OFF toggle, left of the cog, in both card kinds.
+/// Unconditional in both `CardContext`s (like the ON/OFF toggle) — it's a
+/// real per-instance flag, not editor-only chrome.
+const KEY_RELIGHT: u64 = 90_011;
 
 /// D1 tab-ink slide: height of the sliding underline beneath the mod-config
 /// tab strip, inset from the tab's own bottom edge (`HAIRLINE_RADIUS`-scale —
@@ -63,6 +68,21 @@ fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
     match which {
         AudioShapeParam::Sensitivity => format!("{value:.2}"),
         AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
+    }
+}
+
+/// The D3 relight-knob rows' colors when the "3D Shading" toggle is off —
+/// desaturated off the grey ramp instead of the blue accent, so the greyed
+/// state reads as visually distinct from an armed slider (no-conditionally-
+/// visible-ui: still interactive, just not the "live" look).
+fn relight_disabled_slider_colors() -> SliderColors {
+    SliderColors {
+        track: color::SLIDER_TRACK_C32,
+        track_hover: color::SLIDER_TRACK_C32,
+        track_pressed: color::SLIDER_TRACK_C32,
+        fill: color::BG_3_HOVER,
+        thumb: color::TEXT_DIMMED_C32,
+        text: color::TEXT_DIMMED_C32,
     }
 }
 
@@ -169,6 +189,110 @@ pub struct ParamCardStringInfo {
     pub use_dropdown: bool,
 }
 
+/// Config for the "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
+/// P5b) — the union `ParamCardConfig` carries for both effect and generator
+/// cards. Always present (mirrors `PresetInstance.relight`/`relight_params`
+/// always being live on the instance): the card renders the six knobs +
+/// Height From row greyed rather than hidden when `enabled` is false
+/// (no-conditionally-visible-ui), so the values must survive a
+/// toggle-off/toggle-on round trip.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RelightCardConfig {
+    pub enabled: bool,
+    pub light_x: f32,
+    pub light_y: f32,
+    pub relief: f32,
+    pub ao_intensity: f32,
+    pub shadow_softness: f32,
+    pub gain: f32,
+    pub height_from: UiRelightHeightFrom,
+}
+
+/// One D3 knob's static shape — label + clamp range + reset default. The
+/// SINGLE source both `build_relight_rows` (rendering) and the drag hit-test
+/// in `handle_pointer_down` read, so the two can't drift out of range.
+struct RelightFieldSpec {
+    field: UiRelightField,
+    label: &'static str,
+    min: f32,
+    max: f32,
+    default: f32,
+}
+
+/// D3's proven ranges, in `RelightField` declaration order — mirror the
+/// underlying atoms' own `ParamDef` ranges (`lambert_directional`/
+/// `heightfield_shadow`'s light_x/y, `ssao_gtao`'s relief/intensity,
+/// `heightfield_shadow`'s softness, `node.gain`'s gain). `ui` cannot read the
+/// registry directly (`RelightCardConfig`'s doc), so these are pinned here.
+const RELIGHT_FIELD_SPECS: [RelightFieldSpec; 6] = [
+    RelightFieldSpec { field: UiRelightField::LightX, label: "Light X", min: -1.0, max: 1.0, default: 0.4 },
+    RelightFieldSpec { field: UiRelightField::LightY, label: "Light Y", min: -1.0, max: 1.0, default: 0.6 },
+    RelightFieldSpec { field: UiRelightField::Relief, label: "Relief", min: 0.01, max: 2.0, default: 0.25 },
+    RelightFieldSpec {
+        field: UiRelightField::AoIntensity,
+        label: "AO Intensity",
+        min: 0.0,
+        max: 4.0,
+        default: 1.3,
+    },
+    RelightFieldSpec {
+        field: UiRelightField::ShadowSoftness,
+        label: "Shadow Softness",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+    },
+    RelightFieldSpec { field: UiRelightField::Gain, label: "Gain", min: 0.0, max: 4.0, default: 1.4 },
+];
+
+impl RelightCardConfig {
+    /// Read one knob's current value by field — the single accessor the
+    /// row-drag path uses so it never has to match on `RelightField` itself.
+    fn value(&self, field: UiRelightField) -> f32 {
+        match field {
+            UiRelightField::LightX => self.light_x,
+            UiRelightField::LightY => self.light_y,
+            UiRelightField::Relief => self.relief,
+            UiRelightField::AoIntensity => self.ao_intensity,
+            UiRelightField::ShadowSoftness => self.shadow_softness,
+            UiRelightField::Gain => self.gain,
+        }
+    }
+
+    /// Live-preview write for a mid-drag update (never committed here — the
+    /// app layer owns the undo-tracked commit on release, mirroring every
+    /// other slider row).
+    fn set_value(&mut self, field: UiRelightField, value: f32) {
+        match field {
+            UiRelightField::LightX => self.light_x = value,
+            UiRelightField::LightY => self.light_y = value,
+            UiRelightField::Relief => self.relief = value,
+            UiRelightField::AoIntensity => self.ao_intensity = value,
+            UiRelightField::ShadowSoftness => self.shadow_softness = value,
+            UiRelightField::Gain => self.gain = value,
+        }
+    }
+}
+
+impl Default for RelightCardConfig {
+    /// D3's proven v6 recipe defaults — mirrors
+    /// `manifold_core::effects::RelightParams::default()` field-for-field.
+    /// `ui` cannot depend on `manifold-core`; kept in sync by
+    /// `preset_to_config`'s (manifold-app) doc comment pointing back here.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            light_x: 0.4,
+            light_y: 0.6,
+            relief: 0.25,
+            ao_intensity: 1.3,
+            shadow_softness: 0.5,
+            gain: 1.4,
+            height_from: UiRelightHeightFrom::Auto,
+        }
+    }
+}
+
 /// Configuration for building / refreshing one parameter card.
 ///
 /// The union of what the effect and generator cards need. Effect-only fields
@@ -243,6 +367,9 @@ pub struct ParamCardConfig {
     /// Per-param: that lane is currently overridden (latched) — the dot
     /// grays instead of showing red.
     pub automation_overridden: Vec<bool>,
+    /// The "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// P5b) — see [`RelightCardConfig`]'s doc.
+    pub relight: RelightCardConfig,
 }
 
 // ── Layout constants ─────────────────────────────────────────────
@@ -302,6 +429,9 @@ pub(crate) fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
 const TOGGLE_W: f32 = 30.0;
+/// Width of the "3D Shading" header icon — a short "3D" glyph, narrower than
+/// the ON/OFF toggle (no "OFF"-length text to fit).
+const RELIGHT_W: f32 = 24.0;
 // 3-letter chips (ABL/ENV/DRV/MOD) at FONT_CAPTION don't need 36px; the
 // narrower chip reclaims header width for the effect name when several show.
 const BADGE_W: f32 = 28.0;
@@ -485,6 +615,22 @@ pub struct ParamCardPanel {
     name_clip_id: Option<NodeId>,
     chevron_btn_id: Option<NodeId>,
     cog_btn_id: Option<NodeId>,
+    /// The "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
+    /// shared shell, present on both card kinds.
+    relight_btn_id: Option<NodeId>,
+    /// D3/D4 relight card state — always present (see `RelightCardConfig`'s
+    /// doc), the source the always-visible-but-greyed rows below the normal
+    /// params read/write.
+    relight: RelightCardConfig,
+    /// The six D3 knob rows' slider ids, in `RelightField` declaration order
+    /// (Light X, Light Y, Relief, AO Intensity, Shadow Softness, Gain).
+    relight_slider_ids: [Option<crate::slider::SliderNodeIds>; 6],
+    /// The matching right-click reset action for each relight slider, same
+    /// order — mirrors `slider_resets`, registered in `register_intents`.
+    relight_slider_resets: [Option<PanelAction>; 6],
+    /// D4 "Height From" enum row — one button per option (Auto / Luminance /
+    /// Inverted Luminance), the active one tinted.
+    relight_height_btn_ids: [Option<NodeId>; 3],
 
     // ── Node IDs — effect shell ──
     drag_icon_id: Option<NodeId>,
@@ -699,6 +845,11 @@ impl ParamCardPanel {
             name_clip_id: None,
             chevron_btn_id: None,
             cog_btn_id: None,
+            relight_btn_id: None,
+            relight: RelightCardConfig::default(),
+            relight_slider_ids: [None; 6],
+            relight_slider_resets: std::array::from_fn(|_| None),
+            relight_height_btn_ids: [None; 3],
             drag_icon_id: None,
             toggle_btn_id: None,
             abl_badge_bg_id: None,
@@ -773,6 +924,7 @@ impl ParamCardPanel {
         self.effect_id = config.effect_id.clone();
         self.name = config.name.clone();
         self.enabled = config.enabled;
+        self.relight = config.relight;
         self.is_collapsed = config.collapsed;
         self.sync_collapse_anim();
         self.supports_envelopes = config.supports_envelopes;
@@ -1482,9 +1634,8 @@ impl ParamCardPanel {
     /// Effect" button anchored below it (`layer_column_height`) landed
     /// mid-card instead of below the last drawn row.
     fn effect_body_natural_height(&self) -> f32 {
-        if self.param_info.is_empty() {
-            return 0.0;
-        }
+        // The relight block below always draws when expanded (P5b), so the
+        // body is never truly empty anymore even with zero regular params.
         let mut h = HEADER_BODY_GAP;
         for (start, len, section) in self.section_runs() {
             if let Some(name) = &section {
@@ -1514,7 +1665,17 @@ impl ParamCardPanel {
                 }
             }
         }
-        h
+        h + self.relight_block_height()
+    }
+
+    /// Fixed height of the always-visible D3/D4 "3D Shading" block: a
+    /// section label + the six knob rows + the Height From row. Drawn
+    /// (greyed when off, never hidden — no-conditionally-visible-ui)
+    /// regardless of whether the card has any regular params
+    /// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b).
+    fn relight_block_height(&self) -> f32 {
+        const RELIGHT_ROW_COUNT: f32 = 1.0 + 6.0 + 1.0; // label + 6 knobs + Height From
+        RELIGHT_ROW_COUNT * (ROW_HEIGHT + ROW_SPACING)
     }
 
     /// BUG-108: same section-run walk as `effect_body_natural_height` — see
@@ -1524,9 +1685,9 @@ impl ParamCardPanel {
     fn compute_height_generator(&self) -> f32 {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed {
-            if !self.param_info.is_empty() || !self.string_param_info.is_empty() {
-                h += HEADER_BODY_GAP;
-            }
+            // Always true now — the relight block below always draws when
+            // expanded (P5b), so the body is never truly empty.
+            h += HEADER_BODY_GAP;
             for (start, len, section) in self.section_runs() {
                 if let Some(name) = &section {
                     h += ROW_HEIGHT + ROW_SPACING;
@@ -1551,9 +1712,8 @@ impl ParamCardPanel {
             for _ in &self.string_param_info {
                 h += ROW_HEIGHT + ROW_SPACING;
             }
-            if !self.param_info.is_empty() || !self.string_param_info.is_empty() {
-                h += PADDING;
-            }
+            h += self.relight_block_height();
+            h += PADDING;
         }
         h + CARD_BOTTOM_MARGIN
     }
@@ -1837,6 +1997,17 @@ impl ParamCardPanel {
                     .key(KEY_CHANGE),
             )
             .child(gap())
+            .child(
+                // "3D Shading" toggle — same unconditional icon as the effect
+                // header (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b).
+                View::button("3D")
+                    .w(Sizing::Fixed(RELIGHT_W))
+                    .fill_h()
+                    .style(toggle_btn_style(self.relight.enabled))
+                    .inert()
+                    .key(KEY_RELIGHT),
+            )
+            .child(gap())
             .child(cog)
             .child(
                 // P2 "caret rotate": same single-glyph + rotation technique as
@@ -1984,6 +2155,16 @@ impl ParamCardPanel {
                     .style(toggle_btn_style(self.enabled))
                     .inert()
                     .key(KEY_TOGGLE),
+            )
+            .child(
+                // "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
+                // unconditional in both `CardContext`s (a real per-instance
+                // flag, unlike the editor-only cog).
+                View::button("3D")
+                    .fixed(RELIGHT_W, 16.0)
+                    .style(toggle_btn_style(self.relight.enabled))
+                    .inert()
+                    .key(KEY_RELIGHT),
             );
         // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
         // expand chevron is always the rightmost control — same trailing order as
@@ -2062,7 +2243,10 @@ impl ParamCardPanel {
         // settled card keeps the exact old behavior: skip entirely when
         // collapsed, build unclipped under `parent` when expanded.
         let frac = self.collapse_frac();
-        if !self.param_info.is_empty() && frac > 0.0 {
+        // The relight rows below draw whenever expanded, regardless of
+        // whether this card has any regular params — see the matching
+        // comment in `build_generator`.
+        if frac > 0.0 {
             let body_y = inner.y + HEADER_HEIGHT + HEADER_BODY_GAP;
             let sliders_parent = if self.collapse_anim.is_animating() {
                 tree.add_node(
@@ -2125,6 +2309,7 @@ impl ParamCardPanel {
         self.name_clip_id = self.host.node_id_for_key(KEY_NAME_CLIP);
         self.name_label_id = self.host.node_id_for_key(KEY_NAME);
         self.toggle_btn_id = self.host.node_id_for_key(KEY_TOGGLE);
+        self.relight_btn_id = self.host.node_id_for_key(KEY_RELIGHT);
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
 
@@ -2671,6 +2856,107 @@ impl ParamCardPanel {
             cy = row.new_cy;
         }
         }
+
+        // ── "3D Shading" relight rows (docs/DEPTH_RELIGHT_DESIGN.md P5b) —
+        // always drawn, greyed when the header toggle is off (no-
+        // conditionally-visible-ui). ──
+        self.build_relight_rows(tree, Some(parent), x + PADDING, cy, w - PADDING * 2.0);
+    }
+
+    /// The six D3 knob rows + the D4 Height From row — shared between the
+    /// effect and generator card, since both hosts read/write the same
+    /// `PresetInstance.relight_params` shape (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// P5b). Always drawn when the caller reaches this point (never
+    /// conditioned on `self.relight.enabled` — greyed instead, per the
+    /// no-conditionally-visible-ui rule), so values set while the toggle is
+    /// off survive to when it's switched on.
+    fn build_relight_rows(
+        &mut self,
+        tree: &mut UITree,
+        parent: Option<NodeId>,
+        x: f32,
+        mut cy: f32,
+        content_w: f32,
+    ) {
+        let enabled = self.relight.enabled;
+        let label_color = if enabled { color::TEXT_PRIMARY_C32 } else { color::TEXT_DIMMED_C32 };
+        tree.add_label(
+            parent,
+            x,
+            cy,
+            content_w,
+            ROW_HEIGHT,
+            "3D Shading",
+            UIStyle {
+                text_color: label_color,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += ROW_HEIGHT + ROW_SPACING;
+
+        let target = self.param_target();
+        let colors = if enabled { SliderColors::default_slider() } else { relight_disabled_slider_colors() };
+        let label_width = crate::slider::label_width_for_row(content_w);
+
+        for (i, spec) in RELIGHT_FIELD_SPECS.iter().enumerate() {
+            let value = self.relight.value(spec.field);
+            let norm = BitmapSlider::value_to_normalized(value, spec.min, spec.max);
+            let default_norm = BitmapSlider::value_to_normalized(spec.default, spec.min, spec.max);
+            let value_text = format!("{value:.2}");
+            let reset = PanelAction::slider_reset(
+                PanelAction::RelightParamSnapshot(target, spec.field),
+                PanelAction::RelightParamChanged(target, spec.field, spec.default),
+                PanelAction::RelightParamCommit(target, spec.field),
+            );
+            let slider = BitmapSlider::build(
+                tree,
+                parent,
+                Rect::new(x, cy, content_w, ROW_HEIGHT),
+                Some(spec.label),
+                norm,
+                &value_text,
+                &colors,
+                FONT_SIZE,
+                label_width,
+                default_norm,
+                reset,
+            );
+            self.relight_slider_ids[i] = Some(slider.ids);
+            self.relight_slider_resets[i] = Some(slider.reset);
+            cy += ROW_HEIGHT + ROW_SPACING;
+        }
+
+        // D4 Height From row — a 3-way segmented control.
+        let opts = [
+            (UiRelightHeightFrom::Auto, "Auto"),
+            (UiRelightHeightFrom::Luminance, "Luminance"),
+            (UiRelightHeightFrom::InvertedLuminance, "Inverted"),
+        ];
+        let seg_gap = 2.0;
+        let seg_w = (content_w - seg_gap * (opts.len() - 1) as f32) / opts.len() as f32;
+        for (i, (opt, text)) in opts.into_iter().enumerate() {
+            let active = self.relight.height_from == opt;
+            let bg = if enabled && active { color::SLIDER_FILL_C32 } else { color::BG_3 };
+            let btn_id = tree.add_button(
+                parent,
+                x + (seg_w + seg_gap) * i as f32,
+                cy,
+                seg_w,
+                ROW_HEIGHT,
+                UIStyle {
+                    bg_color: bg,
+                    text_color: if enabled { color::TEXT_WHITE_C32 } else { color::TEXT_DIMMED_C32 },
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: color::SMALL_RADIUS,
+                    ..UIStyle::default()
+                },
+                text,
+            );
+            self.relight_height_btn_ids[i] = Some(btn_id);
+        }
     }
 
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
@@ -2697,6 +2983,7 @@ impl ParamCardPanel {
         self.header_bg_id = self.host.node_id_for_key(KEY_HEADER_BG);
         self.name_label_id = self.host.node_id_for_key(KEY_NAME);
         self.change_btn_id = self.host.node_id_for_key(KEY_CHANGE);
+        self.relight_btn_id = self.host.node_id_for_key(KEY_RELIGHT);
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
         if let Some(cog) = self.cog_btn_id {
@@ -2707,8 +2994,11 @@ impl ParamCardPanel {
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
 
-        // ── Params (if not collapsed) ──
-        if !self.is_collapsed && !self.param_info.is_empty() {
+        // ── Params (if not collapsed) — the relight rows below always draw
+        // when expanded, regardless of whether this card has any regular
+        // params (`docs/DEPTH_RELIGHT_DESIGN.md` P5b: "3D Shading" is a
+        // per-instance flag independent of the graph's own param list). ──
+        if !self.is_collapsed {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
             let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP;
@@ -2719,6 +3009,7 @@ impl ParamCardPanel {
             let author = self.context == CardContext::Author;
             let RowGeometry { label_width, slider_w } = row_geometry(content_w, author);
 
+            if !self.param_info.is_empty() {
             self.section_header_ids.clear();
             let runs = self.section_runs();
             for (start, len, section) in runs {
@@ -2865,6 +3156,7 @@ impl ParamCardPanel {
                 }
             }
             }
+            } // end if !self.param_info.is_empty()
 
             // ── String param rows (clickable text fields) ──
             for (si, sp) in self.string_param_info.iter().enumerate() {
@@ -2891,6 +3183,11 @@ impl ParamCardPanel {
                 ));
                 cy += ROW_HEIGHT + ROW_SPACING;
             }
+
+            // ── "3D Shading" relight rows (docs/DEPTH_RELIGHT_DESIGN.md
+            // P5b) — always drawn when expanded, greyed when the header
+            // toggle is off (no-conditionally-visible-ui). ──
+            self.build_relight_rows(tree, None, cx, cy, content_w);
         } // end if !self.is_collapsed
 
         self.node_count = tree.count() - self.first_node;
@@ -3282,6 +3579,23 @@ impl ParamCardPanel {
     }
 
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
+        // "3D Shading" header toggle + D4 Height From row — identical on
+        // both card kinds (`docs/DEPTH_RELIGHT_DESIGN.md` P5b), checked
+        // once here rather than duplicated in `handle_click_effect`/
+        // `handle_click_generator`.
+        if self.relight_btn_id == Some(node_id) {
+            return vec![PanelAction::RelightToggle(self.param_target())];
+        }
+        for (i, btn) in self.relight_height_btn_ids.iter().enumerate() {
+            if *btn == Some(node_id) {
+                let opt = [
+                    UiRelightHeightFrom::Auto,
+                    UiRelightHeightFrom::Luminance,
+                    UiRelightHeightFrom::InvertedLuminance,
+                ][i];
+                return vec![PanelAction::RelightHeightFromChanged(self.param_target(), opt)];
+            }
+        }
         match self.kind {
             ParamCardKind::Effect => self.handle_click_effect(node_id),
             ParamCardKind::Generator => self.handle_click_generator(node_id),
@@ -3913,6 +4227,26 @@ impl ParamCardPanel {
             }
         }
 
+        // D3 relight-knob tracks (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — same
+        // shape as the normal param-slider hit-test above, minus the
+        // trim/target overlay checks (relight rows carry no modulation).
+        // Always live even while the toggle is off (rows render greyed, not
+        // hidden, and edits while off must still take effect).
+        for (slider, spec) in self.relight_slider_ids.iter().zip(RELIGHT_FIELD_SPECS.iter()) {
+            if let Some(ids) = slider
+                && node_id == ids.track
+            {
+                let field = spec.field;
+                self.drag.begin(ParamDragTarget::Relight { field }, pos);
+                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+                let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
+                return vec![
+                    PanelAction::RelightParamSnapshot(target, field),
+                    PanelAction::RelightParamChanged(target, field, val),
+                ];
+            }
+        }
+
         Vec::new()
     }
 
@@ -4131,6 +4465,22 @@ impl ParamCardPanel {
             };
         }
 
+        // D3 relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — mirrors
+        // the plain param-slider drag above exactly, minus the value cache
+        // (relight knobs have no per-row `param_info`/`param_cache` slot).
+        if let Some(field) = self.drag.relight_field()
+            && let Some(i) = RELIGHT_FIELD_SPECS.iter().position(|s| s.field == field)
+            && let Some(ids) = self.relight_slider_ids[i].as_ref()
+        {
+            let spec = &RELIGHT_FIELD_SPECS[i];
+            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+            let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
+            let display_norm = BitmapSlider::value_to_normalized(val, spec.min, spec.max);
+            self.relight.set_value(field, val);
+            BitmapSlider::update_value(tree, ids, display_norm, &format!("{val:.2}"));
+            return vec![PanelAction::RelightParamChanged(self.param_target(), field, val)];
+        }
+
         Vec::new()
     }
 
@@ -4190,6 +4540,9 @@ impl ParamCardPanel {
                     ParamCardKind::Generator => vec![PanelAction::ParamCommit(GraphParamTarget::Generator, pid)],
                 }
             }
+            Some(ParamDragTarget::Relight { field }) => {
+                vec![PanelAction::RelightParamCommit(self.param_target(), field)]
+            }
             None => Vec::new(),
         }
     }
@@ -4242,6 +4595,13 @@ impl ParamCardPanel {
             let (dids, _) = cfg;
             for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
                 BitmapSlider::register_track_reset(sl, reset, intents);
+            }
+        }
+        // D3 relight-knob resets (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — same
+        // pattern as the main-row loop above.
+        for (ids, reset) in self.relight_slider_ids.iter().zip(self.relight_slider_resets.iter()) {
+            if let (Some(ids), Some(reset)) = (ids, reset) {
+                BitmapSlider::register_track_reset(ids, reset, intents);
             }
         }
 
@@ -4366,6 +4726,7 @@ mod tests {
             audio: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
+            relight: RelightCardConfig::default(),
         }
     }
 
@@ -6023,6 +6384,7 @@ mod tests {
             audio: Default::default(),
             automation_active: vec![false; 3],
             automation_overridden: vec![false; 3],
+            relight: RelightCardConfig::default(),
         }
     }
 

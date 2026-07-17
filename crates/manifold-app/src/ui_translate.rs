@@ -20,8 +20,8 @@ use manifold_ui::{
     AudioFeatureKind as UiAudioFeatureKind, AudioSourceKind as UiAudioSourceKind,
     LayerType as UiLayerType, MacroCurve as UiMacroCurve, MarkerColor as UiMarkerColor,
     MidiTriggerMode as UiMidiTriggerMode, ParamConvert as UiParamConvert,
-    PresetTypeId as UiPresetTypeId, SerializedParamValue as UiSerializedParamValue,
-    TonemapCurve as UiTonemapCurve,
+    PresetTypeId as UiPresetTypeId, RelightCardConfig, SerializedParamValue as UiSerializedParamValue,
+    TonemapCurve as UiTonemapCurve, UiRelightField, UiRelightHeightFrom,
 };
 
 use manifold_core::ableton_mapping::{
@@ -443,6 +443,68 @@ pub fn param_slot_to_ui(p: &Param) -> UiParamSlot {
 /// Project a manifest into the UI's positional slot view (card order).
 pub fn param_slots_to_ui(params: &ParamManifest) -> Vec<UiParamSlot> {
     params.iter().map(param_slot_to_ui).collect()
+}
+
+// ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ────────────────
+
+pub fn relight_height_from_to_ui(
+    v: manifold_core::effects::RelightHeightFrom,
+) -> UiRelightHeightFrom {
+    use manifold_core::effects::RelightHeightFrom as Core;
+    match v {
+        Core::Auto => UiRelightHeightFrom::Auto,
+        Core::Luminance => UiRelightHeightFrom::Luminance,
+        Core::InvertedLuminance => UiRelightHeightFrom::InvertedLuminance,
+    }
+}
+
+pub fn relight_height_from_to_core(
+    v: UiRelightHeightFrom,
+) -> manifold_core::effects::RelightHeightFrom {
+    match v {
+        UiRelightHeightFrom::Auto => manifold_core::effects::RelightHeightFrom::Auto,
+        UiRelightHeightFrom::Luminance => manifold_core::effects::RelightHeightFrom::Luminance,
+        UiRelightHeightFrom::InvertedLuminance => {
+            manifold_core::effects::RelightHeightFrom::InvertedLuminance
+        }
+    }
+}
+
+/// Mirrors `manifold_editing::commands::effects::RelightField` — `ui` cannot
+/// depend on `manifold-editing` (`UiRelightField`'s doc), so this is the
+/// boundary translation every relight-knob command construction goes
+/// through.
+pub fn relight_field_to_editing(
+    v: UiRelightField,
+) -> manifold_editing::commands::effects::RelightField {
+    use manifold_editing::commands::effects::RelightField as Core;
+    match v {
+        UiRelightField::LightX => Core::LightX,
+        UiRelightField::LightY => Core::LightY,
+        UiRelightField::Relief => Core::Relief,
+        UiRelightField::AoIntensity => Core::AoIntensity,
+        UiRelightField::ShadowSoftness => Core::ShadowSoftness,
+        UiRelightField::Gain => Core::Gain,
+    }
+}
+
+/// Project a `PresetInstance`'s relight state into the card's config —
+/// shared by `preset_to_config` and `empty_generator_config` so both the
+/// populated and zero-param generator arms carry the same live toggle/knobs
+/// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b: "3D Shading" is independent of the
+/// graph's own param list).
+pub fn relight_card_config_from(inst: &PresetInstance) -> RelightCardConfig {
+    let p = &inst.relight_params;
+    RelightCardConfig {
+        enabled: inst.relight,
+        light_x: p.light_x,
+        light_y: p.light_y,
+        relief: p.relief,
+        ao_intensity: p.ao_intensity,
+        shadow_softness: p.shadow_softness,
+        gain: p.gain,
+        height_from: relight_height_from_to_ui(p.height_from),
+    }
 }
 
 // ── Selection region (UI → core; UIState owns the UI-side region) ─────────

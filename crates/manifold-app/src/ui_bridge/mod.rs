@@ -506,7 +506,12 @@ pub fn dispatch(
         | PanelAction::AbletonInvertToggle(..)
         | PanelAction::AbletonMacroInvertToggle(_)
         | PanelAction::AddEffect(..)
-        | PanelAction::PasteEffects => inspector::dispatch_inspector(
+        | PanelAction::PasteEffects
+        | PanelAction::RelightToggle(..)
+        | PanelAction::RelightParamSnapshot(..)
+        | PanelAction::RelightParamChanged(..)
+        | PanelAction::RelightParamCommit(..)
+        | PanelAction::RelightHeightFromChanged(..) => inspector::dispatch_inspector(
             action,
             project,
             content_tx,

@@ -369,7 +369,11 @@ pub enum RelightField {
 }
 
 impl RelightField {
-    fn get(self, p: &manifold_core::effects::RelightParams) -> f32 {
+    /// Read this field off a `RelightParams` — `pub` (not just used inside
+    /// this module) so the app-layer dispatch (`ui_bridge/inspector.rs`'s
+    /// `RelightParamSnapshot`/`RelightParamCommit` handlers) can read/write a
+    /// knob's live value without duplicating this match.
+    pub fn get(self, p: &manifold_core::effects::RelightParams) -> f32 {
         match self {
             Self::LightX => p.light_x,
             Self::LightY => p.light_y,
@@ -380,7 +384,8 @@ impl RelightField {
         }
     }
 
-    fn set(self, p: &mut manifold_core::effects::RelightParams, value: f32) {
+    /// Write this field on a `RelightParams` — see [`Self::get`]'s doc.
+    pub fn set(self, p: &mut manifold_core::effects::RelightParams, value: f32) {
         match self {
             Self::LightX => p.light_x = value,
             Self::LightY => p.light_y = value,
