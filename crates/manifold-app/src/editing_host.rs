@@ -383,6 +383,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .push(PanelAction::TrackRightClicked(beat.as_f32(), layer_index));
     }
 
+    fn on_automation_lane_right_click(
+        &mut self,
+        target: &UiGraphTarget,
+        param_id: &ParamId,
+        _screen_pos: Vec2,
+    ) {
+        self.pending_actions.push(PanelAction::AutomationLaneRightClicked(
+            target.clone(),
+            param_id.clone(),
+        ));
+    }
+
     fn inspect_layer(&mut self, layer_index: usize) {
         let new_layer = self
             .project

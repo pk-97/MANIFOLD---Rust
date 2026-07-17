@@ -2498,6 +2498,22 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            // BUG-184: `ClearLaneCommand`/`RemoveLaneCommand` had no UI
+            // callers. Two-item menu, same typed with_action shape as
+            // ClipRightClicked/TrackRightClicked above.
+            PanelAction::AutomationLaneRightClicked(target, param_id) => {
+                let items = vec![
+                    DropdownItem::new("Clear Automation").with_action(
+                        PanelAction::ContextClearAutomationLane(target.clone(), param_id.clone()),
+                    ),
+                    DropdownItem::new("Remove Lane").with_action(
+                        PanelAction::ContextRemoveAutomationLane(target.clone(), param_id.clone()),
+                    ),
+                ];
+                self.dropdown
+                    .open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::LayerHeaderRightClicked(layer_id) => {
                 // The action carries a stable LayerId; every context-menu item
                 // below carries that same id (not a resolved row index), so a
