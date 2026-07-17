@@ -1,6 +1,6 @@
 # Audio Event Classifier — name the hit the DSP front-end already found
 
-**Status:** APPROVED design, not built · 2026-07-18 · Fable (authored in-session with Peter)
+**Status:** IN PROGRESS — P1+P2+P3 executed 2026-07-18 (same day); heldout exam run, verdict SHORT OF BAR (see §8): dev tuning plateaued (round 1 accepted, rounds 2+3 measured net-negative and reverted), heldout collapse proves a DATA gap, not a tuning gap. P4/P5 blocked on Peter's call: expand training data (D6 dial + more labeled shows / license-verified Splice) or park. ADTOF stays meanwhile; BUG-069 unchanged. · 2026-07-18 · Fable
 **Prerequisites:** none — the harness, shared data store, and truth assets all landed 2026-07-18 (`74c14de6` and ancestors).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
@@ -213,6 +213,35 @@ loudly logged); one end-to-end run on a manifold_own master committed as a
 JSON artifact. **Gate:** artifact diffed against the Python classifier arm's
 output on the same file (event-level match ≥99% after D9 parity). **Demo:** the
 JSON artifact — L2. Live-rig integration is Deferred, not this phase.
+
+## 5b. Heldout exam record (2026-07-18, one-shot, orchestrator-run)
+
+Model: P3 round-1 (rebalanced recipe, 64×16 patch, 115k params; rounds 2 [mels
+96] and 3 [span 150ms] both measured net-negative on dev and reverted — full
+per-round tables in the P3 lane commits). Exam per D8, first consumption of
+heldout:
+
+| slice | class | classifier | ADTOF | verdict |
+|---|---|---|---|---|
+| liveshow heldout | kick | 0.414 | 0.909 | short (n=1 song) |
+| liveshow heldout | snare | 0.218 | 0.502 | short |
+| liveshow heldout | hat | 0.014 | 0.619 | short |
+| E-GMD heldout | kick | 0.487 | 0.792 | short |
+| E-GMD heldout | snare | **0.723** | 0.639 | **SHIP-grade** |
+| E-GMD heldout | hat | 0.194 | 0.496 | short |
+| E-GMD heldout | perc | 0.517 | 0.639 | short |
+
+drums-filed-as-other on liveshow heldout: 15.5% (bar <10%) — FAIL.
+
+**Reading:** dev→heldout collapse (dev kick 0.55 → 0.41; dev hat 0.27 → 0.01)
+is a generalization failure — the model learned dev-track timbres, and three
+dev shows' worth of production styles isn't enough variety. Cheap tuning is
+exhausted (two of three rounds measured negative); the revive path is D6's
+data dial: more labeled real masters (additional Peter shows labeled the
+clip-placement way), license-verified sample-pack composites (Splice pending a
+terms read — see Deferred), and expanded E-GMD. The one clean win — E-GMD
+snare beating ADTOF — plus P2's beat-the-signature-labeler result keep the
+approach alive: the architecture works; it is starving.
 
 ## 6. Decided — do not reopen
 1. Masters-first; demucs banned from product paths (D1).
