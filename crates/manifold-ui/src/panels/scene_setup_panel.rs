@@ -49,7 +49,6 @@ const KEY_IMPORT_MODEL: u64 = 80_016;
 /// numeric controls (3 triplets + color + metallic + roughness).
 const OBJ_KEY_BASE: u64 = 82_000;
 const OBJ_KEY_STRIDE: u64 = 32;
-const OBJ_OFF_EXPAND: u64 = 0;
 const OBJ_OFF_NAME: u64 = 1;
 // Triplet rows (`build_triplet_row`) take only the FIRST offset — Y/Z cells
 // key off `base_offset + 1`/`+ 2` (the cell loop's `i`), so only the X/R
@@ -107,7 +106,6 @@ const fn object_numeric_row_automation_name(base_offset: u64) -> Option<&'static
 /// variable-length list, so every light gets a private key range.
 const LIGHT_KEY_BASE: u64 = 84_000;
 const LIGHT_KEY_STRIDE: u64 = 32;
-const LIGHT_OFF_EXPAND: u64 = 0;
 const LIGHT_OFF_MODE_MINUS: u64 = 1;
 const LIGHT_OFF_COLOR_R: u64 = 4;
 const LIGHT_OFF_INTENSITY_MINUS: u64 = 7;
@@ -392,8 +390,17 @@ pub struct ModifierKnownRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectKnownRow {
     pub index: usize,
-    pub group_node_id: u32,
+    /// The `node.scene_object`'s own doc id — the address the eye toggle
+    /// writes `visible` at, and (with `group_node_id`) the selection key
+    /// (D12).
+    pub object_node_id: u32,
+    /// `Some` when wrapped in a group (the importer/`AddSceneObjectCommand`
+    /// shape) — the rename sweep's group target. `None` for a bare
+    /// ungrouped scene_object (D1's first-class "hand-built graph, no
+    /// group" case).
+    pub group_node_id: Option<u32>,
     pub name: String,
+    pub visible: RowValue,
     pub transform: Option<Box<TransformRowVm>>,
     pub material: ObjectMaterialVm,
     /// The modifier stack, in wire order (D6/P5) — the interactive list the
@@ -411,11 +418,12 @@ pub struct ObjectKnownRow {
 /// One Objects-section row (D3/D4).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectRowVm {
-    /// Producer resolved to a named group.
+    /// Producer resolved to a `node.scene_object` (D12), directly or through
+    /// one wrapping group.
     Known(Box<ObjectKnownRow>),
-    /// Producer did NOT resolve to a group output — "Object k — custom
-    /// (edit in graph)" per D3.
-    Custom { index: usize, transform: Option<Box<TransformRowVm>> },
+    /// Producer did NOT resolve to a `node.scene_object` — "Object k —
+    /// custom (edit in graph)" per D3/D12.
+    Custom { index: usize },
 }
 
 /// A stepper row whose value is an enum index rather than a raw float — the
@@ -442,6 +450,10 @@ pub struct EnumRowValue {
 pub struct LightKnownRow {
     pub index: usize,
     pub node_doc_id: u32,
+    /// P5: the light's editable display name (NEW — lights didn't have one
+    /// before this design). Double-click opens the same rename UX as an
+    /// object's name.
+    pub name: String,
     pub mode: EnumRowValue,
     pub color: (RowValue, RowValue, RowValue),
     pub intensity: RowValue,
@@ -542,6 +554,19 @@ pub struct SceneSetupVm {
     pub camera: CameraRowVm,
 }
 
+/// P5's outliner selection (D7): the one scene item whose controls the
+/// properties region shows. UI-local workspace state — like fold state,
+/// NEVER serialized (`rg -n "SceneSelection" crates/manifold-io
+/// crates/manifold-core` must stay 0 hits). `u32` payloads are node doc
+/// ids — removal-stable, unlike indices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneSelection {
+    Object(u32),
+    Light(u32),
+    Camera,
+    World,
+}
+
 /// D7's four empty/live states for the selected layer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneSetupState {
@@ -613,11 +638,23 @@ pub struct ScenePanel {
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
     import_model_id: Option<NodeId>,
-    /// P2 Objects section fold state — UI-local (like card sections, not
-    /// serialized), keyed by the object's stable `index` (0..objects; never
-    /// reassigned by rename — only append/remove would renumber, and remove
-    /// isn't wired this phase). Missing entry = expanded (the default).
-    object_expanded: std::collections::HashMap<usize, bool>,
+    /// P5 (D7): the outliner selection, per layer — UI-local workspace
+    /// state, like fold state, NEVER serialized. Missing entry = the
+    /// default (first object, else World) — resolved by
+    /// `Self::resolve_selection`, which also handles the "selected id no
+    /// longer exists after a graph edit" fallback.
+    /// `LayerId` has no `Ord` impl (only `Hash`/`Eq`), so `HashMap` — not a
+    /// `BTreeMap` — is the map that actually compiles; same "keyed per
+    /// layer, UI-local, never serialized" contract either way.
+    selection: std::collections::HashMap<LayerId, SceneSelection>,
+    /// Every outliner row's click target this frame — `(node_id, what
+    /// selecting it means)`.
+    outliner_row_ids: Vec<(NodeId, SceneSelection)>,
+    /// Every object row's eye toggle this frame — `(node_id, the object's
+    /// current `visible` RowValue)`. A click flips the value (writes
+    /// `!(value > 0.5)` as 0.0/1.0) through the same
+    /// `SceneSetupParamChanged` fourth-surface path every other row uses.
+    outliner_eye_ids: Vec<(NodeId, RowValue)>,
     /// Every Objects-row drag-armable value cell built this frame: triplet
     /// axes (pos/rot/scale/color) + the metallic/roughness value boxes.
     /// Rebuilt fresh every `build_nodes` call — Objects is a variable-length
@@ -627,17 +664,23 @@ pub struct ScenePanel {
     /// Every Objects-row stepper (+/-) built this frame, with its fixed step
     /// delta (mirrors `stepper_hit` for the fixed rows above).
     object_steppers: Vec<(NodeId, RowValue, f32)>,
-    /// `(group_node_id, name_label_node_id, current_name)` for every Known
-    /// object row this frame — resolves a name-label click to its rename
-    /// action, and backs `object_name_rect` (the app's text-input anchor
-    /// lookup).
+    /// `(identity_node_id, name_label_node_id, current_name)` for the
+    /// properties header's editable name row, when a Known object is
+    /// selected this frame (`identity_node_id` = `group_node_id.unwrap_or(
+    /// object_node_id)`, the exact address `RenameSceneObjectCommand`
+    /// takes) — resolves a name-label click to its rename action, and backs
+    /// `object_name_rect` (the app's text-input anchor lookup). At most one
+    /// entry per frame (P5: one selection, one properties header).
     object_name_ids: Vec<(u32, NodeId, String)>,
-    /// `(index, expand_toggle_node_id)` for every object row this frame.
-    object_expand_ids: Vec<(usize, NodeId)>,
-    /// BUG-193: `(remove_button_node_id, index)` for every object row's "✕"
-    /// built this frame — resolves a remove-button click to
-    /// `PanelAction::SceneSetupRemoveObject`.
+    /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
+    /// header's "Remove" button, when a Known object is selected this frame
+    /// — resolves to `PanelAction::SceneSetupRemoveObject`. At most one
+    /// entry per frame.
     object_remove_ids: Vec<(NodeId, usize)>,
+    /// P5 (D11): `(duplicate_button_node_id, index)` for the properties
+    /// header's "Duplicate" button, when a Known object is selected this
+    /// frame — resolves to `PanelAction::SceneSetupDuplicateObject`.
+    object_duplicate_ids: Vec<(NodeId, usize)>,
     /// P5: `(node_id, group_node_id, modifier_node_id)` for every modifier
     /// row's remove button built this frame.
     modifier_remove_ids: Vec<(NodeId, u32, u32)>,
@@ -657,8 +700,6 @@ pub struct ScenePanel {
     /// as every other enum row — this vector only exists to route the
     /// VALUE cell's own click, which the `[-]/[+]` steppers don't cover).
     object_enum_cells: Vec<(NodeId, RowValue, Vec<&'static str>)>,
-    /// P3 Lights section fold state — same convention as `object_expanded`.
-    light_expanded: std::collections::HashMap<usize, bool>,
     /// P3 Lights-row drag-armable value cells (color/pos/aim triplets) —
     /// same convention as `object_value_cells`.
     light_value_cells: Vec<(NodeId, RowValue)>,
@@ -667,12 +708,16 @@ pub struct ScenePanel {
     /// `1.0`, value clamped to the label range) share this one vector, same
     /// as `object_steppers`.
     light_steppers: Vec<(NodeId, RowValue, f32)>,
-    /// `(index, expand_toggle_node_id)` for every light row this frame.
-    light_expand_ids: Vec<(usize, NodeId)>,
-    /// BUG-193: `(remove_button_node_id, index)` for every light row's "✕"
-    /// built this frame — resolves a remove-button click to
-    /// `PanelAction::SceneSetupRemoveLight`.
+    /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
+    /// header's "Remove" button, when a Known light is selected this frame —
+    /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
+    /// per frame.
     light_remove_ids: Vec<(NodeId, usize)>,
+    /// P5: `(light_node_doc_id, name_label_node_id, current_name)` for the
+    /// properties header's editable light name row, when a Known light is
+    /// selected this frame — mirrors `object_name_ids`, backs
+    /// `light_name_rect`.
+    light_name_ids: Vec<(u32, NodeId, String)>,
     /// P4 (D9): every Lights-scoped enum value cell built this frame (mode /
     /// cast_shadows / shadow_softness) — same convention as
     /// `object_enum_cells`.
@@ -711,21 +756,22 @@ impl Default for ScenePanel {
             add_object_id: None,
             add_light_id: None,
             import_model_id: None,
-            object_expanded: std::collections::HashMap::new(),
+            selection: std::collections::HashMap::new(),
+            outliner_row_ids: Vec::new(),
+            outliner_eye_ids: Vec::new(),
             object_value_cells: Vec::new(),
             object_steppers: Vec::new(),
             object_name_ids: Vec::new(),
-            object_expand_ids: Vec::new(),
             object_remove_ids: Vec::new(),
+            object_duplicate_ids: Vec::new(),
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             modifier_add_ids: Vec::new(),
             object_enum_cells: Vec::new(),
-            light_expanded: std::collections::HashMap::new(),
             light_value_cells: Vec::new(),
             light_steppers: Vec::new(),
-            light_expand_ids: Vec::new(),
             light_remove_ids: Vec::new(),
+            light_name_ids: Vec::new(),
             light_enum_cells: Vec::new(),
             camera_value_cells: Vec::new(),
             camera_steppers: Vec::new(),
@@ -829,19 +875,21 @@ impl ScenePanel {
         self.add_object_id = None;
         self.add_light_id = None;
         self.import_model_id = None;
+        self.outliner_row_ids.clear();
+        self.outliner_eye_ids.clear();
         self.object_value_cells.clear();
         self.object_steppers.clear();
         self.object_name_ids.clear();
-        self.object_expand_ids.clear();
         self.object_remove_ids.clear();
+        self.object_duplicate_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.modifier_add_ids.clear();
         self.object_enum_cells.clear();
         self.light_value_cells.clear();
         self.light_steppers.clear();
-        self.light_expand_ids.clear();
         self.light_remove_ids.clear();
+        self.light_name_ids.clear();
         self.light_enum_cells.clear();
         self.camera_value_cells.clear();
         self.camera_steppers.clear();
@@ -928,6 +976,11 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
+    /// D7: outliner (Camera · World · lights · objects, one row each) over a
+    /// single properties region showing the current selection's controls —
+    /// "select the object to use the tools" (Peter). Replaces v1's flat
+    /// per-section accordion (a 2-object scene already overflowed the
+    /// panel's window).
     fn build_live(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
         // ── Header ──
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &vm.scene_name, header_label_style());
@@ -956,15 +1009,469 @@ impl ScenePanel {
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &counts, label_style());
         cy += ROW_H + ROW_GAP * 2.0;
 
-        // ── Objects ──
-        cy = self.build_objects_section(tree, inner_x, inner_w, cy, vm);
-        cy += ROW_GAP;
+        // ── Outliner ──
+        let selected = self.resolve_selection(vm);
+        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, selected);
+        cy += ROW_GAP * 2.0;
 
-        // ── Lights ──
-        cy = self.build_lights_section(tree, inner_x, inner_w, cy, vm);
-        cy += ROW_GAP;
+        // ── Properties ──
+        self.build_properties(tree, inner_x, inner_w, cy, vm, selected)
+    }
 
-        // ── Environment ──
+    /// The current selection for `vm.layer_id`, resolving the D7 fallback
+    /// (a dangling id after a graph edit, or no entry yet) to the first
+    /// Known object, else World — and persisting the resolved value back
+    /// into `self.selection` so a later `object_name_rect`/click lookup
+    /// this same frame sees the same answer `build_outliner` used.
+    fn resolve_selection(&mut self, vm: &SceneSetupVm) -> SceneSelection {
+        let current = self.selection.get(&vm.layer_id).copied();
+        let resolved = match current {
+            Some(sel) if Self::selection_exists(vm, sel) => sel,
+            _ => Self::default_selection(vm),
+        };
+        self.selection.insert(vm.layer_id.clone(), resolved);
+        resolved
+    }
+
+    fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
+        match sel {
+            SceneSelection::Camera | SceneSelection::World => true,
+            SceneSelection::Object(id) => {
+                vm.objects.iter().any(|o| matches!(o, ObjectRowVm::Known(r) if r.object_node_id == id))
+            }
+            SceneSelection::Light(id) => {
+                vm.lights.iter().any(|l| matches!(l, LightRowVm::Known(r) if r.node_doc_id == id))
+            }
+        }
+    }
+
+    /// D7's default: the first Known object, else World. A `Custom` row
+    /// carries no addressable node id (D12), so it can never be the default
+    /// target — it's still listed in the outliner, just not selectable.
+    fn default_selection(vm: &SceneSetupVm) -> SceneSelection {
+        vm.objects
+            .iter()
+            .find_map(|o| match o {
+                ObjectRowVm::Known(r) => Some(SceneSelection::Object(r.object_node_id)),
+                ObjectRowVm::Custom { .. } => None,
+            })
+            .unwrap_or(SceneSelection::World)
+    }
+
+    /// The outliner: one row per scene item, in committed order — Camera ·
+    /// World · each light · each object — plus the always-visible footer
+    /// (+ Object · + Light · Import Model…).
+    fn build_outliner(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        vm: &SceneSetupVm,
+        selected: SceneSelection,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Outliner", section_label_style());
+        cy += ROW_H;
+
+        cy = self.build_outliner_row(
+            tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, None,
+        );
+        cy = self.build_outliner_row(
+            tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, None,
+        );
+        for light in &vm.lights {
+            match light {
+                LightRowVm::Known(row) => {
+                    let label = format!("\u{1F4A1} {}", row.name);
+                    cy = self.build_outliner_row(
+                        tree,
+                        inner_x,
+                        inner_w,
+                        cy,
+                        &label,
+                        SceneSelection::Light(row.node_doc_id),
+                        selected,
+                        None,
+                    );
+                }
+                LightRowVm::Custom { index } => {
+                    // No addressable node id (D12/D3) — listed, never hidden,
+                    // but not a selectable target (nothing to show in
+                    // Properties beyond the same "custom" label).
+                    tree.add_label(
+                        Some(self.content_parent),
+                        inner_x,
+                        cy,
+                        inner_w,
+                        ROW_H,
+                        &format!("\u{1F4A1} Light {index} — custom (edit in graph)"),
+                        label_style(),
+                    );
+                    cy += ROW_H;
+                }
+            }
+        }
+        for obj in &vm.objects {
+            match obj {
+                ObjectRowVm::Known(row) => {
+                    let label = format!("\u{25A0} {}", row.name);
+                    cy = self.build_outliner_row(
+                        tree,
+                        inner_x,
+                        inner_w,
+                        cy,
+                        &label,
+                        SceneSelection::Object(row.object_node_id),
+                        selected,
+                        Some(row.visible.clone()),
+                    );
+                }
+                ObjectRowVm::Custom { index } => {
+                    tree.add_label(
+                        Some(self.content_parent),
+                        inner_x,
+                        cy,
+                        inner_w,
+                        ROW_H,
+                        &format!("\u{25A0} Object {index} — custom (edit in graph)"),
+                        label_style(),
+                    );
+                    cy += ROW_H;
+                }
+            }
+        }
+        cy += ROW_GAP;
+        self.add_object_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "+ Object",
+            KEY_ADD_OBJECT,
+        ));
+        cy += ROW_H;
+        self.add_light_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "+ Light",
+            KEY_ADD_LIGHT,
+        ));
+        cy += ROW_H;
+        self.import_model_id = Some(tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "Import Model…",
+            KEY_IMPORT_MODEL,
+        ));
+        cy + ROW_H
+    }
+
+    /// One outliner row: a selectable name button, plus an eye toggle when
+    /// `eye` is `Some` (Object rows only). Selected-row styling per the
+    /// `layer_header.rs` precedent (`sel_accent_style`/`bg_style`): a tint
+    /// using the app-wide `SELECTED_LAYER_RING` colour, never a border box.
+    fn build_outliner_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        sel: SceneSelection,
+        selected: SceneSelection,
+        eye: Option<RowValue>,
+    ) -> f32 {
+        let is_selected = sel == selected;
+        let eye_w = if eye.is_some() { STEP_W } else { 0.0 };
+        let row_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w - eye_w,
+            ROW_H,
+            outliner_row_style(is_selected),
+            label,
+            outliner_row_key(sel),
+        );
+        self.outliner_row_ids.push((row_id, sel));
+        if let Some(row) = eye {
+            let on = row.value > 0.5;
+            let object_node_id = match sel {
+                SceneSelection::Object(id) => id,
+                _ => 0,
+            };
+            let eye_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + inner_w - eye_w,
+                cy,
+                eye_w,
+                ROW_H,
+                if row.driven { driven_label_style() } else { btn_style() },
+                if on { "\u{1F441}" } else { "\u{2013}" },
+                outliner_eye_key(object_node_id),
+            );
+            if !row.driven {
+                self.outliner_eye_ids.push((eye_id, row));
+            }
+        }
+        cy + ROW_H
+    }
+
+    /// The properties region: a header (name, plus Duplicate/Remove for
+    /// Object/Light selections) then the selection's own rows — the EXISTING
+    /// curated builders, relocated intact (never a generic param-tree
+    /// renderer, v1 D3's named wrong turn).
+    fn build_properties(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        vm: &SceneSetupVm,
+        selected: SceneSelection,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Properties", section_label_style());
+        cy += ROW_H;
+        match selected {
+            SceneSelection::Object(id) => {
+                let Some(row) = vm.objects.iter().find_map(|o| match o {
+                    ObjectRowVm::Known(r) if r.object_node_id == id => Some(r.as_ref()),
+                    _ => None,
+                }) else {
+                    return cy;
+                };
+                cy = self.build_object_properties_header(tree, inner_x, inner_w, cy, row);
+                self.build_object_properties_body(tree, inner_x, inner_w, cy, row)
+            }
+            SceneSelection::Light(id) => {
+                let Some(row) = vm.lights.iter().find_map(|l| match l {
+                    LightRowVm::Known(r) if r.node_doc_id == id => Some(r.as_ref()),
+                    _ => None,
+                }) else {
+                    return cy;
+                };
+                cy = self.build_light_properties_header(tree, inner_x, inner_w, cy, row);
+                self.build_light_properties_body(tree, inner_x, inner_w, cy, row)
+            }
+            SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
+            SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
+        }
+    }
+
+    /// Object properties header: editable name (click to rename — same
+    /// single-click-opens-text-input UX the outliner/graph rename affordance
+    /// already uses) + Duplicate + Remove (D11).
+    fn build_object_properties_header(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        row: &ObjectKnownRow,
+    ) -> f32 {
+        let btn_w = STEP_W * 3.0;
+        let name_w = inner_w - btn_w - 8.0;
+        let name_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            name_w,
+            ROW_H,
+            drag_value_style(),
+            &row.name,
+            obj_key(row.index, OBJ_OFF_NAME),
+        );
+        let identity_node_id = row.group_node_id.unwrap_or(row.object_node_id);
+        self.object_name_ids.push((identity_node_id, name_id, row.name.clone()));
+        let dup_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + name_w + 4.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{29C9}",
+            obj_key(row.index, OBJ_OFF_REMOVE) + 1,
+        );
+        self.object_duplicate_ids.push((dup_id, row.index));
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + name_w + 4.0 + STEP_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            obj_key(row.index, OBJ_OFF_REMOVE),
+        );
+        self.object_remove_ids.push((remove_id, row.index));
+        cy + ROW_H + ROW_GAP
+    }
+
+    /// Object properties body: transform triplets, material quick knobs,
+    /// modifier stack — the body `build_object_row` used to render only when
+    /// expanded; now always rendered (there is no fold state left — the
+    /// outliner IS the fold).
+    fn build_object_properties_body(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        row: &ObjectKnownRow,
+    ) -> f32 {
+        let index = row.index;
+        if let Some(t) = &row.transform {
+            cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Position", &t.pos, index, OBJ_OFF_POS_X);
+            cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Rotation", &t.rot, index, OBJ_OFF_ROT_X);
+            cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Scale", &t.scale, index, OBJ_OFF_SCALE_X);
+        }
+        match &row.material {
+            ObjectMaterialVm::Pbr { color, metallic, roughness } => {
+                cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
+                cy = self.build_object_numeric_row(
+                    tree, inner_x, inner_w, cy, "Metallic", metallic, index, OBJ_OFF_METALLIC_MINUS,
+                );
+                cy = self.build_object_numeric_row(
+                    tree, inner_x, inner_w, cy, "Roughness", roughness, index, OBJ_OFF_ROUGHNESS_MINUS,
+                );
+            }
+            ObjectMaterialVm::Other { color } => {
+                cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
+            }
+            ObjectMaterialVm::None => {
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No material", label_style());
+                cy += ROW_H;
+            }
+        }
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Modifiers", label_style());
+        cy += ROW_H;
+        if row.modifiers_addable {
+            for m in &row.modifiers {
+                cy = self.build_modifier_row(
+                    tree,
+                    inner_x,
+                    inner_w,
+                    cy,
+                    index,
+                    row.group_node_id.unwrap_or(row.object_node_id),
+                    m,
+                    row.modifiers.len(),
+                );
+            }
+            cy = self.build_add_modifier_row(
+                tree, inner_x, inner_w, cy, index, row.group_node_id.unwrap_or(row.object_node_id),
+            );
+        } else {
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                "Custom chain — edit in graph",
+                label_style(),
+            );
+            cy += ROW_H;
+        }
+        cy + ROW_GAP
+    }
+
+    /// Light properties header: editable name (NEW, P5) + Remove (D11's
+    /// `RemoveSceneLightCommand`; lights have no Duplicate verb — D11 scopes
+    /// duplicate to objects only).
+    fn build_light_properties_header(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        row: &LightKnownRow,
+    ) -> f32 {
+        let name_w = inner_w - STEP_W - 4.0;
+        let name_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            name_w,
+            ROW_H,
+            drag_value_style(),
+            &row.name,
+            light_key(row.index, LIGHT_OFF_MODE_MINUS) + 100,
+        );
+        self.light_name_ids.push((row.node_doc_id, name_id, row.name.clone()));
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + name_w + 4.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            light_key(row.index, LIGHT_OFF_REMOVE),
+        );
+        self.light_remove_ids.push((remove_id, row.index));
+        cy + ROW_H + ROW_GAP
+    }
+
+    /// Light properties body: mode/color/intensity/pos/aim/cast_shadows/
+    /// shadow_softness + the always-present Light Size sub-row — the body
+    /// `build_light_row` used to render only when expanded; now always on.
+    fn build_light_properties_body(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        row: &LightKnownRow,
+    ) -> f32 {
+        let index = row.index;
+        cy = self.build_light_enum_row(tree, inner_x, inner_w, cy, "Mode", &row.mode, index, LIGHT_OFF_MODE_MINUS);
+        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Color", &row.color, index, LIGHT_OFF_COLOR_R);
+        cy = self.build_light_numeric_row(
+            tree, inner_x, inner_w, cy, "Intensity", &row.intensity, index, LIGHT_OFF_INTENSITY_MINUS,
+        );
+        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, index, LIGHT_OFF_POS_X);
+        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Aim", &row.aim, index, LIGHT_OFF_AIM_X);
+        cy = self.build_light_enum_row(
+            tree, inner_x, inner_w, cy, "Cast Shadows", &row.cast_shadows, index, LIGHT_OFF_CAST_SHADOWS_MINUS,
+        );
+        cy = self.build_light_enum_row(
+            tree, inner_x, inner_w, cy, "Shadow Softness", &row.shadow_softness, index, LIGHT_OFF_SHADOW_SOFTNESS_MINUS,
+        );
+        cy = self.build_light_numeric_row(
+            tree,
+            inner_x + PAD,
+            inner_w - PAD,
+            cy,
+            "Light Size",
+            &row.light_size,
+            index,
+            LIGHT_OFF_LIGHT_SIZE_MINUS,
+        );
+        cy + ROW_GAP
+    }
+
+    /// World properties: Environment + Fog (v1's sections, unchanged bodies
+    /// — carried forward per D7's "World → Environment + Fog sections").
+    fn build_world_properties(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        vm: &SceneSetupVm,
+    ) -> f32 {
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment", section_label_style());
         cy += ROW_H;
         match &vm.environment {
@@ -1028,7 +1535,6 @@ impl ScenePanel {
         }
         cy += ROW_GAP * 2.0;
 
-        // ── Fog ──
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Fog", section_label_style());
         cy += ROW_H;
         match &vm.atmosphere {
@@ -1060,10 +1566,7 @@ impl ScenePanel {
                 cy += ROW_H;
             }
         }
-        cy += ROW_GAP * 2.0;
-
-        // ── Camera ──
-        self.build_camera_section(tree, inner_x, inner_w, cy, vm)
+        cy + ROW_GAP * 2.0
     }
 
     /// One `[label]  [−] value [＋]` numeric row. Driven rows (D4) render
@@ -1148,171 +1651,6 @@ impl ScenePanel {
         );
         *slot = RowIds { minus: Some(minus), value: Some(value), plus: Some(plus) };
         cy + ROW_H
-    }
-
-    /// The Objects section (P2, D4): per-object collapsible rows, then
-    /// "+ Object" / "+ Light" / "Import Model…" (P4 — D4's own row lists all
-    /// three under Objects).
-    fn build_objects_section(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        vm: &SceneSetupVm,
-    ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Objects", section_label_style());
-        cy += ROW_H;
-        for obj in &vm.objects {
-            cy = self.build_object_row(tree, inner_x, inner_w, cy, obj);
-        }
-        cy += ROW_GAP;
-        self.add_object_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            btn_style(),
-            "+ Object",
-            KEY_ADD_OBJECT,
-        ));
-        cy += ROW_H;
-        self.import_model_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            btn_style(),
-            "Import Model…",
-            KEY_IMPORT_MODEL,
-        ));
-        cy + ROW_H
-    }
-
-    /// The Lights section (P3, D3/D4): per-light collapsible rows, then
-    /// "+ Light" (moved here from the Objects section — D4's own table
-    /// places it under Lights; P2 built both buttons together before this
-    /// section existed).
-    fn build_lights_section(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        vm: &SceneSetupVm,
-    ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lights", section_label_style());
-        cy += ROW_H;
-        for light in &vm.lights {
-            cy = self.build_light_row(tree, inner_x, inner_w, cy, light);
-        }
-        cy += ROW_GAP;
-        self.add_light_id = Some(tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            btn_style(),
-            "+ Light",
-            KEY_ADD_LIGHT,
-        ));
-        cy + ROW_H
-    }
-
-    fn is_light_expanded(&self, index: usize) -> bool {
-        *self.light_expanded.get(&index).unwrap_or(&true)
-    }
-
-    /// One Lights-section row (D3/D4): expand toggle + label — then, when
-    /// expanded, mode/color/intensity/pos/aim/cast_shadows/shadow_softness,
-    /// and light_size as an always-present sub-row beneath shadow_softness
-    /// (parameter dependency, not conditional UI — D4).
-    fn build_light_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        light: &LightRowVm,
-    ) -> f32 {
-        let index = match light {
-            LightRowVm::Known(row) => row.index,
-            LightRowVm::Custom { index } => *index,
-        };
-        let expanded = self.is_light_expanded(index);
-        let expand_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            if expanded { "\u{25BE}" } else { "\u{25B8}" },
-            light_key(index, LIGHT_OFF_EXPAND),
-        );
-        self.light_expand_ids.push((index, expand_id));
-
-        let label_x = inner_x + STEP_W + 4.0;
-        let label_w = inner_w - STEP_W - 4.0 - STEP_W - 4.0;
-        let title = match light {
-            LightRowVm::Known(_) => format!("Light {index}"),
-            LightRowVm::Custom { .. } => format!("Light {index} — custom (edit in graph)"),
-        };
-        tree.add_label(Some(self.content_parent), label_x, cy, label_w, ROW_H, &title, label_style());
-        // BUG-193: per-row "✕" — dispatches SceneSetupRemoveLight.
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            label_x + label_w + 4.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2715}",
-            light_key(index, LIGHT_OFF_REMOVE),
-        );
-        self.light_remove_ids.push((remove_id, index));
-        cy += ROW_H;
-
-        if !expanded {
-            return cy + ROW_GAP;
-        }
-
-        let LightRowVm::Known(row) = light else {
-            return cy + ROW_GAP;
-        };
-        let body_x = inner_x + PAD;
-        let body_w = inner_w - PAD;
-        cy = self.build_light_enum_row(tree, body_x, body_w, cy, "Mode", &row.mode, index, LIGHT_OFF_MODE_MINUS);
-        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Color", &row.color, index, LIGHT_OFF_COLOR_R);
-        cy = self.build_light_numeric_row(
-            tree, body_x, body_w, cy, "Intensity", &row.intensity, index, LIGHT_OFF_INTENSITY_MINUS,
-        );
-        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Position", &row.pos, index, LIGHT_OFF_POS_X);
-        cy = self.build_light_triplet_row(tree, body_x, body_w, cy, "Aim", &row.aim, index, LIGHT_OFF_AIM_X);
-        cy = self.build_light_enum_row(
-            tree, body_x, body_w, cy, "Cast Shadows", &row.cast_shadows, index, LIGHT_OFF_CAST_SHADOWS_MINUS,
-        );
-        cy = self.build_light_enum_row(
-            tree, body_x, body_w, cy, "Shadow Softness", &row.shadow_softness, index, LIGHT_OFF_SHADOW_SOFTNESS_MINUS,
-        );
-        // Light Size: a REAL, always-editable row (D4 "parameter dependency,
-        // not conditional UI") — indented one level further to read as a
-        // sub-row of Shadow Softness, since it only visibly matters in
-        // Contact mode. Never hidden, never disabled.
-        cy = self.build_light_numeric_row(
-            tree,
-            body_x + PAD,
-            body_w - PAD,
-            cy,
-            "Light Size",
-            &row.light_size,
-            index,
-            LIGHT_OFF_LIGHT_SIZE_MINUS,
-        );
-        cy + ROW_GAP
     }
 
     /// A light-row `[label] [−] value [+]` numeric row — same shape as
@@ -1668,140 +2006,6 @@ impl ScenePanel {
             self.camera_value_cells.push((cell_id, row.clone()));
         }
         cy + ROW_H
-    }
-
-    fn is_expanded(&self, index: usize) -> bool {
-        *self.object_expanded.get(&index).unwrap_or(&true)
-    }
-
-    /// One Objects-section row: expand toggle + editable name (or the D3
-    /// "custom" label) — then, when expanded, transform triplets, material
-    /// quick knobs, and the (display-only in P2) modifier list.
-    fn build_object_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        obj: &ObjectRowVm,
-    ) -> f32 {
-        let (index, group_node_id, name, transform, material, modifiers) = match obj {
-            ObjectRowVm::Known(row) => (
-                row.index,
-                Some(row.group_node_id),
-                row.name.clone(),
-                row.transform.clone(),
-                row.material.clone(),
-                Some((row.modifiers.clone(), row.modifiers_addable)),
-            ),
-            ObjectRowVm::Custom { index, transform } => (
-                *index,
-                None,
-                format!("Object {index} — custom (edit in graph)"),
-                transform.clone(),
-                ObjectMaterialVm::None,
-                None,
-            ),
-        };
-        let expanded = self.is_expanded(index);
-
-        let expand_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            if expanded { "\u{25BE}" } else { "\u{25B8}" },
-            obj_key(index, OBJ_OFF_EXPAND),
-        );
-        self.object_expand_ids.push((index, expand_id));
-
-        let name_x = inner_x + STEP_W + 4.0;
-        let name_w = inner_w - STEP_W - 4.0 - STEP_W - 4.0;
-        if let Some(group_node_id) = group_node_id {
-            let name_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                name_x,
-                cy,
-                name_w,
-                ROW_H,
-                drag_value_style(),
-                &name,
-                obj_key(index, OBJ_OFF_NAME),
-            );
-            self.object_name_ids.push((group_node_id, name_id, name.clone()));
-        } else {
-            tree.add_label(Some(self.content_parent), name_x, cy, name_w, ROW_H, &name, label_style());
-        }
-        // BUG-193: per-row "✕" — dispatches SceneSetupRemoveObject.
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            name_x + name_w + 4.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2715}",
-            obj_key(index, OBJ_OFF_REMOVE),
-        );
-        self.object_remove_ids.push((remove_id, index));
-        cy += ROW_H;
-
-        if !expanded {
-            return cy + ROW_GAP;
-        }
-
-        let body_x = inner_x + PAD;
-        let body_w = inner_w - PAD;
-        if let Some(t) = &transform {
-            cy = self.build_triplet_row(tree, body_x, body_w, cy, "Position", &t.pos, index, OBJ_OFF_POS_X);
-            cy = self.build_triplet_row(tree, body_x, body_w, cy, "Rotation", &t.rot, index, OBJ_OFF_ROT_X);
-            cy = self.build_triplet_row(tree, body_x, body_w, cy, "Scale", &t.scale, index, OBJ_OFF_SCALE_X);
-        }
-        match &material {
-            ObjectMaterialVm::Pbr { color, metallic, roughness } => {
-                cy = self.build_triplet_row(tree, body_x, body_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
-                cy = self.build_object_numeric_row(
-                    tree, body_x, body_w, cy, "Metallic", metallic, index, OBJ_OFF_METALLIC_MINUS,
-                );
-                cy = self.build_object_numeric_row(
-                    tree, body_x, body_w, cy, "Roughness", roughness, index, OBJ_OFF_ROUGHNESS_MINUS,
-                );
-            }
-            ObjectMaterialVm::Other { color } => {
-                cy = self.build_triplet_row(tree, body_x, body_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
-            }
-            ObjectMaterialVm::None => {
-                tree.add_label(Some(self.content_parent), body_x, cy, body_w, ROW_H, "No material", label_style());
-                cy += ROW_H;
-            }
-        }
-        // ── Modifier stack (D6/P5): only for Known (grouped) objects — a
-        // Custom row has no group to splice into at all. ──
-        if let (Some((mods, addable)), Some(gid)) = (&modifiers, group_node_id) {
-            tree.add_label(Some(self.content_parent), body_x, cy, body_w, ROW_H, "Modifiers", label_style());
-            cy += ROW_H;
-            if *addable {
-                for m in mods {
-                    cy = self.build_modifier_row(tree, body_x, body_w, cy, index, gid, m, mods.len());
-                }
-                cy = self.build_add_modifier_row(tree, body_x, body_w, cy, index, gid);
-            } else {
-                tree.add_label(
-                    Some(self.content_parent),
-                    body_x,
-                    cy,
-                    body_w,
-                    ROW_H,
-                    "Custom chain — edit in graph",
-                    label_style(),
-                );
-                cy += ROW_H;
-            }
-        }
-        cy += ROW_GAP;
-        cy
     }
 
     /// One modifier-stack entry (P5/D6): display name + up/down/remove, then
@@ -2221,19 +2425,51 @@ impl ScenePanel {
                     self.close();
                     return (true, Vec::new());
                 }
-                // Expand/collapse toggles fold state only — no command, no
-                // layer needed, valid even before a `Live` state exists.
-                if let Some((index, _)) = self.object_expand_ids.iter().find(|(_, id)| *id == *node_id) {
-                    let cur = self.is_expanded(*index);
-                    self.object_expanded.insert(*index, !cur);
-                    return (true, Vec::new());
-                }
-                if let Some((index, _)) = self.light_expand_ids.iter().find(|(_, id)| *id == *node_id) {
-                    let cur = self.is_light_expanded(*index);
-                    self.light_expanded.insert(*index, !cur);
+                // D7: an outliner row click sets the UI-local selection —
+                // no command, no undo unit, valid even before a `Live` state
+                // exists (a rebuild on the very next frame re-derives
+                // Properties from it).
+                if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
+                    if let SceneSetupState::Live(vm) = &self.state {
+                        self.selection.insert(vm.layer_id.clone(), *sel);
+                    }
                     return (true, Vec::new());
                 }
                 let mut actions = Vec::new();
+                if let SceneSetupState::Live(vm) = &self.state {
+                    if let Some((_, row_value)) =
+                        self.outliner_eye_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        // The eye toggle: writes `scene_object.visible`
+                        // through the SAME fourth-surface path every other
+                        // row uses — the [0,1] threshold flips between 0.0
+                        // and 1.0 (D3's on/off convention).
+                        let new_value = if row_value.value > 0.5 { 0.0 } else { 1.0 };
+                        actions.push(PanelAction::SceneSetupParamChanged(
+                            vm.layer_id.clone(),
+                            row_value.addr.scope_path.clone(),
+                            row_value.addr.node_doc_id,
+                            row_value.addr.param_id.clone(),
+                            new_value,
+                        ));
+                    } else if let Some((_, index)) =
+                        self.object_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupDuplicateObject(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        ));
+                    } else if let Some((light_node_id, _, current_name)) =
+                        self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupRenameLightClicked(
+                            vm.layer_id.clone(),
+                            *light_node_id,
+                            current_name.clone(),
+                        ));
+                    }
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     if self.add_environment_id == Some(*node_id) {
                         actions.push(PanelAction::SceneSetupAddEnvironment(
@@ -2565,6 +2801,13 @@ impl ScenePanel {
         let (_, node_id, _) = self.object_name_ids.iter().find(|(gid, _, _)| *gid == group_node_id)?;
         Some(tree.get_bounds(*node_id))
     }
+
+    /// The light name label's rect for `light_node_id`, if the properties
+    /// header was built for it this frame — mirrors `object_name_rect`.
+    pub fn light_name_rect(&self, tree: &UITree, light_node_id: u32) -> Option<Rect> {
+        let (_, node_id, _) = self.light_name_ids.iter().find(|(id, _, _)| *id == light_node_id)?;
+        Some(tree.get_bounds(*node_id))
+    }
 }
 
 /// D10's committed degrees-display row table, checked by `param_id` alone:
@@ -2585,6 +2828,48 @@ fn is_degrees_param(param_id: &str) -> bool {
 /// fixed single row set, but its `+`/`-` buttons are captured the same way).
 fn stepper_hit_in(steppers: &[(NodeId, RowValue, f32)], node_id: NodeId) -> Option<(RowValue, f32)> {
     steppers.iter().find(|(id, _, _)| *id == node_id).map(|(_, row, delta)| (row.clone(), *delta))
+}
+
+/// Stable outliner-row key, derived from the selection identity itself
+/// (Camera/World are fixed; Light/Object key off the node's own doc id,
+/// which is stable across a rebuild — removal-stable, unlike an index).
+/// Placed well above every other range in this file (max ~130,000) so it
+/// can never collide.
+const OUTLINER_KEY_BASE: u64 = 90_000_000;
+const OUTLINER_EYE_KEY_BASE: u64 = 91_000_000;
+
+fn outliner_row_key(sel: SceneSelection) -> u64 {
+    match sel {
+        SceneSelection::Camera => OUTLINER_KEY_BASE,
+        SceneSelection::World => OUTLINER_KEY_BASE + 1,
+        SceneSelection::Light(id) => OUTLINER_KEY_BASE + 2 + (id as u64) * 2,
+        SceneSelection::Object(id) => OUTLINER_KEY_BASE + 3 + (id as u64) * 2,
+    }
+}
+
+fn outliner_eye_key(object_node_id: u32) -> u64 {
+    OUTLINER_EYE_KEY_BASE + object_node_id as u64
+}
+
+/// Selected-row styling, transcribed from the `layer_header.rs` precedent
+/// (`sel_accent_style`/`bg_style`, verified 2026-07-17: `tree.rs` carries NO
+/// selection styling at all — this panel has no per-row identity colour to
+/// brighten, so the tint applies the app-wide `SELECTED_LAYER_RING` colour
+/// directly, at low alpha, as a background wash rather than a border box —
+/// same "never a border box" doctrine `bg_style`'s own comment states.
+fn outliner_row_style(selected: bool) -> UIStyle {
+    let ring = color::SELECTED_LAYER_RING;
+    let sel_bg = Color32::new(ring.r, ring.g, ring.b, 40);
+    let sel_hover = Color32::new(ring.r, ring.g, ring.b, 60);
+    UIStyle {
+        bg_color: if selected { sel_bg } else { Color32::TRANSPARENT },
+        hover_bg_color: if selected { sel_hover } else { Color32::new(255, 255, 255, 18) },
+        text_color: if selected { ring } else { Color32::new(200, 200, 208, 255) },
+        font_size: color::FONT_LABEL,
+        text_align: TextAlign::Left,
+        corner_radius: color::SMALL_RADIUS,
+        ..UIStyle::default()
+    }
 }
 
 fn scrollbar_style() -> ScrollbarStyle {
@@ -2766,8 +3051,10 @@ mod tests {
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
                     index: 0,
-                    group_node_id: 42,
+                    object_node_id: 40,
+                    group_node_id: Some(42),
                     name: "Azalea".to_string(),
+                    visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false },
                     transform: Some(Box::new(TransformRowVm {
                         pos: triplet(50, 1.0, 2.0, 3.0, -100.0, 100.0),
                         rot: triplet(50, 0.0, 0.0, 0.0, -6.28, 6.28),
@@ -2798,12 +3085,13 @@ mod tests {
                     }],
                     modifiers_addable: true,
                 })),
-                ObjectRowVm::Custom { index: 1, transform: None },
+                ObjectRowVm::Custom { index: 1 },
             ],
             lights: vec![
                 LightRowVm::Known(Box::new(LightKnownRow {
                     index: 0,
                     node_doc_id: 60,
+                    name: "Sun".to_string(),
                     mode: EnumRowValue {
                         row: RowValue { addr: RowAddr::root(60, "mode"), value: 0.0, min: 0.0, max: 1.0, driven: false },
                         labels: vec!["Sun", "Point"],
@@ -2840,23 +3128,27 @@ mod tests {
     }
 
     #[test]
-    fn objects_section_renders_known_and_custom_rows_with_counts() {
+    fn objects_outliner_lists_known_and_custom_rows_properties_shows_the_selected_one() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Both rows built (one expand toggle each), only the Known row has a
-        // clickable name (the Custom row is a label, per D3).
-        assert_eq!(panel.object_expand_ids.len(), 2, "both objects get an expand toggle");
-        assert_eq!(panel.object_name_ids.len(), 1, "only the Known object has a renamable name");
-        assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's own group node id");
+        // Outliner rows: Camera + World + 1 Known light + 1 Known object are
+        // selectable (`outliner_row_ids`); the Custom object/light are
+        // listed too but as plain labels (D3: never hidden, but no
+        // addressable node id to select by, D12).
+        assert_eq!(panel.outliner_row_ids.len(), 4, "Camera + World + 1 known light + 1 known object");
+        // Default selection (D7): the first Known object — Azalea — so its
+        // properties header + body render without any click.
+        assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
+        assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
-        // The full expanded body: 3 transform triplets (9 cells) + 1 color
-        // triplet (3 cells) for the Known row = 12 drag cells; metallic/
-        // roughness add 2 more value cells; the one Bend modifier's Angle
-        // param (Numeric) adds 1 more (its Axis param is an Enum row — no
-        // drag-value cell, steppers only, tested separately).
+        // The full body always renders (no fold state left — the outliner
+        // IS the fold): 3 transform triplets (9 cells) + 1 color triplet (3
+        // cells) = 12 drag cells; metallic/roughness add 2 more value
+        // cells; the one Bend modifier's Angle param (Numeric) adds 1 more
+        // (its Axis param is an Enum row — no drag-value cell).
         assert_eq!(
             panel.object_value_cells.len(),
             15,
@@ -3038,10 +3330,13 @@ mod tests {
         ));
     }
 
-    /// BUG-193: the per-row "✕" in the Objects section dispatches
-    /// `SceneSetupRemoveObject` carrying THAT object's own `index` (not the
-    /// row's position among rendered rows) — proven against
-    /// `azalea_shaped_vm`'s object index 1 (the `Custom` row).
+    /// BUG-193/P5: the properties header's "Remove" button (Object
+    /// selection) dispatches `SceneSetupRemoveObject` carrying the selected
+    /// object's own `index`. A `Custom` row has no addressable node id
+    /// (D12), so — unlike v1's per-row "✕" — it can't be selected/removed
+    /// through the panel UI; this is a real reduction from v1's coverage,
+    /// flagged as an escalation in the P5 landing report rather than
+    /// improvised around.
     #[test]
     fn object_remove_click_emits_remove_object_action_with_its_own_index() {
         let mut panel = ScenePanel::new();
@@ -3049,13 +3344,10 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.object_remove_ids.len(), 2, "one remove button per object row");
-        let (remove_id, _) = panel
-            .object_remove_ids
-            .iter()
-            .find(|(_, index)| *index == 1)
-            .copied()
-            .unwrap();
+        // Default selection = the Known object (Azalea, index 0).
+        assert_eq!(panel.object_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
+        let (remove_id, index) = panel.object_remove_ids[0];
+        assert_eq!(index, 0);
 
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
             node_id: remove_id,
@@ -3065,25 +3357,50 @@ mod tests {
         assert!(consumed);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupRemoveObject(l, 99, 1) if *l == LayerId::new("layer-1")
+            PanelAction::SceneSetupRemoveObject(l, 99, 0) if *l == LayerId::new("layer-1")
         ));
     }
 
-    /// BUG-193: the Lights-section twin of the object-removal test above.
+    /// D11: the properties header's "Duplicate" button (Object selection)
+    /// dispatches `SceneSetupDuplicateObject` carrying the selected
+    /// object's own `index`.
     #[test]
-    fn light_remove_click_emits_remove_light_action_with_its_own_index() {
+    fn object_duplicate_click_emits_duplicate_object_action() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.light_remove_ids.len(), 2, "one remove button per light row");
-        let (remove_id, _) = panel
-            .light_remove_ids
-            .iter()
-            .find(|(_, index)| *index == 0)
-            .copied()
-            .unwrap();
+        assert_eq!(panel.object_duplicate_ids.len(), 1);
+        let (dup_id, index) = panel.object_duplicate_ids[0];
+        assert_eq!(index, 0);
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: dup_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupDuplicateObject(l, 99, 0) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    /// BUG-193/P5: the Lights-section twin of the object-removal test above
+    /// — the properties header's "Remove" button for a Light selection.
+    #[test]
+    fn light_remove_click_emits_remove_light_action_with_its_own_index() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        // Select the Known light (node 60) — not the default (Azalea).
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.light_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
+        let (remove_id, index) = panel.light_remove_ids[0];
+        assert_eq!(index, 0);
 
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
             node_id: remove_id,
@@ -3146,42 +3463,89 @@ mod tests {
         ));
     }
 
+    /// D7: clicking an outliner row changes the UI-local selection, and the
+    /// next build shows THAT item's properties instead — "select the object
+    /// to use the tools" (Peter). Proves the Object→World switch (Properties
+    /// content changes: object body gone, Environment/Fog appear) and that
+    /// a click on the World row is what does it.
     #[test]
-    fn collapsing_an_object_hides_its_body_rows() {
+    fn selecting_a_different_outliner_row_switches_properties_content() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let expand_id = panel.object_expand_ids[0].1;
+        // Default selection = Azalea: object body cells present, no
+        // environment/fog "add" affordances (azalea fixture's environment
+        // is None — but World isn't selected, so neither button builds).
+        assert!(!panel.object_value_cells.is_empty(), "Azalea's body renders by default");
+        assert!(panel.add_environment_id.is_none(), "World isn't selected — no Environment row built yet");
+
+        let (world_row_id, _) = *panel
+            .outliner_row_ids
+            .iter()
+            .find(|(_, sel)| *sel == SceneSelection::World)
+            .expect("World is always a selectable outliner row");
 
         let (consumed, _) = panel.handle_event(&UIEvent::Click {
-            node_id: expand_id,
+            node_id: world_row_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
         });
         assert!(consumed);
-        assert!(!panel.is_expanded(0), "the toggle click flipped this object's fold state");
+        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
 
         let mut tree2 = UITree::new();
         panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.object_value_cells.is_empty(), "collapsed row 0 builds no body controls");
+        assert!(panel.object_value_cells.is_empty(), "World selected — no object body renders");
+        assert!(panel.add_environment_id.is_some(), "World selected — Environment's Add affordance renders");
+    }
+
+    /// D7's fallback: removing the selected object from a rebuilt Vm falls
+    /// selection back to first-object-else-World, never a dangling id.
+    #[test]
+    fn selection_falls_back_when_the_selected_object_is_removed() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        let vm = azalea_shaped_vm();
+        panel.configure(SceneSetupState::Live(Box::new(vm.clone())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(
+            panel.selection.get(&LayerId::new("layer-1")),
+            Some(&SceneSelection::Object(40)),
+            "default selection resolves to Azalea's own scene_object doc id"
+        );
+
+        // Rebuild with the object gone (removed elsewhere) — only the
+        // Custom row and the light remain.
+        let mut vm2 = vm;
+        vm2.objects = vec![ObjectRowVm::Custom { index: 0 }];
+        vm2.object_count = 0;
+        panel.configure(SceneSetupState::Live(Box::new(vm2)));
+        let mut tree2 = UITree::new();
+        panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(
+            panel.selection.get(&LayerId::new("layer-1")),
+            Some(&SceneSelection::World),
+            "no Known object left — falls back to World, never a dangling Object(40)"
+        );
     }
 
     // ── P3: Lights + Camera sections ──
 
     #[test]
-    fn lights_section_renders_known_and_custom_rows() {
+    fn lights_outliner_lists_known_and_custom_rows_properties_shows_the_selected_one() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.light_expand_ids.len(), 2, "both lights get an expand toggle");
-        // The Known light's expanded body: mode(1) + color triplet(3) +
-        // intensity(1) + pos triplet(3) + aim triplet(3) + light_size(1) = 12
-        // value cells (cast_shadows/shadow_softness are enum steppers, not
-        // drag-armable value cells).
+        // The Known light's body (always rendered, no fold state left):
+        // mode(1) + color triplet(3) + intensity(1) + pos triplet(3) + aim
+        // triplet(3) + light_size(1) = value cells (cast_shadows/
+        // shadow_softness are enum steppers, not drag-armable value cells).
         assert_eq!(panel.light_value_cells.len(), 11, "color+pos+aim triplets (9) + intensity + light_size");
         assert!(panel.add_light_id.is_some());
     }
@@ -3191,6 +3555,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let enum_steppers: Vec<_> = panel.light_steppers.iter().filter(|(_, _, delta)| delta.abs() == 1.0).collect();
@@ -3210,6 +3575,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(
@@ -3218,8 +3584,13 @@ mod tests {
         );
     }
 
+    /// D3/D12's tolerance doctrine: an all-Custom-lights scene (no
+    /// addressable id at all) must still render every row as an outliner
+    /// label — never hidden, never a panic — even though none of them are
+    /// selectable through the panel UI (D12's own gap, same as Custom
+    /// objects, flagged in the P5 landing report).
     #[test]
-    fn more_than_four_lights_all_render_rows_no_panel_side_cap() {
+    fn more_than_four_lights_all_render_without_panicking_no_panel_side_cap() {
         let mut vm = azalea_shaped_vm();
         vm.lights = (0..5)
             .map(|i| LightRowVm::Custom { index: i })
@@ -3231,7 +3602,11 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(vm)));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.light_expand_ids.len(), 5, "all 5 light rows render — no panel-side cap");
+        assert!(tree.count() > 0, "5 custom light rows render without panicking");
+        assert!(
+            panel.outliner_row_ids.iter().all(|(_, sel)| !matches!(sel, SceneSelection::Light(_))),
+            "no Custom light has an addressable id to select by"
+        );
     }
 
     #[test]
@@ -3239,6 +3614,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let (intensity_id, intensity_row) = panel
@@ -3281,6 +3657,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         // Orbit/Tilt/Distance/FOV (4) + Lens's 4 fields = 8 camera value cells.
@@ -3324,6 +3701,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         // Position triplet (3) + yaw + pitch + roll + fov = 7 value cells, no lens.
@@ -3340,6 +3718,7 @@ mod tests {
         let mut panel2 = ScenePanel::new();
         panel2.open();
         panel2.configure(SceneSetupState::Live(Box::new(vm2)));
+        panel2.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
         let mut tree2 = UITree::new();
         panel2.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
         // Position triplet (3) + Target triplet (3) + fov = 7 value cells.
@@ -3355,37 +3734,45 @@ mod tests {
     /// are consumed.
     #[test]
     fn dock_numeric_cells_register_full_contract() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // Two passes — Object selected (default) then Light selected — so
+        // the invariant covers both properties bodies, not just whichever
+        // happens to be the default selection.
+        for selection in [None, Some(SceneSelection::Light(60))] {
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+            if let Some(sel) = selection {
+                panel.selection.insert(LayerId::new("layer-1"), sel);
+            }
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-        let mut cell_ids: Vec<NodeId> = panel.row_ids.iter().filter_map(|ids| ids.value).collect();
-        cell_ids.extend(panel.object_value_cells.iter().map(|(id, _)| *id));
-        cell_ids.extend(panel.light_value_cells.iter().map(|(id, _)| *id));
-        cell_ids.extend(panel.camera_value_cells.iter().map(|(id, _)| *id));
-        assert!(!cell_ids.is_empty(), "azalea fixture must exercise at least one drag-armable cell");
+            let mut cell_ids: Vec<NodeId> = panel.row_ids.iter().filter_map(|ids| ids.value).collect();
+            cell_ids.extend(panel.object_value_cells.iter().map(|(id, _)| *id));
+            cell_ids.extend(panel.light_value_cells.iter().map(|(id, _)| *id));
+            cell_ids.extend(panel.camera_value_cells.iter().map(|(id, _)| *id));
+            assert!(!cell_ids.is_empty(), "azalea fixture must exercise at least one drag-armable cell");
 
-        for id in cell_ids {
-            let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
-                node_id: id,
-                pos: Vec2::ZERO,
-                modifiers: crate::input::Modifiers::default(),
-            });
-            assert!(drag_consumed, "cell {id:?} must be drag-armable");
-            panel.handle_event(&UIEvent::PointerUp { node_id: Some(id), pos: Vec2::ZERO });
+            for id in cell_ids {
+                let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
+                    node_id: id,
+                    pos: Vec2::ZERO,
+                    modifiers: crate::input::Modifiers::default(),
+                });
+                assert!(drag_consumed, "cell {id:?} must be drag-armable");
+                panel.handle_event(&UIEvent::PointerUp { node_id: Some(id), pos: Vec2::ZERO });
 
-            let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
-                node_id: id,
-                pos: Vec2::ZERO,
-                modifiers: crate::input::Modifiers::default(),
-            });
-            assert!(typein_consumed, "cell {id:?} must also open type-in (registration parity)");
-            assert!(
-                matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
-                "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
-            );
+                let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                    node_id: id,
+                    pos: Vec2::ZERO,
+                    modifiers: crate::input::Modifiers::default(),
+                });
+                assert!(typein_consumed, "cell {id:?} must also open type-in (registration parity)");
+                assert!(
+                    matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                    "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
+                );
+            }
         }
     }
 
@@ -3397,6 +3784,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let (light_id, light_row) = panel
@@ -3450,6 +3838,7 @@ mod tests {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 

@@ -7,6 +7,16 @@
   },
   "Snapshot",
   {
+    "Assert": { "selector": { "Query": { "text": "Outliner" } }, "check": "Exists" }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "🌍 World" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
     "Assert": {
       "selector": { "Query": { "text": "Environment" } },
       "check": "Exists"
@@ -57,6 +67,7 @@
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
   {
     "Assert": {
       "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.00" } },
@@ -95,6 +106,7 @@
       "check": "Exists"
     }
   },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
   { "Key": { "key": "Z", "modifiers": { "command": true } } },
   { "Key": { "key": "Z", "modifiers": { "command": true } } },

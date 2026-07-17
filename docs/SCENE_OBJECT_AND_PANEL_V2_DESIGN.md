@@ -3,10 +3,18 @@
 **Status: IN PROGRESS — P1+P2 SHIPPED @ `5c5dacfe`, P3 SHIPPED @ `da452351`
 (both 2026-07-17, landing reports
 `docs/landings/2026-07-17-scene-object-v2-p1-p2.md` and
-`docs/landings/2026-07-17-scene-object-v2-p3.md`); P4–P5 not implemented.
-BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. BUG-212
-opened by P3 (DuplicateSceneObjectCommand's fresh NodeIds break imported
-objects' string bindings — real gap, not a regression, needs its own fix).**
+`docs/landings/2026-07-17-scene-object-v2-p3.md`); P4 (value-cell contract)
+implemented @ `33c575ab`. P5 (SceneVm v2 / D12 + outliner+properties)
+implemented this session, worktree `.claude/worktrees/slot-1`, not yet
+landed to main — full gate green (2188 focused tests, clippy clean, 9/10 UI
+flows passing, held-out merged-scene render verified) EXCEPT the "Add
+modifier" chip, which is a confirmed dead affordance against any real
+grouped object — see BUG-216 (the D6 modifier-stack commands still splice
+at the pre-D12 group_output.vertices port, out of this phase's blast
+radius, fix owed to `manifold-editing`). BUG-210 (AddSceneObjectCommand
+pre-migration wires) FIXED by P3. BUG-212 opened by P3
+(DuplicateSceneObjectCommand's fresh NodeIds break imported objects' string
+bindings — real gap, not a regression, needs its own fix).**
 **(APPROVED design 2026-07-17 · Fable 5, design session with Peter)**
 **Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —

@@ -1591,6 +1591,26 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name) => {
+                    // P5 light-row/properties-header name click — same shape
+                    // as `SceneSetupRenameObjectClicked` above, addressed by
+                    // the light's own doc id (no group indirection).
+                    if let Some(r) = self
+                        .ws
+                        .ui_root
+                        .scene_setup_panel
+                        .light_name_rect(&self.ws.ui_root.tree, *light_node_id)
+                    {
+                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::SceneLightRename(*light_node_id),
+                            name,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            11.0,
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::OpenGeneratorGraphEditor => {
                     // Ask the content thread to snapshot the active layer's
                     // generator graph and set the unified watched_graph_target

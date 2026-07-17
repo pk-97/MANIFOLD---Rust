@@ -1615,6 +1615,33 @@ impl Application {
                     self.needs_rebuild = true;
                 }
             }
+            TextInputField::SceneLightRename(light_node_id) => {
+                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6/P5: a light's name
+                // is a plain `SetNodeHandleCommand` write — no group sweep
+                // (a light is never wrapped in a group, unlike an object).
+                let new_handle = text.trim().to_string();
+                if !new_handle.is_empty()
+                    && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
+                {
+                    if let Some(default) =
+                        crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
+                    {
+                        let target = manifold_core::GraphTarget::Generator(layer_id);
+                        let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
+                            target,
+                            Vec::new(),
+                            light_node_id,
+                            new_handle,
+                            default,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::GraphStringParam(node_id) => {
                 if let (Some(param_name), Some(target), Some(default)) = (
                     self.text_input.graph_param_name.take(),

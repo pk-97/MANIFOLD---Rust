@@ -591,6 +591,7 @@ pub fn dispatch(
         | PanelAction::SceneSetupAddLight(..)
         | PanelAction::SceneSetupRemoveObject(..)
         | PanelAction::SceneSetupRemoveLight(..)
+        | PanelAction::SceneSetupDuplicateObject(..)
         | PanelAction::SceneSetupImportModelClicked(..)
         | PanelAction::SceneSetupAddModifier(..)
         | PanelAction::SceneSetupRemoveModifier(..)
@@ -638,6 +639,10 @@ pub fn dispatch(
         // editor, SCENE_SETUP_PANEL_DESIGN.md P2) — same shape as
         // `AudioSendLabelClicked` above.
         | PanelAction::SceneSetupRenameObjectClicked(..)
+        // Consumed in app_render (opens the Scene Setup light-rename inline
+        // editor, SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P5) — same shape as
+        // `SceneSetupRenameObjectClicked` above.
+        | PanelAction::SceneSetupRenameLightClicked(..)
         // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
         | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
 

@@ -248,6 +248,16 @@ pub enum PanelAction {
     /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
     /// SCENE_BUILD P3 rename-sweep command, unchanged).
     SceneSetupRenameObjectClicked(LayerId, u32, String),
+    /// P5 light-row/properties-header name click: `(layer_id, light_node_id,
+    /// current_name)` — same shape as [`Self::SceneSetupRenameObjectClicked`],
+    /// opens the shared inline text-input session over the row's name label;
+    /// commit dispatches the plain `SetNodeHandleCommand` (no group sweep —
+    /// nothing downstream displays light names besides this row).
+    SceneSetupRenameLightClicked(LayerId, u32, String),
+    /// P5 properties-header "Duplicate" button (Object selection):
+    /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
+    /// existing `DuplicateSceneObjectCommand` (D11).
+    SceneSetupDuplicateObject(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens a native file dialog (the app's existing open-file plumbing,
     /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on
