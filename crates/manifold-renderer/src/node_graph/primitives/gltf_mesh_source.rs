@@ -79,6 +79,32 @@ fn apply_mesh_fit(verts: Vec<MeshVertex>, fit_unit_box: bool, recenter: bool) ->
         .collect()
 }
 
+/// BUG-221: a plain constant per-vertex translate, applied once at parse
+/// time (same "apply once on the background thread" contract as
+/// `apply_mesh_fit`), decoupled from `fit`/`recenter`'s uniform-scale
+/// behavior. `gltf_import.rs` uses this to shift a non-skinned object's
+/// mesh so local `(0,0,0)` lands on the object's OWN bounding-box center
+/// instead of wherever the source glTF authored its local origin —
+/// `node.transform_3d` always rotates about local `(0,0,0)`
+/// (`render_scene.rs`'s `model_matrix`), so this is what makes rotating
+/// that object's transform spin it about its own visual center. `[0,0,0]`
+/// (the default) is a strict no-op — byte-identical to every pre-existing
+/// gltf preset/hand-built node that never sets this param.
+fn apply_translate(verts: Vec<MeshVertex>, offset: [f32; 3]) -> Vec<MeshVertex> {
+    if offset == [0.0, 0.0, 0.0] {
+        return verts;
+    }
+    verts
+        .into_iter()
+        .map(|mut v| {
+            for (p, o) in v.position.iter_mut().zip(offset.iter()) {
+                *p += o;
+            }
+            v
+        })
+        .collect()
+}
+
 crate::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
@@ -157,6 +183,34 @@ crate::primitive! {
         // `merge_import_into_graph` (scale-sanity's reference-radius pick).
         // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
         // importer) — never a fabricated non-negative default.
+        // BUG-221: a plain constant per-vertex translate — see
+        // `apply_translate`'s doc comment. Not port-shadowed: it is an
+        // importer-authored constant baked once at parse time (like
+        // `fit`/`recenter`), never a live-performed scalar.
+        ParamDef {
+            name: Cow::Borrowed("translate_x"),
+            label: "Translate X",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("translate_y"),
+            label: "Translate Y",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("translate_z"),
+            label: "Translate Z",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: None,
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("source_vertex_count"),
             label: "Source Vertex Count",
@@ -175,7 +229,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder`. mesh_index=-1 means whole scene, world-combined under the default scene's transform hierarchy (the default — \"just drop a model in\"); mesh_index >= 0 plus primitive_index select a single mesh or primitive in LOCAL space so the importer can place it via node.render_scene's per-object pos_*/rot_*/scale_* transforms instead of baking a node transform in. max_capacity is the pre-allocation ceiling in vertices; the glTF importer sets it to the exact parsed vertex count, so manual drops of meshes exceeding it are truncated with a logged warning rather than silently dropping the tail. fit=unit_box uniformly scales the parsed mesh so its longest bounding-box axis is 1.0 — every scan arrives at arbitrary scale, and this makes deformer defaults (push_along_normals amount, mesh_ramp bounds) meaningful without hand-tuning per-asset. recenter (default true, only consulted under fit=unit_box) additionally translates the bounding-box center to the origin; false keeps the box's original center and only rescales around it. fit defaults to `none`, a strict no-op — every pre-existing gltf preset is byte-identical after this param was added. Both apply once on the background parse thread, not per-frame.",
+    composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder`. mesh_index=-1 means whole scene, world-combined under the default scene's transform hierarchy (the default — \"just drop a model in\"); mesh_index >= 0 plus primitive_index select a single mesh or primitive in LOCAL space so the importer can place it via node.render_scene's per-object pos_*/rot_*/scale_* transforms instead of baking a node transform in. max_capacity is the pre-allocation ceiling in vertices; the glTF importer sets it to the exact parsed vertex count, so manual drops of meshes exceeding it are truncated with a logged warning rather than silently dropping the tail. fit=unit_box uniformly scales the parsed mesh so its longest bounding-box axis is 1.0 — every scan arrives at arbitrary scale, and this makes deformer defaults (push_along_normals amount, mesh_ramp bounds) meaningful without hand-tuning per-asset. recenter (default true, only consulted under fit=unit_box) additionally translates the bounding-box center to the origin; false keeps the box's original center and only rescales around it. fit defaults to `none`, a strict no-op — every pre-existing gltf preset is byte-identical after this param was added. translate_x/y/z (BUG-221) is a plain constant per-vertex offset applied AFTER fit, independent of it and defaulting to [0,0,0] (strict no-op) — the glTF importer uses it to recenter a non-skinned object's mesh about its OWN bounding-box center so node.transform_3d's rotation (always about local (0,0,0)) spins the object about its visual center instead of wherever the source file authored its local origin. Both fit/recenter and translate_x/y/z apply once on the background parse thread, not per-frame.",
     examples: [],
     picker: { label: "glTF Mesh", category: Atom },
     summary: "Loads a glTF/.glb model file from disk as mesh geometry, so imported 3D assets flow into the render pipeline like any other shape primitive.",
@@ -184,16 +238,17 @@ crate::primitive! {
     aliases: ["gltf", "glb", "import mesh", "load model", "File In SOP"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, mesh_index, primitive_index, material_index, fit, recenter)
-        // last parsed (or in flight). Any change re-triggers a background
-        // parse — including fit/recenter, which apply to the freshly
-        // parsed geometry ON that same background thread (D7), never
-        // per-frame. fit/recenter are authoring-time enum/bool toggles,
-        // not port-shadowed performance scalars, so a full re-parse on
-        // change is the simple, correct choice over a second CPU-side
-        // cache tier.
-        last_key: (String, i32, i32, i32, u32, bool) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false),
+        // (path, mesh_index, primitive_index, material_index, fit, recenter,
+        // translate_x, translate_y, translate_z) last parsed (or in
+        // flight). Any change re-triggers a background parse — including
+        // fit/recenter/translate_*, which apply to the freshly parsed
+        // geometry ON that same background thread (D7), never per-frame.
+        // fit/recenter/translate_* are authoring-time toggles, not
+        // port-shadowed performance scalars, so a full re-parse on change
+        // is the simple, correct choice over a second CPU-side cache tier.
+        // BUG-221: translate_x/y/z joined the tuple the same way.
+        last_key: (String, i32, i32, i32, u32, bool, f32, f32, f32) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, 0.0, 0.0, 0.0),
         // Last successfully parsed geometry (CPU-side). Stays resident
         // across frames — only re-uploaded to `staging` when it changes.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -248,11 +303,34 @@ impl Primitive for GltfMeshSource {
         };
         let recenter = matches!(ctx.params.get("recenter"), Some(ParamValue::Bool(true)));
         let fit_unit_box = fit_idx == 1;
+        let translate_x = match ctx.params.get("translate_x") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let translate_y = match ctx.params.get("translate_y") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let translate_z = match ctx.params.get("translate_z") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let translate = [translate_x, translate_y, translate_z];
 
         // 2. Re-trigger a background parse if the effective selection (or
-        // the fit/recenter authoring choice) changed since the last one we
-        // started.
-        let key = (path.clone(), mesh_index, primitive_index, material_index, fit_idx, recenter);
+        // the fit/recenter/translate_* authoring choice) changed since the
+        // last one we started.
+        let key = (
+            path.clone(),
+            mesh_index,
+            primitive_index,
+            material_index,
+            fit_idx,
+            recenter,
+            translate_x,
+            translate_y,
+            translate_z,
+        );
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_verts.clear();
@@ -289,7 +367,8 @@ impl Primitive for GltfMeshSource {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let result = load_gltf_mesh(&path_buf, selector)
-                        .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter));
+                        .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
+                        .map(|verts| apply_translate(verts, translate));
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -411,6 +490,9 @@ mod tests {
                 "max_capacity",
                 "fit",
                 "recenter",
+                "translate_x",
+                "translate_y",
+                "translate_z",
                 "source_vertex_count",
                 "source_bbox_radius"
             ]
