@@ -4850,6 +4850,30 @@ mod tests {
             .expect("import graph with an animated object must build through PresetRuntime::from_def");
     }
 
+    /// BUG-204 regression: the A4 Retrigger card param is `is_trigger`
+    /// and binds to the animation nodes' `trigger_count` — which must be
+    /// `ParamType::Trigger`, or validate.rs card lint (d) rejects the
+    /// assembled graph and EVERY animated or rigged glb fails at import
+    /// (skeleton_animated.glb, 2026-07-17: A4 shipped `trigger_count` as
+    /// Int four days after the lint landed). Runs the real fixture through
+    /// the same lint the import path uses.
+    #[test]
+    fn animated_and_rigged_import_passes_card_lints() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let (def, _report) =
+            super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        let registry = PrimitiveRegistry::with_builtin();
+        let graph = def.clone().into_graph(&registry).expect("import graph must build");
+        let (errors, _warnings) =
+            crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+        assert!(
+            errors.is_empty(),
+            "card lints must accept the assembled animated+rigged import: {errors:?}"
+        );
+    }
+
     /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 (Table params + the new
     /// node type survive V1 JSON save→reload — the STANDARD §5 gate must
     /// PROVE this, not assume it, per the phase brief).
