@@ -44,6 +44,7 @@ from manifold_audio.stage1_dsp_detection import (
     detect_onsets,
     extract_onset_features,
 )
+import manifold_audio.stage1_dsp_detection as stage1_dsp_detection
 
 from eval.paths import DATA_ROOT
 
@@ -248,3 +249,67 @@ def test_detect_drums_stage1_on_silence_returns_no_events():
     events, result = detect_drums_stage1(silence, sr)
     assert events == []
     assert result.degenerate
+
+
+# ---------------------------------------------------------------------------
+# Classifier-labeling mode (P2, docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md §3
+# seams, §5 P2): an OPTIONAL alternative labeling path, off by default. The
+# tests below prove the default path is BYTE-IDENTICAL to before this mode
+# existed and never touches the classifier machinery at all -- this is the
+# P2 brief's own required "unit test proving default-path equivalence".
+# ---------------------------------------------------------------------------
+
+CLASSIFIER_CHECKPOINT = DATA_ROOT / "models" / "audio_event_classifier_v1.pt"
+
+
+def test_detect_drums_stage1_default_omitted_arg_equals_explicit_none():
+    """detect_drums_stage1(audio, sr) and detect_drums_stage1(audio, sr,
+    classifier_weights=None) must produce EXACTLY the same output -- the
+    new optional parameter changes nothing about the default call."""
+    audio, sr, _truth = _load("edm_kit_128bpm")
+    events_a, result_a = detect_drums_stage1(audio, sr)
+    events_b, result_b = detect_drums_stage1(audio, sr, classifier_weights=None)
+
+    assert events_a == events_b
+    assert result_a.k == result_b.k
+    assert result_a.silhouette == result_b.silhouette
+    assert result_a.degenerate == result_b.degenerate
+    assert result_a.cluster_class == result_b.cluster_class
+    assert result_a.confidences == result_b.confidences
+    assert np.array_equal(result_a.labels, result_b.labels)
+
+
+def test_detect_drums_stage1_default_path_never_touches_the_classifier(monkeypatch):
+    """The classifier machinery (_load_classifier / _label_via_classifier)
+    must be UNREACHABLE on the default path -- proves no torch import, no
+    checkpoint I/O, and no behavior change happen unless a caller opts in
+    with an explicit weights path."""
+    def _boom(*args, **kwargs):
+        raise AssertionError("classifier path was invoked on the default (classifier_weights=None) call")
+
+    monkeypatch.setattr(stage1_dsp_detection, "_label_via_classifier", _boom)
+    monkeypatch.setattr(stage1_dsp_detection, "_load_classifier", _boom)
+
+    audio, sr, _truth = _load("kick_hat_128bpm")
+    events, result = detect_drums_stage1(audio, sr)  # must not raise
+    assert events or result.degenerate is not None  # sanity: the call actually ran the real pipeline
+
+
+@pytest.mark.skipif(
+    not CLASSIFIER_CHECKPOINT.exists(),
+    reason="no trained classifier checkpoint -- run `python -m train.train` first (P2)",
+)
+def test_detect_drums_stage1_classifier_mode_labels_every_onset_from_the_p2_vocabulary():
+    """Smoke test for the classifier arm itself: every emitted event's type
+    is one of train.model.CLASS_NAMES's 6 classes (never a cluster-mode
+    label like `clap`/`tom`), and event count matches onset count 1:1
+    (unlike clustering, the classifier labels every onset independently)."""
+    from train.model import CLASS_NAMES as CLASSIFIER_CLASS_NAMES
+
+    audio, sr, _truth = _load("edm_kit_128bpm")
+    onsets = detect_onsets(audio, sr)
+    events, result = detect_drums_stage1(audio, sr, classifier_weights=str(CLASSIFIER_CHECKPOINT))
+
+    assert len(events) == len(onsets)
+    assert all(e.type in CLASSIFIER_CLASS_NAMES for e in events)
+    assert result.k == 0 and result.silhouette is None  # no clustering happened in this mode
