@@ -1,0 +1,12 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": { "selector": { "Query": { "text": "Outliner" } }, "check": "Exists" }
+  }
+]

@@ -102,6 +102,31 @@ pub enum TextInputField {
     /// routes to `RenameGroupCommand`, addressed at the layer directly (no
     /// graph editor needs to be open — the panel is a fourth surface).
     SceneObjectRename(u32),
+    /// Scene Setup panel light-row rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
+    /// P5). Carries the light node's own doc id; the target layer rides on
+    /// `TextInputState::scene_object_layer_id` (shared with
+    /// `SceneObjectRename` — the two sessions are mutually exclusive, only
+    /// one text edit is ever in flight at a time). Commit dispatches the
+    /// plain `SetNodeHandleCommand` (no group sweep — a light is never
+    /// wrapped in a group).
+    SceneLightRename(u32),
+    /// Scene Setup dock numeric value-cell type-in
+    /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8's `EditValue` target).
+    /// Carries the target node's doc id (mirrors `GraphNumericParam`'s
+    /// shape); the rest (layer, scope_path, param_id, D10's `degrees` flag)
+    /// rides on [`TextInputState::scene_numeric_param`] (not `Copy`). Commit
+    /// parses f32 (degrees rows convert to radians), dispatches the SAME
+    /// `PanelAction::SceneSetupParamChanged` write the dock's drag/steppers
+    /// already use — ONE undo unit, no clamp (PARAM_RANGE_CONTRACT P1).
+    SceneNumericParam(u32),
+    /// Audio Setup dock gain-stepper value-cell type-in (P4's audio-dock
+    /// sibling of `SceneNumericParam`, D8). Carries nothing on the `Copy`
+    /// enum (`AudioSendId` isn't `Copy`); the send id rides on
+    /// [`TextInputState::audio_send_gain_param`]. Commit parses f32,
+    /// dispatches `SetAudioSendGainCommand` directly — no clamp (the
+    /// `AudioSendGainDragChanged` action the live drag uses DOES clamp to
+    /// the trim range, which type-in must not).
+    AudioSendGainParam,
 }
 
 impl TextInputField {
@@ -170,6 +195,35 @@ pub struct GraphNumericParamCtx {
     /// commit must write through the outer card param's own path
     /// (`SetOuterParam`), never `SetGraphNodeParam` on the inner node.
     pub outer_param_id: Option<String>,
+}
+
+/// Context for an in-flight Scene Setup dock numeric type-in — set when the
+/// box opens ([`TextInputField::SceneNumericParam`]) and read on commit
+/// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8). Mirrors `InspectorParamCtx`'s
+/// shape; the write address is the dock's own `(scope_path, node_doc_id,
+/// param_id)` (`PanelAction::SceneSetupParamChanged`'s tuple), not a
+/// `ParamId` — the dock addresses graph nodes directly, not effect/generator
+/// param slots. No `old_value` here (unlike `InspectorParamCtx`): commit
+/// reads the live project value as the undo baseline directly — nothing else
+/// can write this field while the single-session type-in box is open.
+#[derive(Debug, Clone)]
+pub struct SceneNumericParamCtx {
+    pub layer_id: manifold_core::LayerId,
+    pub scope_path: Vec<u32>,
+    pub param_id: String,
+    /// D10: true for the committed degrees-display row table
+    /// (`transform_3d.rot_*`, `orbit_camera.orbit`/`tilt`, `free_camera`'s
+    /// euler triplet, `fov_y` on all three camera atoms) — commit converts
+    /// the typed degrees to radians before dispatch. Storage/model stay
+    /// radians; this is the ONLY place that conversion happens.
+    pub degrees: bool,
+}
+
+/// Context for an in-flight Audio Setup dock gain-stepper type-in
+/// ([`TextInputField::AudioSendGainParam`]), read on commit.
+#[derive(Debug, Clone)]
+pub struct AudioSendGainParamCtx {
+    pub send_id: manifold_core::AudioSendId,
 }
 
 /// Which library door a [`TextInputField::SavePresetName`] session is headed
@@ -293,6 +347,12 @@ pub struct TextInputState {
     /// Context for `GraphNumericParam` (param name + clamp range +
     /// `outer_param_id`). Set right after `begin()`, read on commit (P5d).
     pub graph_numeric_param: Option<GraphNumericParamCtx>,
+    /// Context for `SceneNumericParam` (layer + scope_path + param_id +
+    /// D10's `degrees` flag). Set right after `begin()`, read on commit (P4).
+    pub scene_numeric_param: Option<SceneNumericParamCtx>,
+    /// Context for `AudioSendGainParam` (the send id). Set right after
+    /// `begin()`, read on commit (P4).
+    pub audio_send_gain_param: Option<AudioSendGainParamCtx>,
     /// Context for `SavePresetName` (kind + effective def + destination). Set
     /// right after `begin()`, read (and taken) on commit.
     pub save_preset: Option<SavePresetCtx>,
@@ -333,6 +393,8 @@ impl TextInputState {
             inspector_param: None,
             driver_free_period: None,
             graph_numeric_param: None,
+            scene_numeric_param: None,
+            audio_send_gain_param: None,
             save_preset: None,
             rename_preset: None,
             dragging: false,
@@ -393,6 +455,8 @@ impl TextInputState {
         self.inspector_param = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
+        self.scene_numeric_param = None;
+        self.audio_send_gain_param = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;
@@ -440,6 +504,8 @@ impl TextInputState {
         self.inspector_param = None;
         self.driver_free_period = None;
         self.graph_numeric_param = None;
+        self.scene_numeric_param = None;
+        self.audio_send_gain_param = None;
         self.save_preset = None;
         self.rename_preset = None;
         self.dragging = false;
@@ -585,3 +651,58 @@ pub const TEXT_INPUT_PAD_V: f32 = 2.0;
 pub const TEXT_INPUT_CURSOR_W: f32 = 1.0;
 /// Cursor blink period (seconds per half-cycle).
 pub const TEXT_INPUT_BLINK_PERIOD: f64 = 0.5;
+
+/// Lenient numeric parse shared by every type-in commit path (`InspectorParam`,
+/// `SceneNumericParam`, `AudioSendGainParam`): keep only the leading numeric
+/// head, so a value typed with a trailing unit or stray character (e.g. an
+/// angle "45°") still commits instead of silently no-op'ing. Pure — factored
+/// out of the commit match arms so the parse itself is unit-testable without
+/// constructing a whole `Application` (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md`
+/// P4's BUG-198 note: type-in gates at L2 + unit, never a faked L3).
+pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
+    let cleaned: String = text
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+        .collect();
+    cleaned.parse::<f32>().ok()
+}
+
+/// D10's degrees→radians commit-side conversion — the panel boundary's other
+/// half (the display side lives in `scene_setup_panel.rs`'s
+/// `is_degrees_param` + triplet/camera-row formatters). Pure passthrough
+/// when `degrees` is false, so every non-angle `SceneNumericParam` commit
+/// takes the identical path it always did.
+pub fn scene_numeric_commit_value(parsed: f32, degrees: bool) -> f32 {
+    if degrees { parsed.to_radians() } else { parsed }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn lenient_parse_keeps_only_the_numeric_head() {
+        assert_eq!(parse_lenient_numeric("3.5"), Some(3.5));
+        assert_eq!(parse_lenient_numeric("45°"), Some(45.0));
+        assert_eq!(parse_lenient_numeric("  -0.42  "), Some(-0.42));
+        assert_eq!(parse_lenient_numeric("not a number"), None);
+    }
+
+    /// P4, D10: typing "45" into a degrees row must land at π/4 rad
+    /// (0.7853981), tolerance-checked — the commit-side half of the
+    /// degrees-display boundary (BUG-198's L2 + unit gate for type-in).
+    #[test]
+    fn degrees_row_commit_converts_to_radians() {
+        let parsed = parse_lenient_numeric("45").expect("\"45\" parses");
+        let radians = scene_numeric_commit_value(parsed, true);
+        assert!((radians - 0.7853981).abs() < 1e-5, "got {radians}");
+    }
+
+    /// A non-degrees row's commit value is untouched by the conversion.
+    #[test]
+    fn non_degrees_row_commit_passes_through() {
+        let parsed = parse_lenient_numeric("0.42").expect("\"0.42\" parses");
+        assert_eq!(scene_numeric_commit_value(parsed, false), 0.42);
+    }
+}

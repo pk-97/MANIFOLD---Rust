@@ -2789,6 +2789,41 @@ impl UIRoot {
                 }
                 true
             }
+            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D9: click on a 3+-label
+            // enum value cell in the Scene Setup dock opens the shared
+            // dropdown — items = the row's label set, checked at the current
+            // index, each carrying the SAME `SceneSetupParamChanged` write
+            // the dock's steppers already dispatch (no new mutation path).
+            // `cell_node_id` resolves the anchor directly (the panel has no
+            // `&UITree` in `handle_event` to compute it itself).
+            PanelAction::SceneSetupEnumClicked {
+                layer_id,
+                scope_path,
+                node_doc_id,
+                param_id,
+                labels,
+                current_index,
+                cell_node_id,
+            } => {
+                let cell_trigger = self.tree.get_bounds(*cell_node_id);
+                let items: Vec<DropdownItem> = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| {
+                        DropdownItem::new(label)
+                            .with_check(i as u32 == *current_index)
+                            .with_action(PanelAction::SceneSetupParamChanged(
+                                layer_id.clone(),
+                                scope_path.clone(),
+                                *node_doc_id,
+                                param_id.clone(),
+                                i as f32,
+                            ))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, cell_trigger);
+                true
+            }
             _ => false,
         }
     }
