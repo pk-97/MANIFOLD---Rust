@@ -364,33 +364,69 @@ fn node_matches(
 /// that's actually shipped). Both are "the same row" to a human reading the
 /// dump; this is the resolver matching that intent instead of a topology
 /// the real tree doesn't have.
+///
+/// BUG-192: the ORIGINAL version of this function (git history) walked from
+/// EVERY node whose text equalled `under`, all the way up to the tree root,
+/// and returned `true` the instant that walk crossed ANY ancestor `nodes[i]`
+/// also has — not the NEAREST one. Two failure modes fell out of that:
+///
+/// 1. Zero match: `param_card.rs`'s generator rows parent every row's
+///    label/track/value_text FLAT to the literal tree root
+///    (`build_generator`/`build_param_row`'s `parent: None` — "generators
+///    parent rows flat to the root", source comment) — label, slider, and
+///    value across the WHOLE card share `parent_id: None`. A `None`-parented
+///    node's ancestor chain is empty, so neither check above could ever
+///    fire — a flat-sibling row's `under_text` query always returned zero
+///    matches, full stop, no matter which row.
+/// 2. Cross-match: a REAL dock with per-row containers nested under one
+///    shared OUTER container (`layer_header.rs`'s actual shape — every row's
+///    `row_clip` is itself a child of ONE shared scroll `clip_parent`) could
+///    walk THROUGH that shared outer container and match a DIFFERENT row's
+///    label, because "any shared ancestor, however far up" is true for
+///    almost every two nodes in a real tree (they all share the scroll
+///    clip, the dock, eventually the UI root). `under_text_walks_ancestors`
+///    (below) never caught this — its two rows are each parented straight
+///    to `None`, with no outer container in common.
+///
+/// The fix: walk OUTWARD from `nodes[i]` one enclosing level at a time
+/// (`level`, `level`'s parent, that parent's parent, …). At each level,
+/// first check whether the level's own immediate parent literally carries
+/// `under` as its text (the doc's literal-ancestor case). Otherwise, scan
+/// backward through nodes sharing that SAME parent_id (real container or
+/// `None`) for the NEAREST preceding one with ANY text — build order puts a
+/// row's own label before the rest of that row's controls, so this is "the
+/// nearest labeled row" without needing a real container to define "row" at
+/// all. Stopping at the first ANY-text node (rather than scanning past it)
+/// is what keeps two same-level rows from cross-matching; only climbing to
+/// the next level when a level has NO texted sibling at all (never found
+/// any signal there) is what keeps the walk from tunnelling through a
+/// shared outer container the way the original all-the-way-to-root walk
+/// did. Terminates: a parent's index is always lower than its child's (a
+/// node can only reference a `NodeId` that already exists), so `level`
+/// strictly decreases every climb.
 fn under_text_matches(nodes: &[crate::node::UINode], i: usize, under: &str) -> bool {
-    let mut candidate_ancestors: Vec<usize> = Vec::new();
-    let mut cur = nodes[i].parent_id;
-    while let Some(p) = cur {
-        candidate_ancestors.push(p.index());
-        cur = nodes.get(p.index()).and_then(|n| n.parent_id);
-    }
-
-    for (j, n) in nodes.iter().enumerate() {
-        if n.text.as_deref() != Some(under) {
-            continue;
-        }
-        // Literal ancestor case.
-        if candidate_ancestors.contains(&j) {
+    let mut level = i;
+    loop {
+        let parent = nodes[level].parent_id;
+        // Literal-ancestor case: the enclosing container itself carries
+        // `under` as its own text.
+        if let Some(p) = parent
+            && nodes[p.index()].text.as_deref() == Some(under)
+        {
             return true;
         }
-        // Common-ancestor (same-row) case: does the text node's own ancestor
-        // chain cross any ancestor of the candidate?
-        let mut cur = n.parent_id;
-        while let Some(p) = cur {
-            if candidate_ancestors.contains(&p.index()) {
-                return true;
-            }
-            cur = nodes.get(p.index()).and_then(|nn| nn.parent_id);
+        // Nearest-labeled-row case: the closest preceding same-parent
+        // sibling that carries ANY text decides this level, match or not.
+        if let Some(found) =
+            (0..level).rev().find(|&j| nodes[j].parent_id == parent && nodes[j].text.is_some())
+        {
+            return nodes[found].text.as_deref() == Some(under);
+        }
+        match parent {
+            Some(p) => level = p.index(),
+            None => return false,
         }
     }
-    false
 }
 
 fn describe_query(q: &SelectorQuery) -> String {
@@ -524,6 +560,126 @@ mod tests {
             UIFlags::empty(),
         );
         tree.add_button(Some(row_b), 40.0, 20.0, 10.0, 10.0, UIStyle::default(), "mute");
+
+        let q = SelectorQuery {
+            text: Some("mute".into()),
+            under_text: Some("PLASMA".into()),
+            ..Default::default()
+        };
+        let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
+        assert_eq!(resolved.rect, tree.nodes()[mute_a.index()].bounds);
+    }
+
+    /// BUG-192: `under_text_walks_ancestors` (above) only covers the
+    /// "tight container" shape — each row gets its OWN real per-row parent
+    /// `NodeId`, so a shared non-`None` ancestor always exists between a
+    /// row's label and its controls. `param_card.rs`'s generator rows don't
+    /// build that way: `build_generator`/`build_param_row` parent every
+    /// row's label/track/value_text FLAT to the literal tree root (`parent:
+    /// None` — "generators parent rows flat to the root" per the source
+    /// comment), so label, slider, and value across EVERY row in the whole
+    /// card share the exact same (`None`) parent_id. `candidate_ancestors`
+    /// is empty for a `None`-parented node, so neither the literal-ancestor
+    /// nor the common-ancestor check in `under_text_matches` can ever fire
+    /// — a flat-sibling row's `under_text` query always returned zero
+    /// matches, regardless of which row was queried. Node order mirrors
+    /// `slider.rs::Slider::build`'s real emission (label, then the
+    /// draggable track, THEN the value readout last) — the value node
+    /// trails the control a script actually targets, so it can never sit
+    /// between a row's label and that control.
+    #[test]
+    fn under_text_resolves_flat_sibling_rows() {
+        let mut tree = UITree::new();
+        tree.add_node(
+            None,
+            crate::node::Rect::new(0.0, 0.0, 40.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("Density"),
+            UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+        );
+        let slider_a = tree.add_button(None, 40.0, 0.0, 40.0, 20.0, UIStyle::default(), "S1");
+        tree.add_node(
+            None,
+            crate::node::Rect::new(80.0, 0.0, 20.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("0.75"),
+            UIFlags::empty(),
+        );
+
+        tree.add_node(
+            None,
+            crate::node::Rect::new(0.0, 20.0, 40.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("Speed"),
+            UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+        );
+        tree.add_button(None, 40.0, 20.0, 40.0, 20.0, UIStyle::default(), "S2");
+        tree.add_node(
+            None,
+            crate::node::Rect::new(80.0, 20.0, 20.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("0.30"),
+            UIFlags::empty(),
+        );
+
+        let q = SelectorQuery {
+            text: Some("S1".into()),
+            under_text: Some("Density".into()),
+            ..Default::default()
+        };
+        let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
+        assert_eq!(resolved.rect, tree.nodes()[slider_a.index()].bounds);
+
+        // Cross-row: row 2's slider must NOT resolve under row 1's label —
+        // "stop at the first node carrying ANY text" is what keeps two
+        // flat, same-parent rows from cross-matching each other.
+        let q2 = SelectorQuery {
+            text: Some("S2".into()),
+            under_text: Some("Density".into()),
+            ..Default::default()
+        };
+        assert!(resolve(&tree, &[], &AutomationTarget::Query(q2)).is_err());
+    }
+
+    /// BUG-192 regression guard, `layer_header.rs`'s real shape: EVERY
+    /// layer row's per-row `row_clip` is itself parented to ONE shared
+    /// scroll `clip_parent` (`build_layer_row`'s `clip_parent` param) — an
+    /// extra shared level `under_text_walks_ancestors` never exercised
+    /// (that test's rows are each parented straight to `None`, with no
+    /// outer container in common). A common-ancestor walk that climbs
+    /// unconditionally could cross THROUGH that shared scroll clip and
+    /// match a completely different row's label — this pins that it
+    /// doesn't: the mute button resolves to its OWN row only.
+    #[test]
+    fn under_text_layer_header_shared_scroll_clip_does_not_cross_match() {
+        let mut tree = UITree::new();
+        let clip_parent = tree.add_panel(None, 0.0, 0.0, 100.0, 40.0, UIStyle::default());
+
+        let row_a_clip = tree.add_panel(Some(clip_parent), 0.0, 0.0, 100.0, 20.0, UIStyle::default());
+        tree.add_node(
+            Some(row_a_clip),
+            crate::node::Rect::new(0.0, 0.0, 40.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("PLASMA"),
+            UIFlags::empty(),
+        );
+        let mute_a = tree.add_button(Some(row_a_clip), 40.0, 0.0, 10.0, 10.0, UIStyle::default(), "mute");
+
+        let row_b_clip = tree.add_panel(Some(clip_parent), 0.0, 20.0, 100.0, 20.0, UIStyle::default());
+        tree.add_node(
+            Some(row_b_clip),
+            crate::node::Rect::new(0.0, 20.0, 40.0, 20.0),
+            UINodeType::Label,
+            UIStyle::default(),
+            Some("FLOWERS"),
+            UIFlags::empty(),
+        );
+        tree.add_button(Some(row_b_clip), 40.0, 20.0, 10.0, 10.0, UIStyle::default(), "mute");
 
         let q = SelectorQuery {
             text: Some("mute".into()),
