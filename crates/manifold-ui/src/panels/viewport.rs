@@ -792,7 +792,7 @@ impl TimelineViewportPanel {
                     is_audio: clip.is_audio,
                     waveform: clip.waveform.clone(),
                     in_point_seconds: clip.in_point_seconds,
-                    warped_secs_per_beat: clip.warped_secs_per_beat,
+                    waveform_breakpoints: clip.waveform_breakpoints.clone(),
                 });
             }
         }
@@ -1721,7 +1721,7 @@ mod tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }]);
         vp.set_zoom(400.0);
         let sb = vp.scrollbar_h_rect;
@@ -1812,7 +1812,7 @@ mod tests {
                 is_audio: false,
                 waveform: None,
                 in_point_seconds: 0.0,
-                warped_secs_per_beat: 0.0,
+                waveform_breakpoints: Vec::new(),
             },
             ViewportClip {
                 clip_id: "clip_002".into(),
@@ -1827,7 +1827,7 @@ mod tests {
                 is_audio: false,
                 waveform: None,
                 in_point_seconds: 0.0,
-                warped_secs_per_beat: 0.0,
+                waveform_breakpoints: Vec::new(),
             },
         ]
     }
@@ -1956,7 +1956,7 @@ mod tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }]);
         panel.mapper.set_layout(&[140.0, 140.0]); // two 140px layers
 
@@ -2014,7 +2014,7 @@ mod tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }]);
         panel.mapper.set_layout(&[140.0]);
 
@@ -2052,7 +2052,7 @@ mod tests {
                 is_audio: false,
                 waveform: None,
                 in_point_seconds: 0.0,
-                warped_secs_per_beat: 0.0,
+                waveform_breakpoints: Vec::new(),
             },
             // Fully offscreen, well past the right edge of the 1000px tracks
             // rect — must still be culled even though its clamped width
@@ -2070,7 +2070,7 @@ mod tests {
                 is_audio: false,
                 waveform: None,
                 in_point_seconds: 0.0,
-                warped_secs_per_beat: 0.0,
+                waveform_breakpoints: Vec::new(),
             },
         ]);
 
@@ -2109,7 +2109,7 @@ mod tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }]);
 
         // A real strip + overflow content → the scrollbar shows.
@@ -2350,7 +2350,7 @@ mod tests {
             is_audio: false,
             waveform: None,
             in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
+            waveform_breakpoints: Vec::new(),
         }]);
         panel.build(&mut tree, &layout);
 

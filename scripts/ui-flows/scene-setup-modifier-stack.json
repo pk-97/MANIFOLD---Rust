@@ -7,16 +7,26 @@
   },
   "Snapshot",
   {
-    "Assert": { "selector": { "Query": { "text": "Outliner" } }, "check": "Exists" }
+    "Assert": { "selector": { "Query": { "text": "Objects" } }, "check": "Exists" }
   },
   {
-    "Assert": { "selector": { "Query": { "text": "Add modifier:" } }, "check": "Exists" }
+    "Assert": { "selector": { "Query": { "text": "+ Add Modifier" } }, "check": "Exists" }
   },
   {
     "Assert": {
       "selector": { "Query": { "name": "scene_setup.modifier.param1_value", "nth": 0 } },
       "check": { "Count": 0 }
     }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Modifier" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": { "selector": { "Query": { "text": "Twist" } }, "check": "Exists" }
   },
   {
     "Pointer": {
@@ -31,6 +41,13 @@
       "check": "Exists"
     }
   },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Modifier" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
   {
     "Pointer": {
       "target": { "Query": { "text": "Bend", "nth": 0 } },

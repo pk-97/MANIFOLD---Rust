@@ -925,6 +925,19 @@ impl Application {
         }
         self.ws.ui_root.set_scene_setup_handle_idle();
 
+        // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md): a Scene
+        // Setup drag-armable value cell (transform/color/fixed-row cells —
+        // the panel's OWN `value_cell_at` names the exact set) reads as
+        // scrubbable via the same resize cursor a trim handle uses; the
+        // background-lighten half of the affordance is already the cell's
+        // `hover_bg_color`.
+        if self.ws.ui_root.scene_setup_panel.is_open()
+            && self.ws.ui_root.scene_setup_panel.value_cell_at(&self.ws.ui_root.tree, self.cursor_pos)
+        {
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            return;
+        }
+
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
         let near_split =
@@ -2939,9 +2952,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         (beat, under)
                     };
                     self.import_image_file(&path, drop_beat, layer_under_cursor);
-                } else if ext == "glb" || ext == "gltf" {
+                } else if ext == "glb"
+                    || ext == "gltf"
+                    || crate::blender_import::is_blender_convertible_extension(&ext)
+                {
                     // 3D models → a new generator layer whose graph renders the
                     // model, plus a default clip so it plays immediately.
+                    // FBX/.obj/.dae route through `import_model_file`'s
+                    // Blender-conversion seam first (IMPORT_ANYTHING_WAVE_DESIGN.md
+                    // Lane W3) — MANIFOLD is glTF-only internally.
                     // Resolve the drop beat and target layer from the live
                     // drag position when available (drag_interpose), falling
                     // back to the last tracked cursor position (winit's
