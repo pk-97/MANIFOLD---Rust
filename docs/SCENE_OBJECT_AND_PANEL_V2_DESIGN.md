@@ -1,7 +1,7 @@
 # Scene Object & Panel v2 — objects become graph vocabulary; the panel becomes outliner + properties
 
 **Status: SHIPPED — all 5 phases landed on main 2026-07-17 (P1+P2 @ `5c5dacfe`,
-P3 @ `da452351`, P4+P5 @ landing SHA below). Landing reports:
+P3 @ `da452351`, P4+P5 @ `7d3c41b6`). Landing reports:
 `docs/landings/2026-07-17-scene-object-v2-p1-p2.md`,
 `docs/landings/2026-07-17-scene-object-v2-p3.md`,
 `docs/landings/2026-07-17-scene-object-v2-p4-p5.md`. The object model, the
