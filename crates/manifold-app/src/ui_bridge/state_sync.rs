@@ -2291,21 +2291,21 @@ enum OscScope<'a> {
 /// via its graph/registry `id_to_index`). The arrays are identical; the
 /// per-card `has_drv` / `has_env` summary flags stay with each caller (the
 /// generator card intentionally forces them false).
-struct CardModulation {
-    driver_active: Vec<bool>,
-    trim_min: Vec<f32>,
-    trim_max: Vec<f32>,
-    driver_beat_div_idx: Vec<i32>,
-    driver_waveform_idx: Vec<i32>,
-    driver_reversed: Vec<bool>,
-    driver_dotted: Vec<bool>,
-    driver_triplet: Vec<bool>,
-    driver_free_period: Vec<Option<f32>>,
-    envelope_active: Vec<bool>,
-    target_norm: Vec<f32>,
-    env_decay: Vec<f32>,
-    automation_active: Vec<bool>,
-    automation_overridden: Vec<bool>,
+pub(crate) struct CardModulation {
+    pub(crate) driver_active: Vec<bool>,
+    pub(crate) trim_min: Vec<f32>,
+    pub(crate) trim_max: Vec<f32>,
+    pub(crate) driver_beat_div_idx: Vec<i32>,
+    pub(crate) driver_waveform_idx: Vec<i32>,
+    pub(crate) driver_reversed: Vec<bool>,
+    pub(crate) driver_dotted: Vec<bool>,
+    pub(crate) driver_triplet: Vec<bool>,
+    pub(crate) driver_free_period: Vec<Option<f32>>,
+    pub(crate) envelope_active: Vec<bool>,
+    pub(crate) target_norm: Vec<f32>,
+    pub(crate) env_decay: Vec<f32>,
+    pub(crate) automation_active: Vec<bool>,
+    pub(crate) automation_overridden: Vec<bool>,
 }
 
 /// Build the driver + envelope display arrays for one preset instance's card.
@@ -2482,6 +2482,106 @@ fn build_audio_card_state(
         }
     }
     a
+}
+
+/// Reusable driver/envelope/audio-mod lookup for a SINGLE param id on a
+/// [`PresetInstance`] — the same authority chain [`preset_to_config`] walks
+/// for every card row ([`build_card_modulation`] + [`build_audio_card_state`]),
+/// scoped down from a whole card's row list to one id. SCENE_PANEL_UX_DESIGN.md's
+/// UX-P3b sizing amendment names this refactor as its own deliverable: the
+/// Scene Setup panel's exposed-param rows resolve their driver/envelope/
+/// audio-mod facts through this, instead of re-deriving the lookup a second
+/// time against the layer's generator `PresetInstance`.
+///
+/// Returns `(CardModulation, AudioCardState)` sized to `n = 1` — index `0` is
+/// always the queried param, regardless of its real position in `inst.params`.
+/// `automation_latched` is `ContentState::automation_latched_params`, same as
+/// every other caller of `build_card_modulation`.
+///
+/// Not yet called from production code this session — the mandatory
+/// refactor deliverable ships ahead of its consumer. Un-suppression trigger:
+/// the scene panel's exposed-row inline-drawer rendering (D9/D10 of
+/// SCENE_PANEL_UX_DESIGN.md's UX-P3 amendment) wires this into
+/// `sync_inspector_data`'s scene section to source each exposed row's
+/// `ParamModState`/`AudioCardState` slice — the follow-up phase this
+/// session's report names as not completed. Delete this allow (and the
+/// function, if still unused) if that phase is abandoned instead.
+#[allow(dead_code)]
+pub(crate) fn lookup_param_mod_for_id(
+    inst: &PresetInstance,
+    param_id: &str,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+) -> (CardModulation, AudioCardState) {
+    let resolve = |id: &str| (id == param_id).then_some(0);
+    (
+        build_card_modulation(inst, 1, resolve, automation_latched),
+        build_audio_card_state(inst, 1, resolve),
+    )
+}
+
+#[cfg(test)]
+mod param_mod_lookup_tests {
+    use super::*;
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+
+    fn driver_for(param_id: &str) -> ParameterDriver {
+        ParameterDriver {
+            param_id: std::borrow::Cow::Owned(param_id.to_string()),
+            beat_division: BeatDivision::Quarter,
+            waveform: DriverWaveform::Sine,
+            enabled: true,
+            phase: 0.0,
+            base_value: 0.0,
+            trim_min: 0.1,
+            trim_max: 0.9,
+            reversed: false,
+            free_period_beats: None,
+            legacy_param_index: None,
+            is_paused_by_user: false,
+        }
+    }
+
+    /// UX-P3b (SCENE_PANEL_UX_DESIGN.md sizing amendment): the reusable
+    /// single-param query must find the SAME driver `preset_to_config`'s
+    /// `build_card_modulation` would find for that id at its real card
+    /// position — it just doesn't need that position, because it always
+    /// reports at index 0.
+    #[test]
+    fn lookup_finds_the_named_params_driver_regardless_of_manifest_position() {
+        let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
+        inst.drivers = Some(vec![driver_for("intensity")]);
+
+        let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        assert_eq!(modulation.driver_active, vec![true]);
+        assert_eq!(modulation.trim_min, vec![0.1]);
+        assert_eq!(modulation.trim_max, vec![0.9]);
+    }
+
+    /// A driver on a DIFFERENT param id must not leak into this param's slot
+    /// — the query is scoped to the exact id it was asked about, not "any
+    /// driver on the instance."
+    #[test]
+    fn lookup_ignores_drivers_on_other_param_ids() {
+        let mut inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
+        inst.drivers = Some(vec![driver_for("fill")]);
+
+        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        assert_eq!(modulation.driver_active, vec![false]);
+        assert_eq!(audio.active, vec![false]);
+    }
+
+    /// No drivers/envelopes/audio-mods at all → an idle single-slot result,
+    /// not a panic (the scene panel calls this for every exposed row on
+    /// every rebuild, including ones with no modulation yet).
+    #[test]
+    fn lookup_on_unmodulated_param_returns_idle_slot() {
+        let inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
+        let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
+        assert_eq!(modulation.driver_active, vec![false]);
+        assert_eq!(modulation.envelope_active, vec![false]);
+        assert_eq!(audio.active, vec![false]);
+    }
 }
 
 /// Resolve a send's routed channels to a human label for the Audio Setup row:
