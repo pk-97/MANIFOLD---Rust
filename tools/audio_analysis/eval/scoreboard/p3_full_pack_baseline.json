@@ -1,0 +1,909 @@
+{
+  "generated_at": "2026-07-17T12:09:41.830755+00:00",
+  "pipeline_version": "p3-2026-07-17",
+  "phase": "P3 full-pack baseline (measurement only, no tuning)",
+  "adtof_drums": {
+    "per_track": [
+      {
+        "id": "apricots_128bpm",
+        "domain": "electronic",
+        "kick": {
+          "n_pred": 14,
+          "n_truth": 16,
+          "precision": 0.07142857142857142,
+          "recall": 0.0625,
+          "f1": 0.06666666666666667,
+          "tp": 1,
+          "fp": 13,
+          "fn": 15
+        },
+        "predicted_event_counts_by_class": {
+          "hat": 30,
+          "snare": 15,
+          "kick": 14,
+          "perc": 20
+        }
+      },
+      {
+        "id": "bad_guy_128bpm",
+        "domain": "electronic",
+        "kick": {
+          "n_pred": 23,
+          "n_truth": 17,
+          "precision": 0.6521739130434783,
+          "recall": 0.8823529411764706,
+          "f1": 0.75,
+          "tp": 15,
+          "fp": 8,
+          "fn": 2
+        },
+        "predicted_event_counts_by_class": {
+          "snare": 32,
+          "hat": 70,
+          "kick": 23,
+          "perc": 1
+        }
+      },
+      {
+        "id": "feel_the_vibration_174bpm",
+        "domain": "electronic",
+        "kick": {
+          "n_pred": 15,
+          "n_truth": 16,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "tp": 0,
+          "fp": 15,
+          "fn": 16
+        },
+        "predicted_event_counts_by_class": {
+          "hat": 70,
+          "snare": 21,
+          "kick": 15
+        }
+      },
+      {
+        "id": "inhale_exhale_145bpm",
+        "domain": "electronic",
+        "kick": {
+          "n_pred": 18,
+          "n_truth": 14,
+          "precision": 0.2222222222222222,
+          "recall": 0.2857142857142857,
+          "f1": 0.25,
+          "tp": 4,
+          "fp": 14,
+          "fn": 10
+        },
+        "predicted_event_counts_by_class": {
+          "hat": 64,
+          "snare": 14,
+          "perc": 14,
+          "kick": 18
+        }
+      },
+      {
+        "id": "tears_140bpm",
+        "domain": "electronic",
+        "kick": {
+          "n_pred": 22,
+          "n_truth": 10,
+          "precision": 0.09090909090909091,
+          "recall": 0.2,
+          "f1": 0.12500000000000003,
+          "tp": 2,
+          "fp": 20,
+          "fn": 8
+        },
+        "predicted_event_counts_by_class": {
+          "hat": 106,
+          "kick": 22,
+          "snare": 14
+        }
+      }
+    ],
+    "kick_f1_by_domain": {
+      "electronic": {
+        "mean": 0.23833333333333334,
+        "n": 5
+      },
+      "overall": {
+        "mean": 0.23833333333333334,
+        "n": 5
+      }
+    },
+    "predicted_event_counts_by_class_total": {
+      "hat": 340,
+      "snare": 96,
+      "kick": 92,
+      "perc": 35
+    },
+    "note": "Only 'kick' has ground truth in this fixture pack (kick_onset_csv fixtures label kicks only). snare/hihat/tom/cymbal counts above are predicted-event-density diagnostics ONLY (D10: economy metrics are advisory), not accuracy \u2014 this pack has no per-class drum-hit ground truth yet (E-GMD, Deferred #1, is the intended future source). This kick number is the ADTOF-replacement bake-off's reference point."
+  },
+  "basic_pitch_babyslakh": [
+    {
+      "track": "Track00001",
+      "role": "bass",
+      "n_pred": 576,
+      "n_truth": 361,
+      "precision": 0.5590277777777778,
+      "recall": 0.8919667590027701,
+      "f1": 0.6872998932764142,
+      "tp": 322,
+      "fp": 254,
+      "fn": 39,
+      "mean_duration_iou": 0.6256345948045196,
+      "n_iou_matched": 322
+    },
+    {
+      "track": "Track00002",
+      "role": "bass",
+      "n_pred": 535,
+      "n_truth": 241,
+      "precision": 0.44672897196261685,
+      "recall": 0.991701244813278,
+      "f1": 0.615979381443299,
+      "tp": 239,
+      "fp": 296,
+      "fn": 2,
+      "mean_duration_iou": 0.6059483964873622,
+      "n_iou_matched": 239
+    },
+    {
+      "track": "Track00003",
+      "role": "bass",
+      "n_pred": 1071,
+      "n_truth": 577,
+      "precision": 0.5088702147525677,
+      "recall": 0.9445407279029463,
+      "f1": 0.6614077669902912,
+      "tp": 545,
+      "fp": 526,
+      "fn": 32,
+      "mean_duration_iou": 0.7151969166031287,
+      "n_iou_matched": 545
+    },
+    {
+      "track": "Track00004",
+      "role": "bass",
+      "n_pred": 389,
+      "n_truth": 256,
+      "precision": 0.532133676092545,
+      "recall": 0.80859375,
+      "f1": 0.641860465116279,
+      "tp": 207,
+      "fp": 182,
+      "fn": 49,
+      "mean_duration_iou": 0.5914382927062051,
+      "n_iou_matched": 207
+    },
+    {
+      "track": "Track00005",
+      "role": "bass",
+      "n_pred": 719,
+      "n_truth": 523,
+      "precision": 0.6189151599443672,
+      "recall": 0.8508604206500956,
+      "f1": 0.71658615136876,
+      "tp": 445,
+      "fp": 274,
+      "fn": 78,
+      "mean_duration_iou": 0.60649294645905,
+      "n_iou_matched": 445
+    },
+    {
+      "track": "Track00006",
+      "role": "bass",
+      "n_pred": 756,
+      "n_truth": 370,
+      "precision": 0.4642857142857143,
+      "recall": 0.9486486486486486,
+      "f1": 0.6234458259325044,
+      "tp": 351,
+      "fp": 405,
+      "fn": 19,
+      "mean_duration_iou": 0.648130115049605,
+      "n_iou_matched": 351
+    },
+    {
+      "track": "Track00007",
+      "role": "bass",
+      "n_pred": 749,
+      "n_truth": 427,
+      "precision": 0.5126835781041389,
+      "recall": 0.8992974238875878,
+      "f1": 0.653061224489796,
+      "tp": 384,
+      "fp": 365,
+      "fn": 43,
+      "mean_duration_iou": 0.6390544600891119,
+      "n_iou_matched": 384
+    },
+    {
+      "track": "Track00008",
+      "role": "bass",
+      "n_pred": 450,
+      "n_truth": 218,
+      "precision": 0.48444444444444446,
+      "recall": 1.0,
+      "f1": 0.6526946107784432,
+      "tp": 218,
+      "fp": 232,
+      "fn": 0,
+      "mean_duration_iou": 0.7931310008379664,
+      "n_iou_matched": 218
+    },
+    {
+      "track": "Track00009",
+      "role": "bass",
+      "n_pred": 318,
+      "n_truth": 262,
+      "precision": 0.5911949685534591,
+      "recall": 0.7175572519083969,
+      "f1": 0.6482758620689655,
+      "tp": 188,
+      "fp": 130,
+      "fn": 74,
+      "mean_duration_iou": 0.33175946268022266,
+      "n_iou_matched": 188
+    },
+    {
+      "track": "Track00010",
+      "role": "bass",
+      "n_pred": 761,
+      "n_truth": 289,
+      "precision": 0.3797634691195795,
+      "recall": 1.0,
+      "f1": 0.5504761904761905,
+      "tp": 289,
+      "fp": 472,
+      "fn": 0,
+      "mean_duration_iou": 0.6799222115889134,
+      "n_iou_matched": 289
+    },
+    {
+      "track": "Track00001",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 484,
+      "n_truth": 401,
+      "precision": 0.78099173553719,
+      "recall": 0.942643391521197,
+      "f1": 0.8542372881355931,
+      "tp": 378,
+      "fp": 106,
+      "fn": 23,
+      "mean_duration_iou": 0.7023157697055179,
+      "n_iou_matched": 378
+    },
+    {
+      "track": "Track00002",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 525,
+      "n_truth": 475,
+      "precision": 0.8495238095238096,
+      "recall": 0.9389473684210526,
+      "f1": 0.892,
+      "tp": 446,
+      "fp": 79,
+      "fn": 29,
+      "mean_duration_iou": 0.6402906312268423,
+      "n_iou_matched": 446
+    },
+    {
+      "track": "Track00003",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 2071,
+      "n_truth": 2089,
+      "precision": 0.846450989859971,
+      "recall": 0.839157491622786,
+      "f1": 0.8427884615384614,
+      "tp": 1753,
+      "fp": 318,
+      "fn": 336,
+      "mean_duration_iou": 0.4971958088193506,
+      "n_iou_matched": 1753
+    },
+    {
+      "track": "Track00004",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 667,
+      "n_truth": 323,
+      "precision": 0.4707646176911544,
+      "recall": 0.9721362229102167,
+      "f1": 0.6343434343434344,
+      "tp": 314,
+      "fp": 353,
+      "fn": 9,
+      "mean_duration_iou": 0.5258016205566102,
+      "n_iou_matched": 314
+    },
+    {
+      "track": "Track00005",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 2264,
+      "n_truth": 2051,
+      "precision": 0.8436395759717314,
+      "recall": 0.9312530472940029,
+      "f1": 0.8852838933951332,
+      "tp": 1910,
+      "fp": 354,
+      "fn": 141,
+      "mean_duration_iou": 0.5645390833708361,
+      "n_iou_matched": 1910
+    },
+    {
+      "track": "Track00006",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 792,
+      "n_truth": 646,
+      "precision": 0.7487373737373737,
+      "recall": 0.9179566563467493,
+      "f1": 0.8247566063977747,
+      "tp": 593,
+      "fp": 199,
+      "fn": 53,
+      "mean_duration_iou": 0.7135349497263723,
+      "n_iou_matched": 593
+    },
+    {
+      "track": "Track00007",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 1620,
+      "n_truth": 1270,
+      "precision": 0.7407407407407407,
+      "recall": 0.9448818897637795,
+      "f1": 0.8304498269896194,
+      "tp": 1200,
+      "fp": 420,
+      "fn": 70,
+      "mean_duration_iou": 0.534733624181145,
+      "n_iou_matched": 1200
+    },
+    {
+      "track": "Track00008",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 1769,
+      "n_truth": 1012,
+      "precision": 0.5681175805539853,
+      "recall": 0.9930830039525692,
+      "f1": 0.7227615965480043,
+      "tp": 1005,
+      "fp": 764,
+      "fn": 7,
+      "mean_duration_iou": 0.6041541905800674,
+      "n_iou_matched": 1005
+    },
+    {
+      "track": "Track00009",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 848,
+      "n_truth": 824,
+      "precision": 0.9410377358490566,
+      "recall": 0.9684466019417476,
+      "f1": 0.9545454545454546,
+      "tp": 798,
+      "fp": 50,
+      "fn": 26,
+      "mean_duration_iou": 0.3710712519497567,
+      "n_iou_matched": 798
+    },
+    {
+      "track": "Track00010",
+      "role": "melodic_piano_standin_for_synth",
+      "n_pred": 609,
+      "n_truth": 406,
+      "precision": 0.6584564860426929,
+      "recall": 0.9876847290640394,
+      "f1": 0.7901477832512315,
+      "tp": 401,
+      "fp": 208,
+      "fn": 5,
+      "mean_duration_iou": 0.6475939854777165,
+      "n_iou_matched": 401
+    }
+  ],
+  "basic_pitch_self_render": [
+    {
+      "id": "arp_16th_128bpm",
+      "role": "synth",
+      "n_pred": 0,
+      "n_truth": 64,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 64,
+      "mean_duration_iou": 0.0,
+      "n_iou_matched": 0
+    },
+    {
+      "id": "sustained_pad_100bpm",
+      "role": "pad",
+      "n_pred": 16,
+      "n_truth": 12,
+      "precision": 0.75,
+      "recall": 1.0,
+      "f1": 0.8571428571428571,
+      "tp": 12,
+      "fp": 4,
+      "fn": 0,
+      "mean_duration_iou": 0.6670826785003573,
+      "n_iou_matched": 12
+    }
+  ],
+  "basic_pitch_maestro": [
+    {
+      "track": "MIDI-UNPROCESSED_19-20_R1_2014_MID--AUDIO_19_R1_2014_wav--8",
+      "n_pred": 555,
+      "n_truth": 6173,
+      "precision": 0.9387387387387387,
+      "recall": 0.08439980560505426,
+      "f1": 0.15487514863258023,
+      "tp": 520,
+      "fp": 35,
+      "fn": 5653,
+      "mean_duration_iou": 0.5912325145019126,
+      "n_iou_matched": 520
+    },
+    {
+      "track": "MIDI-Unprocessed_02_R1_2009_03-06_ORIG_MID--AUDIO_02_R1_2009_02_R1_2009_04_WAV",
+      "n_pred": 562,
+      "n_truth": 783,
+      "precision": 0.798932384341637,
+      "recall": 0.5734355044699873,
+      "f1": 0.6676579925650558,
+      "tp": 448,
+      "fp": 114,
+      "fn": 335,
+      "mean_duration_iou": 0.6697771028448224,
+      "n_iou_matched": 448
+    },
+    {
+      "track": "MIDI-Unprocessed_02_R2_2011_MID--AUDIO_R2-D1_02_Track02_wav",
+      "n_pred": 708,
+      "n_truth": 4577,
+      "precision": 0.9124293785310734,
+      "recall": 0.14114048503386498,
+      "f1": 0.2444654683065279,
+      "tp": 643,
+      "fp": 65,
+      "fn": 3934,
+      "mean_duration_iou": 0.417696145112871,
+      "n_iou_matched": 643
+    },
+    {
+      "track": "MIDI-Unprocessed_03_R1_2009_03-08_ORIG_MID--AUDIO_03_R1_2009_03_R1_2009_03_WAV",
+      "n_pred": 1144,
+      "n_truth": 4530,
+      "precision": 0.9309440559440559,
+      "recall": 0.23509933774834438,
+      "f1": 0.37539654564681,
+      "tp": 1064,
+      "fp": 80,
+      "fn": 3466,
+      "mean_duration_iou": 0.643041529521436,
+      "n_iou_matched": 1064
+    },
+    {
+      "track": "MIDI-Unprocessed_03_R2_2011_MID--AUDIO_R2-D1_06_Track06_wav",
+      "n_pred": 499,
+      "n_truth": 1628,
+      "precision": 0.9378757515030061,
+      "recall": 0.28746928746928746,
+      "f1": 0.4400564174894217,
+      "tp": 466,
+      "fp": 33,
+      "fn": 1162,
+      "mean_duration_iou": 0.5292970594077234,
+      "n_iou_matched": 466
+    }
+  ],
+  "vocal_onset_musdb18": {
+    "rows": [
+      {
+        "id": "AM Contra - Heart Peripheral",
+        "n_onsets_clean_vocal_stem": 474,
+        "n_onsets_full_mixture": 1398,
+        "mixture_vs_clean_stem_agreement_f1": 0.4188034188034188,
+        "mixture_vs_clean_stem_agreement_precision": 0.2804005722460658,
+        "mixture_vs_clean_stem_agreement_recall": 0.8270042194092827
+      },
+      {
+        "id": "Al James - Schoolboy Facination",
+        "n_onsets_clean_vocal_stem": 618,
+        "n_onsets_full_mixture": 1002,
+        "mixture_vs_clean_stem_agreement_f1": 0.6283950617283951,
+        "mixture_vs_clean_stem_agreement_precision": 0.5079840319361277,
+        "mixture_vs_clean_stem_agreement_recall": 0.8236245954692557
+      },
+      {
+        "id": "Angels In Amplifiers - I'm Alright",
+        "n_onsets_clean_vocal_stem": 480,
+        "n_onsets_full_mixture": 1071,
+        "mixture_vs_clean_stem_agreement_f1": 0.536428110896196,
+        "mixture_vs_clean_stem_agreement_precision": 0.388422035480859,
+        "mixture_vs_clean_stem_agreement_recall": 0.8666666666666667
+      },
+      {
+        "id": "Arise - Run Run Run",
+        "n_onsets_clean_vocal_stem": 264,
+        "n_onsets_full_mixture": 1297,
+        "mixture_vs_clean_stem_agreement_f1": 0.293401665598975,
+        "mixture_vs_clean_stem_agreement_precision": 0.17656129529683887,
+        "mixture_vs_clean_stem_agreement_recall": 0.8674242424242424
+      },
+      {
+        "id": "BKS - Bulldozer",
+        "n_onsets_clean_vocal_stem": 689,
+        "n_onsets_full_mixture": 1782,
+        "mixture_vs_clean_stem_agreement_f1": 0.42816673411574263,
+        "mixture_vs_clean_stem_agreement_precision": 0.29685746352413017,
+        "mixture_vs_clean_stem_agreement_recall": 0.7677793904208998
+      }
+    ],
+    "n_scored": 5,
+    "mean_mixture_vs_clean_stem_agreement_f1": 0.46103899822854555,
+    "note": "This is a mixture-vs-clean-stem AGREEMENT measurement (madmom CNN vocal onset run on both the isolated true vocal stem and the full mixture, scored against each other), NOT accuracy against a hand-labeled truth, and does NOT include the demucs separation step fixtures.toml's D13 note describes \u2014 deferred, see module docstring."
+  },
+  "beat_downbeat_liveshow": {
+    "rows": [
+      {
+        "id": "liveshow_midnight_patience",
+        "split": "dev",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 136.36363636363265,
+        "n_truth_beats": 512,
+        "n_pred_beats": 493,
+        "beat_f1": 0.7303482587064677,
+        "beat_precision": 0.744421906693712,
+        "beat_recall": 0.716796875,
+        "n_truth_downbeats": 128,
+        "n_pred_downbeats": 154,
+        "downbeat_f1": 0.6170212765957447,
+        "downbeat_precision": 0.564935064935065,
+        "downbeat_recall": 0.6796875
+      },
+      {
+        "id": "liveshow_integer",
+        "split": "dev",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 115.38461538461942,
+        "n_truth_beats": 448,
+        "n_pred_beats": 703,
+        "beat_f1": 0.5403996524761077,
+        "beat_precision": 0.4423897581792319,
+        "beat_recall": 0.6941964285714286,
+        "n_truth_downbeats": 112,
+        "n_pred_downbeats": 275,
+        "downbeat_f1": 0.3875968992248062,
+        "downbeat_precision": 0.2727272727272727,
+        "downbeat_recall": 0.6696428571428571
+      },
+      {
+        "id": "liveshow_pattern",
+        "split": "dev",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 136.36363636363706,
+        "n_truth_beats": 192,
+        "n_pred_beats": 205,
+        "beat_f1": 0.9571788413098237,
+        "beat_precision": 0.926829268292683,
+        "beat_recall": 0.9895833333333334,
+        "n_truth_downbeats": 48,
+        "n_pred_downbeats": 59,
+        "downbeat_f1": 0.8785046728971962,
+        "downbeat_precision": 0.7966101694915254,
+        "downbeat_recall": 0.9791666666666666
+      },
+      {
+        "id": "liveshow_stagnate",
+        "split": "heldout",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 149.99999999999787,
+        "n_truth_beats": 448,
+        "n_pred_beats": 438,
+        "beat_f1": 0.9796839729119637,
+        "beat_precision": 0.9908675799086758,
+        "beat_recall": 0.96875,
+        "n_truth_downbeats": 112,
+        "n_pred_downbeats": 109,
+        "downbeat_f1": 0.9773755656108598,
+        "downbeat_precision": 0.9908256880733946,
+        "downbeat_recall": 0.9642857142857143
+      },
+      {
+        "id": "liveshow_basalt",
+        "split": "heldout",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 149.99999999999787,
+        "n_truth_beats": 448,
+        "n_pred_beats": 305,
+        "beat_f1": 0.8021248339973439,
+        "beat_precision": 0.9901639344262295,
+        "beat_recall": 0.6741071428571429,
+        "n_truth_downbeats": 112,
+        "n_pred_downbeats": 78,
+        "downbeat_f1": 0.8105263157894737,
+        "downbeat_precision": 0.9871794871794872,
+        "downbeat_recall": 0.6875
+      },
+      {
+        "id": "liveshow_all_in_for_you",
+        "split": "dev",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 136.36363636363598,
+        "n_truth_beats": 240,
+        "n_pred_beats": 177,
+        "beat_f1": 0.7338129496402878,
+        "beat_precision": 0.864406779661017,
+        "beat_recall": 0.6375,
+        "n_truth_downbeats": 60,
+        "n_pred_downbeats": 58,
+        "downbeat_f1": 0.728813559322034,
+        "downbeat_precision": 0.7413793103448276,
+        "downbeat_recall": 0.7166666666666667
+      },
+      {
+        "id": "liveshow_oh_so_suddenly",
+        "split": "dev",
+        "domain": "electronic",
+        "tracker": "beat_this",
+        "bpm": 166.66666666666694,
+        "n_truth_beats": 688,
+        "n_pred_beats": 652,
+        "beat_f1": 0.5776119402985075,
+        "beat_precision": 0.593558282208589,
+        "beat_recall": 0.5625,
+        "n_truth_downbeats": 172,
+        "n_pred_downbeats": 196,
+        "downbeat_f1": 0.4293478260869565,
+        "downbeat_precision": 0.4030612244897959,
+        "downbeat_recall": 0.45930232558139533
+      }
+    ],
+    "by_split": {
+      "dev": {
+        "beat_f1": {
+          "electronic": {
+            "mean": 0.7078703284862389,
+            "n": 5
+          },
+          "overall": {
+            "mean": 0.7078703284862389,
+            "n": 5
+          }
+        },
+        "downbeat_f1": {
+          "electronic": {
+            "mean": 0.6082568468253475,
+            "n": 5
+          },
+          "overall": {
+            "mean": 0.6082568468253475,
+            "n": 5
+          }
+        }
+      },
+      "heldout": {
+        "beat_f1": {
+          "electronic": {
+            "mean": 0.8909044034546538,
+            "n": 2
+          },
+          "overall": {
+            "mean": 0.8909044034546538,
+            "n": 2
+          }
+        },
+        "downbeat_f1": {
+          "electronic": {
+            "mean": 0.8939509407001667,
+            "n": 2
+          },
+          "overall": {
+            "mean": 0.8939509407001667,
+            "n": 2
+          }
+        }
+      }
+    }
+  },
+  "beat_downbeat_harmonix_electronic_sample": {
+    "rows": [
+      {
+        "id": "0012_aroundtheworld",
+        "n_truth_beats": 305,
+        "n_pred_beats": 483,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 7.319124000000016,
+        "offset_vote_count": 215,
+        "beat_f1_after_offset_correction": 0.7741116751269036,
+        "n_truth_downbeats": 77,
+        "n_pred_downbeats": 121,
+        "downbeat_f1_after_offset_correction": 0.7777777777777778
+      },
+      {
+        "id": "0022_betteroffalone",
+        "n_truth_beats": 357,
+        "n_pred_beats": 393,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 2.918859999999995,
+        "offset_vote_count": 210,
+        "beat_f1_after_offset_correction": 0.9520000000000001,
+        "n_truth_downbeats": 90,
+        "n_pred_downbeats": 99,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0062_dance",
+        "n_truth_beats": 241,
+        "n_pred_beats": 456,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 5.0986905,
+        "offset_vote_count": 160,
+        "beat_f1_after_offset_correction": 0.6771879483500717,
+        "n_truth_downbeats": 61,
+        "n_pred_downbeats": 114,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0063_daysgoby",
+        "n_truth_beats": 229,
+        "n_pred_beats": 521,
+        "beat_f1_raw": 0.005333333333333333,
+        "estimated_offset_sec": 4.561176000000003,
+        "offset_vote_count": 139,
+        "beat_f1_after_offset_correction": 0.5866666666666667,
+        "n_truth_downbeats": 58,
+        "n_pred_downbeats": 137,
+        "downbeat_f1_after_offset_correction": 0.5743589743589743
+      },
+      {
+        "id": "0079_dontyouwantme",
+        "n_truth_beats": 425,
+        "n_pred_beats": 405,
+        "beat_f1_raw": 0.29638554216867474,
+        "estimated_offset_sec": -6.099246000000001,
+        "offset_vote_count": 30,
+        "beat_f1_after_offset_correction": 0.2819277108433734,
+        "n_truth_downbeats": 107,
+        "n_pred_downbeats": 102,
+        "downbeat_f1_after_offset_correction": 0.28708133971291866
+      },
+      {
+        "id": "0112_giveitup",
+        "n_truth_beats": 305,
+        "n_pred_beats": 396,
+        "beat_f1_raw": 0.05420827389443651,
+        "estimated_offset_sec": -1.597126000000003,
+        "offset_vote_count": 186,
+        "beat_f1_after_offset_correction": 0.8616262482168331,
+        "n_truth_downbeats": 77,
+        "n_pred_downbeats": 99,
+        "downbeat_f1_after_offset_correction": 0.8636363636363635
+      },
+      {
+        "id": "0124_hello",
+        "n_truth_beats": 353,
+        "n_pred_beats": 597,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": -3.0012499999999998,
+        "offset_vote_count": 145,
+        "beat_f1_after_offset_correction": 0.7284210526315789,
+        "n_truth_downbeats": 89,
+        "n_pred_downbeats": 150,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0181_mrsaxobeat",
+        "n_truth_beats": 357,
+        "n_pred_beats": 402,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 7.700160000000011,
+        "offset_vote_count": 288,
+        "beat_f1_after_offset_correction": 0.9407114624505929,
+        "n_truth_downbeats": 90,
+        "n_pred_downbeats": 101,
+        "downbeat_f1_after_offset_correction": 0.9424083769633509
+      },
+      {
+        "id": "0209_paparazzi",
+        "n_truth_beats": 396,
+        "n_pred_beats": 521,
+        "beat_f1_raw": 0.006543075245365322,
+        "estimated_offset_sec": 3.8009099999999876,
+        "offset_vote_count": 100,
+        "beat_f1_after_offset_correction": 0.3009814612868048,
+        "n_truth_downbeats": 99,
+        "n_pred_downbeats": 138,
+        "downbeat_f1_after_offset_correction": 0.008438818565400845
+      },
+      {
+        "id": "0217_pokerface",
+        "n_truth_beats": 273,
+        "n_pred_beats": 417,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 3.3801409999999983,
+        "offset_vote_count": 225,
+        "beat_f1_after_offset_correction": 0.791304347826087,
+        "n_truth_downbeats": 69,
+        "n_pred_downbeats": 105,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0219_pondereplay",
+        "n_truth_beats": 229,
+        "n_pred_beats": 353,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 2.8797599999999997,
+        "offset_vote_count": 173,
+        "beat_f1_after_offset_correction": 0.7869415807560137,
+        "n_truth_downbeats": 58,
+        "n_pred_downbeats": 89,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0240_sandstorm",
+        "n_truth_beats": 291,
+        "n_pred_beats": 1046,
+        "beat_f1_raw": 0.3365744203440539,
+        "estimated_offset_sec": -5.259664000000001,
+        "offset_vote_count": 174,
+        "beat_f1_after_offset_correction": 0.3275991024682124,
+        "n_truth_downbeats": 73,
+        "n_pred_downbeats": 326,
+        "downbeat_f1_after_offset_correction": 0.025062656641604012
+      },
+      {
+        "id": "0242_satisfaction",
+        "n_truth_beats": 289,
+        "n_pred_beats": 320,
+        "beat_f1_raw": 0.729064039408867,
+        "estimated_offset_sec": 1.8414120000000054,
+        "offset_vote_count": 127,
+        "beat_f1_after_offset_correction": 0.715927750410509,
+        "n_truth_downbeats": 73,
+        "n_pred_downbeats": 81,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0250_sexyandiknowit",
+        "n_truth_beats": 337,
+        "n_pred_beats": 435,
+        "beat_f1_raw": 0.0,
+        "estimated_offset_sec": 6.600033000000003,
+        "offset_vote_count": 223,
+        "beat_f1_after_offset_correction": 0.8730569948186528,
+        "n_truth_downbeats": 85,
+        "n_pred_downbeats": 110,
+        "downbeat_f1_after_offset_correction": 0.0
+      },
+      {
+        "id": "0264_stereolove",
+        "n_truth_beats": 313,
+        "n_pred_beats": 519,
+        "beat_f1_raw": 0.24519230769230774,
+        "estimated_offset_sec": -6.2210485,
+        "offset_vote_count": 26,
+        "beat_f1_after_offset_correction": 0.21394230769230768,
+        "n_truth_downbeats": 79,
+        "n_pred_downbeats": 131,
+        "downbeat_f1_after_offset_correction": 0.0
+      }
+    ],
+    "n_scored": 15,
+    "n_candidates": 15,
+    "beat_f1_raw_mean": 0.11155339947246924,
+    "beat_f1_after_offset_correction_mean": 0.6541604206363072,
+    "downbeat_f1_after_offset_correction_mean": 0.23191762051042597,
+    "note": "sample of 15 from the matched Harmonix electronic slice \u2014 not the full 107-track set (a follow-up full sweep is straightforward, same code path). beat_f1_raw is near-zero for most tracks because YouTube-matched audio commonly carries a multi-second timing offset vs. the Harmonix annotation reference (see docstring) \u2014 the offset-corrected numbers are the meaningful ones for judging Beat This itself; the raw numbers are reported too so the offset problem isn't hidden."
+  }
+}

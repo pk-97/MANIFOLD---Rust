@@ -58,7 +58,8 @@ roles = ["vocal_regions", "stem_sanity"]
 license = "research/non-commercial (Zenodo 1117372, 'other-nc') — eval-only per D8, never shipped"
 path = "eval/data/musdb18"
 truth_kind = "true_stems"
-notes = "D13: gate the clean vocal stem to derive near-truth activity regions; score our detector (on demucs output of the mix) against them. heldout because it's the closest thing this harness has to an independent listening-quality check for D13, and it's large/slow enough that it won't get iterated against by accident."
+n_tracks = 150  # confirmed complete 2026-07-17 (P3): 100 train + 50 test, matches the full published dataset — the P1 landing report's "still downloading" note is stale
+notes = "D13: gate the clean vocal stem to derive near-truth activity regions; score our detector (on demucs output of the mix) against them. heldout because it's the closest thing this harness has to an independent listening-quality check for D13, and it's large/slow enough that it won't get iterated against by accident. P3 vocal-onset baseline (eval/full_pack_baseline.py) used a mixture-vs-clean-stem madmom-CNN AGREEMENT measurement instead of the full demucs-in-the-loop recipe described above — see that module's docstring for the disclosed scope reduction."
 
 # ---------------------------------------------------------------------------
 # Real-stem tracks (tests/fixtures/audio/*) — 5 tracks, Ableton stem splits,
@@ -265,3 +266,61 @@ grid_source = "tempoMap (project.json), 98 points, <=2ms per Peter"
 onset_excess_threshold = 0.2
 section_excess_ceiling = 0.05
 demucs_cache = "reuse existing cached separation — see eval/liveshow_labels/ and the P1 landing report for the cache path; never re-separate"
+
+# ---------------------------------------------------------------------------
+# P3 additions (2026-07-17) — fixture pack build-out. See
+# docs/landings/2026-07-17-audio-accuracy-p3.md for the full baseline
+# scoreboard these fixtures fed.
+# ---------------------------------------------------------------------------
+
+[[fixture]]
+id = "slakh2100_test"
+dataset = "slakh2100"
+split = "heldout"  # test-split tracks were never used for tuning (dev's babyslakh_16k covers that role) — a clean, never-touched heldout set once populated
+domain = "other"  # same rationale as babyslakh_16k: Slakh derives from Lakh MIDI, broad multi-genre, not electronic-specific
+roles = ["notes", "duration", "stems"]
+license = "CC-BY 4.0 (Zenodo record 4599666)"
+path = "eval/data/slakh2100_test"
+truth_kind = "aligned_midi_per_stem"
+expected_n_tracks = 151  # redux de-duplicated test-split count — NOT the original Slakh2100's 225 (this doc's own §3 table cited the original split; the archive actually shipped is the smaller redux, confirmed 2026-07-17)
+notes = "PARTIAL FETCH IN PROGRESS at P3 landing time — background streaming job, see eval/data/_fetch_progress.json for live state. Zenodo throttles this single 104.3GB archive to ~830KB/s regardless of available bandwidth (measured 2026-07-17, independently verified against a ~11.5MB/s Cloudflare baseline on the same connection) => ~35h to stream through the full archive even though only ~151 test tracks (a fraction of the total) are kept on disk (gzip has no cheap seek, so the whole stream must be decompressed sequentially). Left running unattended past session end; re-check eval/data/_fetch_progress.json and eval/data/slakh2100_test/ before assuming completeness. See eval/fetch/slakh2100.py's module docstring for the full mechanism."
+
+[[fixture]]
+id = "maestro_v3_selection"
+dataset = "maestro_v3"
+split = "dev"  # P4's stated use is tuning basic_pitch's sustained-polyphony post-processing
+domain = "other"  # solo piano, not electronic
+roles = ["notes", "duration", "sustained_polyphony"]
+license = "CC BY-NC-SA 4.0 (magenta.withgoogle.com/datasets/maestro) — eval-only per D8"
+path = "eval/data/maestro_v3"
+n_tracks = 20
+truth_kind = "aligned_midi_no_real_audio"
+notes = "DEVIATION FROM §3'S LITERAL WORDING, flagged 2026-07-17: MAESTRO's real recorded piano audio is not individually addressable (verified via direct GCS bucket listing — only a monolithic 108.4GB zip or TF-record shards requiring tensorflow/note_seq, neither installed, exist). Fetched the tiny MIDI-only archive instead (real MAESTRO MIDI, genuine ground truth) and rendered audio ourselves via eval/midi_synth.py (pretty_midi's additive synth, no fluidsynth binary needed). Exact reproducible note-level ground truth; NOT real piano recording timbre/artifacts — insufficient if a future phase needs to test against real mic bleed/room tone/pedal noise. See eval/fetch/maestro.py's module docstring."
+
+[[fixture]]
+id = "harmonixset_audio_electronic"
+dataset = "harmonix"
+split = "dev_and_heldout"  # per-track split still deferred (fixtures.toml's harmonixset entry above already flags this — 129 tracks is a small population split across dev/heldout by a later session, not this one)
+domain = "electronic"  # Genre == "Dance/Electronic" filter, the slice this session prioritized per the design doc's domain directive
+roles = ["grid", "sections"]
+license = "annotations: CC0-style (harmonixset entry above). Matched AUDIO: eval-only per D8 — inherits the original YouTube upload's license (typically all-rights-reserved commercial music), never redistributed, never shipped, never trains shipped weights."
+path = "eval/data/harmonixset_audio"
+n_candidates = 129
+n_matched = 107
+n_unmatched = 22
+match_rate = 0.830
+truth_kind = "beats_downbeats_segments"
+audio_available = true
+notes = "P3: per-track audio matched via yt-dlp (NEW eval-only dependency, pip-installed into the shared BundledRuntime env 2026-07-17 — never added to requirements.runtime.mac.txt; same 'eval-tool exemption, not a fallback' precedent as madmom post-P6). 22 unmatched tracks logged in eval/data/harmonixset_audio/_unmatched.json (video unavailable / private / taken down) — best-effort by construction, not a failure. Re-run eval.fetch.harmonix_audio to retry unmatched tracks or extend to more genres; it skips already-matched files."
+
+[[fixture]]
+id = "self_render_v1"
+dataset = "self_render"
+split = "dev"
+domain = "electronic"
+roles = ["notes", "duration", "drums"]
+license = "ours (agent-composed MIDI, synth-rendered) — no restriction"
+path = "eval/data/self_render"
+n_tracks = 3
+truth_kind = "exact_midi_ground_truth"
+notes = "P3 v1 seed (deliverable #4): a 16th-note arp (128bpm, D3's per-note granularity precedent), a sustained pad/chord progression (D4's duration-event precedent), and a kick+hat pattern (drum-truth precedent). Grows as gaps appear — see eval/fetch/self_render.py's GENERATORS dict for how to add more."
