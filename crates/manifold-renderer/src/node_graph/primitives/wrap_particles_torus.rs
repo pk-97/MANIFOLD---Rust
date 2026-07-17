@@ -50,6 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — operates on the particle buffer in place. Typical chain: `sample_texture_at_particles → euler_step_particles → wrap_particles_torus`. For alternative boundary policies, swap this node for a future `boundary_death` (excess particles die when leaving [0,1]²) or `wall_bounce` sibling.",
     examples: [],
     picker: { label: "Wrap Around (torus)", category: Atom },

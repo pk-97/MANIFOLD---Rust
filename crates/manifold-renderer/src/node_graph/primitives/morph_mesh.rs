@@ -55,6 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The 'dissolve into another shape' atom — wire an LFO or beat ramp into `t` to crossfade continuously between two meshes of the same vertex layout (e.g. two node.revolve_curve profiles at different `sweep`, or a scanned mesh and a procedural stand-in). Wire node.mesh_ramp's `weights` output to mask the morph to a region instead of blending uniformly. Output capacity follows `in` (like node.push_along_normals); run() truncates dispatch to min(a, b, out) so the shader can't read past either input — if the two meshes have different vertex counts, only the first min(count_a, count_b) verts morph, the rest pass through node.push_along_normals-style unaffected (they are simply outside the dispatch).",
     examples: [],
     picker: { label: "Morph Mesh", category: Atom },

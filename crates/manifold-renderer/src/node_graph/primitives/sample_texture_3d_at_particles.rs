@@ -54,6 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the input `particles` array. Samples are trilinear via the default clamp-edge sampler (matches the legacy fluid_simulate_3d field read). Writes the RGB at position.xyz directly — the force buffer is seeded here and accumulated by downstream force atoms (simplex_noise_force_3d, diffuse_force_3d, container_repel_force_3d) before node.move_particles_3d integrates it. Output entries for indices >= active_count are uninitialised.",
     examples: ["FluidSim3D"],
     picker: { label: "Sample Volume for Particles (3D)", category: Atom },

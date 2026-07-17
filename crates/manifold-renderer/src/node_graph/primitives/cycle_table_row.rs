@@ -43,6 +43,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "JSON `table` shape: `{\"type\":\"Table\",\"rows\":[[0.0, 90.0, 180.0, 270.0, 360.0], [...]]}`. The wired `trigger_count` is the row selector (port-shadows-param: pass raw, never pre-wrap — `ClipTriggerCycle::step` handles modulus internally so same-frame retriggers don't double-advance). When unwired the cycler stays on row 0.",
     examples: [],
     picker: { label: "Cycle Table Row", category: Driver },

@@ -48,6 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "DigitalPlants uses grid_size = 400 (160K UVs). Output is dispatched fresh each frame — cheap (8 bytes × N² write per frame), no persistent state. Editor changes to grid_size trigger a chain rebuild because the buffer capacity comes from this param. Pair downstream with node.simplex_noise_per_copy / node.fractal_noise_per_copy to sample noise at each UV, or with node.cylinder_wrap_field / node.torus_wrap_field to lift the UV grid onto a 3D surface as Array<InstanceTransform>.",
     examples: [],
     picker: { label: "Grid UV Field", category: Atom },

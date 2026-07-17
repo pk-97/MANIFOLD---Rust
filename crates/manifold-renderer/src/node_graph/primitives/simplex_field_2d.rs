@@ -101,6 +101,7 @@ crate::primitive! {
             enum_values: SIMPLEX_FIELD_OUTPUT_CHANNELS,
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Aspect correction belongs OUTSIDE this primitive: wire `system.generator_input.aspect → math.multiply(value=N) → scale_x` to keep the noise isotropic on non-square canvases (this is the convention oily-fluid uses for its color/velocity seeding). Multi-octave FBM is built externally: chain N instances at scales (S, S*lacunarity, S*lacunarity²…) into N gain nodes (weights 1, persistence, persistence²…) summed via `node.compose` — packing FBM into one primitive locks the octave count; composing it stays editable. Independent channels: assign distinct `z` values per node (a large numeric gap like 5.0 between channels is enough).",
     examples: [],
     picker: { label: "Simplex Field 2D", category: Atom },

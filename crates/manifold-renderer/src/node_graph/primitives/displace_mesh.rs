@@ -84,6 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "displaced_y = src.y + (height_sample.r - height_bias) * displacement. height_bias = 0.5 centers the displacement (matches MetallicGlass's behaviour where 0.5-luma maps to no displacement). displacement = 0.0 is pass-through. Bilinear texture sampling. Normals are passed through unchanged — the downstream TriangulateGrid recomputes them from displaced positions.",
     examples: [],
     picker: { label: "Push Mesh", category: Atom },

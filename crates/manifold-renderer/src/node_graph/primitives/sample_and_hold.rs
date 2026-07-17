@@ -79,6 +79,9 @@ impl Default for SampleAndHold {
 }
 
 impl EffectNode for SampleAndHold {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
@@ -278,6 +281,7 @@ mod trigger_latch_release_tests {
         seen: Arc<Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

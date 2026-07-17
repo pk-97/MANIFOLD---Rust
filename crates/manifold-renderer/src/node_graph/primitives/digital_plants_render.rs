@@ -110,6 +110,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Hardcoded 36-vertex cube geometry — no Array<MeshVertex> input. Pair upstream with node.arrange_copies (Grid/Ring/Spiral/Random layouts) to drive arbitrary cube fields, or use a procedural compute that emits InstanceTransform values (DigitalPlants's noise-driven plant-stalk generator is one). 5-tap PCF shadow sampling with hard-coded 0.003 depth bias matches the legacy DigitalPlants. Shadow map is 2048×2048 internal state.",
     examples: [],
     picker: { label: "Digital Plants Render", category: Atom },

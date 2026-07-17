@@ -52,6 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Fused composite primitive — Sobel + smoothstep-threshold in one pass. Will split into atomic Sobel3 + Threshold when the fusion compiler can preserve bit-exact parity. 1:1 replacement for the legacy EdgeDetectFX effect; the legacy mode param (Laplacian/Frei-Chen) was never wired to the shader and is dropped.",
     examples: ["preset.effect.edge_detect"],
     picker: { label: "Edge Detect", category: Atom },

@@ -65,6 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire detections into `detections` and the video into `in`; stacks with node.draw_markers / node.draw_ticks for a full HUD (Blob Track uses radius_px 4). alpha is port-shadowed for a shared HUD fade control. Skips to a zero-cost passthrough while the detector reports nothing.",
     examples: [],
     picker: { label: "Draw Dots", category: Atom },

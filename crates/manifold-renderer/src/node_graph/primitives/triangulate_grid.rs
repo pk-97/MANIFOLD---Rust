@@ -59,6 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "src_cols × src_rows must match the upstream producer's grid resolution. Output capacity must be at least (src_cols - 1) × (src_rows - 1) × 6 vertices. Default 256×256 grid → 390,150 triangle vertices ≈ 12.5 MB. Border normals are clamped to the nearest in-bounds neighbour (no special-case ghost rows). Source must be in row-major order: idx = row * cols + col.",
     examples: [],
     picker: { label: "Make Triangles", category: Atom },

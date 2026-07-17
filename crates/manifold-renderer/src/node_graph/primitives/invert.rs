@@ -39,6 +39,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "1:1 replacement for the legacy InvertColorsFX effect. Use Invert alone for a single-pass invert; chain with ColorGradeHSV or Threshold for analog-style processing pipelines.",
     examples: ["preset.effect.invert"],
     picker: { label: "Invert", category: Atom },

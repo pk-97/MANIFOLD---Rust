@@ -50,6 +50,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: `lut` is indexed by `in`'s own luminance (a data-dependent 1D lookup), not sampled at a coincident spatial UV — depth follows `in` only, not a CombineNearest peer
+    depth_rule: Inherit,
     composition_notes: "1:1 building block for the legacy Infrared effect. The lut input is a W×1 Rgba16Float texture covering luminance [0, 2.0]; the Infrared preset graph supplies pre-baked palette textures.",
     examples: ["preset.effect.infrared"],
     picker: { label: "Color LUT", category: Atom },

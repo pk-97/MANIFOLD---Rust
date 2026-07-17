@@ -72,6 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `diffusion` is port-shadow so a control wire drives the kick energy live. The density Texture3D weights the kick by `capped(d) = d/(1+d)` — particles in dense regions get a stronger random push, which spreads clumps. Early-outs when diffusion <= 0. Wire between node.turbulence_3d and node.move_particles_3d so the kick is integrated through speed*dt.",
     examples: ["FluidSim3D"],
     picker: { label: "Spread Out (3D diffuse)", category: Atom },

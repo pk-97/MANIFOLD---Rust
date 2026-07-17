@@ -71,6 +71,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Defaults match Tesseract's preset (0.6, 0.4, 0.25). Wire angle_* through Math nodes for time-based tumble. Active-count uses the *input* buffer's item count — output writes the same N items.",
     examples: [],
     picker: { label: "Rotate 4D", category: Atom },

@@ -17,6 +17,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
+    depth_rule: Inherit,
     composition_notes: "Maps [-a, a] → [0, a]. Common downstream of node.scale_offset_image (which recovers signed noise from [0, 1] generators) and node.sin_texture / cos_texture.",
     examples: [],
     picker: { label: "Absolute Value", category: Atom },

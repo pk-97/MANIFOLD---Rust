@@ -77,6 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "view defaults to (0, 0, 1) — camera looking down +Z. Higher `power` sharpens the rim. Color alpha is ignored; output alpha = fresnel weight (handy for compositing the rim only where it's actually contributing). Port-shadowed `power` lets you pulse the rim from a beat or LFO.",
     examples: [],
     picker: { label: "Rim Light (Fresnel)", category: Atom },

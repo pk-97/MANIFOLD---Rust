@@ -108,6 +108,7 @@ crate::primitive! {
             enum_values: SPAWN_MODES,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "vertices mode gives an exact silhouette (one particle per vertex) — best for meshes whose vertex density already reads as a point cloud (imported scans, dense procedural geometry). surface mode gives uniform density independent of triangulation — best for low-poly meshes where per-vertex seeding would visibly clump at dense corners and leave large flat faces empty. active_count / frame_seed are port-shadows-param — wire from system.generator_input or a math chain to drive them live. Triangles are read as flat [v0,v1,v2] triples from the vertices array (standard triangle-list layout, matching node.cube_mesh / node.render_mesh's expected input); a trailing partial triangle (vertex_count % 3 != 0) is ignored. Internal per-triangle cumulative-area scratch is sized to vertex_count/3 elements; reallocs when vertex_count changes.",
     examples: [],
     picker: { label: "Spawn From Mesh", category: Atom },

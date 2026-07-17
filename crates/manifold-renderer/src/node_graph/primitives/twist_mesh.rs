@@ -80,6 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The 'twisting column / vine' atom — a strip extruded along `axis` twists into a helix. Wire node.mesh_ramp's `weights` output to grow the twist progressively along the length (sweep `phase` so the twist unwinds from one end). `angle` is unbounded: wire a saw LFO (min=0, max a multiple of 2*pi) straight into it for continuous full-revolution spin — sin/cos absorb the wrap with no seam, never clamp it downstream (BUG-039 class). The canonical demo is TwistColumn: node.grid_mesh (long in X, narrow in Z) -> node.make_triangles -> node.twist_mesh(axis=X).",
     examples: ["TwistColumn"],
     picker: { label: "Twist Mesh", category: Atom },

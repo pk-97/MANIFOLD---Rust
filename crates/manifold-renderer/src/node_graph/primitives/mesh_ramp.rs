@@ -136,6 +136,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Reach for this whenever a deformer needs to grow/reveal progressively rather than apply uniformly everywhere — wire `weights` into node.push_along_normals (or any future deform atom's weights port) and sweep `phase` from a beat ramp so the effect walks up the mesh over bars. `axis=Radial XZ` grows outward from a vertical origin line (stems, columns); `axis=Distance` grows outward from a point in all directions (spherical blooms). Not a deformer itself — pair with a consumer that reads `weights`.",
     examples: ["Breathe"],
     picker: { label: "Mesh Ramp", category: Atom },

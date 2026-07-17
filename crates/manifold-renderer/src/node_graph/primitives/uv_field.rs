@@ -21,6 +21,8 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
+    // depth_rule: zero-input UV-coordinate producer, same reasoning as centered_uv/grid_uv_field
+    depth_rule: Terminal,
     composition_notes: "Pairs with node.sin_texture / cos_texture / fract_texture / scale_offset_texture for per-axis sinusoids and stripes. Pairs with node.distance_to_point for radial fields. Output texel center sampling is (i+0.5)/dims (standard convention).",
     examples: [],
     picker: { label: "UV Field", category: Atom },

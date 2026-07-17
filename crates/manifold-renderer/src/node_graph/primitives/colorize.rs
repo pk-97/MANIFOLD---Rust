@@ -73,6 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "tinted = tint_rgb * graded_luma; out = mix(c, tinted, amount * element_mask), where element_mask = mix(1, smoothstep(0.18,0.95,luma) * (1 - smoothstep(0.10,0.80,sat)), focus). At amount=0 it passes through unchanged. Place after the tonal grade (gain/saturation/hue/contrast) so the masks read graded luma/saturation, matching legacy Color Grade ordering. Each input port shadows its param.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Colorize", category: Atom },

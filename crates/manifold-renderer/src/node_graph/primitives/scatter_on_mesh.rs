@@ -117,6 +117,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `max_capacity` (static, never bind it to a card) declares the output's allocation ceiling; `count` sweeps live beneath it and slots beyond count park at zero scale. Set max_capacity to the count card's max so the fader's whole range is real; when max_capacity is 0/absent the buffer sizes from count at build time (legacy single-param behavior). Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
     examples: ["Garden"],
     picker: { label: "Scatter On Mesh", category: Atom },

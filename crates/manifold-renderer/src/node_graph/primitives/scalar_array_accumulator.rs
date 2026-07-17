@@ -60,6 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Trigger detection mirrors legacy NestedCubes: a fresh `trigger_count > last_seen` event adds `increment` to every accumulator element. `increment` is port-shadows-param so it can be modulated. Output capacity comes from the `capacity` param at chain-build time. `initial` is an optional 1×N (or larger) Table param; the first frame copies its row 0 into the accumulator so the starting pose isn't forced to zeros. Accumulator state is fresh on rebuild (per the graph-editor-is-authoring-not-perform rule); same trigger_count across rebuild won't double-add.",
     examples: [],
     picker: { label: "Sum Into Bins", category: Driver },

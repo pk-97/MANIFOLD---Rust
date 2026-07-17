@@ -64,6 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — the dispatch mutates particles in place and the chain build resolves `in` and `out` to one physical buffer. `speed` is port-shadow so a control wire (LFO, audio band, manual slider) drives the advection energy. Typical chain: `sample_texture_at_particles → euler_step_particles → wrap_particles_torus`.",
     examples: [],
     picker: { label: "Move Particles (Euler step)", category: Atom },

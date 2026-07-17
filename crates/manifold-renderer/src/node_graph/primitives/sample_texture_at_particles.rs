@@ -52,6 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the input `particles` array. Samples are bilinear via the default clamp-edge sampler (matches `integrate_particles`'s legacy behaviour). For toroidal flow fields, the input texture is sampled at p.position.xy directly — wrap if needed is the consumer's responsibility (typically a downstream `wrap_particles_torus`). Output is RG only; consumers that need a single channel can pair with `node.split_xy`. Output entries for indices ≥ active_count are uninitialised — downstream consumers must respect active_count too.",
     examples: [],
     picker: { label: "Sample Image for Particles", category: Atom },

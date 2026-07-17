@@ -46,6 +46,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Pure affine around the 0.5 pivot — no clamp, so dark pixels can go negative at contrast > 1. Follow with node.clamp (min 0) before consumers that need bounded input; Color Grade does exactly this at the end of its chain. Wire wins over param.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Contrast", category: Atom },

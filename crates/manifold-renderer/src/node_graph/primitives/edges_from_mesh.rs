@@ -28,6 +28,7 @@ crate::primitive! {
         edges: Array(EdgePair),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Output capacity = input vertex capacity (one edge per vertex: 3 edges per 3-vertex triangle) at plan time. Runtime fills floor(min(buffer_verts, active_count) / 3) * 3 edges and sentinel-pads the tail. `active_count` (input-only port-shadow, mirrors node.range) lets a source with a larger max_capacity than the loaded asset still emit only real topology — when unwired the count is the buffer's own vertex capacity, so old graphs (fully-sized sources) dispatch identically. CPU-write topology, same content-thread pattern as node.grid_edges — draw_lines consumes it same-frame.",
     examples: [],
     picker: { label: "Mesh Edges", category: Atom },
