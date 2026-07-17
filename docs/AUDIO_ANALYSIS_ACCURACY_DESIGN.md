@@ -552,3 +552,23 @@ small-n, don't read). Non-electronic ("other": E-GMD + babyslakh): kick 0.472 vs
 tightens: required electronic closes are now kick +0.21, snare +0.29, hat +0.43.
 Eval data now lives in the shared main-checkout store (eval/paths.py) — re-runs
 need no re-download.
+
+### Liveshow DENSE_IN_WINDOW read (2026-07-18, Fable) — first dense truth on the real show
+
+Peter confirmed his clip placements are per-hit complete inside performed
+sections, so the liveshow dev songs were promoted from SPARSE_VISUAL to a new
+DENSE_IN_WINDOW truth type (per-class active windows derived from truth runs;
+predictions outside a class's windows are discarded; full P/R/F1 inside —
+sweep_p4.derive_active_windows). 1,771 hand-placed labels on the show MASTER;
+Stage-1 arm scored on the one-time demucs drum stems (`<id>_drums.wav`, third
+instance of the drum-stem override pattern). 80-track corpus, scoreboard in
+eval/scoreboard/bakeoff_b1_stage1.json.
+
+Results (liveshow slice): kick ADTOF **0.757** vs Stage-1 0.244 · snare 0.411
+vs 0.091 · hat 0.481 vs **0.603** (n=1). Two facts this settles: (1) ADTOF
+holds up on the real master — kick 0.76 dense on actual show audio is the
+first real-conditions confirmation of the keeper; (2) Stage-1's near-perfect
+clean-stem event detection does NOT survive demucs + real production density
+(kick recall 0.89 clean → 0.50 through demucs). Any future Stage-1/Stage-2
+work must be evaluated through demucs on real masters, not on clean stems —
+this corpus now does that by default.
