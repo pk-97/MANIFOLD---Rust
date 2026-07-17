@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-216 | **feedback-loop-into-final-output-freezes-at-depth-one** | wiring a feedback loop's blend straight to `system.final_output` silently freezes the loop at one frame of history (swap refused on the borrowed boundary slot, no copy fallback) + per-frame stderr spam — MED |
+| BUG-217 | **non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources** | Max/Add feedback trails over an alpha-0-background source accumulate RGB but inherit the source's alpha, so the display culls them; `set_alpha` before the blend is the idiom — LOW |
 | BUG-212 | **duplicate-scene-object-string-bindings-dangle-on-imported-mesh** | `DuplicateSceneObjectCommand`'s fresh NodeIds break the imported "Model File" string binding — a duplicated glTF-imported object's clone loads no geometry — MED |
 | BUG-096 | **camera-rotate-sliders-jump-no-degrees** | FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open) |
 | ~~BUG-211~~ FIXED | **conformance-harness-advancing-clock-cant-converge-animated-imports** | FIXED — `glb_conformance`'s render loop (and the `render-import` CLI's twin) advanced time every frame, so post-GLTF_ANIMATION auto-playing assets re-posed forever, never went byte-stable, and reported a phantom "black" frame (the 0.0000 is `last_fraction`'s initializer, never assigned); clock now frozen (`--time` flag on the CLI), six stale goldens regenerated for the legitimate BUG-205/206 reframes. |
@@ -165,6 +167,26 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — a `node.feedback` loop whose blend output feeds `system.final_output` directly silently degrades to a one-frame loop with per-frame stderr spam — found 2026-07-17 during the depth-relight look probe (headless `PresetRuntime` path)
+
+**Status:** OPEN — MED (a user who wires their feedback loop's output straight to the graph's output node — the natural wiring — gets no trails at all, plus "[graph error] … texture swap out<->in failed" once per frame; the loop works only if some other node sits between the blend and the boundary).
+
+**Symptom:** author a standard feedback graph (`mix → feedback → transform → … → mix`, mix out → `final_output`). Trails never accumulate — every frame shows only the current source — and stderr prints `texture swap out<->in failed (unbound or shadowed slot) — feedback state did NOT advance this frame` per frame.
+
+**Root cause (observed headless, in-app chain path unverified):** the boundary output's resource is pre-bound as a borrowed target (`pre_bind_texture_2d`); when the loop's capture source shares that resource, `MetalBackend::swap_texture_2d` (`crates/manifold-renderer/src/node_graph/metal_backend.rs:624`) refuses the ping-pong because a borrowed shadow is present. Its comment says "caller falls back to copies", but the executor's `late_capture` (`crates/manifold-renderer/src/node_graph/execution.rs:1689`) has no copy fallback — it prints the error and drops the frame's capture, freezing the loop at depth 1.
+
+**Fix shape:** implement the promised fallback — when the swap refuses, land the capture via the existing format-bridge copy path (one dispatch, same as the dims-mismatch mode in `temporal.rs`) instead of skipping; alternatively (or additionally) have the compile step insert an implicit pass-through buffer between a state-capture input's producer and a boundary output so the shared-resource case can't arise. Repro artifact: `ProbeTapFeedback.json` variant from the 2026-07-17 depth-relight probe session (any minimal feedback preset wired loop→final_output reproduces).
+
+### BUG-217 (non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources) — BUG-181's "non-Lerp blends pass `a`'s alpha" makes feedback trails invisible whenever the source has a transparent background — found 2026-07-17 during the depth-relight look probe
+
+**Status:** OPEN — LOW (generator-authoring trap, deterministic workaround: force the source opaque with `node.set_alpha` before the blend).
+
+**Symptom:** a Max/Add feedback blend over a generator source with alpha-0 background (any SDF shape on transparent black) accumulates trails in RGB but every trail pixel outside the current source's alpha footprint carries alpha 0, so the display path culls them — the preset renders as if feedback were off.
+
+**Root cause:** deliberate BUG-181 contract — non-Lerp `node.mix` modes are RGB-only and pass `a`'s alpha through so an AO map's alpha=1 can't overwrite a display chain's real alpha. Correct for masks; for feedback accumulation it means the blend's alpha never widens to cover the trail RGB it just wrote.
+
+**Fix shape:** don't revert BUG-181. Either an explicit `alpha` mode enum on `node.mix` (PassA / Lerp / Max) so accumulation graphs can opt into alpha-max, or document the `set_alpha`-before-blend idiom in the mix atom's `composition_notes` and the feedback atom's notes (cheapest; the probe proved the idiom works). Decide when the depth-relight infra design lands, since that's the first consumer that hit it.
 
 ### BUG-212 (duplicate-scene-object-string-bindings-dangle-on-imported-mesh) — `DuplicateSceneObjectCommand`'s fresh NodeIds break the "Model File" string binding on a cloned glTF-imported object's mesh source, so the clone has no path and loads no geometry — found 2026-07-17, SCENE_OBJECT_AND_PANEL_V2_DESIGN P3, via the render-path proof (`duplicate_demo_pair_renders_original_then_original_plus_offset_copy`, manifold-renderer gpu-proofs)
 
@@ -1071,6 +1093,17 @@ clean).
 
 **Fix shape:** get one failing .exr from Peter and run it through `render_import --param env_mode=1 --param hdri_file=<file>` to capture the actual decode error; then (1) surface decode failures to the UI (a card-level error state instead of silent black — this half is owed regardless of the decoder outcome, per the no-silent-fallbacks rule), and (2) if the `image` crate's EXR decoder is the gap, decode via the `exr` crate directly (it reads the full OpenEXR spec incl. multi-part and DWAA) and convert to the same `Rgba16Float` upload. A native file picker on `hdri_file` (filter `.exr`) is the third, smallest piece.
 
+### BUG-186 (sheenwoodleathersofa-webp-error-message-misattribution) — `SheenWoodLeatherSofa.glb` is correctly rejected (MANIFOLD has no webp decoder) but the surfaced error is the crate's raw `textures[].source: Missing` validation dump, not our own clean `extensionsRequired` veto message — MED-LOW, found 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6's deferred-3 reclassification sweep
+**Status:** OPEN — informational/message-clarity gap, not a shading defect; correctly xfail'd (`xfail:BUG-186`) rather than blocking.
+
+**Symptom:** `render-import` on `SheenWoodLeatherSofa.glb` fails with `glTF validation failed: [(Path("textures[0].source"), Missing), (Path("textures[1].source"), Missing), ... 15 entries]` instead of the clean `"EXT_texture_webp": extensionsRequired[..] = ...: unsupported extension (MANIFOLD does not import this extension)` message `gltf_load.rs`'s own veto path is designed to produce.
+
+**Root cause:** the asset's `textures[]` entries carry their image source exclusively via `extensions.EXT_texture_webp.source` (spec-legal — the top-level `source` field is omitted when a texture-level extension supplies it instead). `gltf_load.rs`'s filter only strips validation errors whose path starts with `extensionsRequired` (the top-level unsupported-extension list); it does not know that a `textures[N].source: Missing` error is an *expected* consequence of the same unsupported extension at the texture level, so that error survives the filter and reaches the caller first, several validation-error-list-entries ahead of anything naming `EXT_texture_webp` by extensionsRequired path. The asset genuinely can't render without webp decoding either way — the veto is correct, only the message is misleading (looks like a random malformed-texture bug, not "unsupported extension").
+
+**Fix shape:** when an `extensionsRequired` entry is in `MANIFOLD_SUPPORTED_EXTENSIONS`'s complement (i.e. the asset is going to be vetoed anyway), suppress/reorder validation errors so the extensionsRequired veto message surfaces first — or, more directly, run the extensionsRequired veto check BEFORE invoking `json::Root::Validate` at all, so an asset requiring an unsupported extension never reaches the crate's own validator to produce a confusing secondary error. Low priority (message quality only, behavior is already correct) — no khronos asset in the manifest depends on this for anything beyond this one asset.
+
+## Fixed
+
 ### BUG-185 (e6-texture-completion-invalidates-two-stale-goldens) — `CompareSpecular.glb` and `CompareVolume.glb` genuinely regress in `glb_conformance_sweep` after E6's texture-completion sweep wires `specularTexture`/`specularColorTexture`/`thicknessTexture` for the first time — expected consequence of fixing the gap, not a shading bug
 **Status:** FIXED with BUG-211's landing (2026-07-17) — the visual-confirmation call this entry was waiting on was made by eyeballing both renders: CompareSpecular's golden re-baselined (glossy spheres correct), CompareVolume's `region_green_minus_red_above` region moved from the bowl's upper interior (legitimately thin/clear once E6 honored `thicknessTexture`) to the thick lower interior where the Beer-Lambert tint lives (measured G-R 10.13; floor 8 → 6 for margin, ~0 with volume off). Manifest note carries the same rationale.
 
@@ -1082,17 +1115,6 @@ clean).
 - Also found and FIXED in the same session (not the cause of either failure above, but adjacent and real): `wire_map_texture`'s `map_tex_cache` was keyed by `tex_index` ALONE (`gltf_import.rs`) — safe for the base five maps (any shared index always wants the same decode, e.g. ORM) but wrong once one extension family (KHR_materials_specular here) legally reuses the SAME image index under TWO DIFFERENT decodes (linear-alpha vs sRGB-rgb). Fixed by keying on `(tex_index, color_space, channel_mode)`.
 
 **Fix shape:** this is a re-baselining call, not a code fix — visually confirm the NEW renders are correct (they read as spec-compliant per the diagnosis above), then regenerate `tests/fixtures/gltf/goldens/compare_specular.png` and move `CompareVolume.glb`'s region (to a thicker part of the bowl) or its G-R floor to match the texture-aware rendering, same discipline as every prior family's Compare-asset re-certification in this design doc. Whoever lands E6 next should do this as the final "certification" step E6's own brief describes (manifest re-classification + status-doc arithmetic) — flagging per CLAUDE.md's "bug found but not fixed this session" rule.
-
-### BUG-186 (sheenwoodleathersofa-webp-error-message-misattribution) — `SheenWoodLeatherSofa.glb` is correctly rejected (MANIFOLD has no webp decoder) but the surfaced error is the crate's raw `textures[].source: Missing` validation dump, not our own clean `extensionsRequired` veto message — MED-LOW, found 2026-07-16 during GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6's deferred-3 reclassification sweep
-**Status:** OPEN — informational/message-clarity gap, not a shading defect; correctly xfail'd (`xfail:BUG-186`) rather than blocking.
-
-**Symptom:** `render-import` on `SheenWoodLeatherSofa.glb` fails with `glTF validation failed: [(Path("textures[0].source"), Missing), (Path("textures[1].source"), Missing), ... 15 entries]` instead of the clean `"EXT_texture_webp": extensionsRequired[..] = ...: unsupported extension (MANIFOLD does not import this extension)` message `gltf_load.rs`'s own veto path is designed to produce.
-
-**Root cause:** the asset's `textures[]` entries carry their image source exclusively via `extensions.EXT_texture_webp.source` (spec-legal — the top-level `source` field is omitted when a texture-level extension supplies it instead). `gltf_load.rs`'s filter only strips validation errors whose path starts with `extensionsRequired` (the top-level unsupported-extension list); it does not know that a `textures[N].source: Missing` error is an *expected* consequence of the same unsupported extension at the texture level, so that error survives the filter and reaches the caller first, several validation-error-list-entries ahead of anything naming `EXT_texture_webp` by extensionsRequired path. The asset genuinely can't render without webp decoding either way — the veto is correct, only the message is misleading (looks like a random malformed-texture bug, not "unsupported extension").
-
-**Fix shape:** when an `extensionsRequired` entry is in `MANIFOLD_SUPPORTED_EXTENSIONS`'s complement (i.e. the asset is going to be vetoed anyway), suppress/reorder validation errors so the extensionsRequired veto message surfaces first — or, more directly, run the extensionsRequired veto check BEFORE invoking `json::Root::Validate` at all, so an asset requiring an unsupported extension never reaches the crate's own validator to produce a confusing secondary error. Low priority (message quality only, behavior is already correct) — no khronos asset in the manifest depends on this for anything beyond this one asset.
-
-## Fixed
 
 ### BUG-210 (add-scene-object-command-emits-pre-migration-legacy-wires) — `AddSceneObjectCommand`'s `catalog_default` still emits `mesh_k`/`material_k`/`transform_k`-shaped wires into `render_scene`, which no longer reads them post-SCENE_OBJECT_AND_PANEL_V2 P2 — found 2026-07-17 landing P1+P2
 
