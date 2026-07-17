@@ -51,7 +51,7 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | ~~BUG-218~~ FIXED | **modifier-commands-splice-at-dead-group-output-vertices-port** | FIXED — `walk_mesh_modifier_chain`/`splice_modifier_into_chain` now resolve the group's `node.scene_object` via the group output's `object` producer and walk/splice against its own `vertices` port, not the dead `system.group_output` `vertices` port; verified via `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-modifier-stack.json`. |
-| BUG-216 | **feedback-loop-into-final-output-freezes-at-depth-one** | wiring a feedback loop's blend straight to `system.final_output` silently freezes the loop at one frame of history (swap refused on the borrowed boundary slot, no copy fallback) + per-frame stderr spam — MED |
+| ~~BUG-216~~ FIXED | **feedback-loop-into-final-output-freezes-at-depth-one** | FIXED @ f2684402 — `late_capture` now falls back to a format-bridge copy (blit/resize_sample) when the ping-pong swap refuses on a borrowed boundary slot, instead of dropping the frame's capture. |
 | BUG-217 | **non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources** | Max/Add feedback trails over an alpha-0-background source accumulate RGB but inherit the source's alpha, so the display culls them; `set_alpha` before the blend is the idiom — LOW |
 | ~~BUG-215~~ FIXED | **conformance-sweep-panics-on-duplicate-mat-0-handle** | FIXED — a glTF material authored `"mat_N"` (e.g. `MetalRoughSpheresNoTextures.glb`, 98 such materials) collided with that object's own `mat_{k}` inner-node handle once SCENE_OBJECT_AND_PANEL_V2 P3 started stamping the group + scene_object with the material's raw name, panicking `Graph::add_node_named` on duplicate handle `"mat_0/mat_0"` — reddened the conformance sweep; independently hit by W1, W5, and W6, fixed by W5. |
 | BUG-214 | **ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist** | `EXT_mesh_gpu_instancing` is fully implemented (`gltf_load.rs:278-394`) but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — an asset marking it `extensionsRequired` would be falsely rejected as unsupported — LOW (latent, not yet observed on a real asset), found 2026-07-17 during IMPORT_ANYTHING_WAVE Lane W6's extension roadmap audit |
@@ -172,25 +172,15 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — a `node.feedback` loop whose blend output feeds `system.final_output` directly silently degrades to a one-frame loop with per-frame stderr spam — found 2026-07-17 during the depth-relight look probe (headless `PresetRuntime` path)
-
-**Status:** OPEN — MED (a user who wires their feedback loop's output straight to the graph's output node — the natural wiring — gets no trails at all, plus "[graph error] … texture swap out<->in failed" once per frame; the loop works only if some other node sits between the blend and the boundary).
-
-**Symptom:** author a standard feedback graph (`mix → feedback → transform → … → mix`, mix out → `final_output`). Trails never accumulate — every frame shows only the current source — and stderr prints `texture swap out<->in failed (unbound or shadowed slot) — feedback state did NOT advance this frame` per frame.
-
-**Root cause (observed headless, in-app chain path unverified):** the boundary output's resource is pre-bound as a borrowed target (`pre_bind_texture_2d`); when the loop's capture source shares that resource, `MetalBackend::swap_texture_2d` (`crates/manifold-renderer/src/node_graph/metal_backend.rs:624`) refuses the ping-pong because a borrowed shadow is present. Its comment says "caller falls back to copies", but the executor's `late_capture` (`crates/manifold-renderer/src/node_graph/execution.rs:1689`) has no copy fallback — it prints the error and drops the frame's capture, freezing the loop at depth 1.
-
-**Fix shape:** implement the promised fallback — when the swap refuses, land the capture via the existing format-bridge copy path (one dispatch, same as the dims-mismatch mode in `temporal.rs`) instead of skipping; alternatively (or additionally) have the compile step insert an implicit pass-through buffer between a state-capture input's producer and a boundary output so the shared-resource case can't arise. Repro artifact: `ProbeTapFeedback.json` variant from the 2026-07-17 depth-relight probe session (any minimal feedback preset wired loop→final_output reproduces).
-
 ### BUG-217 (non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources) — BUG-181's "non-Lerp blends pass `a`'s alpha" makes feedback trails invisible whenever the source has a transparent background — found 2026-07-17 during the depth-relight look probe
 
-**Status:** OPEN — LOW (generator-authoring trap, deterministic workaround: force the source opaque with `node.set_alpha` before the blend).
+**Status:** OPEN — LOW (documented idiom shipped @ f2684402; the alpha-mode enum on `node.mix` is still undecided — see below).
 
 **Symptom:** a Max/Add feedback blend over a generator source with alpha-0 background (any SDF shape on transparent black) accumulates trails in RGB but every trail pixel outside the current source's alpha footprint carries alpha 0, so the display path culls them — the preset renders as if feedback were off.
 
 **Root cause:** deliberate BUG-181 contract — non-Lerp `node.mix` modes are RGB-only and pass `a`'s alpha through so an AO map's alpha=1 can't overwrite a display chain's real alpha. Correct for masks; for feedback accumulation it means the blend's alpha never widens to cover the trail RGB it just wrote.
 
-**Fix shape:** don't revert BUG-181. Either an explicit `alpha` mode enum on `node.mix` (PassA / Lerp / Max) so accumulation graphs can opt into alpha-max, or document the `set_alpha`-before-blend idiom in the mix atom's `composition_notes` and the feedback atom's notes (cheapest; the probe proved the idiom works). Decide when the depth-relight infra design lands, since that's the first consumer that hit it.
+**Fix shape:** don't revert BUG-181. D7's cheap fix (the `set_alpha`-before-blend idiom, documented in `node.mix`'s and `node.feedback`'s `composition_notes` @ f2684402) is shipped and is the current answer for anyone who hits this. Still open/undecided: an explicit `alpha` mode enum on `node.mix` (PassA / Lerp / Max) so accumulation graphs can opt into alpha-max without the extra `set_alpha` node — Peter's call, no consumer has asked for it since the idiom shipped.
 
 ### BUG-214 (ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist) — `EXT_mesh_gpu_instancing` is fully implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
 
@@ -1109,6 +1099,16 @@ clean).
 **Still open — not attempted this session (out of Lane W5's scope, which targeted decode-path instrumentation only):** (b) the log line still isn't surfaced anywhere in the running app's UI — a decode error is invisible without a terminal/log file open, so an unsupported file is still indistinguishable from "HDRI does nothing" to a user at the rig. This needs a card-level error state (a small UI feature, not a log-line change) — no such per-node error-surface mechanism exists yet anywhere in the graph editor to hook into (checked: `node.gltf_texture_source` has the identical `log::error!`-only gap). (c) `hdri_file` is still a bare text field with no file picker (`GenStringParamClicked` → text input only).
 
 ## Fixed
+
+### BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — a `node.feedback` loop whose blend output feeds `system.final_output` directly silently degrades to a one-frame loop with per-frame stderr spam — found 2026-07-17 during the depth-relight look probe (headless `PresetRuntime` path)
+
+**Status:** FIXED @ f2684402 (DEPTH_RELIGHT_DESIGN.md P4, D6(b)).
+
+**Symptom:** author a standard feedback graph (`mix → feedback → transform → … → mix`, mix out → `final_output`). Trails never accumulate — every frame shows only the current source — and stderr prints `texture swap out<->in failed (unbound or shadowed slot) — feedback state did NOT advance this frame` per frame.
+
+**Root cause (observed headless, in-app chain path unverified):** the boundary output's resource carries a borrowed shadow (`MetalBackend::replace_texture_2d` — the mechanism `PresetRuntime::install_target` uses to install the host's canvas texture over `final_output.in` each frame); when the loop's capture source shares that resource, `MetalBackend::swap_texture_2d` (`crates/manifold-renderer/src/node_graph/metal_backend.rs:624`) refuses the ping-pong because a borrowed shadow is present. Its comment says "caller falls back to copies", but the executor's `late_capture` (`crates/manifold-renderer/src/node_graph/execution.rs:1689`) had no copy fallback — it printed the error and dropped the frame's capture, freezing the loop at depth 1.
+
+**Fixed:** `late_capture` now falls back to a format-bridge copy (blit via `copy_texture_to_texture` when producer/state formats+dims match, `resize_sample` when only dims differ — same contract as `node.feedback`'s own `copy_with_format_bridge` in `temporal.rs`) landing `in`'s fresh content into `out`'s persistent texture, instead of dropping the frame. The eprintln now fires only when no copy is possible at all (missing texture, or a genuine format mismatch neither blit nor resize can bridge — a narrower, documented residual gap, not the common case). Regression test: `node_graph::execution::bug_216_gpu_tests::feedback_direct_to_final_output_accumulates_trails` (gpu-proofs feature) builds the exact repro shape (`mix` Add-blending a constant source against its delayed output, wired straight to `mix→feedback.in` AND `mix→final_output`, `final_output`'s resource installed via `replace_texture_2d` to reproduce the real borrowed-shadow condition) and asserts the readback value compounds monotonically frame over frame; verified failing (frozen at the alloc-frame value forever) with the fix reverted.
 
 ### BUG-218 (modifier-commands-splice-at-dead-group-output-vertices-port) — the D6 modifier-stack commands still target the pre-D12 splice point, so "Add modifier" silently no-ops on every real grouped object — found 2026-07-17, SCENE_OBJECT_AND_PANEL_V2 P5 flow-script verification
 

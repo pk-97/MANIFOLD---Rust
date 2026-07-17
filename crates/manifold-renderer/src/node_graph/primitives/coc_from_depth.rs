@@ -96,6 +96,11 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/coc_from_depth_body.wgsl"),
     input_access: [CoincidentTexel],
+    // D6(a): the thin-lens CoC derivation is a difference-of-depths
+    // (`|D_mm - S_mm|`) amplified by the lens/aperture terms — fp16
+    // quantization of `depth` shows up as visible ring contours in the
+    // blur-radius map at shallow depth-of-field settings.
+    precision_critical: ["depth"],
     derived_uniforms: ["fov_y", "near", "far", "focus_distance", "f_stop"],
     wgsl_includes: [DEPTH_COMMON],
 }

@@ -117,6 +117,11 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/heightfield_shadow_body.wgsl"),
     input_access: [GatherTexel],
+    // D6(a): `height` is horizon-tested along the raymarch — each step
+    // compares the marched ray height against the sampled terrain height to
+    // track penetration; fp16 quantization of that comparison bands the
+    // penumbra at shallow light angles.
+    precision_critical: ["height"],
 }
 
 impl Primitive for HeightfieldShadow {

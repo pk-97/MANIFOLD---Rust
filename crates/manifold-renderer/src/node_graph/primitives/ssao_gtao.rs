@@ -151,6 +151,11 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/ssao_gtao_body.wgsl"),
     input_access: [GatherTexel],
+    // D6(a): `depth` feeds both the finite-difference normal reconstruction
+    // (explicit +/-1-texel central differences) and the per-step horizon
+    // raymarch's view-space range test — fp16's ~10-bit mantissa quantizes
+    // both into visible stair-stepping at grazing angles.
+    precision_critical: ["depth"],
     derived_uniforms: ["fov_y", "near", "far"],
     wgsl_includes: [DEPTH_COMMON],
 }

@@ -7087,6 +7087,21 @@ fn gcd_select_channel(c: vec4<f32>, idx: u32) -> f32 {
     }
 }
 
+// Resolve a neighbour texel index per `wrap_mode`: 0 (Clamp) clamps to the
+// texture bounds — the ClampToEdge-sampler equivalent, exact because the
+// offset is always precisely one texel from a fragment sampled at its own
+// texel center. 1 (Repeat) modulo-wraps the index — the Repeat-address-
+// sampler equivalent, exact for the same reason (a periodic sampler wrap at
+// an exact one-texel-out-of-range UV lands on the exact opposite-edge texel
+// center, identical to wrapping the integer index).
+
+fn gcd_wrap_coord(c: vec2<i32>, dims_i: vec2<i32>, wrap_mode: u32) -> vec2<i32> {
+    if wrap_mode == 1u {
+        return ((c % dims_i) + dims_i) % dims_i;
+    }
+    return clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+}
+
 fn n0_body(uv: vec2<f32>, dims: vec2<f32>, scale_x: f32, scale_y: f32, offset_x: f32, offset_y: f32, z: f32, output_channel: u32) -> vec4<f32> {
     let p = vec3<f32>(
         uv.x * scale_x + offset_x,
@@ -7149,13 +7164,14 @@ fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, gain: f32) -> vec4<f32>
     return vec4<f32>(c.rgb * gain, c.a);
 }
 
-fn n6_body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
-    let inv = vec2<f32>(1.0) / dims;
+fn n6_body(in_tex: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let c = vec2<i32>(uv * dims);
 
-    let cL = textureSampleLevel(in_tex, samp, uv + vec2<f32>(-inv.x, 0.0), 0.0);
-    let cR = textureSampleLevel(in_tex, samp, uv + vec2<f32>( inv.x, 0.0), 0.0);
-    let cD = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0, -inv.y), 0.0);
-    let cU = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0,  inv.y), 0.0);
+    let cL = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cR = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cD = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(0, 1), dims_i, wrap_mode), 0);
+    let cU = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(0, 1), dims_i, wrap_mode), 0);
 
     let diff_x = gcd_select_channel(cR, channel) - gcd_select_channel(cL, channel);
     let diff_y = gcd_select_channel(cU, channel) - gcd_select_channel(cD, channel);
@@ -7178,13 +7194,14 @@ fn n7_body(c_in: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(n, 0.0, 1.0);
 }
 
-fn n8_body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
-    let inv = vec2<f32>(1.0) / dims;
+fn n8_body(in_tex: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let c = vec2<i32>(uv * dims);
 
-    let cL = textureSampleLevel(in_tex, samp, uv + vec2<f32>(-inv.x, 0.0), 0.0);
-    let cR = textureSampleLevel(in_tex, samp, uv + vec2<f32>( inv.x, 0.0), 0.0);
-    let cD = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0, -inv.y), 0.0);
-    let cU = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0,  inv.y), 0.0);
+    let cL = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cR = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cD = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(0, 1), dims_i, wrap_mode), 0);
+    let cU = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(0, 1), dims_i, wrap_mode), 0);
 
     let diff_x = gcd_select_channel(cR, channel) - gcd_select_channel(cL, channel);
     let diff_y = gcd_select_channel(cU, channel) - gcd_select_channel(cD, channel);
@@ -7287,9 +7304,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_gain);
     let r4 = q16(n4_body(src_0, samp, ext_1, uv, vec2<f32>(dims), params.n4_dt, params.n4_boundary));
     let r5 = q16(n5_body(r4, uv, vec2<f32>(dims), params.n5_gain));
-    let r6 = q16(n6_body(src_2, samp, uv, vec2<f32>(dims), params.n6_channel, params.n6_scale_mode, params.n6_wrap_mode));
+    let r6 = q16(n6_body(src_2, uv, vec2<f32>(dims), params.n6_channel, params.n6_scale_mode, params.n6_wrap_mode));
     let r7 = q16(n7_body(r6, uv, vec2<f32>(dims)));
-    let r8 = q16(n8_body(src_2, samp, uv, vec2<f32>(dims), params.n8_channel, params.n8_scale_mode, params.n8_wrap_mode));
+    let r8 = q16(n8_body(src_2, uv, vec2<f32>(dims), params.n8_channel, params.n8_scale_mode, params.n8_wrap_mode));
     let r9 = q16(n9_body(r8, uv, vec2<f32>(dims)));
     let r10 = q16(n10_body(r9, r7, uv, vec2<f32>(dims), params.n10_amount, params.n10_mode));
     let r11 = q16(n11_body(r10, uv, vec2<f32>(dims), params.n11_gain));
@@ -7393,9 +7410,8 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var dst_0: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(4) var dst_1: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var dst_1: texture_storage_2d<rgba16float, write>;
 
 fn overlay_channel(a: f32, b: f32) -> f32 {
     if a < 0.5 {
@@ -7433,13 +7449,20 @@ fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
     }
 }
 
-fn n0_body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, z_scale: f32, aspect: f32, coord_space: u32) -> vec4<f32> {
-    let inv = vec2<f32>(1.0) / dims;
+fn n0_body(tex_in: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, z_scale: f32, aspect: f32, coord_space: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let max_c = dims_i - vec2<i32>(1, 1);
+    let c = vec2<i32>(uv * dims);
 
-    let hL = textureSampleLevel(tex_in, samp, uv + vec2<f32>(-inv.x, 0.0), 0.0).r;
-    let hR = textureSampleLevel(tex_in, samp, uv + vec2<f32>( inv.x, 0.0), 0.0).r;
-    let hD = textureSampleLevel(tex_in, samp, uv + vec2<f32>(0.0, -inv.y), 0.0).r;
-    let hU = textureSampleLevel(tex_in, samp, uv + vec2<f32>(0.0,  inv.y), 0.0).r;
+    let cL = clamp(c - vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cR = clamp(c + vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cD = clamp(c - vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+    let cU = clamp(c + vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+
+    let hL = textureLoad(tex_in, cL, 0).r;
+    let hR = textureLoad(tex_in, cR, 0).r;
+    let hD = textureLoad(tex_in, cD, 0).r;
+    let hU = textureLoad(tex_in, cU, 0).r;
     let gx = (hR - hL) * 0.5;
     let gy = (hU - hD) * 0.5 * aspect;
     let z = max(z_scale, 1e-4);
@@ -7542,7 +7565,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_z_scale, params.n0_aspect, params.n0_coord_space);
+    let r0 = n0_body(src_0, uv, vec2<f32>(dims), params.n0_z_scale, params.n0_aspect, params.n0_coord_space);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), vec4<f32>(params.n1_color_y_low_x, params.n1_color_y_low_y, params.n1_color_y_low_z, params.n1_color_y_low_w), vec4<f32>(params.n1_color_y_high_x, params.n1_color_y_high_y, params.n1_color_y_high_z, params.n1_color_y_high_w), vec4<f32>(params.n1_color_x_low_x, params.n1_color_x_low_y, params.n1_color_x_low_z, params.n1_color_x_low_w), vec4<f32>(params.n1_color_x_high_x, params.n1_color_x_high_y, params.n1_color_x_high_z, params.n1_color_x_high_w));
     let r2 = n2_body(r0, uv, vec2<f32>(dims), params.n2_view_x, params.n2_view_y, params.n2_view_z, params.n2_power, vec4<f32>(params.n2_color_x, params.n2_color_y, params.n2_color_z, params.n2_color_w));
     let r3 = n3_body(r1, r2, uv, vec2<f32>(dims), params.n3_amount, params.n3_mode);
@@ -7615,16 +7638,22 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
 
-fn n0_body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, z_scale: f32, aspect: f32, coord_space: u32) -> vec4<f32> {
-    let inv = vec2<f32>(1.0) / dims;
+fn n0_body(tex_in: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, z_scale: f32, aspect: f32, coord_space: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let max_c = dims_i - vec2<i32>(1, 1);
+    let c = vec2<i32>(uv * dims);
 
-    let hL = textureSampleLevel(tex_in, samp, uv + vec2<f32>(-inv.x, 0.0), 0.0).r;
-    let hR = textureSampleLevel(tex_in, samp, uv + vec2<f32>( inv.x, 0.0), 0.0).r;
-    let hD = textureSampleLevel(tex_in, samp, uv + vec2<f32>(0.0, -inv.y), 0.0).r;
-    let hU = textureSampleLevel(tex_in, samp, uv + vec2<f32>(0.0,  inv.y), 0.0).r;
+    let cL = clamp(c - vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cR = clamp(c + vec2<i32>(1, 0), vec2<i32>(0, 0), max_c);
+    let cD = clamp(c - vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+    let cU = clamp(c + vec2<i32>(0, 1), vec2<i32>(0, 0), max_c);
+
+    let hL = textureLoad(tex_in, cL, 0).r;
+    let hR = textureLoad(tex_in, cR, 0).r;
+    let hD = textureLoad(tex_in, cD, 0).r;
+    let hU = textureLoad(tex_in, cU, 0).r;
     let gx = (hR - hL) * 0.5;
     let gy = (hU - hD) * 0.5 * aspect;
     let z = max(z_scale, 1e-4);
@@ -7654,7 +7683,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_z_scale, params.n0_aspect, params.n0_coord_space);
+    let r0 = n0_body(src_0, uv, vec2<f32>(dims), params.n0_z_scale, params.n0_aspect, params.n0_coord_space);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_light_x, params.n1_light_y, params.n1_light_z, params.n1_ambient);
     textureStore(dst, coord, r1);
 }
@@ -7989,8 +8018,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
 
 fn gcd_select_channel(c: vec4<f32>, idx: u32) -> f32 {
     switch idx {
@@ -8001,13 +8029,29 @@ fn gcd_select_channel(c: vec4<f32>, idx: u32) -> f32 {
     }
 }
 
-fn n0_body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
-    let inv = vec2<f32>(1.0) / dims;
+// Resolve a neighbour texel index per `wrap_mode`: 0 (Clamp) clamps to the
+// texture bounds — the ClampToEdge-sampler equivalent, exact because the
+// offset is always precisely one texel from a fragment sampled at its own
+// texel center. 1 (Repeat) modulo-wraps the index — the Repeat-address-
+// sampler equivalent, exact for the same reason (a periodic sampler wrap at
+// an exact one-texel-out-of-range UV lands on the exact opposite-edge texel
+// center, identical to wrapping the integer index).
 
-    let cL = textureSampleLevel(in_tex, samp, uv + vec2<f32>(-inv.x, 0.0), 0.0);
-    let cR = textureSampleLevel(in_tex, samp, uv + vec2<f32>( inv.x, 0.0), 0.0);
-    let cD = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0, -inv.y), 0.0);
-    let cU = textureSampleLevel(in_tex, samp, uv + vec2<f32>(0.0,  inv.y), 0.0);
+fn gcd_wrap_coord(c: vec2<i32>, dims_i: vec2<i32>, wrap_mode: u32) -> vec2<i32> {
+    if wrap_mode == 1u {
+        return ((c % dims_i) + dims_i) % dims_i;
+    }
+    return clamp(c, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
+}
+
+fn n0_body(in_tex: texture_2d<f32>, uv: vec2<f32>, dims: vec2<f32>, channel: u32, scale_mode: u32, wrap_mode: u32) -> vec4<f32> {
+    let dims_i = vec2<i32>(dims);
+    let c = vec2<i32>(uv * dims);
+
+    let cL = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cR = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(1, 0), dims_i, wrap_mode), 0);
+    let cD = textureLoad(in_tex, gcd_wrap_coord(c - vec2<i32>(0, 1), dims_i, wrap_mode), 0);
+    let cU = textureLoad(in_tex, gcd_wrap_coord(c + vec2<i32>(0, 1), dims_i, wrap_mode), 0);
 
     let diff_x = gcd_select_channel(cR, channel) - gcd_select_channel(cL, channel);
     let diff_y = gcd_select_channel(cU, channel) - gcd_select_channel(cD, channel);
@@ -8046,7 +8090,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_channel, params.n0_scale_mode, params.n0_wrap_mode);
+    let r0 = n0_body(src_0, uv, vec2<f32>(dims), params.n0_channel, params.n0_scale_mode, params.n0_wrap_mode);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_angle);
     let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_gain);
     textureStore(dst, coord, r2);
