@@ -568,9 +568,12 @@ impl Application {
         let _ = content_tx.send(cmd);
     }
 
-    /// Import a dropped `.glb`/`.gltf` model as a new generator layer whose
-    /// per-instance graph renders the model, plus a default generator clip so
-    /// it plays immediately — the "drop a model in and it renders" gesture.
+    /// Import a dropped `.glb`/`.gltf` model — or `.fbx`/`.obj`/`.dae`,
+    /// converted to `.glb` through the user's installed Blender first (see
+    /// `crate::blender_import`; MANIFOLD is glTF-only internally) — as a new
+    /// generator layer whose per-instance graph renders the model, plus a
+    /// default generator clip so it plays immediately — the "drop a model in
+    /// and it renders" gesture.
     ///
     /// The graph is assembled by
     /// [`manifold_renderer::node_graph::gltf_import::assemble_import_graph`]
@@ -594,6 +597,51 @@ impl Application {
             return;
         };
         let content_tx = content_tx.clone();
+
+        // FBX/.obj/.dae (MANIFOLD is glTF-only internally, per
+        // IMPORT_ANYTHING_WAVE_DESIGN.md Lane W3): convert through the
+        // user's installed Blender first, then continue with the produced
+        // `.glb` through the exact same path a native glTF drop takes. This
+        // is a blocking subprocess call on the calling (UI) thread — the
+        // same shape `assemble_import_graph` below already uses for its
+        // blocking CPU parse, so it's one function seam, not new UI-thread
+        // plumbing.
+        let mut conversion_report_line: Option<String> = None;
+        let import_path: std::borrow::Cow<std::path::Path> = match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+        {
+            Some(ext) if crate::blender_import::is_blender_convertible_extension(&ext) => {
+                let repo_root =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                match crate::blender_import::convert_via_blender(&self.user_prefs, &repo_root, path)
+                {
+                    Ok(outcome) => {
+                        conversion_report_line = Some(match &outcome.blender_version {
+                            Some(v) => format!(
+                                "converted from {} via Blender {v}",
+                                crate::blender_import::source_format_label(&ext)
+                            ),
+                            None => format!(
+                                "converted from {} via Blender",
+                                crate::blender_import::source_format_label(&ext)
+                            ),
+                        });
+                        std::borrow::Cow::Owned(outcome.glb_path)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[Import] Blender conversion failed for {}: {e}",
+                            path.display()
+                        );
+                        return;
+                    }
+                }
+            }
+            _ => std::borrow::Cow::Borrowed(path),
+        };
+        let path = import_path.as_ref();
 
         // Parse + assemble on the calling thread. Errors (no geometry with
         // materials, unreadable file) abort the drop with a log rather than
@@ -687,11 +735,18 @@ impl Application {
         // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — object_count always
         // equals material_count, nothing is ever dropped over a cap
         // (assemble_import_graph errors instead of truncating).
-        log::warn!(
-            "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s)",
-            report.object_count,
-            report.textures_wired,
-        );
+        match &conversion_report_line {
+            Some(line) => log::warn!(
+                "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s) ({line})",
+                report.object_count,
+                report.textures_wired,
+            ),
+            None => log::warn!(
+                "[Import] Added 3D model '{display_name}' — {} object(s), {} texture(s)",
+                report.object_count,
+                report.textures_wired,
+            ),
+        }
 
         // 1. Layer command — execute locally first so the generated LayerId is
         //    fixed in the command instance, then send that SAME instance to the
