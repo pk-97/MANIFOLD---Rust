@@ -7703,23 +7703,29 @@ mod tests {
         // recursively. `Graph::add_node_named` rejects a duplicate handle
         // anywhere in the whole graph, so a clone whose inner nodes kept
         // their source's exact handles (`mesh_0`, `mat_0`, …) fails to
-        // build even with fresh ids everywhere else.
+        // build even with fresh ids everywhere else. `node_id_map` (BUG-212)
+        // mirrors the production fix: collects every (old, new) stable
+        // NodeId pair across the whole subtree so the caller can re-target
+        // `string_bindings` entries onto the clone's fresh ids.
         fn clone_fresh(
             src: &EffectGraphNode,
             next_id: &mut u32,
             taken: &mut std::collections::HashSet<String>,
+            node_id_map: &mut Vec<(manifold_core::NodeId, manifold_core::NodeId)>,
         ) -> EffectGraphNode {
             let mut node = src.clone();
             node.id = *next_id;
             *next_id += 1;
+            let old_node_id = node.node_id.clone();
             node.node_id = manifold_core::NodeId::new(manifold_core::short_id());
+            node_id_map.push((old_node_id, node.node_id.clone()));
             node.handle = node.handle.as_deref().map(|h| dedup_handle(h, taken));
             if let Some(group) = node.group.as_deref_mut() {
                 let mut id_map: Vec<(u32, u32)> = Vec::new();
                 let mut new_nodes = Vec::new();
                 for n in &group.nodes {
                     let old = n.id;
-                    let cloned = clone_fresh(n, next_id, taken);
+                    let cloned = clone_fresh(n, next_id, taken, node_id_map);
                     id_map.push((old, cloned.id));
                     new_nodes.push(cloned);
                 }
@@ -7743,7 +7749,8 @@ mod tests {
         let source_node = plus_def.nodes[source_index].clone();
         let mut taken = std::collections::HashSet::new();
         collect_all_handles(&plus_def.nodes, &mut taken);
-        let mut clone = clone_fresh(&source_node, &mut next_id, &mut taken);
+        let mut node_id_map: Vec<(manifold_core::NodeId, manifold_core::NodeId)> = Vec::new();
+        let mut clone = clone_fresh(&source_node, &mut next_id, &mut taken, &mut node_id_map);
         // D11's exact top-level convention (handle + " 2"), derived from the
         // SOURCE's own handle (not the post-dedup one — see the identical
         // comment on `DuplicateSceneObjectCommand::execute`).
@@ -7756,59 +7763,38 @@ mod tests {
         }
         clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
 
-        // BUG-212 workaround (demo-only, see the backlog entry this test's
-        // failure led to): string_bindings (the "Model File" → mesh-source
-        // `path` binding every importer object carries) address their
-        // target by stable NodeId. DuplicateSceneObjectCommand mints a
-        // FRESH NodeId for every cloned node (D11), so the clone's mesh
-        // source node has no literal `path` param and no binding pointing
-        // at it — its default_value never applies, so it fails to decode
-        // any geometry. The shipped command does not fix this (D11 says
-        // "fresh NodeIds make cloned bindings dangle by construction" for
-        // CARD exposes; string_bindings turned out to hit the same
-        // mechanism unintentionally for the importer's most common object
-        // shape — logged, not silently patched). For this demo to show a
-        // meaningful visual, propagate the source's already-resolved model
-        // path literally onto the clone's mesh source node(s) — a targeted
-        // one-off for the render proof, not a general fix.
-        if let Some(source_meta) = plus_def.preset_metadata.as_ref() {
-            let path_default: Vec<(manifold_core::NodeId, String)> = source_meta
+        // BUG-212 fix (mirrors `DuplicateSceneObjectCommand`'s shipped fix,
+        // not a demo-only workaround): `string_bindings` (the "Model File" →
+        // mesh-source `path` binding every importer object carries)
+        // addresses its target by stable NodeId, which `clone_fresh` just
+        // minted fresh for every cloned node (D11). Clone every
+        // `string_bindings` entry whose target falls inside the duplicated
+        // subtree (per `node_id_map`, collected above), re-targeted at the
+        // clone's fresh NodeId, same `id`/`label`/`default_value` — D11's
+        // "fresh NodeIds make cloned bindings dangle" is a deliberate
+        // tradeoff for CARD exposes (`bindings`/`exposed_params`), not for
+        // this non-performer-facing importer plumbing.
+        if let Some(meta) = plus_def.preset_metadata.as_mut() {
+            let new_entries: Vec<manifold_core::effect_graph_def::StringBindingDef> = meta
                 .string_bindings
                 .iter()
                 .filter_map(|b| match &b.target {
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                        if param == "path" =>
-                    {
-                        Some((node_id.clone(), b.default_value.clone()))
-                    }
-                    _ => None,
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => node_id_map
+                        .iter()
+                        .find(|(old, _)| old == node_id)
+                        .map(|(_, new_id)| manifold_core::effect_graph_def::StringBindingDef {
+                            id: b.id.clone(),
+                            label: b.label.clone(),
+                            default_value: b.default_value.clone(),
+                            target: manifold_core::effect_graph_def::BindingTarget::Node {
+                                node_id: new_id.clone(),
+                                param: param.clone(),
+                            },
+                        }),
+                    manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
                 })
                 .collect();
-            // Lockstep walk: `src_nodes[i]` is what `clone_nodes[i]` was
-            // cloned FROM (`clone_fresh` preserves list order at every
-            // level), so pairing by index at each recursion level — not a
-            // flattened global list — correctly threads through nesting.
-            fn stamp_paths_lockstep(
-                src_nodes: &[EffectGraphNode],
-                clone_nodes: &mut [EffectGraphNode],
-                bindings: &[(manifold_core::NodeId, String)],
-            ) {
-                for (src, clone) in src_nodes.iter().zip(clone_nodes.iter_mut()) {
-                    if let Some((_, path)) = bindings.iter().find(|(id, _)| *id == src.node_id) {
-                        clone.params.insert("path".to_string(), SerializedParamValue::String { value: path.clone() });
-                    }
-                    if let (Some(src_body), Some(clone_body)) =
-                        (src.group.as_deref(), clone.group.as_deref_mut())
-                    {
-                        stamp_paths_lockstep(&src_body.nodes, &mut clone_body.nodes, bindings);
-                    }
-                }
-            }
-            if let (Some(src_body), Some(clone_body)) =
-                (source_node.group.as_deref(), clone.group.as_deref_mut())
-            {
-                stamp_paths_lockstep(&src_body.nodes, &mut clone_body.nodes, &path_default);
-            }
+            meta.string_bindings.extend(new_entries);
         }
 
         if let Some(body) = clone.group.as_deref_mut()

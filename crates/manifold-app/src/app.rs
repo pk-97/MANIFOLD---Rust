@@ -2952,9 +2952,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         (beat, under)
                     };
                     self.import_image_file(&path, drop_beat, layer_under_cursor);
-                } else if ext == "glb" || ext == "gltf" {
+                } else if ext == "glb"
+                    || ext == "gltf"
+                    || crate::blender_import::is_blender_convertible_extension(&ext)
+                {
                     // 3D models → a new generator layer whose graph renders the
                     // model, plus a default clip so it plays immediately.
+                    // FBX/.obj/.dae route through `import_model_file`'s
+                    // Blender-conversion seam first (IMPORT_ANYTHING_WAVE_DESIGN.md
+                    // Lane W3) — MANIFOLD is glTF-only internally.
                     // Resolve the drop beat and target layer from the live
                     // drag position when available (drag_interpose), falling
                     // back to the last tracked cursor position (winit's

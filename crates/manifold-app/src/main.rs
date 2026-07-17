@@ -8,6 +8,7 @@ mod app_render;
 mod audio_mod_runtime;
 mod autosave;
 mod audio_waveform_cache;
+mod blender_import;
 mod breadcrumb;
 mod clip_atlas;
 mod clip_filmstrip;
