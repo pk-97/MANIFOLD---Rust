@@ -1208,6 +1208,33 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
     }))
 }
 
+/// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether `param_id`
+/// is currently exposed on the outer card for the node with doc id
+/// `node_doc_id`, searched at any depth (root or inside a group body).
+/// `exposed_params` is a per-node `BTreeSet<String>` already on
+/// [`EffectGraphNode`] — this is the "free read" the amendment names, a
+/// second independent walk of the SAME `def` `SceneVm::from_def` just
+/// walked (node doc ids are unique document-wide, so no scope disambiguation
+/// is needed). The panel rebuilds this on every event-gated sync anyway
+/// (D1: "no rotting, no staleness"), so a second O(nodes) pass costs
+/// nothing measurable — no lookup table plumbed through the Vm tree.
+pub fn is_param_exposed(def: &EffectGraphDef, node_doc_id: u32, param_id: &str) -> bool {
+    fn search(nodes: &[EffectGraphNode], node_doc_id: u32, param_id: &str) -> Option<bool> {
+        for n in nodes {
+            if n.id == node_doc_id {
+                return Some(n.exposed_params.contains(param_id));
+            }
+            if let Some(group) = &n.group
+                && let Some(found) = search(&group.nodes, node_doc_id, param_id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    search(&def.nodes, node_doc_id, param_id).unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2080,5 +2107,31 @@ mod tests {
         }
         assert!(vm.header.vertex_count > 0, "vertex count must resolve through the group boundary, not silently 0");
         assert!(vm.header.vertex_count_exact, "SceneStarter's mesh sources have known vertex counts");
+    }
+
+    /// UX-P3a's exposed-state read (D8): unexposed by default, flips on
+    /// `exposed_params` insert, and finds a node nested inside a group body
+    /// (the scene_object/transform_3d shape D12 wraps grouped objects in).
+    #[test]
+    fn is_param_exposed_reads_root_and_grouped_nodes() {
+        let mut root_node = node(1, TRANSFORM_3D_TYPE_ID, None);
+        assert!(!is_param_exposed(&def(vec![root_node.clone()], vec![]), 1, "pos_x"));
+        root_node.exposed_params.insert("pos_x".to_string());
+        let d = def(vec![root_node], vec![]);
+        assert!(is_param_exposed(&d, 1, "pos_x"));
+        assert!(!is_param_exposed(&d, 1, "pos_y"), "only the inserted param is exposed");
+        assert!(!is_param_exposed(&d, 99, "pos_x"), "unknown node id — no panic, just false");
+
+        let mut inner = node(10, MATERIAL_TYPE_IDS[0], None);
+        inner.exposed_params.insert("roughness".to_string());
+        let mut group = node(11, GROUP_TYPE_ID, Some("Cube"));
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![inner],
+            wires: vec![],
+            tint: None,
+        }));
+        let grouped_def = def(vec![group], vec![]);
+        assert!(is_param_exposed(&grouped_def, 10, "roughness"), "must find nodes nested inside a group body");
     }
 }
