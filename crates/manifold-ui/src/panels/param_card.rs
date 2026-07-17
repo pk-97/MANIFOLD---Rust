@@ -6184,7 +6184,10 @@ mod tests {
         let inner_w = rect.width - BORDER_W * 2.0;
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - GAP - COG_W;
-        let toggle_x = cog_x - GAP - TOGGLE_W;
+        // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
+        // the ON/OFF toggle and the cog.
+        let relight_x = cog_x - GAP - RELIGHT_W;
+        let toggle_x = relight_x - GAP - TOGGLE_W;
         let elem_y = inner_y + (HEADER_HEIGHT - 16.0) * 0.5;
 
         let close = |a: Rect, b: Rect| {
@@ -6195,6 +6198,8 @@ mod tests {
         };
         let toggle = tree.get_bounds(panel.host.node_id_for_key(KEY_TOGGLE).unwrap());
         assert!(close(toggle, Rect::new(toggle_x, elem_y, TOGGLE_W, 16.0)), "toggle {toggle:?}");
+        let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
+        assert!(close(relight, Rect::new(relight_x, elem_y, RELIGHT_W, 16.0)), "relight {relight:?}");
         let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
         assert!(close(chevron, Rect::new(chevron_x, elem_y, CHEVRON_W, 16.0)), "chevron {chevron:?}");
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
@@ -6260,7 +6265,10 @@ mod tests {
         // gutter (was flush to the inner edge).
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - COG_W;
-        let change_x = cog_x - CHANGE_BTN_W - GAP;
+        // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
+        // Change and the cog.
+        let relight_x = cog_x - GAP - RELIGHT_W;
+        let change_x = relight_x - GAP - CHANGE_BTN_W;
 
         let close = |a: Rect, b: Rect| {
             (a.x - b.x).abs() < 0.01
@@ -6275,6 +6283,11 @@ mod tests {
         );
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
         assert!(close(cog, Rect::new(cog_x, inner_y, COG_W, HEADER_HEIGHT)), "cog {cog:?}");
+        let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
+        assert!(
+            close(relight, Rect::new(relight_x, inner_y, RELIGHT_W, HEADER_HEIGHT)),
+            "relight {relight:?}"
+        );
         let change = tree.get_bounds(panel.host.node_id_for_key(KEY_CHANGE).unwrap());
         assert!(
             close(
