@@ -2,7 +2,7 @@
 
 # Audio Analysis Accuracy — measured detection, licensed models, sustained objects
 
-**Status:** IN PROGRESS — P1 SHIPPED 2026-07-17 (harness core, D7/D10/D11/D14, live-show fixture + provisional split awaiting Peter's veto; metamorphic invariance failure = BUG-227, a pipeline finding, not loosened) · designed 2026-07-08 · Fable
+**Status:** IN PROGRESS — P1+P2 SHIPPED 2026-07-17 (P1 harness core; P2 Beat This swap: madmom beat/downbeat/tempo arms deleted, sum-F1 gate passed both splits with downbeat +40pp heldout; D14 ≤5ms deferred to P5 correction seam per BUG-229; Integer octave mis-track = P4/P5 target; split veto + BUG-227 still open) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
