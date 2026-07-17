@@ -97,7 +97,16 @@ ONSET_FRAME_SIZE = 2048
 ONSET_HOP_SIZE = 256
 ONSET_MIN_SEPARATION_SEC = 0.03  # within one band's own peak-picker
 ONSET_MERGE_WINDOW_SEC = 0.015  # collapse near-duplicate picks ACROSS bands
-ONSET_HEIGHT_FRACTION = 0.15  # peak must clear this fraction of the band's OWN whole-track max
+# Peak must clear this fraction of the band's OWN whole-track max. Was 0.15;
+# lowered to 0.075 (2026-07-18, BUG-241 follow-up tuning) after stage-wise
+# accounting showed the threshold as the second kick-killer behind the
+# removed backtrack: at 0.075 fixture kick recall (any onset, +-50ms) went
+# apricots 15/16 -> 16/16, inhale_exhale 11/14 -> 14/14, tears 6/10 -> 10/10
+# at ~30% more raw events (precision is the downstream refractory/threshold
+# knobs' job). 0.05 bought +1 kick on one track for another +30% events;
+# the live-detector median-adaptive picker was measured strictly worse
+# offline (causal lag). Sweepable in bake-off rounds.
+ONSET_HEIGHT_FRACTION = 0.075
 LOW_BAND_HZ = (20.0, 150.0)
 MID_BAND_HZ = (150.0, 2000.0)
 # Upper bound intentionally open (effectively Nyquist, not a fixed 12kHz cap):
