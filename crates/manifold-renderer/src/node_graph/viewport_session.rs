@@ -272,20 +272,27 @@ impl ViewportSession {
     }
 
     /// Render one frame IF `dirty` (camera moved or `sync_def` rebuilt the
-    /// graph), then composite the D7 overlays (grid + show-camera frustum +
-    /// light billboards) on top and cache the result; otherwise return the
-    /// cached bytes untouched — the debounce that keeps this struct off the
-    /// per-display-tick path. `show_camera`/`light_positions` are the
-    /// caller's decode of the CURRENT def's wired show camera/lights (same
-    /// contract as `viewport_overlay::build_overlay_lines`); pass `None`/`&[]`
-    /// if the caller hasn't decoded them.
+    /// graph) — the debounce that keeps the GPU render off the per-display-
+    /// tick path — then composite the D7 overlays (grid + show-camera
+    /// frustum + light billboards) AND `gizmo_lines` (P6: move/rotate/scale
+    /// handles, built by the caller from `viewport_gizmo` against the
+    /// SAME editor camera this frame renders with) on top of a scratch copy
+    /// of the clean cached scene, EVERY call regardless of `dirty` — gizmo
+    /// state (hover highlight, drag-in-progress geometry) changes on its own
+    /// clock, independent of camera/graph dirtiness, so baking it into
+    /// `cached_rgba` (the P5 shape) would let it go stale between camera
+    /// moves. `show_camera`/`light_positions` are the caller's decode of the
+    /// CURRENT def's wired show camera/lights (same contract as
+    /// `viewport_overlay::build_overlay_lines`); pass `None`/`&[]` if the
+    /// caller hasn't decoded them.
     pub fn render_if_dirty(
         &mut self,
         frame_ctx: &PresetContext,
         overlay_cfg: &ViewportOverlayConfig,
         show_camera: Option<(&crate::node_graph::camera::Camera, f32)>,
         light_positions: &[[f32; 3]],
-    ) -> &[u8] {
+        gizmo_lines: &[crate::node_graph::viewport_overlay::WorldLine],
+    ) -> Vec<u8> {
         if self.dirty {
             let mut enc = self.device.create_encoder("viewport-session-render-enc");
             {
@@ -298,17 +305,17 @@ impl ViewportSession {
                 );
             }
             enc.commit_and_wait_completed();
-            let mut rgba = readback_tonemapped_rgba8(&self.device, &self.target.texture, self.width, self.height);
-
-            let editor_cam = self.camera.to_camera();
-            let world_lines = build_overlay_lines(overlay_cfg, show_camera, light_positions);
-            let screen_lines = project_lines(&editor_cam, self.width, self.height, &world_lines);
-            composite_overlay_lines_rgba8(&mut rgba, self.width, self.height, &screen_lines);
-
-            self.cached_rgba = rgba;
+            self.cached_rgba = readback_tonemapped_rgba8(&self.device, &self.target.texture, self.width, self.height);
             self.dirty = false;
         }
-        &self.cached_rgba
+
+        let mut out = self.cached_rgba.clone();
+        let editor_cam = self.camera.to_camera();
+        let mut world_lines = build_overlay_lines(overlay_cfg, show_camera, light_positions);
+        world_lines.extend_from_slice(gizmo_lines);
+        let screen_lines = project_lines(&editor_cam, self.width, self.height, &world_lines);
+        composite_overlay_lines_rgba8(&mut out, self.width, self.height, &screen_lines);
+        out
     }
 
     pub fn dimensions(&self) -> (u32, u32) {

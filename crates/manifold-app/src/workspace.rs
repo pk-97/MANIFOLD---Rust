@@ -112,6 +112,40 @@ pub struct Workspace {
     /// session is open, cleared on release. Drives the per-move delta fed to
     /// `viewport_input::classify_mouse_drag`.
     pub viewport_drag: Option<(winit::event::MouseButton, f32, f32)>,
+    /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): the currently active
+    /// gizmo mode (move/rotate/scale) — a plain toggle, not project state
+    /// (editor state per `docs/REALTIME_3D_DESIGN.md` §5's "Forbidden"
+    /// list: "viewport/gizmo state in `manifold-core`").
+    pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
+    /// The `node.scene_object` doc id the gizmo is attached to this session,
+    /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
+    /// cleared when the viewport closes or the def no longer resolves it
+    /// (`gizmo_target_for` returning `None`). Also routed into the Scene
+    /// Setup panel's own `SceneSelection` (`window_input.rs`) so Properties
+    /// follows a viewport click — one selection store, not two.
+    pub viewport_selected_object: Option<u32>,
+    /// Active gizmo axis drag: armed on a press that hits a gizmo handle
+    /// (`viewport_gizmo::pick_axis`), fed per-move deltas that dispatch
+    /// `SetGraphNodeParamCommand` writes (P6's undo-round-trips-per-write
+    /// gate), cleared on release. `transform_node_id` is resolved once at
+    /// arm time — either the object's existing `node.transform_3d` (D8) or
+    /// the id `AddObjectTransformCommand` just created (P6's "unwired
+    /// transform_n → offers to create the atom" entry state) — so every
+    /// subsequent move in the same gesture writes the SAME node without
+    /// re-resolving the wire each time.
+    pub viewport_gizmo_drag: Option<GizmoDrag>,
+}
+
+/// One active gizmo axis drag (P6). `transform_node_id` is resolved once at
+/// arm time (see `viewport_gizmo_drag`'s field doc) and reused for every
+/// `SetGraphNodeParamCommand` the gesture dispatches.
+#[derive(Debug, Clone)]
+pub struct GizmoDrag {
+    pub axis: manifold_renderer::node_graph::GizmoAxis,
+    pub object_node_id: u32,
+    pub layer_id: manifold_core::LayerId,
+    pub last_x: f32,
+    pub last_y: f32,
 }
 
 impl Workspace {
@@ -143,6 +177,9 @@ impl Workspace {
             viewport_open: false,
             viewport_rect: None,
             viewport_drag: None,
+            viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode::default(),
+            viewport_selected_object: None,
+            viewport_gizmo_drag: None,
         }
     }
 }
