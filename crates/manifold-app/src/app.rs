@@ -985,18 +985,12 @@ impl Application {
         }
         self.ws.ui_root.set_scene_setup_handle_idle();
 
-        // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md): a Scene
-        // Setup drag-armable value cell (transform/color/fixed-row cells —
-        // the panel's OWN `value_cell_at` names the exact set) reads as
-        // scrubbable via the same resize cursor a trim handle uses; the
-        // background-lighten half of the affordance is already the cell's
-        // `hover_bg_color`.
-        if self.ws.ui_root.scene_setup_panel.is_open()
-            && self.ws.ui_root.scene_setup_panel.value_cell_at(&self.ws.ui_root.tree, self.cursor_pos)
-        {
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-            return;
-        }
+        // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md) — the Scene
+        // Setup drag-armable value-cell cursor lookup — is DELETED
+        // (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d): Modifier, the
+        // last family with a bespoke delta-drag value cell, converted onto
+        // the card row's own slider track, so `value_cell_at` has no
+        // producer left anywhere in the panel.
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).

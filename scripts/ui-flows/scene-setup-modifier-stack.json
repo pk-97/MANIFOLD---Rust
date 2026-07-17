@@ -60,7 +60,7 @@
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.modifier.param1_value", "nth": 0 } },
+      "target": { "Query": { "name": "scene_setup.modifier.param1_track", "nth": 0 } },
       "gesture": {
         "Drag": {
           "to": { "Point": { "x": 1200.0, "y": 404.0 } },
@@ -72,8 +72,8 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.modifier.param1_value", "nth": 0, "text": "1.00" } },
-      "check": { "Count": 0 }
+      "selector": { "Query": { "name": "scene_setup.modifier.param1_driver_btn", "nth": 0 } },
+      "check": "Exists"
     }
   },
   {

@@ -21,7 +21,6 @@
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
-use crate::drag::DragController;
 use crate::input::UIEvent;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
@@ -321,16 +320,15 @@ const MODIFIER_ROW_STRIDE: u64 = 20;
 const MODIFIER_OFF_UP: u64 = 0;
 const MODIFIER_OFF_DOWN: u64 = 1;
 const MODIFIER_OFF_REMOVE: u64 = 2;
-/// Stride-3 `[−] value [+]` stepper rows follow, up to 4 param slots per
-/// modifier (12 offsets) — well under `MODIFIER_ROW_STRIDE`'s 20.
-const MODIFIER_OFF_PARAM_BASE: u64 = 3;
-/// UX-P3b-i: one mod-button offset per param slot (up to 4), placed after
-/// the 3..14 value range. Collision audit: `MODIFIER_ROW_STRIDE`'s existing
-/// 20-wide budget already had 5 spare offsets (15..19) — unlike
-/// `LIGHT_KEY_STRIDE`, no bump was needed here to fit the 4 new offsets.
-/// Only `Numeric` param rows get a mod button (`ModifierParamRowVm::Axis`
-/// stays unexposable — a structural axis-selector switch, same reasoning as
-/// Light's Mode row).
+/// UX-P3b-i: one mod-button offset per param slot (up to 4). C-P1d deleted
+/// the old stride-3 `[−] value [+]` stepper offsets that used to occupy
+/// 3..14 (the pre-convergence bespoke Numeric/Axis row builders — a row's
+/// own value cell, track, and steppers now key through `build_param_row`'s
+/// internal `(slot << 8)` scheme, not `modifier_row_key`)
+/// — this offset just needs to stay clear of `MODIFIER_OFF_UP`/`DOWN`/
+/// `REMOVE` (0..2) and fit under `MODIFIER_ROW_STRIDE`. Only `Numeric` param
+/// rows get a mod button (`ModifierParamRowVm::Axis` stays unexposable — a
+/// structural axis-selector switch, same reasoning as Light's Mode row).
 const MODIFIER_OFF_PARAM_MOD_BASE: u64 = 15;
 /// Reserved sub-range within the per-object budget for the "+ Add Modifier"
 /// button (UX-P2 D6: one control now, was 7 chips) — well clear of any real
@@ -340,6 +338,21 @@ const MODIFIER_ADD_BUTTON_OFFSET: u64 = 400;
 const fn modifier_row_key(object_index: usize, modifier_index: usize, offset: u64) -> u64 {
     MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + modifier_index as u64 * MODIFIER_ROW_STRIDE + offset
 }
+
+/// C-P1d: the slot offset `build_modifier_card_row` adds before shifting
+/// into `build_param_row`'s `row_key_base` — pushes the WHOLE
+/// `modifier_card` key range far clear of `object_card`'s (0..`OBJ_ROW_COUNT`
+/// before its own `<< 8`), since Modifier's rows build as siblings of
+/// Object's under the SAME `content_parent` every frame (the modifier stack
+/// lives inside the selected object's properties body, unlike World/Light/
+/// Camera which are mutually-exclusive Properties-body sections that never
+/// coexist with Object in one frame). Chosen well above any realistic
+/// `object_card`/`light_card`/`camera_card` slot count and far below
+/// `modifier_row_key`'s own explicit-key range (`MODIFIER_KEY_BASE`'s
+/// `<< 0`, not `<< 8` — the two schemes never overlap by construction even
+/// without this margin, but the margin makes it visibly obvious on
+/// inspection too).
+const MODIFIER_CARD_ROW_KEY_OFFSET: u64 = 100_000;
 
 const fn modifier_add_button_key(object_index: usize) -> u64 {
     MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_BUTTON_OFFSET
@@ -369,6 +382,36 @@ const fn modifier_param_mod_automation_name(param_slot: usize) -> Option<&'stati
         1 => Some("scene_setup.mod.modifier_param1"),
         2 => Some("scene_setup.mod.modifier_param2"),
         3 => Some("scene_setup.mod.modifier_param3"),
+        _ => None,
+    }
+}
+
+/// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): stable automation name
+/// for a modifier param row's SLIDER TRACK, by param slot — the drag target
+/// once Modifier moves onto the card row's own `SliderDragState` protocol
+/// (`SliderDragState::try_start_drag` only arms on `ids.track`, never
+/// `ids.value_text` — same split World/Object/Light/Camera already have
+/// between their own `*_value`/`*_track` automation names).
+const fn modifier_param_track_automation_name(param_slot: usize) -> Option<&'static str> {
+    match param_slot {
+        0 => Some("scene_setup.modifier.param0_track"),
+        1 => Some("scene_setup.modifier.param1_track"),
+        2 => Some("scene_setup.modifier.param2_track"),
+        3 => Some("scene_setup.modifier.param3_track"),
+        _ => None,
+    }
+}
+
+/// C-P1d: stable automation name for a modifier param row's driver button,
+/// by param slot — same convention as the track/value names above, kept for
+/// the same "one interaction model to learn" parity World/Object/Light/
+/// Camera's own `*_driver_btn` names already give those families.
+const fn modifier_param_driver_btn_automation_name(param_slot: usize) -> Option<&'static str> {
+    match param_slot {
+        0 => Some("scene_setup.modifier.param0_driver_btn"),
+        1 => Some("scene_setup.modifier.param1_driver_btn"),
+        2 => Some("scene_setup.modifier.param2_driver_btn"),
+        3 => Some("scene_setup.modifier.param3_driver_btn"),
         _ => None,
     }
 }
@@ -725,7 +768,6 @@ const ROW_GAP: f32 = 4.0;
 const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
 const LABEL_W: f32 = 130.0;
-const VALUE_W: f32 = 70.0;
 /// UX-P2 (D4/D7 of SCENE_PANEL_UX_DESIGN.md): the color row's live swatch —
 /// the ONE new style constant that phase's §4 negative gate allowed. Sized
 /// to sit inside a `ROW_H` row with visible margin top/bottom, echoing the
@@ -923,12 +965,18 @@ pub enum ObjectMaterialVm {
 /// the primitive's own param label, transcribed by `state_sync` (this crate
 /// can't depend on `manifold-renderer`'s `ParamDef`, same DTO-boundary
 /// convention as `EnvironmentRowVm::mode_is_hdri`). `Axis` covers
-/// Bend/Twist/Taper's own X/Y/Z selector — the same `EnumRowValue` stepper
-/// Lights already use, never a new widget kind.
+/// Bend/Twist/Taper's own X/Y/Z selector — the same labeled-stepper shape
+/// Light's Mode/Cast Shadows/Shadow Softness rows already ride through
+/// `build_param_row`'s `value_labels` path, never a new widget kind.
+/// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): both fields promoted to
+/// `ModulatedRow`/`ModulatedEnumRow` — the same promotion C-P1b/C-P1c
+/// already did for Object/Light — so Modifier's own rows build through
+/// `build_modifier_card_row` (the shared card row core) instead of the
+/// deleted pre-convergence bespoke numeric/enum stepper builders.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModifierParamRowVm {
-    Numeric { label: &'static str, row: RowValue },
-    Axis { label: &'static str, row: EnumRowValue },
+    Numeric { label: &'static str, row: ModulatedRow },
+    Axis { label: &'static str, row: ModulatedEnumRow },
 }
 
 /// One modifier-stack entry (D6/P5): the atom's display name, its own
@@ -987,16 +1035,15 @@ pub enum ObjectRowVm {
     Custom { index: usize },
 }
 
-/// A stepper row whose value is an enum index rather than a raw float — the
-/// same `[label] [−] value [+]` shape as [`RowValue`]'s numeric steppers, but
-/// the value cell shows `labels[value.round() as usize]` instead of a
-/// decimal (D4: `shadow_softness` "as the same stepper the importer card
-/// uses"). `row.min`/`row.max` are `0.0`/`labels.len() - 1` and the stepper
-/// delta is always `1.0` (round to the next label) — never the 0.05 numeric
-/// nudge. This crate can't depend on `manifold-renderer`'s `LIGHT_MODES`/
-/// `SHADOW_SOFTNESS_LABELS` constants, so `labels` is transcribed by
-/// `state_sync` (the same DTO-boundary convention as
-/// `EnvironmentRowVm::mode_is_hdri`).
+/// A stepper row whose value is an enum index rather than a raw float —
+/// historically the same `[label] [−] value [+]` shape as [`RowValue`]'s
+/// numeric steppers; C-P1c/C-P1d converted every consumer (Light, then
+/// Modifier's Axis rows) onto [`ModulatedEnumRow`]'s `value_labels` path, so
+/// this type has no producer left in this crate — kept only as the DTO shape
+/// documentation for `ModulatedEnumRow`'s own doc comment to point at
+/// (`labels` is transcribed by `state_sync`, the same DTO-boundary
+/// convention as `EnvironmentRowVm::mode_is_hdri`, since this crate can't
+/// depend on `manifold-renderer`'s `LIGHT_MODES`/`SHADOW_SOFTNESS_LABELS`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnumRowValue {
     pub row: RowValue,
@@ -1005,15 +1052,13 @@ pub struct EnumRowValue {
 
 /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the modulation-carrying
 /// twin of [`EnumRowValue`] — same shape, but `row` is a [`ModulatedRow`] so
-/// Light's Mode/Cast Shadows/Shadow Softness rows can carry driver/envelope/
-/// audio-mod facts through `build_param_row`'s `ParamInfo.value_labels` path
-/// (the card row core already supports labeled/enum rows — no bespoke
-/// stepper needed, D1's "check for a card enum row first"). A SEPARATE type
-/// from `EnumRowValue` rather than promoting that one in place: Modifier's
-/// `ModifierParamRowVm::Axis` still uses plain `EnumRowValue`/`RowValue`
-/// (Modifier stays on the old bespoke path until C-P1d) — mutating
-/// `EnumRowValue` itself would have forced Modifier's Axis rows through this
-/// shape too, ahead of its own sub-phase.
+/// enum/axis rows can carry driver/envelope/audio-mod facts through
+/// `build_param_row`'s `ParamInfo.value_labels` path (the card row core
+/// already supports labeled/enum rows — no bespoke stepper needed, D1's
+/// "check for a card enum row first"). Light's Mode/Cast Shadows/Shadow
+/// Softness rows were the first consumer (C-P1c); C-P1d moved Modifier's
+/// `ModifierParamRowVm::Axis` rows onto this same type, so every enum row in
+/// the panel now rides one shape.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModulatedEnumRow {
     pub row: ModulatedRow,
@@ -1201,23 +1246,6 @@ struct ModExposeCtx {
     /// Flows onto the appended binding's `is_angle` so the card slider
     /// keeps the same degrees presentation the panel itself uses.
     is_angle: bool,
-}
-
-/// A value-label drag session (D7 gesture: "ride Fog density with the
-/// mouse") — same pointer-down-arms/drag-computes/release-clears shape as
-/// `AudioSetupPanel`'s gain-stepper calibration drag.
-#[derive(Clone, Debug)]
-struct ValueDrag {
-    addr: RowAddr,
-    start_x: f32,
-    start_value: f32,
-    min: f32,
-    max: f32,
-    /// Shift held at drag-start (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4,
-    /// D8): the applied per-pixel delta is multiplied by 0.1 for the life of
-    /// the drag — the performer's precision-landing gesture (e.g. Fog
-    /// density to exactly 0.42, mid-set, one hand).
-    fine: bool,
 }
 
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: the panel's card-shaped row
@@ -1448,6 +1476,23 @@ pub struct ScenePanel {
     /// `CAM_ROW_COUNT` fixed slots (the union of every field across the
     /// three curated camera atoms; only one row set exists per scene).
     camera_card: SceneCardState,
+    /// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted
+    /// Modifier family's card-shaped row state — same `SceneCardState`
+    /// shape, but VARIABLE slot count (unlike World/Object/Light/Camera's
+    /// fixed unions): a modifier stack is a reorderable list of 0..N
+    /// modifiers, each contributing its own curated param rows, so the
+    /// selected object's `modifier_card` regrows every properties-body
+    /// build to the ACTUAL total row count for this frame (`build_modifier_row`
+    /// threads a running slot cursor across the stack). Row IDENTITY is
+    /// still stable across frames despite the index not being: the
+    /// synthesized `ParamId` (D2) encodes `(node_doc_id, param_key)`, not
+    /// the slot index, so `resolve_scene_param`/the id-map never depend on
+    /// slot stability — only `mod_active_tab`/`drag_sliders` (which
+    /// `SceneCardState::resize` already grows-never-truncates) could, in
+    /// principle, show the wrong row's drawer tab open for one frame after
+    /// a reorder mid-drawer-open; accepted as a cosmetic edge case, same
+    /// honesty standard as every other documented consequence in this file.
+    modifier_card: SceneCardState,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
@@ -1471,16 +1516,6 @@ pub struct ScenePanel {
     /// `!(value > 0.5)` as 0.0/1.0) through the same
     /// `SceneSetupParamChanged` fourth-surface path every other row uses.
     outliner_eye_ids: Vec<(NodeId, RowValue)>,
-    /// C-P1b: Objects-row drag-armable value cells built this frame — as of
-    /// this phase, ONLY the Modifier-stack's own numeric param rows
-    /// (`build_modifier_numeric_row`; Modifier stays on the old bespoke path
-    /// until C-P1d). Transform/color/material moved onto `object_card`'s
-    /// card-row protocol; their old pushes here are deleted along with
-    /// `build_triplet_row`/`build_color_row`/`build_object_slider_row`.
-    object_value_cells: Vec<(NodeId, RowValue)>,
-    /// Every Objects-row stepper (+/-) built this frame, with its fixed step
-    /// delta (mirrors `stepper_hit` for the fixed rows above).
-    object_steppers: Vec<(NodeId, RowValue, f32)>,
     /// `(identity_node_id, name_label_node_id, current_name)` for the
     /// properties header's editable name row, when a Known object is
     /// selected this frame (`identity_node_id` = `group_node_id.unwrap_or(
@@ -1513,13 +1548,6 @@ pub struct ScenePanel {
     /// entry per chip — the click now opens the shared dropdown instead of
     /// resolving directly, so there's at most one entry and no `type_id`).
     add_modifier_button_id: Option<(NodeId, u32)>,
-    /// P4 (D9): every Objects-scoped enum value cell built this frame
-    /// (modifier Axis rows) — `(cell_node_id, row, labels)`. A cell here
-    /// with `labels.len() >= 3` opens the dropdown on click; a 2-label cell
-    /// stays a stepper (its `[-]/[+]` cycle lives in `object_steppers`, same
-    /// as every other enum row — this vector only exists to route the
-    /// VALUE cell's own click, which the `[-]/[+]` steppers don't cover).
-    object_enum_cells: Vec<(NodeId, RowValue, Vec<&'static str>)>,
     /// BUG-193/P5: `(remove_button_node_id, index)` for the properties
     /// header's "Remove" button, when a Known light is selected this frame —
     /// resolves to `PanelAction::SceneSetupRemoveLight`. At most one entry
@@ -1531,7 +1559,6 @@ pub struct ScenePanel {
     /// `light_name_rect`.
     light_name_ids: Vec<(u32, NodeId, String)>,
     panel_rect: Rect,
-    drag: DragController<ValueDrag>,
     /// The layer_id a drag targets — captured at PointerDown so `on_event`
     /// doesn't need to re-read `self.state` (which may rebuild mid-drag on
     /// an unrelated `configure`, per D1 "no staleness": the drag itself
@@ -1568,25 +1595,22 @@ impl Default for ScenePanel {
             object_card: SceneCardState::new(),
             light_card: SceneCardState::new(),
             camera_card: SceneCardState::new(),
+            modifier_card: SceneCardState::new(),
             add_object_id: None,
             add_light_id: None,
             import_model_id: None,
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
-            object_value_cells: Vec::new(),
-            object_steppers: Vec::new(),
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             add_modifier_button_id: None,
-            object_enum_cells: Vec::new(),
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
-            drag: DragController::new(),
             drag_layer_id: None,
             mod_button_ids: Vec::new(),
         }
@@ -1697,20 +1721,22 @@ impl ScenePanel {
         // actually builds this frame.
         self.light_card.resize(0);
         self.camera_card.resize(0);
+        // C-P1d: same contract — `modifier_card` regrows to the selected
+        // object's ACTUAL total modifier-param-row count when its
+        // properties body builds this frame (variable, unlike the other
+        // three families' fixed unions — see `modifier_card`'s doc comment).
+        self.modifier_card.resize(0);
         self.add_object_id = None;
         self.add_light_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
         self.outliner_eye_ids.clear();
-        self.object_value_cells.clear();
-        self.object_steppers.clear();
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.add_modifier_button_id = None;
-        self.object_enum_cells.clear();
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
         self.mod_button_ids.clear();
@@ -2254,6 +2280,14 @@ impl ScenePanel {
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Modifiers", label_style());
         cy += ROW_H;
         if row.modifiers_addable {
+            // C-P1d: `modifier_card` regrows to the selected object's
+            // ACTUAL total modifier-param-row count this frame (variable,
+            // unlike `object_card`'s fixed union above) — see
+            // `modifier_card`'s own doc comment for why a running cursor,
+            // not a per-family fixed slot table, is the right shape here.
+            let total_rows: usize = row.modifiers.iter().map(|m| m.params.len()).sum();
+            self.modifier_card.resize(total_rows);
+            let mut slot = 0usize;
             for m in &row.modifiers {
                 cy = self.build_modifier_row(
                     tree,
@@ -2265,6 +2299,7 @@ impl ScenePanel {
                     m,
                     row.modifiers.len(),
                     &obj_label,
+                    &mut slot,
                 );
             }
             cy = self.build_add_modifier_button(
@@ -2561,7 +2596,7 @@ impl ScenePanel {
             );
             self.world_card.slider_ids[slot] = None;
             self.world_card.param_info[slot] = placeholder_param_info();
-            self.build_mod_button(
+            self.build_expose_button(
                 tree, mod_x, cy, &row.value, "World", label, false,
                 row_key(slot as u64, ROW_OFF_MOD),
                 world_row_mod_automation_name(slot),
@@ -2642,7 +2677,7 @@ impl ScenePanel {
 
         // Same reserved exposure-button lane every row family draws — sits
         // past the card's own D/E/A buttons, at the row's far right edge.
-        self.build_mod_button(
+        self.build_expose_button(
             tree, mod_x, cy, &row.value, "World", label, false,
             row_key(slot as u64, ROW_OFF_MOD),
             world_row_mod_automation_name(slot),
@@ -2743,7 +2778,7 @@ impl ScenePanel {
             self.object_card.slider_ids[slot] = None;
             self.object_card.param_info[slot] = placeholder_param_info();
             if let Some(offset) = mod_offset {
-                self.build_mod_button(
+                self.build_expose_button(
                     tree, mod_x, cy, &row.value, object_label, label, is_angle,
                     obj_key(index, offset),
                     mod_button_automation_name(offset),
@@ -2824,7 +2859,7 @@ impl ScenePanel {
         }
 
         if let Some(offset) = mod_offset {
-            self.build_mod_button(
+            self.build_expose_button(
                 tree, mod_x, cy, &row.value, object_label, label, is_angle,
                 obj_key(index, offset),
                 mod_button_automation_name(offset),
@@ -2914,17 +2949,21 @@ impl ScenePanel {
             .unwrap_or(-1);
     }
 
-    /// UX-P3a (D8/D9 of SCENE_PANEL_UX_DESIGN.md, sizing amendment): the mod
-    /// button for one exposable row. Draws at the row's reserved right-edge
-    /// slot (`MOD_BTN_W`). A driven row gets the dimmed, non-interactive
-    /// variant and is NOT pushed into `mod_button_ids` (EyeSlot's
-    /// Live/Dimmed convention — the slot is always drawn, never absent).
-    /// `object_label`/`param_label` feed the exposure's card name
-    /// (`<ObjectName> · <ParamLabel>`, D8) — the panel's own row-label
-    /// strings, not re-derived from the primitive registry.
+    /// UX-P3a (D8/D9 of SCENE_PANEL_UX_DESIGN.md, sizing amendment): the
+    /// expose-to-card button for one exposable row — EVERY converted
+    /// family's own affordance (World/Object/Light/Camera/Modifier), not a
+    /// bespoke per-family widget (C-P1d renamed this function to drop its
+    /// old pre-convergence "mod button" name — same behavior, a name that no
+    /// longer implies a separate dialect now that every family rides it). Draws
+    /// at the row's reserved right-edge slot (`MOD_BTN_W`). A driven row
+    /// gets the dimmed, non-interactive variant and is NOT pushed into
+    /// `mod_button_ids` (EyeSlot's Live/Dimmed convention — the slot is
+    /// always drawn, never absent). `object_label`/`param_label` feed the
+    /// exposure's card name (`<ObjectName> · <ParamLabel>`, D8) — the
+    /// panel's own row-label strings, not re-derived from the primitive
+    /// registry.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
-    fn build_mod_button(
+    fn build_expose_button(
         &mut self,
         tree: &mut UITree,
         x: f32,
@@ -3015,7 +3054,7 @@ impl ScenePanel {
             self.light_card.slider_ids[slot] = None;
             self.light_card.param_info[slot] = placeholder_param_info();
             if let Some(offset) = mod_offset {
-                self.build_mod_button(
+                self.build_expose_button(
                     tree, mod_x, cy, &row.value, light_label, label, false,
                     light_key(index, offset),
                     light_mod_button_automation_name(offset, 0),
@@ -3096,7 +3135,7 @@ impl ScenePanel {
         }
 
         if let Some(offset) = mod_offset {
-            self.build_mod_button(
+            self.build_expose_button(
                 tree, mod_x, cy, &row.value, light_label, label, false,
                 light_key(index, offset),
                 light_mod_button_automation_name(offset, 0),
@@ -3262,7 +3301,7 @@ impl ScenePanel {
             );
             self.camera_card.slider_ids[slot] = None;
             self.camera_card.param_info[slot] = placeholder_param_info();
-            self.build_mod_button(
+            self.build_expose_button(
                 tree, mod_x, cy, &row.value, "Camera", label, is_angle,
                 CAMERA_KEY_BASE + mod_offset,
                 camera_mod_button_automation_name(mod_offset, 0),
@@ -3341,7 +3380,7 @@ impl ScenePanel {
             }
         }
 
-        self.build_mod_button(
+        self.build_expose_button(
             tree, mod_x, cy, &row.value, "Camera", label, is_angle,
             CAMERA_KEY_BASE + mod_offset,
             camera_mod_button_automation_name(mod_offset, 0),
@@ -3391,17 +3430,25 @@ impl ScenePanel {
             .unwrap_or(-1);
     }
 
-    /// One modifier-stack entry (P5/D6): display name + up/down/remove, then
-    /// its own param rows. `mod_count` is the CURRENT stack length — up/down
-    /// are always rendered (never conditionally hidden,
+    /// One modifier-stack entry (P5/D6): display name + up/down/remove
+    /// (panel chrome — stays bespoke, D1's own carve-out for "rows that
+    /// aren't params"), then its own param rows built through the shared
+    /// card row core (C-P1d). `mod_count` is the CURRENT stack length —
+    /// up/down are always rendered (never conditionally hidden,
     /// `feedback_no_conditionally_visible_ui`) but only recorded as live
     /// targets when they wouldn't push past a stack boundary; clicking an
-    /// inert one at the boundary is simply a no-op. UX-P3b-i: `object_label`
-    /// (the owning object's name — modifiers live inside an object's own
-    /// group, so the mod-button's exposure card name follows the same
+    /// inert one at the boundary is simply a no-op. `slot` is a running
+    /// cursor into `self.modifier_card` — the caller
+    /// (`build_object_properties_body`) pre-sizes `modifier_card` to the
+    /// selected object's TOTAL modifier-param-row count for this frame and
+    /// threads the same cursor across every modifier in the stack, so each
+    /// param row gets its own stable-for-this-frame array slot regardless
+    /// of which modifier it belongs to. UX-P3b-i: `object_label` (the
+    /// owning object's name — modifiers live inside an object's own group,
+    /// so the mod-button's exposure card name follows the same
     /// `<ObjectName> · <ParamLabel>` convention every other exposable row
     /// uses, not a modifier-scoped identity) threads down to
-    /// `build_modifier_numeric_row`.
+    /// `build_modifier_card_row`.
     #[allow(clippy::too_many_arguments)]
     fn build_modifier_row(
         &mut self,
@@ -3414,6 +3461,7 @@ impl ScenePanel {
         m: &ModifierKnownRow,
         mod_count: usize,
         object_label: &str,
+        slot: &mut usize,
     ) -> f32 {
         let name_w = inner_w - STEP_W * 3.0;
         tree.add_label(Some(self.content_parent), inner_x, cy, name_w, ROW_H, &m.display_name, label_style());
@@ -3459,195 +3507,231 @@ impl ScenePanel {
 
         let param_x = inner_x + PAD;
         let param_w = inner_w - PAD;
-        for (slot, p) in m.params.iter().enumerate() {
+        for (param_slot, p) in m.params.iter().enumerate() {
+            let this_slot = *slot;
+            *slot += 1;
             cy = match p {
                 // UX-P3b-i: the mod-button's `param_label` disambiguates
                 // WHICH modifier's field this is (an object can carry
                 // several modifiers, each with its own "Angle"/"Amount") —
                 // "Bend Angle", not a bare "Angle" that would collide with
                 // a Twist modifier's own numeric row on the same object.
-                ModifierParamRowVm::Numeric { label, row } => self.build_modifier_numeric_row(
-                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot, object_label,
-                    &format!("{} {label}", m.display_name),
-                ),
-                ModifierParamRowVm::Axis { label, row } => self.build_modifier_enum_row(
-                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot,
-                ),
+                ModifierParamRowVm::Numeric { label, row } => {
+                    let param_key = row.value.addr.param_id.clone();
+                    self.build_modifier_card_row(
+                        tree, param_x, param_w, cy, label, row, this_slot, &param_key, param_slot,
+                        object_index, m.index, object_label, &format!("{} {label}", m.display_name), None,
+                    )
+                }
+                ModifierParamRowVm::Axis { label, row } => {
+                    let param_key = row.row.value.addr.param_id.clone();
+                    self.build_modifier_card_row(
+                        tree, param_x, param_w, cy, label, &row.row, this_slot, &param_key, param_slot,
+                        object_index, m.index, object_label, "", Some(&row.labels),
+                    )
+                }
             };
         }
         cy
     }
 
-    /// One modifier param's `[label] [−] value [＋]` row, keyed into the
-    /// modifier-row range — a modifier's own params (bend angle, twist
-    /// turns, axis, …) stay steppers; D2 scopes sliders to Objects material
-    /// rows only.
-    /// Pushed onto the SAME `object_steppers`/`object_value_cells` vectors
-    /// every other Objects-section numeric row uses (those are already
-    /// generic `(NodeId, RowValue, …)` lookups keyed by write address, not
-    /// object identity — no separate modifier-specific drag plumbing needed).
-    /// UX-P3b-i: `object_label`/`param_label` feed the mod button's
-    /// exposure name — always present (every modifier `Numeric` param is in
-    /// the doc's exposable inventory; only `Axis` rows are excluded, a
-    /// structural switch, same reasoning as Light's Mode row).
+    /// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): one Modifier param
+    /// row, built through the shared card row core — the Modifier-family
+    /// twin of `build_light_card_row` (Axis rows ride `labels` the SAME
+    /// `value_labels` path Light's Mode/Cast Shadows/Shadow Softness rows
+    /// already proved, D1's "check for a card enum row first"). Unlike the
+    /// other three families, `slot` is NOT a fixed per-family index — it's
+    /// the running cursor `build_modifier_row` threads across the whole
+    /// stack (see `modifier_card`'s own doc comment). `param_slot` (0-based,
+    /// WITHIN this one modifier's own param list) is used only for stable
+    /// automation names (`modifier_param_*_automation_name`) — reused
+    /// across every modifier instance via `nth` in `scripts/ui-flows/`, the
+    /// same "name over raw pixel coordinate" convention every fixed-slot
+    /// family already follows, just keyed one level more locally since the
+    /// stack itself has no fixed width. Only `Numeric` rows get a mod
+    /// button (`labels.is_none()`) — `Axis` rows stay unexposable, a
+    /// structural switch, same reasoning as Light's Mode row.
     #[allow(clippy::too_many_arguments)]
-    fn build_modifier_numeric_row(
+    fn build_modifier_card_row(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
         cy: f32,
         label: &str,
-        row: &RowValue,
+        row: &ModulatedRow,
+        slot: usize,
+        param_key: &str,
+        param_slot: usize,
         object_index: usize,
         modifier_index: usize,
-        param_slot: usize,
         object_label: &str,
-        param_label: &str,
+        mod_param_label: &str,
+        labels: Option<&[&'static str]>,
     ) -> f32 {
+        let mod_offset = labels.is_none().then_some(MODIFIER_OFF_PARAM_MOD_BASE + param_slot as u64);
         let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
-        let mod_offset = MODIFIER_OFF_PARAM_MOD_BASE + param_slot as u64;
-        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-        if row.driven {
+        let usable_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
+
+        if row.value.driven {
+            tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+            let text = if let Some(labels) = labels {
+                let idx = row.value.value.round().clamp(0.0, (labels.len().max(1) - 1) as f32) as usize;
+                format!("{} (driven)", labels.get(idx).copied().unwrap_or("?"))
+            } else {
+                format!("{:.2} (driven)", row.value.value)
+            };
             tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
-                inner_w - LABEL_W,
+                usable_w - LABEL_W,
                 ROW_H,
-                &format!("{:.2} (driven)", row.value),
+                &text,
                 driven_label_style(),
             );
-            self.build_mod_button(
-                tree, mod_x, cy, row, object_label, param_label, false,
-                modifier_row_key(object_index, modifier_index, mod_offset),
+            self.modifier_card.slider_ids[slot] = None;
+            self.modifier_card.param_info[slot] = placeholder_param_info();
+            if let Some(offset) = mod_offset {
+                self.build_expose_button(
+                    tree, mod_x, cy, &row.value, object_label, mod_param_label, false,
+                    modifier_row_key(object_index, modifier_index, offset),
+                    modifier_param_mod_automation_name(param_slot),
+                );
+            }
+            return cy + ROW_H;
+        }
+
+        let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
+        let (min, max) = (row.value.min, row.value.max);
+        let info = ParamInfo {
+            param_id: param_id.clone(),
+            name: label.to_string(),
+            min,
+            max,
+            default: row.value.value,
+            whole_numbers: labels.is_some(),
+            is_angle: false,
+            exposed: row.value.exposed,
+            is_toggle: false,
+            is_trigger: false,
+            is_trigger_gate: false,
+            value_labels: labels.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+            section: None,
+        };
+        self.modifier_card.param_info[slot] = info.clone();
+        self.modifier_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
+        self.sync_modifier_modulation(slot, &row.modulation);
+
+        let content_w = if mod_offset.is_some() { usable_w - MOD_BTN_W - MOD_BTN_GAP } else { usable_w };
+        let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
+        let built = build_param_row(
+            tree,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            slider_w,
+            &info,
+            &self.modifier_card.mod_state,
+            slot,
+            GraphParamTarget::Generator,
+            &crate::slider::SliderColors::default_slider(),
+            color::FONT_LABEL,
+            true,
+            label_width,
+            self.modifier_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
+            true,
+            // C-P1d: unlike World/Object/Light/Camera (mutually exclusive
+            // Properties-body sections — never two of them build under the
+            // same `content_parent` in one frame), Modifier rows ALWAYS
+            // build alongside `object_card`'s own rows (the stack lives
+            // INSIDE the selected object's properties body) — so a bare
+            // `(slot << 8)` here would collide with `object_card`'s own
+            // slot-0..13 key range as sibling WidgetIds under the same
+            // parent. `MODIFIER_CARD_ROW_KEY_OFFSET` pushes this family's
+            // whole key range far clear of every other family's.
+            Some((MODIFIER_CARD_ROW_KEY_OFFSET + slot as u64) << 8),
+            None,
+        );
+        self.modifier_card.row_catcher_ids[slot] = Some(built.row_catcher);
+        self.modifier_card.trim_ids[slot] = built.trim;
+        self.modifier_card.target_ids[slot] = built.target;
+        self.modifier_card.envelope_config_ids[slot] = built.envelope_config;
+        self.modifier_card.envelope_btn_ids[slot] = built.envelope_btn;
+        self.modifier_card.driver_btn_ids[slot] = Some(built.driver_btn);
+        self.modifier_card.driver_config_ids[slot] = built.driver_config;
+        self.modifier_card.audio_btn_ids[slot] = Some(built.audio_btn);
+        self.modifier_card.audio_configs[slot] = built.audio_config;
+        self.modifier_card.mod_tab_ids[slot] = built.mod_tabs;
+        self.modifier_card.slider_ids[slot] = built.slider;
+        if let Some(name) = modifier_param_driver_btn_automation_name(param_slot) {
+            tree.set_name(built.driver_btn, name);
+        }
+        if let Some(ids) = built.slider {
+            self.modifier_card.drag_sliders[slot].set_ids(ids);
+            self.modifier_card.drag_sliders[slot].set_range(min, max, false);
+            if let Some(name) = modifier_param_row_automation_name(param_slot) {
+                tree.set_name(ids.value_text, name);
+            }
+            if let Some(name) = modifier_param_track_automation_name(param_slot) {
+                tree.set_name(ids.track, name);
+            }
+        }
+
+        if let Some(offset) = mod_offset {
+            self.build_expose_button(
+                tree, mod_x, cy, &row.value, object_label, mod_param_label, false,
+                modifier_row_key(object_index, modifier_index, offset),
                 modifier_param_mod_automation_name(param_slot),
             );
-            return cy + ROW_H;
         }
-        let base = MODIFIER_OFF_PARAM_BASE + param_slot as u64 * 3;
-        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
-        let minus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2212}",
-            modifier_row_key(object_index, modifier_index, base),
-        );
-        let value_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W,
-            cy,
-            VALUE_W,
-            ROW_H,
-            drag_value_style(),
-            &format!("{:.2}", row.value),
-            modifier_row_key(object_index, modifier_index, base + 1),
-        );
-        if let Some(name) = modifier_param_row_automation_name(param_slot) {
-            tree.set_name(value_id, name);
-        }
-        let plus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W + VALUE_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{002B}",
-            modifier_row_key(object_index, modifier_index, base + 2),
-        );
-        self.object_steppers.push((minus_id, row.clone(), -0.05));
-        self.object_value_cells.push((value_id, row.clone()));
-        self.object_steppers.push((plus_id, row.clone(), 0.05));
-        self.build_mod_button(
-            tree, mod_x, cy, row, object_label, param_label, false,
-            modifier_row_key(object_index, modifier_index, mod_offset),
-            modifier_param_mod_automation_name(param_slot),
-        );
-        cy + ROW_H
+
+        built.new_cy
     }
 
-    /// One modifier's Axis param row (Bend/Twist/Taper's X/Y/Z selector) —
-    /// the old `[label] [-] value [+]` enum stepper shape (C-P1c deleted the
-    /// Light-family sibling this comment used to point at, `build_light_enum_row`
-    /// — Light's own enum rows now build through `build_light_card_row`'s
-    /// `value_labels` path instead), keyed into the modifier-row range.
-    #[allow(clippy::too_many_arguments)]
-    fn build_modifier_enum_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        enum_row: &EnumRowValue,
-        object_index: usize,
-        modifier_index: usize,
-        param_slot: usize,
-    ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-        let row = &enum_row.row;
-        let label_text = enum_row
-            .labels
-            .get(row.value.round().clamp(0.0, (enum_row.labels.len().max(1) - 1) as f32) as usize)
-            .copied()
-            .unwrap_or("?");
-        if row.driven {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x + LABEL_W,
-                cy,
-                inner_w - LABEL_W,
-                ROW_H,
-                &format!("{label_text} (driven)"),
-                driven_label_style(),
-            );
-            return cy + ROW_H;
-        }
-        let base = MODIFIER_OFF_PARAM_BASE + param_slot as u64 * 3;
-        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
-        let minus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2212}",
-            modifier_row_key(object_index, modifier_index, base),
-        );
-        let value_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W,
-            cy,
-            VALUE_W,
-            ROW_H,
-            drag_value_style(),
-            label_text,
-            modifier_row_key(object_index, modifier_index, base + 1),
-        );
-        if let Some(name) = modifier_param_row_automation_name(param_slot) {
-            tree.set_name(value_id, name);
-        }
-        let plus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W + VALUE_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{002B}",
-            modifier_row_key(object_index, modifier_index, base + 2),
-        );
-        self.object_steppers.push((minus_id, row.clone(), -1.0));
-        self.object_enum_cells.push((value_id, row.clone(), enum_row.labels.clone()));
-        self.object_steppers.push((plus_id, row.clone(), 1.0));
-        cy + ROW_H
+    /// C-P1d: copy one Modifier row's [`RowModulation`] facts into
+    /// `self.modifier_card.mod_state` at `slot` — the Modifier-family twin
+    /// of `sync_light_modulation`.
+    fn sync_modifier_modulation(&mut self, slot: usize, m: &RowModulation) {
+        let ms = &mut self.modifier_card.mod_state;
+        ms.driver_expanded[slot] = m.driver_active;
+        ms.envelope_expanded[slot] = m.envelope_active;
+        ms.trim_min[slot] = m.trim_min;
+        ms.trim_max[slot] = m.trim_max;
+        ms.target_norm[slot] = m.target_norm;
+        ms.env_decay[slot] = m.env_decay;
+        ms.driver_beat_div_idx[slot] = m.driver_beat_div_idx;
+        ms.driver_waveform_idx[slot] = m.driver_waveform_idx;
+        ms.driver_reversed[slot] = m.driver_reversed;
+        ms.driver_dotted[slot] = m.driver_dotted;
+        ms.driver_triplet[slot] = m.driver_triplet;
+        ms.driver_free_period[slot] = m.driver_free_period;
+        ms.automation_active[slot] = m.automation_active;
+        ms.automation_overridden[slot] = m.automation_overridden;
+        ms.audio_active[slot] = m.audio_active;
+        ms.audio_kind_idx[slot] = m.audio_kind_idx;
+        ms.audio_band_idx[slot] = m.audio_band_idx;
+        ms.audio_range_min[slot] = m.audio_range_min;
+        ms.audio_range_max[slot] = m.audio_range_max;
+        ms.audio_invert[slot] = m.audio_invert;
+        ms.audio_rate[slot] = m.audio_rate;
+        ms.audio_sensitivity[slot] = m.audio_sensitivity;
+        ms.audio_attack_ms[slot] = m.audio_attack_ms;
+        ms.audio_release_ms[slot] = m.audio_release_ms;
+        ms.audio_mode_idx[slot] = m.audio_trigger_mode_idx;
+        ms.audio_action_idx[slot] = m.audio_action_idx;
+        ms.audio_step_amount[slot] = m.audio_step_amount;
+        ms.audio_wrap_idx[slot] = m.audio_wrap_idx;
+        ms.audio_send_idx[slot] = m
+            .audio_send_id
+            .as_ref()
+            .and_then(|sid| ms.audio_send_ids.iter().position(|s| s == sid))
+            .map(|p| p as i32)
+            .unwrap_or(-1);
     }
 
     /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
@@ -3691,25 +3775,13 @@ impl ScenePanel {
         self.open && self.panel_rect.contains(pos)
     }
 
-    /// UX-P2 (D3a): whether `pos` is over a drag-armable value cell this
-    /// frame — every cell in the SAME lookup set `PointerDown`'s delta-drag
-    /// arm uses. C-P1c: only `object_value_cells` remains here (Modifier's
-    /// own numeric param rows, unconverted until C-P1d) — Light/Camera
-    /// (like World/Object before them) moved onto the card row's own slider
-    /// track, which has its OWN cursor language (a resize handle doesn't
-    /// apply to a track you click-to-jump on, so it's deliberately not
-    /// included, same as `world_card`/`object_card`). The app's
-    /// cursor-priority chain (`app.rs::update_cursor_for_position`) calls
-    /// this to switch to `TimelineCursor::ResizeHorizontal` on hover — the
-    /// visible half of D3a's affordance (the background-lighten half already
-    /// ships via `drag_value_style`'s `hover_bg_color`).
-    pub fn value_cell_at(&self, tree: &UITree, pos: crate::node::Vec2) -> bool {
-        if !self.open {
-            return false;
-        }
-        let hit = |id: NodeId| tree.get_bounds(id).contains(pos);
-        self.object_value_cells.iter().any(|(id, _)| hit(*id))
-    }
+    // UX-P2 (D3a)'s drag-armable value-cell cursor lookup (`value_cell_at`)
+    // is DELETED — C-P1d converted Modifier (its last producer,
+    // `object_value_cells`) onto the card row's own slider track, same as
+    // every other family before it (`world_card`/`object_card`/`light_card`/
+    // `camera_card`), so no family has a bespoke delta-drag value cell left.
+    // `app.rs::update_cursor_for_position`'s Priority 2d block (the caller)
+    // is deleted in the same commit.
 
     /// Handle one input event. Returns `(consumed, actions)`.
     pub fn handle_event(&mut self, event: &UIEvent) -> (bool, Vec<PanelAction>) {
@@ -3861,15 +3933,6 @@ impl ScenePanel {
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
-                        ));
-                    } else if let Some((row_value, delta)) = stepper_hit_in(&self.object_steppers, *node_id) {
-                        let new_value = (row_value.value + delta).clamp(row_value.min, row_value.max);
-                        actions.push(PanelAction::SceneSetupParamChanged(
-                            vm.layer_id.clone(),
-                            row_value.addr.scope_path.clone(),
-                            row_value.addr.node_doc_id,
-                            row_value.addr.param_id.clone(),
-                            new_value,
                         ));
                     } else if let Some(rc) = match_param_row_click(
                         *node_id,
@@ -4121,26 +4184,68 @@ impl ScenePanel {
                     } else if let Some((pi, tab)) = self.camera_card.mod_tab_hit(*node_id) {
                         self.camera_card.focus_mod_tab(pi, tab);
                         actions.push(PanelAction::ModConfigTabChanged);
-                    } else if let Some((cell_id, row_value, labels)) = self
-                        .object_enum_cells
-                        .iter()
-                        .find(|(id, _, _)| *id == *node_id)
-                    {
-                        // D9: 3+-label enum cells open the dropdown; 2-label
-                        // cells stay a stepper (the `[-]/[+]` cycle above
-                        // already covers them — this arm never fires for a
-                        // 2-label row, so there's nothing to leave dead).
-                        if labels.len() >= 3 && !row_value.driven {
-                            actions.push(PanelAction::SceneSetupEnumClicked {
-                                layer_id: vm.layer_id.clone(),
-                                scope_path: row_value.addr.scope_path.clone(),
-                                node_doc_id: row_value.addr.node_doc_id,
-                                param_id: row_value.addr.param_id.clone(),
-                                labels: labels.clone(),
-                                current_index: row_value.value.round().max(0.0) as u32,
-                                cell_node_id: *cell_id,
-                            });
-                        }
+                    } else if let Some(rc) = match_param_row_click(
+                        *node_id,
+                        &self.modifier_card.driver_btn_ids,
+                        &self.modifier_card.envelope_btn_ids,
+                        &self.modifier_card.driver_config_ids,
+                        &self.modifier_card.ableton_config_ids,
+                        &self.modifier_card.audio_btn_ids,
+                        &self.modifier_card.audio_configs,
+                        &self.modifier_card.slider_ids,
+                        &self.modifier_card.osc_addresses,
+                        &self.modifier_card.param_info,
+                        &self.modifier_card.mod_state,
+                    ) {
+                        // C-P1d: the converted Modifier family's D/E/A
+                        // buttons + config drawers — same dispatch shape as
+                        // `camera_card`'s branch above, generalized.
+                        let target = GraphParamTarget::Generator;
+                        actions.extend(match rc {
+                            RowClick::DriverToggle(pi) => {
+                                self.modifier_card.focus_mod_tab(pi, ModTab::Driver);
+                                vec![PanelAction::DriverToggle(target, self.modifier_card.pid_at(pi))]
+                            }
+                            RowClick::EnvelopeToggle(pi) => {
+                                self.modifier_card.focus_mod_tab(pi, ModTab::Envelope);
+                                vec![PanelAction::EnvelopeToggle(target, self.modifier_card.pid_at(pi))]
+                            }
+                            RowClick::DriverConfig(pi, action) => {
+                                vec![PanelAction::DriverConfig(target, self.modifier_card.pid_at(pi), action)]
+                            }
+                            RowClick::AbletonInvert(pi) => {
+                                vec![PanelAction::AbletonInvertToggle(target, self.modifier_card.pid_at(pi))]
+                            }
+                            RowClick::AudioToggle(pi) => {
+                                self.modifier_card.focus_mod_tab(pi, ModTab::Audio);
+                                self.modifier_card.audio_toggle_action(target, pi)
+                            }
+                            RowClick::AudioSelectSend(pi, k) => {
+                                self.modifier_card.audio_set_source_action(target, pi, Some(k), None, None)
+                            }
+                            RowClick::AudioSelectKind(pi, k) => {
+                                self.modifier_card.audio_set_source_action(target, pi, None, Some(k), None)
+                            }
+                            RowClick::AudioSelectBand(pi, b) => {
+                                self.modifier_card.audio_set_source_action(target, pi, None, None, Some(b))
+                            }
+                            RowClick::AudioToggleInvert(pi) => {
+                                vec![PanelAction::AudioModSetInvert(target, self.modifier_card.pid_at(pi))]
+                            }
+                            RowClick::AudioSelectTriggerMode(pi, m) => {
+                                vec![PanelAction::AudioModSetTriggerMode(target, self.modifier_card.pid_at(pi), m)]
+                            }
+                            RowClick::AudioSelectAction(pi, k) => {
+                                vec![PanelAction::AudioModSetActionKind(target, self.modifier_card.pid_at(pi), k)]
+                            }
+                            RowClick::AudioSelectWrap(pi, w) => {
+                                vec![PanelAction::AudioModSetWrap(target, self.modifier_card.pid_at(pi), w)]
+                            }
+                            RowClick::LabelCopy(_) => Vec::new(),
+                        });
+                    } else if let Some((pi, tab)) = self.modifier_card.mod_tab_hit(*node_id) {
+                        self.modifier_card.focus_mod_tab(pi, tab);
+                        actions.push(PanelAction::ModConfigTabChanged);
                     } else if let Some((_, ctx)) = self.mod_button_ids.iter().find(|(id, _)| *id == *node_id) {
                         // UX-P3a: the panel always emits — a re-click on an
                         // already-exposed row is a harmless duplicate the
@@ -4190,11 +4295,7 @@ impl ScenePanel {
                         "DoubleClick on a value cell must resolve to EditValue (D8's contract)"
                     );
                     let row_value = self
-                        .object_value_cells
-                        .iter()
-                        .find(|(id, _)| *id == *node_id)
-                        .map(|(_, rv)| rv.clone())
-                        .or_else(|| self.world_row_value_for_value_text(*node_id))
+                        .world_row_value_for_value_text(*node_id)
                         // C-P1b: the converted Object family's own card
                         // slider value-text cells — same lookup shape as
                         // `world_row_value_for_value_text`, generalized.
@@ -4202,7 +4303,12 @@ impl ScenePanel {
                         // C-P1c: the converted Light/Camera families' own
                         // card slider value-text cells — same lookup shape.
                         .or_else(|| self.light_row_value_for_value_text(*node_id))
-                        .or_else(|| self.camera_row_value_for_value_text(*node_id));
+                        .or_else(|| self.camera_row_value_for_value_text(*node_id))
+                        // C-P1d: the converted Modifier family's own card
+                        // slider value-text cells — same lookup shape, the
+                        // last family to move off the old bespoke
+                        // `object_value_cells` direct-vector lookup.
+                        .or_else(|| self.modifier_row_value_for_value_text(*node_id));
                     if let Some(row_value) = row_value
                         && !row_value.driven
                         && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
@@ -4223,7 +4329,7 @@ impl ScenePanel {
                 }
                 (false, Vec::new())
             }
-            UIEvent::PointerDown { node_id, pos, modifiers } => {
+            UIEvent::PointerDown { node_id, pos, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
                     // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D4): the
                     // converted Environment/Fog rows' slider tracks —
@@ -4314,43 +4420,48 @@ impl ScenePanel {
                             ],
                         );
                     }
-                    if let Some((_, row_value)) = self
-                        .object_value_cells
-                        .iter()
-                        .find(|(id, _)| *id == *node_id)
-                        && !row_value.driven
+                    // C-P1d: the converted Modifier rows' slider tracks —
+                    // same shape as `world_card`/`object_card`/`light_card`/
+                    // `camera_card` above, the last family off the old
+                    // bespoke `object_value_cells`+`ValueDrag` delta-drag
+                    // path (deleted this phase).
+                    if let Some((pi, new_value)) = self
+                        .modifier_card
+                        .drag_sliders
+                        .iter_mut()
+                        .enumerate()
+                        .find_map(|(pi, sl)| sl.try_start_drag(*node_id, pos.x).map(|v| (pi, v)))
                     {
                         self.drag_layer_id = Some(vm.layer_id.clone());
-                        self.drag.start(
-                            ValueDrag {
-                                addr: row_value.addr.clone(),
-                                start_x: pos.x,
-                                start_value: row_value.value,
-                                min: row_value.min,
-                                max: row_value.max,
-                                fine: modifiers.shift,
-                            },
-                            *pos,
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.modifier_card.pid_at(pi);
+                        return (
+                            true,
+                            vec![
+                                PanelAction::ParamSnapshot(target, pid.clone()),
+                                PanelAction::ParamChanged(target, pid, new_value),
+                            ],
                         );
-                        return (true, Vec::new());
                     }
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
             UIEvent::DragBegin { .. } => (
-                self.drag.is_active()
-                    || self.world_card.drag_sliders.iter().any(|s| s.is_dragging())
+                self.world_card.drag_sliders.iter().any(|s| s.is_dragging())
                     || self.object_card.drag_sliders.iter().any(|s| s.is_dragging())
                     || self.light_card.drag_sliders.iter().any(|s| s.is_dragging())
-                    || self.camera_card.drag_sliders.iter().any(|s| s.is_dragging()),
+                    || self.camera_card.drag_sliders.iter().any(|s| s.is_dragging())
+                    // C-P1d: the converted Modifier rows — same shape.
+                    || self.modifier_card.drag_sliders.iter().any(|s| s.is_dragging()),
                 Vec::new(),
             ),
             UIEvent::Drag { pos, .. } => {
-                // C-P1a: continue an active slider drag first (distinct
-                // machinery from the delta-drag `self.drag` below — see
-                // `slider_drag_value`'s doc for why there's no local tree
-                // update here). Live `ParamChanged` only, no undo unit (the
-                // card cadence: one `ParamCommit` fires on release, below).
+                // C-P1a: continue an active slider drag first — one `find_map`
+                // per family, in priority order. Live `ParamChanged` only, no
+                // undo unit (the card cadence: one `ParamCommit` fires on
+                // release, below). C-P1d: Modifier is the last family to move
+                // onto this shape — no bespoke delta-drag (`self.drag`/
+                // `ValueDrag`) remains anywhere in this panel.
                 if self.drag_layer_id.is_some() {
                     if let Some((pi, new_value)) = self
                         .world_card
@@ -4399,45 +4510,26 @@ impl ScenePanel {
                         let pid = self.camera_card.pid_at(pi);
                         return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
                     }
-                }
-                match (self.drag.payload().cloned(), self.drag_layer_id.clone()) {
-                    (Some(drag), Some(layer_id)) => {
-                        // D8: Shift held at drag-start ("fine") multiplies the
-                        // applied per-pixel delta by 0.1. D10: the committed
-                        // degrees-display rows scrub in degrees (0.5°/px, fine
-                        // 0.05°/px) converted to the radians the graph stores —
-                        // the ONLY place that conversion happens; everywhere
-                        // else keeps the existing 1 px = 0.01 units rate (the
-                        // audio dock's 0.1 dB/px order of magnitude, scaled for
-                        // these params' typical [0, ~2] ranges).
-                        let dx = pos.x - drag.start_x;
-                        let delta = if is_degrees_param(&drag.addr.param_id) {
-                            let deg_per_px = if drag.fine { 0.05 } else { 0.5 };
-                            (dx * deg_per_px).to_radians()
-                        } else {
-                            let unit_per_px = if drag.fine { 0.001 } else { 0.01 };
-                            dx * unit_per_px
-                        };
-                        let new_value = (drag.start_value + delta).clamp(drag.min, drag.max);
-                        (
-                            true,
-                            vec![PanelAction::SceneSetupParamChanged(
-                                layer_id,
-                                drag.addr.scope_path.clone(),
-                                drag.addr.node_doc_id,
-                                drag.addr.param_id.clone(),
-                                new_value,
-                            )],
-                        )
+                    // C-P1d: the converted Modifier rows — same shape.
+                    if let Some((pi, new_value)) = self
+                        .modifier_card
+                        .drag_sliders
+                        .iter()
+                        .enumerate()
+                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
+                    {
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.modifier_card.pid_at(pi);
+                        return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
                     }
-                    _ => (false, Vec::new()),
                 }
+                (false, Vec::new())
             }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
-                self.drag.release();
-                // C-P1a (D4): release commits ONE undo unit for whichever
-                // Environment/Fog row was mid-drag, if any — the card
-                // protocol's Commit step.
+                // C-P1a (D4): release commits ONE undo unit for whichever row
+                // was mid-drag, if any — the card protocol's Commit step. No
+                // bespoke `self.drag.release()` left to call (C-P1d deleted
+                // the last consumer, `ValueDrag`).
                 let mut actions = Vec::new();
                 for pi in 0..self.world_card.drag_sliders.len() {
                     if self.world_card.drag_sliders[pi].end_drag() {
@@ -4462,6 +4554,13 @@ impl ScenePanel {
                 for pi in 0..self.camera_card.drag_sliders.len() {
                     if self.camera_card.drag_sliders[pi].end_drag() {
                         let pid = self.camera_card.pid_at(pi);
+                        actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
+                    }
+                }
+                // C-P1d: the converted Modifier rows — same shape.
+                for pi in 0..self.modifier_card.drag_sliders.len() {
+                    if self.modifier_card.drag_sliders[pi].end_drag() {
+                        let pid = self.modifier_card.pid_at(pi);
                         actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
                     }
                 }
@@ -4543,15 +4642,30 @@ impl ScenePanel {
         Some(RowValue { addr: addr.clone(), value: *value, min: 0.0, max: 0.0, driven: false, exposed: false })
     }
 
+    /// C-P1d: the Modifier-family twin of `world_row_value_for_value_text` —
+    /// the last family to move off the old direct `object_value_cells`
+    /// vector lookup.
+    fn modifier_row_value_for_value_text(&self, node_id: NodeId) -> Option<RowValue> {
+        let pi = self
+            .modifier_card
+            .slider_ids
+            .iter()
+            .position(|ids| ids.is_some_and(|ids| ids.value_text == node_id))?;
+        let pid = self.modifier_card.pid_at(pi);
+        let (addr, value) = self.modifier_card.id_map.get(&pid)?;
+        Some(RowValue { addr: addr.clone(), value: *value, min: 0.0, max: 0.0, driven: false, exposed: false })
+    }
+
     /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: resolve a card-shaped
     /// action's synthesized `ParamId` back to this frame's write address +
     /// snapshot value. `dispatch_inspector`'s `ParamSnapshot`/`ParamChanged`/
     /// `ParamCommit` arms check this FIRST — a hit means the id addresses a
     /// converted scene row (routes through `SetGraphNodeParamCommand`); a
     /// miss falls through to the existing `with_preset_graph_mut` exposed-
-    /// param path unchanged. C-P1c: checks `light_card`/`camera_card` too —
-    /// every card's map is disjoint by construction (`synth_world_param_id`'s
-    /// `node_doc_id` is document-wide unique).
+    /// param path unchanged. C-P1c: checks `light_card`/`camera_card` too;
+    /// C-P1d adds `modifier_card` — every card's map is disjoint by
+    /// construction (`synth_world_param_id`'s `node_doc_id` is document-wide
+    /// unique).
     pub fn resolve_scene_param(&self, id: &manifold_foundation::ParamId) -> Option<(RowAddr, f32)> {
         self.world_card
             .id_map
@@ -4559,6 +4673,7 @@ impl ScenePanel {
             .or_else(|| self.object_card.id_map.get(id))
             .or_else(|| self.light_card.id_map.get(id))
             .or_else(|| self.camera_card.id_map.get(id))
+            .or_else(|| self.modifier_card.id_map.get(id))
             .cloned()
     }
 
@@ -4588,14 +4703,6 @@ impl ScenePanel {
 /// faces stay in radians, untouched.
 fn is_degrees_param(param_id: &str) -> bool {
     matches!(param_id, "rot_x" | "rot_y" | "rot_z" | "orbit" | "tilt" | "yaw" | "pitch" | "roll" | "fov_y")
-}
-
-/// Generic stepper hit test over a variable-length list built this frame —
-/// the shared shape `object_stepper_hit` used before Lights/Camera needed
-/// the identical lookup (Objects/Lights are variable-length; Camera is a
-/// fixed single row set, but its `+`/`-` buttons are captured the same way).
-fn stepper_hit_in(steppers: &[(NodeId, RowValue, f32)], node_id: NodeId) -> Option<(RowValue, f32)> {
-    steppers.iter().find(|(id, _, _)| *id == node_id).map(|(_, row, delta)| (row.clone(), *delta))
 }
 
 /// UX-P2 (D2): the value an active object slider drag resolves to at
@@ -4679,7 +4786,7 @@ fn btn_style() -> UIStyle {
 /// strip degenerates to a single "make this modulatable" glyph that lights
 /// the moment the param is exposed on the card. A driven row passes
 /// `active: false` regardless of `exposed` — its slot is reserved (EyeSlot's
-/// Live/Dimmed convention: present, never absent) but `build_mod_button`
+/// Live/Dimmed convention: present, never absent) but `build_expose_button`
 /// never pushes it into `mod_button_ids`, so it isn't a click target even
 /// though it renders the same "off" skin an unexposed-but-live row does.
 fn mod_btn_style(active: bool) -> UIStyle {
@@ -5052,6 +5159,85 @@ mod tests {
         }
     }
 
+    /// C-P1d: id-map totality for the Modifier family — the same shape as
+    /// `light_id_map_is_total_over_every_built_row`, but `modifier_card` has
+    /// no fixed `*_ROW_COUNT` (a stack is a variable-length list, per
+    /// `modifier_card`'s own doc comment) — the azalea fixture's single Bend
+    /// modifier wires exactly its 2 rows (Axis, Angle), running-slot 0 and 1
+    /// in wire order.
+    #[test]
+    fn modifier_id_map_is_total_over_every_built_row() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        // azalea_shaped_vm's default selection already targets the Azalea object.
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let expected = [(0usize, 70u32, "axis"), (1usize, 70u32, "angle")];
+        assert_eq!(panel.modifier_card.id_map.len(), expected.len(), "Bend's own two rows, no more no less");
+        for (slot, node_doc_id, param_key) in expected {
+            let pid = panel.modifier_card.pid_at(slot);
+            let (addr, _value) = panel
+                .resolve_scene_param(&pid)
+                .unwrap_or_else(|| panic!("slot {slot} id {pid:?} must resolve through the id map"));
+            assert_eq!(addr.node_doc_id, node_doc_id, "slot {slot} write address must target its own node");
+            assert_eq!(addr.param_id, param_key, "slot {slot} write address must target its own param");
+        }
+    }
+
+    /// C-P1d (D4): the Modifier-family twin of
+    /// `light_intensity_card_row_sweeps_full_range_with_one_commit` —
+    /// scrubbing the Bend modifier's Angle row via the real card slider
+    /// track is ONE undo unit (PointerDown snapshots + jumps, Drag
+    /// continues live, PointerUp commits exactly once).
+    #[test]
+    fn modifier_angle_card_row_sweeps_full_range_with_one_commit() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        // Slot 1 = Angle (slot 0 is the Axis enum row) — see
+        // `modifier_id_map_is_total_over_every_built_row`.
+        let ids = panel.modifier_card.slider_ids[1].expect("Angle renders a card slider");
+        let track = ids.track_rect;
+        let target = GraphParamTarget::Generator;
+        let pid = panel.modifier_card.pid_at(1);
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::PointerDown {
+            node_id: ids.track,
+            pos: Vec2::new(track.x, 0.0),
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(consumed, "the Angle row's slider track must be drag-armable");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::ParamSnapshot(t, p), PanelAction::ParamChanged(_, _, low)]
+                if *t == target && *p == pid && *low < -6.0
+        ), "PointerDown at the track's left edge must snapshot + land near min, got {actions:?}");
+
+        let (drag_consumed, drag_actions) = panel.handle_event(&UIEvent::Drag {
+            node_id: Some(ids.track),
+            pos: Vec2::new(track.x + track.width, 0.0),
+            delta: Vec2::ZERO,
+        });
+        assert!(drag_consumed);
+        assert!(matches!(
+            drag_actions.as_slice(),
+            [PanelAction::ParamChanged(_, _, high)] if *high > 6.0
+        ), "dragging to the track's right edge must land near max, got {drag_actions:?}");
+
+        let (up_consumed, up_actions) = panel
+            .handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::new(track.x + track.width, 0.0) });
+        assert!(up_consumed);
+        assert!(
+            matches!(up_actions.as_slice(), [PanelAction::ParamCommit(t, p)] if *t == target && *p == pid),
+            "release must commit ONE ParamCommit, got {up_actions:?}"
+        );
+        assert!(!panel.modifier_card.drag_sliders[1].is_dragging(), "PointerUp ends the drag");
+    }
+
     /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
     /// a full transform + pbr material + a Bend modifier, one Custom object,
     /// and header counts — proves the Objects section renders both shapes,
@@ -5095,14 +5281,14 @@ mod tests {
                         params: vec![
                             ModifierParamRowVm::Axis {
                                 label: "Axis",
-                                row: EnumRowValue {
-                                    row: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "axis".to_string() }, value: 1.0, min: 0.0, max: 2.0, driven: false, exposed: false },
-                                    labels: vec!["X", "Y", "Z"],
-                                },
+                                row: menum(
+                                    RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "axis".to_string() }, value: 1.0, min: 0.0, max: 2.0, driven: false, exposed: false },
+                                    vec!["X", "Y", "Z"],
+                                ),
                             },
                             ModifierParamRowVm::Numeric {
                                 label: "Angle",
-                                row: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "angle".to_string() }, value: 0.5, min: -6.28, max: 6.28, driven: false, exposed: false },
+                                row: mrow(RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 70, param_id: "angle".to_string() }, value: 0.5, min: -6.28, max: 6.28, driven: false, exposed: false }),
                             },
                         ],
                     }],
@@ -5168,18 +5354,14 @@ mod tests {
         assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // The full body always renders (no fold state left — the outliner
-        // IS the fold). C-P1b: Position/Rotation/Scale (9)/Color (3)/
-        // Metallic/Roughness (2) moved OFF `object_value_cells` onto the
-        // card-row protocol (`object_card`, asserted below) — the ONLY
-        // thing left in `object_value_cells` for this fixture is the one
-        // Bend modifier's Angle param (Numeric; its Axis param is an Enum
-        // row — no drag-value cell), which stays on the old bespoke path
-        // until C-P1d.
-        assert_eq!(
-            panel.object_value_cells.len(),
-            1,
-            "1 modifier numeric param value cell (Modifier family unconverted until C-P1d)"
-        );
+        // IS the fold). C-P1b moved Position/Rotation/Scale (9)/Color (3)/
+        // Metallic/Roughness (2) onto the card-row protocol (`object_card`,
+        // asserted below); C-P1d moved the Bend modifier's own two rows
+        // (Axis + Angle) onto `modifier_card` too — every modifier param
+        // row rides the shared card core now, enum/labeled rows included.
+        // No bespoke `object_value_cells` vector remains anywhere in the
+        // panel.
+        assert_eq!(panel.modifier_card.id_map.len(), 2, "Bend's Axis + Angle rows both wired onto the card protocol");
         // 9 transform + 3 color + Metallic + Roughness = 14 wired card rows
         // — every `OBJ_ROW_*` slot the azalea fixture's PBR material
         // populates.
@@ -5310,6 +5492,47 @@ mod tests {
             typein_actions.as_slice(),
             [PanelAction::SceneSetupBeginNumericTextInput { param_id, .. }] if param_id == "roughness"
         ));
+    }
+
+    /// C-P1d's own acceptance-flow gate, at the render level (the
+    /// `--script` headless harness can't independently confirm this half:
+    /// `PanelAction::DriverToggle`'s dispatch is proven correct by log
+    /// inspection — `cargo xtask ui-snap gltfscene --script
+    /// scripts/ui-flows/scene-card-convergence-c-p1d-roughness-scrub-drawer-undo.json`
+    /// shows the exact `DriverToggle(Generator, "scene.10.roughness")` fire
+    /// — but the SAME class of harness gap BUG-234/BUG-239 already
+    /// documented means the resulting drawer's own visible text isn't
+    /// reliably observable through that same script run, so this proves
+    /// the OTHER half directly: feed a Roughness row with
+    /// `RowModulation.driver_active = true` — the exact shape
+    /// `dispatch_inspector`'s `DriverToggle` arm produces on the next
+    /// resync — and confirm `build_object_card_row`'s driven branch
+    /// actually renders `build_driver_config`'s beat-grid drawer (the
+    /// "Straight"/"Dotted"/"Triplet" feel row is deep enough into the
+    /// drawer body to prove it built past the tab strip, not just reserved
+    /// the slot).
+    #[test]
+    fn roughness_driver_active_renders_the_drawer_inline() {
+        let mut vm = azalea_shaped_vm();
+        if let ObjectRowVm::Known(row) = &mut vm.objects[0]
+            && let ObjectMaterialVm::Pbr { roughness, .. } = &mut row.material
+        {
+            roughness.modulation.driver_active = true;
+            roughness.modulation.driver_beat_div_idx = 2;
+        }
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let has_text = |needle: &str| {
+            (0..tree.count())
+                .any(|i| tree.get_node(tree.id_at(i)).is_some_and(|n| n.text.as_deref() == Some(needle)))
+        };
+        assert!(has_text("Straight"), "an armed driver must render its config drawer INLINE in the panel");
+        assert!(has_text("Dotted"));
+        assert!(has_text("Triplet"));
     }
 
     /// BUG-224 regression: the × close button used to call `self.close()`
@@ -5531,9 +5754,9 @@ mod tests {
 
     /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): clicking an
     /// unexposed row's mod button emits `SceneSetupExposeParam` named
-    /// `<ObjectName> · <ParamLabel>` — proven on the Roughness slider row
-    /// (`build_object_slider_row`), the flagship performer-gesture surface
-    /// D8's own text names. A second click on the SAME (now still-unexposed,
+    /// `<ObjectName> · <ParamLabel>` — proven on the Roughness card row,
+    /// the flagship performer-gesture surface D8's own text names. A second
+    /// click on the SAME (now still-unexposed,
     /// since this panel never mutates `RowValue` itself) button emits the
     /// SAME action again — the panel's one-way "always emit, app no-ops"
     /// contract (see the action's own doc comment).
@@ -5666,7 +5889,7 @@ mod tests {
     }
 
     /// UX-P3b-i: mod-button parity on a MODIFIER param row
-    /// (`build_modifier_numeric_row`'s "Angle" slot on the azalea fixture's
+    /// (`build_modifier_card_row`'s "Angle" slot on the azalea fixture's
     /// Bend modifier) — `object_label` is the OWNING OBJECT's name ("Azalea"),
     /// and `param_label` is disambiguated by the modifier's own display name
     /// ("Bend Angle"), not a bare "Angle" that would collide across modifiers.
@@ -5808,17 +6031,16 @@ mod tests {
 
         // Modifier: per-slot offsets (up to 4 param slots) must fit inside
         // MODIFIER_ROW_STRIDE, same per-index-range contract as OBJECT/LIGHT.
+        // C-P1d: the old `MODIFIER_OFF_PARAM_BASE` 3-wide `[-] value [+]`
+        // stepper offsets are gone (deleted with the pre-convergence bespoke
+        // numeric/enum stepper builders) — a Numeric/Axis row's own value
+        // cell, track, and steppers now key through `build_param_row`'s internal
+        // `(slot << 8)` scheme, not `modifier_row_key`; only the reorder/
+        // remove chrome and the mod-button offset still use it.
         for slot in 0..4u64 {
-            let base = MODIFIER_OFF_PARAM_BASE + slot * 3;
             assert_no_dupes_and_fits_stride(
                 "MODIFIER (per-row)",
-                &[
-                    MODIFIER_OFF_UP,
-                    MODIFIER_OFF_DOWN,
-                    MODIFIER_OFF_REMOVE,
-                    base, base + 1, base + 2,
-                    MODIFIER_OFF_PARAM_MOD_BASE + slot,
-                ],
+                &[MODIFIER_OFF_UP, MODIFIER_OFF_DOWN, MODIFIER_OFF_REMOVE, MODIFIER_OFF_PARAM_MOD_BASE + slot],
                 Some(MODIFIER_ROW_STRIDE),
             );
         }
@@ -6197,13 +6419,13 @@ mod tests {
     /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §4 invariant: every drag-armable
     /// value cell built by the dock is ALSO in the type-in registration set,
     /// and vice versa. PointerDown and DoubleClick resolve through the exact
-    /// same lookup in `handle_event`. C-P1c: Light/Camera joined World/Object
-    /// on the card slider's own registration (proven separately by
-    /// `light_intensity_card_row_sweeps_full_range_with_one_commit` and the
-    /// Camera id-map tests) — the only family still on THIS `_value_cells`
-    /// lookup is Modifier (`object_value_cells`, unconverted until C-P1d),
-    /// so this now drives both gestures on Modifier's own numeric param
-    /// cells built by the azalea fixture's default (Object) selection.
+    /// same lookup in `handle_event`. C-P1c proved this for Light/Camera on
+    /// the card slider's own registration; C-P1d moves the LAST family off
+    /// the old bespoke `_value_cells` lookup (Modifier's `object_value_cells`,
+    /// deleted this phase) — this test now drives both gestures on
+    /// `modifier_card`'s own slider ids, the azalea fixture's Bend "Angle"
+    /// row, same shape `roughness_card_row_sweeps_full_range_and_value_box_opens_typein`
+    /// already proves for Object.
     #[test]
     fn dock_numeric_cells_register_full_contract() {
         {
@@ -6213,24 +6435,25 @@ mod tests {
             let mut tree = UITree::new();
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-            let cell_ids: Vec<NodeId> = panel.object_value_cells.iter().map(|(id, _)| *id).collect();
-            assert!(!cell_ids.is_empty(), "azalea fixture must exercise at least one drag-armable cell");
+            let slider_ids: Vec<crate::slider::SliderNodeIds> =
+                panel.modifier_card.slider_ids.iter().filter_map(|ids| *ids).collect();
+            assert!(!slider_ids.is_empty(), "azalea fixture must exercise at least one modifier card slider");
 
-            for id in cell_ids {
+            for ids in slider_ids {
                 let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
-                    node_id: id,
-                    pos: Vec2::ZERO,
+                    node_id: ids.track,
+                    pos: Vec2::new(ids.track_rect.x, 0.0),
                     modifiers: crate::input::Modifiers::default(),
                 });
-                assert!(drag_consumed, "cell {id:?} must be drag-armable");
-                panel.handle_event(&UIEvent::PointerUp { node_id: Some(id), pos: Vec2::ZERO });
+                assert!(drag_consumed, "track {:?} must be drag-armable", ids.track);
+                panel.handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::ZERO });
 
                 let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
-                    node_id: id,
+                    node_id: ids.value_text,
                     pos: Vec2::ZERO,
                     modifiers: crate::input::Modifiers::default(),
                 });
-                assert!(typein_consumed, "cell {id:?} must also open type-in (registration parity)");
+                assert!(typein_consumed, "value cell {:?} must also open type-in (registration parity)", ids.value_text);
                 assert!(
                     matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
                     "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
@@ -6239,72 +6462,16 @@ mod tests {
         }
     }
 
-    /// P4, D8: Shift held at drag-start makes the applied delta 0.1× the
-    /// unmodified rate — the performer's precision-landing gesture. Drives
-    /// the SAME pixel travel with and without Shift and asserts the ratio.
-    /// C-P1c: Light/Camera moved onto the card slider's absolute-position
-    /// drag protocol (no shift-fine concept — same as World/Object since
-    /// C-P1a/b), so this test's target moves to the one family still on the
-    /// OLD delta-drag path: Modifier's own numeric param rows (the azalea
-    /// fixture's Bend "Angle", unconverted until C-P1d).
-    #[test]
-    fn shift_drag_applies_a_tenth_the_delta() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        // azalea_shaped_vm's default selection already targets the Azalea object.
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (angle_id, angle_row) = panel
-            .object_value_cells
-            .iter()
-            .find(|(_, row)| row.addr.param_id == "angle")
-            .cloned()
-            .expect("azalea fixture has the Bend modifier's Angle cell");
-
-        // Coarse: no Shift.
-        panel.handle_event(&UIEvent::PointerDown {
-            node_id: angle_id,
-            pos: Vec2::new(0.0, 0.0),
-            modifiers: crate::input::Modifiers::default(),
-        });
-        let (_, coarse_actions) =
-            panel.handle_event(&UIEvent::Drag { node_id: Some(angle_id), pos: Vec2::new(20.0, 0.0), delta: Vec2::ZERO });
-        panel.handle_event(&UIEvent::PointerUp { node_id: Some(angle_id), pos: Vec2::new(20.0, 0.0) });
-        let PanelAction::SceneSetupParamChanged(.., coarse_value) = &coarse_actions[0] else {
-            panic!("expected SceneSetupParamChanged");
-        };
-        let coarse_delta = coarse_value - angle_row.value;
-
-        // Fine: Shift held at PointerDown.
-        panel.handle_event(&UIEvent::PointerDown {
-            node_id: angle_id,
-            pos: Vec2::new(0.0, 0.0),
-            modifiers: crate::input::Modifiers { shift: true, ..Default::default() },
-        });
-        let (_, fine_actions) =
-            panel.handle_event(&UIEvent::Drag { node_id: Some(angle_id), pos: Vec2::new(20.0, 0.0), delta: Vec2::ZERO });
-        panel.handle_event(&UIEvent::PointerUp { node_id: Some(angle_id), pos: Vec2::new(20.0, 0.0) });
-        let PanelAction::SceneSetupParamChanged(.., fine_value) = &fine_actions[0] else {
-            panic!("expected SceneSetupParamChanged");
-        };
-        let fine_delta = fine_value - angle_row.value;
-
-        assert!(
-            (fine_delta - coarse_delta * 0.1).abs() < 1e-4,
-            "fine delta ({fine_delta}) must be 0.1x the coarse delta ({coarse_delta})"
-        );
-    }
-
     /// C-P1c supersedes the old P4/D9 dropdown-on-click mechanism for Light:
     /// Mode/Cast Shadows/Shadow Softness now build through the shared card
     /// row core (`ParamInfo.value_labels`, proven by
     /// `light_enum_rows_carry_value_labels_on_the_card_row`) — the SAME
     /// drag/type-in interaction every other card row uses, not a bespoke
-    /// click-to-open dropdown. `SceneSetupEnumClicked` stays reachable only
-    /// through `object_enum_cells` (Modifier's Axis rows, unconverted until
-    /// C-P1d) — a click on the Light card row's own value-text cell must NOT
-    /// emit it.
+    /// click-to-open dropdown. C-P1d converted Modifier's Axis rows onto the
+    /// same path, so `PanelAction::SceneSetupEnumClicked` now has NO
+    /// producer left anywhere in this panel (`object_enum_cells`, its last
+    /// source, is deleted) — a click on the Light card row's own value-text
+    /// cell must NOT emit it, same as it never could for any other family.
     #[test]
     fn light_enum_row_click_does_not_emit_scene_setup_enum_clicked() {
         let mut panel = ScenePanel::new();

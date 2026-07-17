@@ -1786,6 +1786,8 @@ pub fn sync_inspector_data(
                                                             &m.type_id,
                                                             &m.params,
                                                             &m.driven,
+                                                            gen_inst,
+                                                            automation_latched,
                                                         ),
                                                     })
                                                     .collect(),
@@ -3410,41 +3412,65 @@ fn modifier_display_name(type_id: &str) -> String {
 /// hand-edited chain with a non-curated node reached via the trace's
 /// tolerant walk) renders no param rows — the display name alone still
 /// shows, never a panic or a blank crash.
+///
+/// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): rows are now
+/// `ModulatedRow`/`ModulatedEnumRow` — the same `mrow` promotion
+/// `transform_row`/`material_row`/Light's `enum_row` already do — so
+/// Modifier param rows can build through the shared card row core
+/// (`build_modifier_card_row`) and carry real driver/envelope/audio-mod
+/// facts instead of the old idle-always bespoke stepper. `exposed` stays
+/// `false` (UX-P3a's mod-button scoping is untouched by this phase — see
+/// `build_modifier_card_row`'s doc comment for why Numeric rows still draw
+/// a mod button despite `exposed` always starting `false`: same "expose at
+/// first click" contract every other family's rows already have).
 fn modifier_param_rows(
     scope: Vec<u32>,
     node_doc_id: u32,
     type_id: &str,
     params: &std::collections::BTreeMap<String, f32>,
     driven: &std::collections::HashSet<String>,
+    gen_inst: Option<&PresetInstance>,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
-    use manifold_ui::panels::scene_setup_panel::{EnumRowValue, ModifierParamRowVm, RowAddr, RowValue};
+    use manifold_ui::panels::scene_setup_panel::{
+        ModifierParamRowVm, ModulatedEnumRow, ModulatedRow, RowAddr, RowValue, synth_world_param_id,
+    };
     const AXIS_LABELS: &[&str] = &["X", "Y", "Z"];
+    let mrow = |param_key: &str, v: RowValue| ModulatedRow {
+        modulation: Box::new(row_modulation_for_id(
+            gen_inst,
+            synth_world_param_id(node_doc_id, param_key).as_ref(),
+            automation_latched,
+        )),
+        value: v,
+    };
     let numeric = |label: &'static str, key: &str, default: f32, min: f32, max: f32| ModifierParamRowVm::Numeric {
         label,
-        row: RowValue {
+        row: mrow(key, RowValue {
             addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
             value: params.get(key).copied().unwrap_or(default),
             min,
             max,
             driven: driven.contains(key),
-            // UX-P3a scoped mod buttons to Environment/Fog + Objects
-            // transform/material — modifier-stack params aren't part of
-            // this phase's mod-button surface, so this is always `false`
-            // (never read; `build_modifier_numeric_row` draws no button).
+            // UX-P3a scoped the mod-button surface to Environment/Fog +
+            // Objects transform/material; C-P1d extends it to Modifier's
+            // own Numeric params too (every one is in the doc's exposable
+            // inventory) — `false` here just means "not yet exposed", the
+            // same starting state every other family's rows have.
             exposed: false,
-        },
+        }),
     };
     let axis = |label: &'static str, key: &str, default: f32| ModifierParamRowVm::Axis {
         label,
-        row: EnumRowValue {
-            row: RowValue {
+        row: ModulatedEnumRow {
+            row: mrow(key, RowValue {
                 addr: RowAddr { scope_path: scope.clone(), node_doc_id, param_id: key.to_string() },
                 value: params.get(key).copied().unwrap_or(default),
                 min: 0.0,
                 max: (AXIS_LABELS.len() - 1) as f32,
                 driven: driven.contains(key),
                 exposed: false,
-            },
+            }),
             labels: AXIS_LABELS.to_vec(),
         },
     };

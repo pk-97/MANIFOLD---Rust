@@ -30,8 +30,8 @@ Landed 2026-07-17 (`34a38a45`, `b4d2d448`; `docs/landings/2026-07-17-scene-3d-ux
 ### VD-031 — modulation/scrub L3 claims are dispatch+value-level, not pixels (harness gaps BUG-234/BUG-235)
 Landed 2026-07-17 (UX-P3a `ee30d52d`, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs. Burn-down: the verification-infra lane (BUG-225/226/234/235) queued next wave; close when a flow can assert a changing value across snapshots.
 
-### VD-032 — UX-P2 mid-scrub hairline unproven in pixels
-Landed 2026-07-17 (`6dd700e7`). The ui-snap Drag gesture is atomic (no mid-drag snapshot), so the scrub hairline is pinned by unit test only. Burn-down: harness gains a mid-drag snapshot point (same infra lane), or accepted as unit-test-covered when the convergence rebuild replaces these rows entirely (likely moot after C-P1b..d).
+### VD-033 — C-P1c's sun-intensity render proof is subtle to the eye; the pixel-diff assertion carried the gate, not a look-pass
+Landed 2026-07-18 (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d landing session, reviewing C-P1c's own carried artifacts). BUG-237's render-level closure (`bug237_light_camera_commit_render_proof.rs`) rendered SceneStarter before/after `sun.intensity` 1.0→8.0 and measured `mean_abs_diff 0.09` — real, but visually subtle in the two PNGs (`/tmp/bug237_sun_intensity_{before,after}.png`) an orchestrator eyeballing them side by side would likely call "brighter, maybe" rather than an obvious win; the camera-orbit half of the same proof (`mean_abs_diff 0.06`, a quarter-turn reframe) reads unambiguously by contrast. The gate is real (the pixel-diff assertion is exact, deterministic, and correctly wired to the actual committed value), so this is not a correctness gap — it's a legibility note for whoever next does a look-pass over the Scene Setup panel's Light family: don't rely on eyeballing a static before/after pair for intensity changes this small; trust the numeric diff, or re-render at a starker delta (e.g. 1.0→20.0) if a demo PNG needs to read as obviously-brighter to a human. Burn-down: no action required unless a future look-pass wants a punchier demo asset.
 
 ### VD-028 — VOLUMETRIC_LIGHT_DESIGN P1–P3: mechanically L2 (PNGs rendered and read by the orchestrator), Peter's look-pass not yet run, and the demos read as a visual miss
 Landed 2026-07-13 (`docs/landings/2026-07-13-volumetric-light-p1-p3.md`). All numeric gates
@@ -284,6 +284,9 @@ landing. VD-005 closed at P2 landing. The full backfill pass over recent landing
 will extend this list.)*
 
 ## Closed
+
+### VD-032 — UX-P2 mid-scrub hairline unproven in pixels — CLOSED 2026-07-18 (MOOT, SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d)
+Landed 2026-07-17 (`6dd700e7`) as an open gap: the ui-snap Drag gesture is atomic (no mid-drag snapshot), so the old bespoke scrub-hairline draw was pinned by unit test only. C-P1d (2026-07-18) deleted the entire bespoke row/drag layer this entry was about — `build_modifier_numeric_row`/`build_modifier_enum_row` (Modifier, the last holdout family) and the panel's own delta-drag machinery (`struct ValueDrag`, `object_value_cells`/`object_steppers`, the scrub-hairline draw itself) are gone; every scene param row now scrubs through the card protocol's `SliderDragState`/`BitmapSlider`, whose own visual correctness is covered by `param_card.rs`'s existing golden/unit test suite (not this file's ledger). Nothing left to burn down — the surface the gap was about no longer exists.
 
 ### VD-029 — SCENE_SETUP_PANEL_DESIGN P1's fog-drag L3 flow regressed to unreachable by BUG-199 — CLOSED 2026-07-17 (BUG-199 fixed, BUGFIX_WAVE_2026_07_17_DESIGN.md Lane 1)
 Landed 2026-07-17 (`docs/landings/2026-07-17-scene-setup-panel-p5-wave-close.md`), closed the same
