@@ -1,6 +1,6 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
-**Status:** IN PROGRESS — UX-P1 landed (selection responds same-frame + outliner unification); UX-P2 (properties rows on the card family) not started · 2026-07-17 · Fable
+**Status:** BUILT, PENDING LANDING — UX-P1 + UX-P2 both built on `wave/scene-panel-ux` (UX-P1 selection responds same-frame + outliner unification; UX-P2 Metallic/Roughness sliders + transform-cell affordance chrome + color swatch + Add-Modifier dropdown). Both phases pass their gates on the branch; not yet merged to main — the orchestrator lands. Known gap: UX-P2's mid-scrub hairline (D3b) could not be captured in a PNG artifact — the `ui-snap` flow driver's `Drag` gesture is atomic (PointerDown→steps→PointerUp in one action, no snapshot point mid-drag), so the hairline's *existence* is proven by a focused Rust unit test and code read, not a screenshot; hover-state and swatch-live-update ARE captured. Also open (pre-existing, owned elsewhere): BUG-218 blocks the modifier-row param cell from appearing after `SceneSetupAddModifier` dispatches — the UX-P2 dropdown reproduces the SAME gap the old chip grid had, not a new one. · 2026-07-17 · Sonnet
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
