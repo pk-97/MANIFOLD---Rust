@@ -206,6 +206,9 @@ fn float(v: f32) -> SerializedParamValue {
 fn int(v: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value: v }
 }
+fn bool_val(v: bool) -> SerializedParamValue {
+    SerializedParamValue::Bool { value: v }
+}
 fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
@@ -870,7 +873,12 @@ fn build_object_group(
             skinmesh_node.params.insert("joint_count".to_string(), int(joint_count as i32));
             group_nodes.push(skinmesh_node);
 
-            group_wires.push(wire(mesh_id, "vertices", skinmesh_id, "in"));
+            // BUG-208: skin_mesh's `in` wire is deferred until AFTER the
+            // morph block below decides whether this object is ALSO
+            // morphed — a skin+morph combination chains
+            // node.morph_targets_blend between this node's `vertices` and
+            // skin_mesh's `in` (glTF applies morph then skin, §3.7.2); a
+            // skin-only object wires directly, same as before.
             group_wires.push(wire(mesh_id, "joints", skinmesh_id, "joints"));
             group_wires.push(wire(mesh_id, "weights", skinmesh_id, "weights"));
             group_wires.push(wire(pose_id, "joint_matrices", skinmesh_id, "matrices"));
@@ -914,19 +922,21 @@ fn build_object_group(
         };
 
         // GLTF_ANIMATION_DESIGN.md A3: a morphed object's base geometry
-        // comes from the EXISTING `node.gltf_mesh_source` built just above
-        // (the `mesh_id`/`mesh_node_id` slot) — unlike skinning, ordinary
-        // node transforms DO position a morphed mesh, so there is no
-        // separate "morph mesh source" analogous to
-        // `node.gltf_skinned_mesh_source`. A skin+morph COMBINATION on the
-        // same object is out of scope (neither gate fixture is also
-        // skinned; `skinned_vertices_source.is_some()` means `mesh_id`
-        // above was claimed by `node.gltf_skinned_mesh_source` instead, so
-        // morph wiring is skipped rather than double-purposing that node
-        // id — re-derive if a future asset needs both).
-        let morphed_vertices_source: Option<u32> = if skinned_vertices_source.is_none()
-            && let Some(morph) = &m.morph
-        {
+        // comes from the EXISTING `node.gltf_mesh_source` (rigid case) or
+        // `node.gltf_skinned_mesh_source` (BUG-208: skin+morph case) built
+        // just above (the `mesh_id`/`mesh_node_id` slot) — unlike skinning,
+        // ordinary node transforms DO position a morphed mesh, so there is
+        // no separate "morph mesh source" analogous to
+        // `node.gltf_skinned_mesh_source` for the rigid path. When the
+        // object is ALSO skinned, glTF applies morph THEN skin (§3.7.2):
+        // the blend is chained between the skinned source's vertices and
+        // node.skin_mesh's `in` further below, and
+        // node.gltf_morph_deltas_source's `skinned` param routes the
+        // loader into the SAME untransformed bind-pose space
+        // node.gltf_skinned_mesh_source already uses (see that param's doc
+        // comment) — without it the deltas would be world-transformed
+        // while the base bind-pose vertices are not, a space mismatch.
+        let morphed_vertices_source: Option<u32> = if let Some(morph) = &m.morph {
             let weights_node_id = format!("morphweights_{k}");
             let weights_id = fresh_id();
             let (weight_rows, weights_clip_durations_rows, weights_duration_s) =
@@ -966,6 +976,12 @@ fn build_object_group(
                 "max_capacity".to_string(),
                 int((morph.target_count.max(1) * m.vertex_count.max(1)) as i32),
             );
+            // BUG-208: see node.gltf_morph_deltas_source's `skinned` param
+            // doc comment — must match whether `mesh_id` above resolved to
+            // node.gltf_skinned_mesh_source or node.gltf_mesh_source.
+            deltas_node
+                .params
+                .insert("skinned".to_string(), bool_val(skinned_vertices_source.is_some()));
             group_nodes.push(deltas_node);
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
@@ -989,15 +1005,39 @@ fn build_object_group(
             group_wires.push(wire(mesh_id, "vertices", blend_id, "in"));
             group_wires.push(wire(deltas_id, "deltas", blend_id, "deltas"));
             group_wires.push(wire(weights_id, "weights", blend_id, "weights"));
-            report_lines.push(format!(
-                "{group_name}: morphed ({} targets) — node.gltf_mesh_source + \
-                 node.gltf_morph_deltas_source + node.gltf_morph_weights + node.morph_targets_blend",
-                morph.target_count
-            ));
+            if let Some(skinmesh_id) = skinned_vertices_source {
+                // BUG-208: morph applied BEFORE skin (glTF 2.0 §3.7.2) —
+                // the blend's output feeds skin_mesh's `in` instead of the
+                // group output directly (the group-output match further
+                // below already routes through skinmesh_id whenever
+                // skinned_vertices_source is Some, regardless of this
+                // node's value).
+                group_wires.push(wire(blend_id, "out", skinmesh_id, "in"));
+                report_lines.push(format!(
+                    "{group_name}: morphed ({} targets) on a skinned object — \
+                     node.gltf_skinned_mesh_source + node.gltf_morph_deltas_source + \
+                     node.gltf_morph_weights + node.morph_targets_blend + node.skin_mesh \
+                     (morph applied before skin, glTF 2.0 §3.7.2 — BUG-208)",
+                    morph.target_count
+                ));
+            } else {
+                report_lines.push(format!(
+                    "{group_name}: morphed ({} targets) — node.gltf_mesh_source + \
+                     node.gltf_morph_deltas_source + node.gltf_morph_weights + node.morph_targets_blend",
+                    morph.target_count
+                ));
+            }
             Some(blend_id)
         } else {
             None
         };
+
+        // BUG-208: a skinned object with NO morph targets still needs its
+        // skin_mesh `in` wired directly from the skinned source (the
+        // morph-branch above only wires it when a blend node exists).
+        if let (Some(skinmesh_id), None) = (skinned_vertices_source, morphed_vertices_source) {
+            group_wires.push(wire(mesh_id, "vertices", skinmesh_id, "in"));
+        }
 
         let mat_id = fresh_id();
         let mut mat_node = plain_node(mat_id, &mat_node_id, "node.pbr_material", &mat_node_id);
@@ -4911,6 +4951,66 @@ mod tests {
             "a skinned object's positioning comes entirely from its joint palette — \
              a rigid node.gltf_animation_source on the same object re-applies the \
              ancestor chain a second time (BUG-205)"
+        );
+    }
+
+    /// BUG-208: an object with BOTH a skin and morph targets must import
+    /// with its morph animation COMPOSED, not silently dropped —
+    /// `node.morph_targets_blend` chained between
+    /// `node.gltf_skinned_mesh_source` and `node.skin_mesh`'s `in` (glTF
+    /// applies morph then skin, §3.7.2), and the deltas source's
+    /// `skinned` param set so its loaded deltas share the skinned
+    /// source's untransformed bind-pose space. `skin_morph.glb`: a
+    /// Blender-authored armature-skinned cylinder with a keyframed
+    /// "Bulge" shape key, carrying both a skin AND morph targets plus
+    /// animation channels for each.
+    #[test]
+    fn skin_and_morph_combination_composes_instead_of_dropping() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/hostile/skin_morph.glb");
+        let (def, report) = super::assemble_import_graph(&path).expect("assemble skin_morph.glb");
+
+        assert!(
+            report.report_lines.iter().any(|l| l.contains("BUG-208")),
+            "import report must call out the skin+morph composition explicitly: {:?}",
+            report.report_lines
+        );
+
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+        assert!(
+            flat.nodes.iter().any(|n| n.type_id == "node.gltf_skinned_mesh_source"),
+            "skin+morph object must still be driven by node.gltf_skinned_mesh_source"
+        );
+        let blend = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.morph_targets_blend")
+            .expect("skin+morph object must carry a node.morph_targets_blend — morph animation \
+                     dropped silently (BUG-208)");
+        let skinmesh = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.skin_mesh")
+            .expect("skinned object must carry node.skin_mesh");
+        assert!(
+            flat.wires
+                .iter()
+                .any(|w| w.from_node == blend.id && w.from_port == "out"
+                    && w.to_node == skinmesh.id && w.to_port == "in"),
+            "node.morph_targets_blend's `out` must feed node.skin_mesh's `in` directly — \
+             glTF applies morph before skin (§3.7.2)"
+        );
+        let deltas = flat
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.gltf_morph_deltas_source")
+            .expect("skin+morph object must carry node.gltf_morph_deltas_source");
+        assert_eq!(
+            deltas.params.get("skinned"),
+            Some(&SerializedParamValue::Bool { value: true }),
+            "the deltas source must be told this object is skinned — otherwise its loader \
+             world-transforms the deltas while the skinned base vertices stay untransformed \
+             (a coordinate-space mismatch, BUG-208)"
         );
     }
 

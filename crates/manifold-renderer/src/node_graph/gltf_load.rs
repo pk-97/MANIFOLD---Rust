@@ -1918,9 +1918,25 @@ fn flatten_primitive_morph_deltas(
 /// only wires `node.gltf_morph_deltas_source` (which calls this) when
 /// `GltfMaterialInfo::morph` resolved. Returns `(deltas, target_count,
 /// vertex_count)`.
+///
+/// `skinned`: BUG-208 — a skin+morph combination on the same object chains
+/// `node.morph_targets_blend` between `node.gltf_skinned_mesh_source` and
+/// `node.skin_mesh` (glTF applies morph THEN skin, §3.7.2). Per A2/A3,
+/// `flatten_skinned_node`'s base vertices are emitted in UNTRANSFORMED
+/// bind-pose/local space — `node.gltf_skinned_mesh_source` never applies
+/// the mesh-owning node's world matrix, since a skinned object's
+/// positioning comes entirely from its joint palette. Morph deltas for
+/// that combination must land in the SAME untransformed space so
+/// `node.morph_targets_blend`'s additive sum stays index-1:1 with
+/// `node.skin_mesh`'s `in` — `skinned == true` skips the world-transform
+/// step entirely (identity matrices) instead of applying the node's world
+/// matrix. The non-skinned (rigid) path is unchanged: it still applies the
+/// node's world transform, matching `node.gltf_mesh_source`'s own
+/// world-transform of the base mesh.
 pub(crate) fn load_gltf_morph_deltas(
     path: &std::path::Path,
     material_index: u32,
+    skinned: bool,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
     let (document, buffers, _images) = import_glb(path)?;
     let parent_of = build_parent_map(&document);
@@ -1933,10 +1949,17 @@ pub(crate) fn load_gltf_morph_deltas(
         // Material selector flattens the base mesh (assuming no
         // EXT_mesh_gpu_instancing on this node; not exercised by the A3
         // gate fixtures, which each ship a single non-instanced morphed
-        // object — re-derive if a future asset needs it).
-        let world = static_world_matrix(&document, found.index(), &parent_of);
-        let world_linear = mat3_upper_row_major(&world);
-        let normal_mat = mat3_transpose(mat3_inverse(world_linear));
+        // object — re-derive if a future asset needs it). Skipped entirely
+        // (identity) for a skinned object — see the `skinned` doc comment
+        // above (BUG-208).
+        let (world_linear, normal_mat) = if skinned {
+            (MAT3_IDENTITY, MAT3_IDENTITY)
+        } else {
+            let world = static_world_matrix(&document, found.index(), &parent_of);
+            let world_linear = mat3_upper_row_major(&world);
+            let normal_mat = mat3_transpose(mat3_inverse(world_linear));
+            (world_linear, normal_mat)
+        };
         let mesh = found.mesh().ok_or_else(|| "matched node has no mesh".to_string())?;
         let mut per_target: Vec<Vec<MeshVertex>> = Vec::new();
         for primitive in mesh.primitives() {

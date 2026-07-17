@@ -8066,6 +8066,12 @@
             "16000000"
           ],
           "type": "int"
+        },
+        {
+          "default": "false",
+          "label": "Skinned",
+          "name": "skinned",
+          "type": "bool"
         }
       ],
       "purpose": "Read a glTF/.glb file's sole mesh-owning node contributing `material_index` and emit its morph-target POSITION/NORMAL deltas as a flattened target-major Array(MeshVertex) — deltas[target_index * vertex_count + vertex_index]. Wire into node.morph_targets_blend's `deltas` input alongside node.gltf_mesh_source's base geometry (`in`) and node.gltf_morph_weights' sampled weights.",
