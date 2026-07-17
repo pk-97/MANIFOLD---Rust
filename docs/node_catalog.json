@@ -8001,6 +8001,24 @@
           "type": "bool"
         },
         {
+          "default": "0",
+          "label": "Translate X",
+          "name": "translate_x",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Translate Y",
+          "name": "translate_y",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Translate Z",
+          "name": "translate_z",
+          "type": "float"
+        },
+        {
           "default": "-1",
           "label": "Source Vertex Count",
           "name": "source_vertex_count",
