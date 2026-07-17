@@ -4,6 +4,7 @@
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
+use manifold_editing::command::Command;
 use manifold_ui::PanelAction;
 
 use super::DispatchResult;
@@ -347,6 +348,43 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        // BUG-193 per-row "✕": the inverse of SceneSetupAddObject/
+        // SceneSetupAddLight above — `object_index`/`light_index` ride on
+        // the action exactly as `next_index` does for the Add commands (the
+        // panel's own live Vm row index, not re-derived here).
+        PanelAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *object_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveSceneLightCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *light_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
+
         // P4 "Import Model…" button (D5): a native file dialog picks a
         // second `.glb`/`.gltf`, `merge_import_into_graph` (via the public
         // `assemble_merge_plan` wrapper — the assembler's own summary type
@@ -499,6 +537,40 @@ pub(super) fn dispatch_project(
                         ContentCommand::GeneratorTypeChanged { layer_id: layer_id.clone(), new_type },
                     );
                 }
+            }
+            DispatchResult::structural()
+        }
+
+        // BUG-184: the automation-lane right-click context menu's two items
+        // — `ClearLaneCommand`/`RemoveLaneCommand` had zero UI callers before
+        // this. Same `to_graph_target` conversion `editing_host.rs`'s
+        // automation-point arms use.
+        PanelAction::ContextClearAutomationLane(target, param_id) => {
+            let graph_target = crate::editing_host::to_graph_target(target);
+            let mut cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
+                graph_target,
+                param_id.as_ref(),
+            );
+            cmd.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            DispatchResult::structural()
+        }
+        PanelAction::ContextRemoveAutomationLane(target, param_id) => {
+            let graph_target = crate::editing_host::to_graph_target(target);
+            let param_id_str = param_id.as_ref();
+            let index = project.preset_instance(&graph_target).and_then(|inst| {
+                inst.automation_lanes
+                    .as_ref()
+                    .and_then(|lanes| lanes.iter().position(|l| l.param_id.as_ref() == param_id_str))
+            });
+            if let Some(index) = index {
+                let mut cmd = manifold_editing::commands::automation::RemoveLaneCommand::new(
+                    graph_target,
+                    param_id_str,
+                    index,
+                );
+                cmd.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             DispatchResult::structural()
         }
@@ -658,6 +730,69 @@ mod tests {
         );
         assert!(result.structural_change, "adding a light is a structural graph edit");
         assert_eq!(lights_param(&project, &layer_id, render_scene_id), before + 1.0);
+    }
+
+    /// BUG-193 gate: "remove-object button emits RemoveSceneObjectCommand" —
+    /// proven end to end through the SAME `dispatch_project` entry point the
+    /// panel's per-row "✕" click reaches. Removes the LAST existing object
+    /// (SceneStarter ships with at least one), then confirms `objects`
+    /// dropped by one — the panel-visible count `state_sync` re-derives on
+    /// its next structural sync (the "headless flow proving remove-object
+    /// updates the panel" gate: `objects_param` reads the exact same
+    /// `render_scene` param the Vm's `object_count` comes from).
+    #[test]
+    fn scene_setup_remove_object_dispatches_remove_scene_object_command() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = objects_param(&project, &layer_id, render_scene_id);
+        assert!(before >= 1.0, "SceneStarter ships with at least one object");
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action = PanelAction::SceneSetupRemoveObject(
+            layer_id.clone(),
+            render_scene_id,
+            (before - 1.0) as u32,
+        );
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "removing an object is a structural graph edit");
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before - 1.0);
+    }
+
+    /// BUG-193 gate: the light-row twin of the object-removal gate above.
+    #[test]
+    fn scene_setup_remove_light_dispatches_remove_scene_light_command() {
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let before = lights_param(&project, &layer_id, render_scene_id);
+        assert!(before >= 1.0, "SceneStarter ships with at least one light");
+        let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+
+        let action = PanelAction::SceneSetupRemoveLight(
+            layer_id.clone(),
+            render_scene_id,
+            (before - 1.0) as u32,
+        );
+        let result = dispatch_project(
+            &action,
+            &mut project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        assert!(result.structural_change, "removing a light is a structural graph edit");
+        assert_eq!(lights_param(&project, &layer_id, render_scene_id), before - 1.0);
     }
 
     /// "rename emits the sweep command": `generator_catalog_default` +

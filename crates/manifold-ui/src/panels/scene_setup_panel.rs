@@ -62,6 +62,8 @@ const OBJ_OFF_COLOR_R: u64 = 11;
 // minus offset — value/plus key off `base_offset + 1`/`+ 2`.
 const OBJ_OFF_METALLIC_MINUS: u64 = 14;
 const OBJ_OFF_ROUGHNESS_MINUS: u64 = 17;
+/// BUG-193 per-row "✕" remove button, on the title row next to the name.
+const OBJ_OFF_REMOVE: u64 = 20;
 
 const fn obj_key(index: usize, offset: u64) -> u64 {
     OBJ_KEY_BASE + index as u64 * OBJ_KEY_STRIDE + offset
@@ -114,6 +116,8 @@ const LIGHT_OFF_AIM_X: u64 = 13;
 const LIGHT_OFF_CAST_SHADOWS_MINUS: u64 = 16;
 const LIGHT_OFF_SHADOW_SOFTNESS_MINUS: u64 = 19;
 const LIGHT_OFF_LIGHT_SIZE_MINUS: u64 = 22;
+/// BUG-193 per-row "✕" remove button, on the title row next to the label.
+const LIGHT_OFF_REMOVE: u64 = 26;
 
 const fn light_key(index: usize, offset: u64) -> u64 {
     LIGHT_KEY_BASE + index as u64 * LIGHT_KEY_STRIDE + offset
@@ -625,6 +629,10 @@ pub struct ScenePanel {
     object_name_ids: Vec<(u32, NodeId, String)>,
     /// `(index, expand_toggle_node_id)` for every object row this frame.
     object_expand_ids: Vec<(usize, NodeId)>,
+    /// BUG-193: `(remove_button_node_id, index)` for every object row's "✕"
+    /// built this frame — resolves a remove-button click to
+    /// `PanelAction::SceneSetupRemoveObject`.
+    object_remove_ids: Vec<(NodeId, usize)>,
     /// P5: `(node_id, group_node_id, modifier_node_id)` for every modifier
     /// row's remove button built this frame.
     modifier_remove_ids: Vec<(NodeId, u32, u32)>,
@@ -649,6 +657,10 @@ pub struct ScenePanel {
     light_steppers: Vec<(NodeId, RowValue, f32)>,
     /// `(index, expand_toggle_node_id)` for every light row this frame.
     light_expand_ids: Vec<(usize, NodeId)>,
+    /// BUG-193: `(remove_button_node_id, index)` for every light row's "✕"
+    /// built this frame — resolves a remove-button click to
+    /// `PanelAction::SceneSetupRemoveLight`.
+    light_remove_ids: Vec<(NodeId, usize)>,
     /// P3 Camera-row drag-armable value cells — same convention as
     /// `object_value_cells`, but the Camera section holds exactly one row
     /// set (no per-index list).
@@ -688,6 +700,7 @@ impl Default for ScenePanel {
             object_steppers: Vec::new(),
             object_name_ids: Vec::new(),
             object_expand_ids: Vec::new(),
+            object_remove_ids: Vec::new(),
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             modifier_add_ids: Vec::new(),
@@ -695,6 +708,7 @@ impl Default for ScenePanel {
             light_value_cells: Vec::new(),
             light_steppers: Vec::new(),
             light_expand_ids: Vec::new(),
+            light_remove_ids: Vec::new(),
             camera_value_cells: Vec::new(),
             camera_steppers: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -801,12 +815,14 @@ impl ScenePanel {
         self.object_steppers.clear();
         self.object_name_ids.clear();
         self.object_expand_ids.clear();
+        self.object_remove_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.modifier_add_ids.clear();
         self.light_value_cells.clear();
         self.light_steppers.clear();
         self.light_expand_ids.clear();
+        self.light_remove_ids.clear();
         self.camera_value_cells.clear();
         self.camera_steppers.clear();
 
@@ -1220,12 +1236,24 @@ impl ScenePanel {
         self.light_expand_ids.push((index, expand_id));
 
         let label_x = inner_x + STEP_W + 4.0;
-        let label_w = inner_w - STEP_W - 4.0;
+        let label_w = inner_w - STEP_W - 4.0 - STEP_W - 4.0;
         let title = match light {
             LightRowVm::Known(_) => format!("Light {index}"),
             LightRowVm::Custom { .. } => format!("Light {index} — custom (edit in graph)"),
         };
         tree.add_label(Some(self.content_parent), label_x, cy, label_w, ROW_H, &title, label_style());
+        // BUG-193: per-row "✕" — dispatches SceneSetupRemoveLight.
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            label_x + label_w + 4.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            light_key(index, LIGHT_OFF_REMOVE),
+        );
+        self.light_remove_ids.push((remove_id, index));
         cy += ROW_H;
 
         if !expanded {
@@ -1656,7 +1684,7 @@ impl ScenePanel {
         self.object_expand_ids.push((index, expand_id));
 
         let name_x = inner_x + STEP_W + 4.0;
-        let name_w = inner_w - STEP_W - 4.0;
+        let name_w = inner_w - STEP_W - 4.0 - STEP_W - 4.0;
         if let Some(group_node_id) = group_node_id {
             let name_id = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -1672,6 +1700,18 @@ impl ScenePanel {
         } else {
             tree.add_label(Some(self.content_parent), name_x, cy, name_w, ROW_H, &name, label_style());
         }
+        // BUG-193: per-row "✕" — dispatches SceneSetupRemoveObject.
+        let remove_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            name_x + name_w + 4.0,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            "\u{2715}",
+            obj_key(index, OBJ_OFF_REMOVE),
+        );
+        self.object_remove_ids.push((remove_id, index));
         cy += ROW_H;
 
         if !expanded {
@@ -2203,6 +2243,22 @@ impl ScenePanel {
                             *group_node_id,
                             *modifier_node_id,
                             *new_position,
+                        ));
+                    } else if let Some((_, index)) =
+                        self.object_remove_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupRemoveObject(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        ));
+                    } else if let Some((_, index)) =
+                        self.light_remove_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::SceneSetupRemoveLight(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
                         ));
                     } else if let Some((row_value, delta)) = stepper_hit_in(&self.object_steppers, *node_id)
                         .or_else(|| stepper_hit_in(&self.light_steppers, *node_id))
@@ -2824,6 +2880,65 @@ mod tests {
         assert!(matches!(
             &actions[0],
             PanelAction::SceneSetupAddLight(l, 99, 1) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    /// BUG-193: the per-row "✕" in the Objects section dispatches
+    /// `SceneSetupRemoveObject` carrying THAT object's own `index` (not the
+    /// row's position among rendered rows) — proven against
+    /// `azalea_shaped_vm`'s object index 1 (the `Custom` row).
+    #[test]
+    fn object_remove_click_emits_remove_object_action_with_its_own_index() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.object_remove_ids.len(), 2, "one remove button per object row");
+        let (remove_id, _) = panel
+            .object_remove_ids
+            .iter()
+            .find(|(_, index)| *index == 1)
+            .copied()
+            .unwrap();
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: remove_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupRemoveObject(l, 99, 1) if *l == LayerId::new("layer-1")
+        ));
+    }
+
+    /// BUG-193: the Lights-section twin of the object-removal test above.
+    #[test]
+    fn light_remove_click_emits_remove_light_action_with_its_own_index() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.light_remove_ids.len(), 2, "one remove button per light row");
+        let (remove_id, _) = panel
+            .light_remove_ids
+            .iter()
+            .find(|(_, index)| *index == 0)
+            .copied()
+            .unwrap();
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: remove_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(matches!(
+            &actions[0],
+            PanelAction::SceneSetupRemoveLight(l, 99, 0) if *l == LayerId::new("layer-1")
         ));
     }
 
