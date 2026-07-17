@@ -17,6 +17,17 @@ const PREFS_FILE_NAME: &str = "prefs.json";
 
 // ── Platform config directory ────────────────────────────────────────
 
+/// The app's persistent data directory (same root `prefs.json` lives in) —
+/// the directory convention other MANIFOLD subsystems should reuse for their
+/// own caches rather than inventing a second path scheme. Falls back to `.`
+/// when the platform env var isn't set (matches `UserPrefs::load`'s own
+/// fallback), so this always returns a usable path.
+pub fn app_data_dir() -> PathBuf {
+    config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_DIR_NAME)
+}
+
 fn config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -83,6 +94,18 @@ impl UserPrefs {
         Self {
             data: HashMap::new(),
             file_path: std::env::temp_dir().join("manifold-ui-snap-prefs.json"),
+        }
+    }
+
+    /// Same shape as [`Self::in_memory`] but always available under
+    /// `cfg(test)` — unit tests elsewhere in the crate (e.g.
+    /// `blender_import`'s discovery tests) want a throwaway `UserPrefs`
+    /// without depending on the `ui-snapshot` feature being enabled.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            data: HashMap::new(),
+            file_path: std::env::temp_dir().join("manifold-test-prefs.json"),
         }
     }
 
