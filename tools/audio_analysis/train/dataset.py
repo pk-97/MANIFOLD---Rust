@@ -47,7 +47,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-import librosa
 import numpy as np
 
 try:
@@ -71,6 +70,16 @@ from eval.run import AUDIO_ANALYSIS_ROOT, _load_kick_truth_csv, _resolve_path, l
 # reads the two songs that list itself excludes.
 from eval.sweep_p4 import DEV_LIVESHOW_FIXTURES, derive_active_windows, filter_to_windows  # noqa: E402
 from manifold_audio.audio_io import load_audio_mono  # noqa: E402
+# Patch extraction itself lives in manifold_audio.mel_patch (P2 move, same
+# behavior): stage1_dsp_detection.py's classifier-labeling mode needs the
+# exact same D4 patch geometry and train/'s own one-way dependency rule
+# (train -> eval/manifold_audio, never the reverse) means it can't live
+# here. Re-imported under their original names so this module's public
+# surface (ds.N_MELS, ds.extract_mel_patch, ...) is unchanged.
+from manifold_audio.mel_patch import (  # noqa: E402
+    HOP_MS, MEL_FMAX_HZ, MEL_FMIN_HZ, N_FFT, N_FRAMES, N_MELS, PATCH_SPAN_MS,
+    POST_ONSET_MS, PRE_ONSET_MS, extract_mel_patch, mel_from_segment, patch_segment,
+)
 from manifold_audio.stage1_dsp_detection import detect_onsets, extract_onset_features  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -80,18 +89,11 @@ from manifold_audio.stage1_dsp_detection import detect_onsets, extract_onset_fea
 CLASS_NAMES: Tuple[str, ...] = ("kick", "snare", "hat", "perc", "synth", "vocal", "other")
 
 # ---------------------------------------------------------------------------
-# D4 patch defaults
+# D4 patch defaults -- geometry constants re-exported from
+# manifold_audio.mel_patch (see the import block above); this module's own
+# scope adds only the side-feature vocabulary below.
 # ---------------------------------------------------------------------------
 
-N_MELS = 64
-MEL_FMIN_HZ = 20.0
-MEL_FMAX_HZ = 16000.0
-N_FRAMES = 16
-PRE_ONSET_MS = 10.0
-POST_ONSET_MS = 90.0
-PATCH_SPAN_MS = PRE_ONSET_MS + POST_ONSET_MS  # 100.0ms, D4 default
-HOP_MS = PATCH_SPAN_MS / N_FRAMES  # 6.25ms, within D4's "hop ~=6ms"
-N_FFT = 1024
 SIDE_FEATURE_NAMES: Tuple[str, ...] = (
     "centroid_hz", "flatness", "low_ratio", "mid_ratio", "high_ratio", "decay_rate_db_per_sec",
 )
@@ -116,49 +118,8 @@ class PatchExample:
 
 
 # ---------------------------------------------------------------------------
-# Mel-patch + side-feature extraction
+# Side-feature extraction (mel-patch extraction itself: manifold_audio.mel_patch)
 # ---------------------------------------------------------------------------
-
-
-def _hop_length(sr: int) -> int:
-    return max(1, int(round(HOP_MS / 1000.0 * sr)))
-
-
-def _patch_segment(audio: np.ndarray, sr: int, onset_sec: float, jitter_sec: float = 0.0) -> np.ndarray:
-    """Raw-sample segment long enough for exactly N_FRAMES center=False STFT
-    frames at (N_FFT, hop_length), starting PRE_ONSET_MS before the
-    (possibly jittered) onset. Zero-padded at track edges -- jitter or a
-    near-boundary onset can run the window off either end."""
-    hop = _hop_length(sr)
-    n_needed = N_FFT + (N_FRAMES - 1) * hop
-    start_sample = int(round((onset_sec + jitter_sec - PRE_ONSET_MS / 1000.0) * sr))
-    end_sample = start_sample + n_needed
-    seg = np.zeros(n_needed, dtype=np.float32)
-    src_start = max(0, start_sample)
-    src_end = min(len(audio), end_sample)
-    if src_end > src_start:
-        dst_start = src_start - start_sample
-        seg[dst_start: dst_start + (src_end - src_start)] = audio[src_start:src_end]
-    return seg
-
-
-def _mel_from_segment(segment: np.ndarray, sr: int) -> np.ndarray:
-    hop = _hop_length(sr)
-    fmax = min(MEL_FMAX_HZ, sr / 2.0)
-    mel_power = librosa.feature.melspectrogram(
-        y=segment.astype(np.float32), sr=sr, n_fft=N_FFT, hop_length=hop,
-        center=False, n_mels=N_MELS, fmin=MEL_FMIN_HZ, fmax=fmax,
-    )
-    mel_db = librosa.power_to_db(mel_power, ref=1.0, amin=1e-6, top_db=None)
-    if mel_db.shape[1] < N_FRAMES:
-        mel_db = np.pad(mel_db, ((0, 0), (0, N_FRAMES - mel_db.shape[1])), mode="edge")
-    elif mel_db.shape[1] > N_FRAMES:
-        mel_db = mel_db[:, :N_FRAMES]
-    return mel_db.astype(np.float32)
-
-
-def extract_mel_patch(audio: np.ndarray, sr: int, onset_sec: float, jitter_sec: float = 0.0) -> np.ndarray:
-    return _mel_from_segment(_patch_segment(audio, sr, onset_sec, jitter_sec), sr)
 
 
 def _side_features_from_onset_feature(f) -> np.ndarray:
@@ -416,16 +377,16 @@ def _load_egmd_dev(rng: np.random.Generator) -> List[PatchExample]:
                 side = feat_map.get(key)
                 if side is None:
                     side = _side_features(audio, sr, t)
-                base_seg = _composite_with_backing(_patch_segment(audio, sr, t, 0.0), backing, rng)
+                base_seg = _composite_with_backing(patch_segment(audio, sr, t, 0.0), backing, rng)
                 out.append(PatchExample(
-                    mel=_mel_from_segment(base_seg, sr), side_features=side,
+                    mel=mel_from_segment(base_seg, sr), side_features=side,
                     label=cls, source_id="egmd_dev", track_id=row["id"],
                     onset_time_sec=t, jitter_sec=0.0,
                 ))
                 jitter = float(rng.uniform(-JITTER_MS, JITTER_MS)) / 1000.0
-                jit_seg = _composite_with_backing(_patch_segment(audio, sr, t, jitter), backing, rng)
+                jit_seg = _composite_with_backing(patch_segment(audio, sr, t, jitter), backing, rng)
                 out.append(PatchExample(
-                    mel=_mel_from_segment(jit_seg, sr), side_features=side,
+                    mel=mel_from_segment(jit_seg, sr), side_features=side,
                     label=cls, source_id="egmd_dev", track_id=row["id"],
                     onset_time_sec=t, jitter_sec=jitter,
                 ))

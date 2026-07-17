@@ -66,6 +66,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+from manifold_audio.mel_patch import extract_mel_patch
 from manifold_audio.models import Event
 from manifold_audio.spectral import compute_band_onsets
 
@@ -503,16 +504,125 @@ def cluster_onsets(
     )
 
 
-def detect_drums_stage1(audio: np.ndarray, sr: int) -> Tuple[List[Event], ClusterResult]:
+# ---------------------------------------------------------------------------
+# Classifier-labeling mode (P2, docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md §3
+# seams / §5 P2): an OPTIONAL alternative to cluster-then-label that names
+# each onset via the trained Audio Event Classifier (train/model.py)
+# instead. Off by default -- see detect_drums_stage1's own docstring for
+# the default-path-equivalence guarantee this module's tests assert.
+#
+# torch is imported LAZILY, only inside _load_classifier, and only when a
+# caller explicitly opts in with a weights path -- this module (and every
+# other manifold_audio module) never imports torch at top level, matching
+# manifold_audio.adtof_detection's own established convention. Loading
+# train.model here (an eval/dev-only Python trainer module) is likewise a
+# deliberately scoped exception, gated the same way: this is a Python
+# eval-side convenience ("torch load in the eval env is fine"), never a
+# product runtime path -- the Rust port is its own later phase.
+# ---------------------------------------------------------------------------
+
+_classifier_cache: Dict[str, Tuple[object, Tuple[str, ...]]] = {}
+
+
+def _load_classifier(weights_path: str) -> Tuple[object, Tuple[str, ...]]:
+    key = str(Path(weights_path).resolve())
+    cached = _classifier_cache.get(key)
+    if cached is not None:
+        return cached
+
+    import torch  # local import -- see module note above
+
+    from train.model import CLASS_NAMES as _classifier_class_names
+    from train.model import build_model
+
+    checkpoint = torch.load(weights_path, map_location="cpu", weights_only=False)
+    model = build_model()
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    classes = tuple(checkpoint.get("classes", _classifier_class_names))
+    _classifier_cache[key] = (model, classes)
+    return _classifier_cache[key]
+
+
+def _label_via_classifier(
+    audio: np.ndarray,
+    sr: int,
+    onset_times: np.ndarray,
+    features: List[OnsetFeatures],
+    weights_path: str,
+) -> Tuple[List[Event], ClusterResult]:
+    """Names each onset via the trained classifier's own argmax instead of
+    cluster_onsets/_label_clusters. Confidence is the model's own softmax
+    probability of the winning class -- a genuine trained-margin signal,
+    unlike cluster_onsets' per-track-relative distance (the classifier has
+    no equivalent notion of "cluster", so k/silhouette/cluster_class are
+    left at their ClusterResult defaults; `degenerate` mirrors
+    cluster_onsets' own too-few-onsets floor so callers checking `.degenerate`
+    still get a meaningful signal on a near-silent track)."""
+    import torch  # local import -- see the module note above _load_classifier
+
+    model, classes = _load_classifier(weights_path)
+
+    events: List[Event] = []
+    confidences: List[float] = []
+    if features:
+        mel_batch = np.stack(
+            [extract_mel_patch(audio, sr, f.time_sec) for f in features]
+        ).astype(np.float32)[:, None, :, :]
+        side_batch = np.array(
+            [[f.centroid_hz, f.flatness, f.low_ratio, f.mid_ratio, f.high_ratio, f.decay_rate_db_per_sec]
+             for f in features],
+            dtype=np.float32,
+        )
+        with torch.no_grad():
+            logits = model(torch.from_numpy(mel_batch), torch.from_numpy(side_batch))
+            probs = torch.softmax(logits, dim=1).numpy()
+        pred_idx = probs.argmax(axis=1)
+        for i, feat in enumerate(features):
+            cls = classes[int(pred_idx[i])]
+            conf = float(probs[i, pred_idx[i]])
+            events.append(Event(type=cls, time=round(feat.time_sec, 4), confidence=round(conf, 4)))
+            confidences.append(conf)
+    events.sort(key=lambda e: (e.time, e.type))
+
+    degenerate, reason = False, None
+    n = len(features)
+    if n < MIN_ONSETS_FOR_CLUSTERING:
+        degenerate, reason = True, f"too few onsets ({n} < {MIN_ONSETS_FOR_CLUSTERING})"
+
+    result = ClusterResult(
+        onset_times=list(onset_times), labels=np.zeros(n, dtype=int), k=0, silhouette=None,
+        cluster_class={}, confidences=confidences, degenerate=degenerate, degenerate_reason=reason,
+    )
+    return events, result
+
+
+def detect_drums_stage1(
+    audio: np.ndarray, sr: int, classifier_weights: Optional[str] = None,
+) -> Tuple[List[Event], ClusterResult]:
     """Full Stage-1 pipeline: onset detect -> feature extract -> per-track
     cluster -> centroid-signature label -> Event JSON contract (same shape
     as manifold_audio.adtof_detection.detect_drums_adtof's output). Returns
     (events, cluster_result) -- the cluster_result carries the diagnostics
     (k, silhouette, degenerate flag/reason) callers need to report per-track
     clustering health, per the bake-off brief ("where clustering failed --
-    count them, don't hide")."""
+    count them, don't hide").
+
+    classifier_weights: OPTIONAL path to a trained Audio Event Classifier
+    checkpoint (docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md §3 seams, §5 P2).
+    When given, each detected onset is labeled by the trained model
+    (train.model.EventClassifierCNN, loaded lazily via torch -- see
+    _load_classifier) instead of the cluster-then-label pipeline below.
+    Default None preserves the EXACT prior behavior -- same code path, same
+    lines, no torch import at all (see
+    eval/tests/test_stage1_dsp_detection.py's default-path-equivalence
+    test)."""
     onset_times = detect_onsets(audio, sr)
     features = extract_onset_features(audio, sr, onset_times)
+
+    if classifier_weights is not None:
+        return _label_via_classifier(audio, sr, onset_times, features, classifier_weights)
+
     result = cluster_onsets(features)
 
     events: List[Event] = []

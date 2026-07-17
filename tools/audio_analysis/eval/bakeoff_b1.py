@@ -77,6 +77,14 @@ STAGE1_TO_ADTOF_CLASS = {
     "hat": "hat", "tom": "perc", "perc": "perc",
 }
 
+# The classifier-labeling arm's OWN vocabulary (P2, kick/snare/hat/perc/
+# synth/other) folded the same way -- `synth`/`other` have no ADTOF-side
+# slot and are intentionally absent (unmapped -> dropped): `other` is
+# precisely D3's non-drum precision filter, so dropping it here is
+# correct-by-design, matching STAGE1_TO_ADTOF_CLASS's own precedent of
+# only folding classes that have a same-meaning target.
+CLASSIFIER_TO_ADTOF_CLASS = {"kick": "kick", "snare": "snare", "hat": "hat", "perc": "perc"}
+
 EGMD_MAX_TRACKS: Optional[int] = None  # None = all fetched dev rows
 SLAKH_MAX_TRACKS: Optional[int] = None
 
@@ -259,7 +267,15 @@ def _manifold_own_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str,
     return override
 
 
-def run_stage1_on_corpus(corpus: List[TrackData]) -> List[Stage1Result]:
+def run_stage1_on_corpus(
+    corpus: List[TrackData], classifier_weights: Optional[str] = None,
+) -> List[Stage1Result]:
+    """classifier_weights: OPTIONAL path to a trained Audio Event Classifier
+    checkpoint (docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md §5 P2). When set, the
+    Stage-1 arm labels onsets via the trained model instead of cluster-
+    then-label, and folds through CLASSIFIER_TO_ADTOF_CLASS instead of
+    STAGE1_TO_ADTOF_CLASS. Default None is the unchanged B1 arm."""
+    fold_map = CLASSIFIER_TO_ADTOF_CLASS if classifier_weights is not None else STAGE1_TO_ADTOF_CLASS
     audio_override = _babyslakh_drum_stem_audio_override(corpus)
     audio_override.update(_manifold_own_drum_stem_audio_override(corpus))
     audio_override.update(_liveshow_drum_stem_audio_override(corpus))
@@ -269,10 +285,10 @@ def run_stage1_on_corpus(corpus: List[TrackData]) -> List[Stage1Result]:
         if entry is None:  # liveshow track whose demucs stem is missing
             continue
         audio, sr = entry
-        events, cluster_result = detect_drums_stage1(audio, sr)
+        events, cluster_result = detect_drums_stage1(audio, sr, classifier_weights=classifier_weights)
         by_class: Dict[str, List[float]] = {c: [] for c in CLASSES}
         for e in events:
-            folded = STAGE1_TO_ADTOF_CLASS.get(e.type)
+            folded = fold_map.get(e.type)
             if folded:
                 by_class[folded].append(e.time)
         out.append(Stage1Result(
@@ -324,14 +340,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--max-babyslakh-tracks", type=int, default=8)
     parser.add_argument("--out", type=Path, default=AUDIO_ANALYSIS_ROOT / "eval" / "scoreboard" / "bakeoff_b1_stage1.json")
+    parser.add_argument(
+        "--classifier-weights", type=Path, default=None,
+        help="path to a trained Audio Event Classifier checkpoint (P2); when set, the Stage-1 "
+             "arm labels onsets via the classifier instead of cluster-then-label",
+    )
     args = parser.parse_args(argv)
+    classifier_weights = str(args.classifier_weights) if args.classifier_weights else None
 
     print("[bakeoff_b1] building DEV corpus (babyslakh + self_render + manifold_own kick + E-GMD dev + Slakh-drums dev) ...", file=sys.stderr)
     corpus = build_b1_corpus(max_babyslakh_tracks=args.max_babyslakh_tracks)
     print(f"[bakeoff_b1] corpus: {len(corpus)} tracks", file=sys.stderr)
 
-    print("[bakeoff_b1] running Stage-1 DSP detector on every track ...", file=sys.stderr)
-    stage1_results = run_stage1_on_corpus(corpus)
+    stage1_arm = "classifier" if classifier_weights else "cluster_then_label"
+    print(f"[bakeoff_b1] running Stage-1 arm ({stage1_arm}) on every track ...", file=sys.stderr)
+    stage1_results = run_stage1_on_corpus(corpus, classifier_weights=classifier_weights)
     degenerate = [r for r in stage1_results if r.degenerate]
 
     base_config = PrecisionConfig()
@@ -356,6 +379,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     payload = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "phase": "B1 -- first scoreboard, DEV ONLY, HELDOUT FORBIDDEN",
+        "stage1_arm": stage1_arm,
+        "classifier_weights": classifier_weights,
         "corpus_summary": [{"id": t.id, "domain": t.domain, "source": t.source} for t in corpus],
         "n_tracks": len(corpus),
         "per_class": per_class,
