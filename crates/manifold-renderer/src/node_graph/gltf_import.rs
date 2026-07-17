@@ -6920,22 +6920,23 @@ mod tests {
         assert_eq!(report.object_count, 1, "DamagedHelmet is a single-material model");
 
         // Every one of F-P2's four new map ports must be wired, by name —
-        // not just "the import didn't error".
+        // not just "the import didn't error". SCENE_OBJECT_AND_PANEL_V2_DESIGN
+        // D1/D3: these wire into the object's `node.scene_object` bind node
+        // now, not directly into `render` — `render` itself only ever sees
+        // the single `object_0` port.
         let flat = flatten_groups(&def).expect("DamagedHelmet import graph flattens");
-        let render_ports: std::collections::HashSet<String> = flat
+        let scene_object_id =
+            flat.nodes.iter().find(|n| n.type_id == "node.scene_object").expect("scene_object bind node").id;
+        let scene_object_ports: std::collections::HashSet<String> = flat
             .wires
             .iter()
-            .filter(|w| {
-                flat.nodes
-                    .iter()
-                    .any(|n| n.id == w.to_node && n.node_id.as_str() == "render")
-            })
+            .filter(|w| w.to_node == scene_object_id)
             .map(|w| w.to_port.clone())
             .collect();
-        for port in ["base_color_map_0", "normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+        for port in ["base_color_map", "normal_map", "mr_map", "occlusion_map", "emissive_map"] {
             assert!(
-                render_ports.contains(port),
-                "DamagedHelmet must wire `{port}` — carries all five glTF PBR maps; got {render_ports:?}"
+                scene_object_ports.contains(port),
+                "DamagedHelmet must wire `{port}` — carries all five glTF PBR maps; got {scene_object_ports:?}"
             );
         }
 
@@ -7142,6 +7143,523 @@ mod tests {
         }
         enc.commit_and_wait_completed();
         println!("amg_gt3_glb_imports_and_renders_without_error_if_present: rendered without error");
+    }
+
+    // ── SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P3 held-out gate: the_rosetta_stone.glb ──
+    // A fixture v1's briefs never used for emission tests (per the P3 phase
+    // brief) — proves the importer's NEW scene_object-shaped emission on an
+    // asset none of the earlier scene_object work was tuned against.
+
+    fn rosetta_stone_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/the_rosetta_stone.glb")
+    }
+
+    /// CPU-only, in the default sweep: every imported object row is
+    /// scene_object-shaped (an `object_k` wire whose producer resolves,
+    /// through at most one group hop, to a `node.scene_object`), and a
+    /// fresh import needs no migration —
+    /// `migrate_scene_object_wires` must return `false` on the assembled
+    /// def, proving the importer emits the target shape natively rather
+    /// than relying on the load-time migration to paper over legacy wires.
+    #[test]
+    fn rosetta_stone_imports_scene_object_shaped_with_no_migration_needed() {
+        let path = rosetta_stone_fixture_path();
+        if !path.exists() {
+            println!(
+                "rosetta_stone_imports_scene_object_shaped_with_no_migration_needed: fixture not \
+                 found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+
+        let (mut def, report) = assemble_import_graph(&path).expect("assemble the_rosetta_stone");
+        println!("the_rosetta_stone import report: object_count={}", report.object_count);
+        assert!(report.object_count >= 1, "the_rosetta_stone must import at least one object");
+
+        let render = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("render_scene node present");
+        let render_id = render.id;
+        let objects = report.object_count;
+        for k in 0..objects {
+            let object_port = format!("object_{k}");
+            let producer_id = def
+                .wires
+                .iter()
+                .find(|w| w.to_node == render_id && w.to_port == object_port)
+                .unwrap_or_else(|| panic!("object {k}: no wire into render_scene's `{object_port}`"))
+                .from_node;
+            let producer = def.nodes.iter().find(|n| n.id == producer_id).expect("producer node exists");
+            let is_scene_object_shaped = producer.type_id == "node.scene_object"
+                || (producer.type_id == GROUP_TYPE_ID
+                    && producer
+                        .group
+                        .as_ref()
+                        .is_some_and(|g| g.nodes.iter().any(|n| n.type_id == "node.scene_object")));
+            assert!(
+                is_scene_object_shaped,
+                "object {k}: producer (type_id={}) must be node.scene_object or a group containing one",
+                producer.type_id
+            );
+        }
+
+        // Negative: zero legacy per-object port wires anywhere on render_scene.
+        for prefix in [
+            "mesh_", "material_", "transform_", "base_color_map_", "normal_map_", "mr_map_",
+            "occlusion_map_", "emissive_map_", "instances_",
+        ] {
+            assert!(
+                !def.wires.iter().any(|w| w.to_node == render_id && w.to_port.starts_with(prefix)),
+                "the_rosetta_stone must wire zero legacy `{prefix}*` ports into render_scene"
+            );
+        }
+
+        assert!(
+            !manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def),
+            "a fresh the_rosetta_stone import must already be scene_object-shaped — \
+             migrate_scene_object_wires should be a no-op"
+        );
+    }
+
+    /// GPU render proof: the_rosetta_stone import must actually draw non-
+    /// degenerate content and be saved to disk for visual inspection.
+    /// Needs a GPU device: run deliberately with `--features gpu-proofs`.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn rosetta_stone_import_renders_gpu_proof() {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let path = rosetta_stone_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "rosetta_stone_import_renders_gpu_proof: fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+
+        let (def, report) = assemble_import_graph(&path).expect("assemble the_rosetta_stone");
+        println!("the_rosetta_stone import report: object_count={}", report.object_count);
+
+        let (w, h) = (512u32, 512u32);
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .expect("the_rosetta_stone import graph must build through PresetRuntime::from_def_with_device");
+        let target = RenderTarget::new(&device, w, h, format, "rosetta-stone");
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+
+        // Same convergence-polling loop as the DamagedHelmet/AMG proofs
+        // above — background texture decodes need to land before the
+        // readback means anything.
+        const STABLE_STREAK: u32 = 3;
+        let max_attempts = 200;
+        let mut rgba = Vec::new();
+        let mut prev_rgba: Option<Vec<u8>> = None;
+        let mut stable_count = 0u32;
+        let mut converged = false;
+        let mut fraction = 0.0f64;
+        for attempt in 0..max_attempts {
+            {
+                let mut enc = device.create_encoder("rosetta-stone-render");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                    generator.render(
+                        &mut gpu,
+                        &target.texture,
+                        &ctx,
+                        &manifold_core::params::ParamManifest::default(),
+                    );
+                }
+                enc.commit_and_wait_completed();
+            }
+
+            let bytes_per_row = w * 8;
+            let total_bytes = u64::from(h * bytes_per_row);
+            let readback_buf = device.create_buffer_shared(total_bytes);
+            let mut readback_enc = device.create_encoder("rosetta-stone-readback");
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            let mut non_black = 0usize;
+            for px in halves.chunks_exact(4) {
+                let r = tonemap_channel(half_to_f32(px[0]));
+                let g = tonemap_channel(half_to_f32(px[1]));
+                let b = tonemap_channel(half_to_f32(px[2]));
+                if r != 0 || g != 0 || b != 0 {
+                    non_black += 1;
+                }
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                let a = half_to_f32(px[3]).clamp(0.0, 1.0);
+                rgba.push((a * 255.0).round() as u8);
+            }
+            fraction = non_black as f64 / (w * h) as f64;
+
+            if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+                stable_count += 1;
+            } else {
+                stable_count = 0;
+            }
+            prev_rgba = Some(rgba.clone());
+
+            if stable_count >= STABLE_STREAK {
+                println!(
+                    "rosetta_stone_import_renders_gpu_proof: converged on attempt {attempt} \
+                     (non-black fraction {fraction:.4})"
+                );
+                converged = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            converged,
+            "the_rosetta_stone render never stabilized non-black after {max_attempts} attempts \
+             (last non-black fraction {fraction:.4})"
+        );
+
+        let out_path = std::env::var("MESH_SNAP_OUT")
+            .unwrap_or_else(|_| "target/mesh-snap/the_rosetta_stone.png".to_string());
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            std::fs::create_dir_all(parent).expect("create output dir");
+        }
+        image::save_buffer(&out_path, &rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
+        println!("rosetta_stone_import_renders_gpu_proof: wrote {out_path}");
+    }
+
+    /// One frame, no convergence loop (this is a look-check demo, not a
+    /// numeric gate) — renders `def` at time 0 into a fresh RGBA buffer.
+    #[cfg(feature = "gpu-proofs")]
+    fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
+        use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+        use crate::preset_context::PresetContext;
+        use crate::render_target::RenderTarget;
+        use manifold_gpu::GpuTextureFormat;
+
+        let device = crate::test_device();
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut generator =
+            PresetRuntime::from_def_with_device(def, &registry, device.arc(), w, h, format, None)
+                .unwrap_or_else(|e| panic!("{label}: import graph must build: {e:?}"));
+        let target = RenderTarget::new(&device, w, h, format, label);
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: 1.0,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut rgba = Vec::new();
+        // A few frames for background texture decodes to land (no
+        // stability-polling needed for a demo, just enough headroom).
+        for _ in 0..30 {
+            let mut enc = device.create_encoder(label);
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                generator.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            }
+            enc.commit_and_wait_completed();
+
+            let bytes_per_row = w * 8;
+            let readback_buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut readback_enc = device.create_encoder(label);
+            readback_enc.copy_texture_to_buffer(&target.texture, &readback_buf, w, h, bytes_per_row);
+            readback_enc.commit_and_wait_completed();
+            let ptr = readback_buf.mapped_ptr().expect("shared readback");
+            let halves: &[u16] =
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            rgba = Vec::with_capacity((w * h * 4) as usize);
+            for px in halves.chunks_exact(4) {
+                rgba.push(tonemap_channel(half_to_f32(px[0])));
+                rgba.push(tonemap_channel(half_to_f32(px[1])));
+                rgba.push(tonemap_channel(half_to_f32(px[2])));
+                rgba.push((half_to_f32(px[3]).clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        rgba
+    }
+
+    /// Demo pair for the P3 gate's L2 artifact: the_rosetta_stone alone,
+    /// then the_rosetta_stone plus a duplicate of its (sole) object offset
+    /// by D11's +0.5 on `pos_x` — mirroring `DuplicateSceneObjectCommand`'s
+    /// shape structurally (deep-clone the producer subtree with fresh doc
+    /// ids, rewire internal wires, wire the clone's `object` output to the
+    /// next free `object_k`, bump `objects`) without depending on
+    /// `manifold-editing` from this crate — the actual command's
+    /// correctness (fresh-id freshness, undo, D6 handle sync) is proven by
+    /// its own inverse-pair unit tests in `manifold-editing`; this test
+    /// proves the RENDER characteristics of the shape it produces.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn duplicate_demo_pair_renders_original_then_original_plus_offset_copy() {
+        let path = rosetta_stone_fixture_path();
+        if !path.exists() {
+            eprintln!(
+                "duplicate_demo_pair_renders_original_then_original_plus_offset_copy: fixture not \
+                 found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+
+        let (def, _report) = assemble_import_graph(&path).expect("assemble the_rosetta_stone");
+        let (w, h) = (512u32, 512u32);
+
+        let original_rgba = render_once(def.clone(), w, h, "rosetta-original");
+        let out_dir = std::env::var("MESH_SNAP_OUT_DIR").unwrap_or_else(|_| "target/mesh-snap".to_string());
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+        let original_path = format!("{out_dir}/rosetta_duplicate_demo_original.png");
+        image::save_buffer(&original_path, &original_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {original_path}: {e}"));
+
+        // Build the "plus a duplicate" def: clone the sole object's producer
+        // subtree with fresh doc ids (mirrors
+        // manifold_editing::commands::graph::deep_clone_with_fresh_ids /
+        // DuplicateSceneObjectCommand), offset transform_3d.pos_x by +0.5,
+        // wire to the next object_k slot, bump `objects`.
+        let mut plus_def = def.clone();
+        let render_id = plus_def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.render_scene")
+            .expect("render_scene node")
+            .id;
+        let producer_id = plus_def
+            .wires
+            .iter()
+            .find(|w| w.to_node == render_id && w.to_port == "object_0")
+            .expect("object_0 wire present")
+            .from_node;
+        let source_index = plus_def.nodes.iter().position(|n| n.id == producer_id).expect("producer node");
+
+        fn max_id(nodes: &[EffectGraphNode]) -> u32 {
+            nodes
+                .iter()
+                .map(|n| n.id.max(n.group.as_ref().map(|g| max_id(&g.nodes)).unwrap_or(0)))
+                .max()
+                .unwrap_or(0)
+        }
+        fn collect_all_handles(nodes: &[EffectGraphNode], out: &mut std::collections::HashSet<String>) {
+            for n in nodes {
+                if let Some(h) = &n.handle {
+                    out.insert(h.clone());
+                }
+                if let Some(body) = n.group.as_deref() {
+                    collect_all_handles(&body.nodes, out);
+                }
+            }
+        }
+        // Mirrors `dedup_handle` in
+        // `manifold_editing::commands::graph` — `base`, else `base_2`,
+        // `base_3`, … (this crate has no dependency on manifold-editing,
+        // so the tiny helper is duplicated rather than shared).
+        fn dedup_handle(base: &str, taken: &mut std::collections::HashSet<String>) -> String {
+            if !taken.contains(base) {
+                taken.insert(base.to_string());
+                return base.to_string();
+            }
+            let mut i = 2u32;
+            loop {
+                let cand = format!("{base}_{i}");
+                if !taken.contains(&cand) {
+                    taken.insert(cand.clone());
+                    return cand;
+                }
+                i += 1;
+            }
+        }
+        // Mirrors `deep_clone_with_fresh_ids` in
+        // `manifold_editing::commands::graph::DuplicateSceneObjectCommand` —
+        // fresh doc id + fresh NodeId + deduped handle on every node,
+        // recursively. `Graph::add_node_named` rejects a duplicate handle
+        // anywhere in the whole graph, so a clone whose inner nodes kept
+        // their source's exact handles (`mesh_0`, `mat_0`, …) fails to
+        // build even with fresh ids everywhere else.
+        fn clone_fresh(
+            src: &EffectGraphNode,
+            next_id: &mut u32,
+            taken: &mut std::collections::HashSet<String>,
+        ) -> EffectGraphNode {
+            let mut node = src.clone();
+            node.id = *next_id;
+            *next_id += 1;
+            node.node_id = manifold_core::NodeId::new(manifold_core::short_id());
+            node.handle = node.handle.as_deref().map(|h| dedup_handle(h, taken));
+            if let Some(group) = node.group.as_deref_mut() {
+                let mut id_map: Vec<(u32, u32)> = Vec::new();
+                let mut new_nodes = Vec::new();
+                for n in &group.nodes {
+                    let old = n.id;
+                    let cloned = clone_fresh(n, next_id, taken);
+                    id_map.push((old, cloned.id));
+                    new_nodes.push(cloned);
+                }
+                let remap = |id: u32| id_map.iter().find(|(o, _)| *o == id).map(|(_, n)| *n).unwrap_or(id);
+                group.wires = group
+                    .wires
+                    .iter()
+                    .map(|w| EffectGraphWire {
+                        from_node: remap(w.from_node),
+                        from_port: w.from_port.clone(),
+                        to_node: remap(w.to_node),
+                        to_port: w.to_port.clone(),
+                    })
+                    .collect();
+                group.nodes = new_nodes;
+            }
+            node
+        }
+
+        let mut next_id = max_id(&plus_def.nodes) + 1;
+        let source_node = plus_def.nodes[source_index].clone();
+        let mut taken = std::collections::HashSet::new();
+        collect_all_handles(&plus_def.nodes, &mut taken);
+        let mut clone = clone_fresh(&source_node, &mut next_id, &mut taken);
+        // D11's exact top-level convention (handle + " 2"), derived from the
+        // SOURCE's own handle (not the post-dedup one — see the identical
+        // comment on `DuplicateSceneObjectCommand::execute`).
+        let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
+        clone.handle = cloned_handle.clone();
+        if let Some(body) = clone.group.as_deref_mut()
+            && let Some(inner_object) = body.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")
+        {
+            inner_object.handle = cloned_handle;
+        }
+        clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+
+        // BUG-211 workaround (demo-only, see the backlog entry this test's
+        // failure led to): string_bindings (the "Model File" → mesh-source
+        // `path` binding every importer object carries) address their
+        // target by stable NodeId. DuplicateSceneObjectCommand mints a
+        // FRESH NodeId for every cloned node (D11), so the clone's mesh
+        // source node has no literal `path` param and no binding pointing
+        // at it — its default_value never applies, so it fails to decode
+        // any geometry. The shipped command does not fix this (D11 says
+        // "fresh NodeIds make cloned bindings dangle by construction" for
+        // CARD exposes; string_bindings turned out to hit the same
+        // mechanism unintentionally for the importer's most common object
+        // shape — logged, not silently patched). For this demo to show a
+        // meaningful visual, propagate the source's already-resolved model
+        // path literally onto the clone's mesh source node(s) — a targeted
+        // one-off for the render proof, not a general fix.
+        if let Some(source_meta) = plus_def.preset_metadata.as_ref() {
+            let path_default: Vec<(manifold_core::NodeId, String)> = source_meta
+                .string_bindings
+                .iter()
+                .filter_map(|b| match &b.target {
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                        if param == "path" =>
+                    {
+                        Some((node_id.clone(), b.default_value.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            // Lockstep walk: `src_nodes[i]` is what `clone_nodes[i]` was
+            // cloned FROM (`clone_fresh` preserves list order at every
+            // level), so pairing by index at each recursion level — not a
+            // flattened global list — correctly threads through nesting.
+            fn stamp_paths_lockstep(
+                src_nodes: &[EffectGraphNode],
+                clone_nodes: &mut [EffectGraphNode],
+                bindings: &[(manifold_core::NodeId, String)],
+            ) {
+                for (src, clone) in src_nodes.iter().zip(clone_nodes.iter_mut()) {
+                    if let Some((_, path)) = bindings.iter().find(|(id, _)| *id == src.node_id) {
+                        clone.params.insert("path".to_string(), SerializedParamValue::String { value: path.clone() });
+                    }
+                    if let (Some(src_body), Some(clone_body)) =
+                        (src.group.as_deref(), clone.group.as_deref_mut())
+                    {
+                        stamp_paths_lockstep(&src_body.nodes, &mut clone_body.nodes, bindings);
+                    }
+                }
+            }
+            if let (Some(src_body), Some(clone_body)) =
+                (source_node.group.as_deref(), clone.group.as_deref_mut())
+            {
+                stamp_paths_lockstep(&src_body.nodes, &mut clone_body.nodes, &path_default);
+            }
+        }
+
+        if let Some(body) = clone.group.as_deref_mut()
+            && let Some(transform_node) = body.nodes.iter_mut().find(|n| n.type_id == "node.transform_3d")
+        {
+            let cur = match transform_node.params.get("pos_x") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                _ => 0.0,
+            };
+            transform_node
+                .params
+                .insert("pos_x".to_string(), SerializedParamValue::Float { value: cur + 0.5 });
+        }
+        let clone_id = clone.id;
+        plus_def.nodes.push(clone);
+        plus_def
+            .wires
+            .push(wire(clone_id, "object", render_id, "object_1"));
+        plus_def
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == render_id)
+            .unwrap()
+            .params
+            .insert("objects".to_string(), SerializedParamValue::Float { value: 2.0 });
+
+        let plus_rgba = render_once(plus_def, w, h, "rosetta-plus-duplicate");
+        let plus_path = format!("{out_dir}/rosetta_duplicate_demo_plus_copy.png");
+        image::save_buffer(&plus_path, &plus_rgba, w, h, image::ExtendedColorType::Rgba8)
+            .unwrap_or_else(|e| panic!("save {plus_path}: {e}"));
+
+        assert_ne!(
+            original_rgba, plus_rgba,
+            "the duplicate-plus-offset render must differ from the original (a second, offset copy is visible)"
+        );
+        println!(
+            "duplicate_demo_pair_renders_original_then_original_plus_offset_copy: wrote \
+             {original_path} and {plus_path}"
+        );
     }
 }
 

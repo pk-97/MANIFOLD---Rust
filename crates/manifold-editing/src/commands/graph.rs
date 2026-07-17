@@ -2675,28 +2675,57 @@ fn max_node_id_over(nodes: &[EffectGraphNode]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Every populated `handle` anywhere in `nodes`, recursively through nested
+/// group bodies — `Graph::add_node_named` enforces handle uniqueness across
+/// the WHOLE graph (not just one scope: a clone's inner `mesh_0` collides
+/// with the ORIGINAL's `mesh_0` even though they live in different group
+/// bodies), so the dedup seed for a deep clone must be collected from the
+/// entire def, not just the level being edited. Mirrors `collect_node_ids`'s
+/// walk, for handles instead of stable NodeIds.
+fn collect_all_handles(nodes: &[EffectGraphNode], out: &mut std::collections::HashSet<String>) {
+    for n in nodes {
+        if let Some(h) = &n.handle {
+            out.insert(h.clone());
+        }
+        if let Some(body) = n.group.as_deref() {
+            collect_all_handles(&body.nodes, out);
+        }
+    }
+}
+
 /// Deep-clone `src` (and, recursively, its ENTIRE `group` subtree when it has
-/// one) with a FRESH doc `id` and a FRESH stable [`NodeId`] on every node —
-/// D11: "bindings are identity, never cloned; fresh NodeIds make cloned
-/// bindings dangle by construction" (a stale NodeId on the clone would let a
-/// card binding silently double-drive both the original and the copy).
+/// one) with a FRESH doc `id`, a FRESH stable [`NodeId`], and a deduped
+/// `handle` on every node — D11: "bindings are identity, never cloned; fresh
+/// NodeIds make cloned bindings dangle by construction" (a stale NodeId on
+/// the clone would let a card binding silently double-drive both the
+/// original and the copy). Handle dedup (via [`dedup_handle`], the same
+/// convention `PasteNodesCommand` uses) is load-bearing, not cosmetic: the
+/// runtime graph builder (`Graph::add_node_named`) rejects a duplicate
+/// handle anywhere in the WHOLE graph, so a clone whose inner nodes keep
+/// their source's exact handles (`mesh_0`, `mat_0`, …) fails to build.
 /// Internal wires are re-pointed onto the fresh ids. `exposed_params` is
 /// cleared on every cloned node — D11: card exposes are a deliberate act,
-/// never carried by a duplicate. `next_id` is threaded through so nested
-/// clones (a duplicated object's inner mesh/material/transform/scene_object
-/// nodes) each get their own fresh id, ascending.
-fn deep_clone_with_fresh_ids(src: &EffectGraphNode, next_id: &mut u32) -> EffectGraphNode {
+/// never carried by a duplicate. `next_id`/`taken` are threaded through so
+/// nested clones (a duplicated object's inner mesh/material/transform/
+/// scene_object nodes) each get their own fresh id and collision-free
+/// handle, ascending.
+fn deep_clone_with_fresh_ids(
+    src: &EffectGraphNode,
+    next_id: &mut u32,
+    taken: &mut std::collections::HashSet<String>,
+) -> EffectGraphNode {
     let mut node = src.clone();
     node.id = *next_id;
     *next_id += 1;
     node.node_id = NodeId::new(manifold_core::short_id());
     node.exposed_params = Default::default();
+    node.handle = node.handle.as_deref().map(|h| dedup_handle(h, taken));
     if let Some(group) = node.group.as_deref_mut() {
         let mut id_map: Vec<(u32, u32)> = Vec::with_capacity(group.nodes.len());
         let mut new_nodes = Vec::with_capacity(group.nodes.len());
         for n in &group.nodes {
             let old_id = n.id;
-            let cloned = deep_clone_with_fresh_ids(n, next_id);
+            let cloned = deep_clone_with_fresh_ids(n, next_id, taken);
             id_map.push((old_id, cloned.id));
             new_nodes.push(cloned);
         }
@@ -2774,11 +2803,19 @@ impl Command for DuplicateSceneObjectCommand {
             let prev = (nodes.clone(), wires.clone());
 
             let source_id = object_producer_id(wires, render_id, src_k)?;
-            let source_node = nodes.iter().find(|n| n.id == source_id)?;
+            let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
 
             let mut next_id = max_node_id_over(nodes) + 1;
-            let mut clone = deep_clone_with_fresh_ids(source_node, &mut next_id);
-            let cloned_handle = clone.handle.as_ref().map(|h| format!("{h} 2"));
+            let mut taken = std::collections::HashSet::new();
+            collect_all_handles(nodes, &mut taken);
+            let mut clone = deep_clone_with_fresh_ids(&source_node, &mut next_id, &mut taken);
+            // D11's exact top-level convention (handle + " 2") overrides
+            // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
+            // assigned to the TOP node — derived from the SOURCE's own
+            // handle, not the post-dedup one (the source's handle is
+            // already in `taken`, so a naive dedup on the clone would have
+            // produced e.g. "Object 1_2", not the D11 "Object 1 2" shape).
+            let cloned_handle = source_node.handle.as_ref().map(|h| format!("{h} 2"));
             clone.handle = cloned_handle.clone();
             clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
 
@@ -7229,6 +7266,27 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), all_doc_ids.len(), "no doc id collisions anywhere in the def");
+
+        // No duplicate handles among SIBLINGS at any one scope — the real
+        // constraint the flattener's group-name-prefixing composite naming
+        // needs (`Graph::add_node_named` builds on the flattened, prefixed
+        // names; two DIFFERENT groups' identically-named inner leaves don't
+        // collide because the group name prefixes them, but two nodes in
+        // the SAME scope sharing a handle do). The clone's own group got a
+        // distinct top handle ("Object 1 2" vs the source's "Object 1"), so
+        // this must hold recursively through both subtrees.
+        fn assert_no_sibling_handle_collisions(nodes: &[EffectGraphNode]) {
+            let mut seen = std::collections::HashSet::new();
+            for n in nodes {
+                if let Some(h) = &n.handle {
+                    assert!(seen.insert(h.clone()), "sibling handle collision at this scope: {h:?}");
+                }
+                if let Some(body) = n.group.as_deref() {
+                    assert_no_sibling_handle_collisions(&body.nodes);
+                }
+            }
+        }
+        assert_no_sibling_handle_collisions(&def.nodes);
 
         // D6: the clone's inner scene_object handle stays in sync with the
         // group's handle.

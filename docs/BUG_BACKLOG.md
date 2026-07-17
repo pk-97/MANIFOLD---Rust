@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-211 | **duplicate-scene-object-string-bindings-dangle-on-imported-mesh** | `DuplicateSceneObjectCommand`'s fresh NodeIds break the imported "Model File" string binding — a duplicated glTF-imported object's clone loads no geometry — MED |
 | BUG-096 | **camera-rotate-sliders-jump-no-degrees** | FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open) |
 | ~~BUG-207~~ FIXED | **materialless-skinned-mesh-silently-imports-static-at-node-scale** | FIXED — the default-material bucket (`nodes_by_material`'s `None` key) is now a first-class key resolved by the SAME shared functions a real material uses, so a materialless skinned/morphed/animated rig resolves its skin/morph/animation exactly like a materialed one. |
 | BUG-209 | **animated-ancestor-above-joint-tree-sampled-statically** | root motion authored on a node ABOVE a skin's joint tree is frozen at its static TRS (`joint_root_world` is static by design; the rigid path that would have carried it is correctly excluded post-BUG-205) — LOW until a real asset exhibits it |
@@ -163,6 +164,17 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-211 (duplicate-scene-object-string-bindings-dangle-on-imported-mesh) — `DuplicateSceneObjectCommand`'s fresh NodeIds break the "Model File" string binding on a cloned glTF-imported object's mesh source, so the clone has no path and loads no geometry — found 2026-07-17, SCENE_OBJECT_AND_PANEL_V2_DESIGN P3, via the render-path proof (`duplicate_demo_pair_renders_original_then_original_plus_offset_copy`, manifold-renderer gpu-proofs)
+
+**Status:** OPEN — MED (Duplicate on any glTF-imported object — the app's primary object shape — produces an invisible clone; Duplicate on an `AddSceneObjectCommand`-built cube, which needs no file path, works correctly and is unaffected).
+
+**Symptom:** click Duplicate on an imported object (e.g. a glTF mesh). The command succeeds (undo/redo, wiring, `objects` count, transform offset all correct — proven by
+`duplicate_scene_object_command_clones_grouped_object_with_fresh_ids_and_undo_restores`), but the clone renders nothing: its mesh source node has no geometry.
+
+**Root cause:** the importer's "Model File" card control is one `StringBindingDef` per file-dependent node (`BindingTarget::Node { node_id, param: "path" }`, `default_value` = the resolved file path) — addressed by stable `NodeId`, not doc id. `node.gltf_mesh_source`/`node.gltf_skinned_mesh_source`/`node.gltf_texture_source` never carry a literal `path` param in the def; it only ever arrives via this binding's `default_value` resolving against the node's `NodeId`. `DuplicateSceneObjectCommand`'s `deep_clone_with_fresh_ids` (`crates/manifold-editing/src/commands/graph.rs`) correctly mints a FRESH `NodeId` on every cloned node per D11 ("fresh NodeIds make cloned bindings dangle by construction") — but D11's own text was written about CARD exposes (`exposed_params`/`UserParamBinding`, performer-controlled sliders), which are legitimately meant to dangle. `string_bindings` is a different, non-performer-facing infra mechanism (keeps every file-dependent node in an import pointed at the same physical file) that hits the exact same "addressed by NodeId" mechanism unintentionally — dropping it isn't a deliberate tradeoff, it silently breaks mesh loading for the shipped importer's own object shape.
+
+**Fix shape:** `DuplicateSceneObjectCommand` should also clone (with the SAME `default_value`, re-targeted at the clone's fresh NodeId) every `string_bindings` entry whose target NodeId falls inside the duplicated subtree — mirroring what it already does NOT do for `bindings`/`exposed_params` (those stay excluded, per D11). Needs `PresetInstance`/`preset_metadata` access at the SAME undo-unit boundary the D5 rename sweep (`RenameSceneObjectCommand`) already reaches via `resolve_target_instance` — likely the same shape, appending fresh `StringBindingDef`s instead of rewriting `section`. A synthetic-mesh object (no `string_bindings`, e.g. `AddSceneObjectCommand`'s cube) is unaffected and needs no fix. Demo-only workaround used to produce a real render proof without this fix: `render_once`'s caller in `gltf_import.rs`'s `duplicate_demo_pair_renders_original_then_original_plus_offset_copy` manually copies the source's resolved `path` onto the clone's mesh nodes post-clone — NOT present in the shipped command, do not mistake it for the fix.
 
 ### BUG-209 (animated-ancestor-above-joint-tree-sampled-statically) — root motion authored on a node above a skin's joint tree is frozen — promoted from BUG-205's "known remaining approximation" note, 2026-07-17
 
