@@ -3353,8 +3353,15 @@ type RenameSceneObjectPrev = (u32, Option<String>, Option<(u32, Option<String>)>
 pub struct RenameSceneObjectCommand {
     target: GraphTarget,
     scope_path: Vec<u32>,
-    render_scene_node_id: u32,
-    object_index: u32,
+    /// The `object_k` wire's producer at `scope_path` — the group when the
+    /// object is grouped (Add/importer/merge shape), else the bare
+    /// `node.scene_object` itself. Same value `SceneVm`'s
+    /// `SceneObjectVm::Known::group_node_id` already resolves to (P1/P2
+    /// re-anchored it onto the Object-wire producer, D12), so the panel can
+    /// address this command with the exact id it already has — no
+    /// render_scene/object-index re-derivation needed. Matches
+    /// `RenameGroupCommand::group_node_id`'s addressing shape exactly.
+    object_node_id: u32,
     new_handle: String,
     catalog_default: EffectGraphDef,
     /// Captured on first successful execute.
@@ -3369,40 +3376,28 @@ impl RenameSceneObjectCommand {
     pub fn new(
         target: GraphTarget,
         scope_path: Vec<u32>,
-        render_scene_node_id: u32,
-        object_index: u32,
+        object_node_id: u32,
         new_handle: String,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self {
-            target,
-            scope_path,
-            render_scene_node_id,
-            object_index,
-            new_handle,
-            catalog_default,
-            prev: None,
-            swept: Vec::new(),
-        }
+        Self { target, scope_path, object_node_id, new_handle, catalog_default, prev: None, swept: Vec::new() }
     }
 }
 
 impl Command for RenameSceneObjectCommand {
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
-        let render_id = self.render_scene_node_id;
-        let k = self.object_index;
+        let producer_id = self.object_node_id;
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
 
         let captured = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             if new_handle.is_empty() || new_handle.contains('/') {
                 return None;
             }
             // Reject a collision with any sibling's handle at this level
             // (matching RenameGroupCommand's own guard).
-            let producer_id = object_producer_id(wires, render_id, k)?;
             if nodes
                 .iter()
                 .any(|n| n.id != producer_id && n.handle.as_deref() == Some(new_handle.as_str()))
@@ -7300,8 +7295,7 @@ mod tests {
         let mut cmd = RenameSceneObjectCommand::new(
             GraphTarget::Effect(fx.clone()),
             vec![],
-            0,
-            0,
+            group_id,
             "Hero".to_string(),
             mirror_catalog_default(),
         );
@@ -7338,8 +7332,7 @@ mod tests {
         let mut cmd = RenameSceneObjectCommand::new(
             GraphTarget::Effect(fx.clone()),
             vec![],
-            0,
-            0,
+            object_ids[0],
             "Renamed".to_string(),
             mirror_catalog_default(),
         );
