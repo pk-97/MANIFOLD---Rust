@@ -102,6 +102,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Tear mode: offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Slide mode: offset.r = (value_noise(band, time*speed*0.065) - 0.5) * amount * 0.05 — ungated, every band drifts smoothly; band = floor(uv.y*bands). bands=0 emits a zero offset (the slide turns off — pair with a flow/domain warp so the image still moves, the Digital Drift recipe). speed=2 reproduces the website's 0.13 time scale; `scanline` is ignored. Sum the offset with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
     examples: ["preset.effect.glitch", "preset.effect.digital_drift"],
     picker: { label: "Scanline Jitter Field", category: Atom },

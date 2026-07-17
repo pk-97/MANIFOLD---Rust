@@ -63,6 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The lathe/spin atom — a profile curve built from generate_range + array_math (or pack_curve_xy) becomes a solid of revolution. Wire node.make_triangles downstream with src_cols = segments+1, src_rows = the profile's point count for topology + normals. `sweep` is unbounded: wire a saw LFO straight into it for continuous full-revolution spin, never clamp downstream (BUG-039 class). At sweep = 2*pi the seam column's positions coincide with column 0 (a closed surface) while uv still spans the full 0..1 range across the seam. The canonical demo is Lathe: node.range -> node.combine_xy (profile) -> node.revolve_curve -> node.make_triangles -> node.render_scene.",
     examples: ["Lathe"],
     picker: { label: "Revolve Curve", category: Atom },

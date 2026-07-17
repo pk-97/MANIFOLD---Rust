@@ -58,6 +58,7 @@ crate::primitive! {
             enum_values: REMAP_FIELD_MODES,
         },
     ],
+    depth_rule: Warp,
     composition_notes: "Absolute (default): uv_field carries target UVs in R (u) / G (v), [0,1] over the canvas — build it from centered_uv / polar_field / scale_offset_texture / field_combine chains, or feed a flow field. Relative: uv_field carries a signed UV *offset* added to each pixel's own coordinate — this is how displacement fields (block_displace_field, scanline_jitter_field) compose: sum them with node.mix(Add) then remap once. Wrap is applied per-component in the shader (Clamp = saturate, Repeat = fract, Mirror = triangle), so no sampler-state juggling. Pure resample — blend the result against the original with node.mix downstream when an effect wants a wet/dry.",
     examples: ["preset.effect.kaleidoscope"],
     picker: { label: "Remap", category: Atom },

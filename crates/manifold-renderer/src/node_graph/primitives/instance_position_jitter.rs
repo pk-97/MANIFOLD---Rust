@@ -105,6 +105,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the `instances` input. Drive `time_uvx_drift` and `z_coord` from time wires (typically `time * 0.2` and `time * 0.15` for slow drift) to animate the noise field. `axis_seed` decorrelates the three axis samples — pick any value large enough to land in a different noise cell (100 / 50 are the legacy DigitalPlants values for the detail and micro passes respectively). Pair upstream with node.grid_uv_field for the UV input. The original instance rotations are preserved verbatim — pair with node.rotation_jitter downstream if rotation jitter is also wanted.",
     examples: [],
     picker: { label: "Position Jitter", category: Atom },

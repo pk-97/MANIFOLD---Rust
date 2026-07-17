@@ -195,6 +195,16 @@ pub trait PrimitiveSpec: Send {
     /// single-channel u32 / i32 (WGSL atomics are integer-only).
     const ATOMIC_OUTPUTS: &'static [&'static str] = &[];
 
+    /// How this primitive propagates the depth companion channel the "3D
+    /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
+    /// D1). **No default** — unlike [`FUSION_KIND`](Self::FUSION_KIND), every
+    /// primitive must declare this explicitly via the macro's REQUIRED
+    /// `depth_rule:` field; a primitive that omits it fails to compile. Kept
+    /// required (rather than defaulting to the conservative `Terminal`) so
+    /// the classification stays truthful as new primitives are added — no
+    /// primitive can silently inherit a wrong guess.
+    const DEPTH_RULE: crate::node_graph::depth_rule::DepthRule;
+
     /// Returns a process-wide `EffectNodeType` instance for this
     /// primitive, allocated lazily on first call.
     ///
@@ -697,6 +707,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
         P::BOUNDARY_REASON
     }
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        P::DEPTH_RULE
+    }
     fn param_contract(&self, param_name: &str) -> Option<manifold_core::effects::RangeContract> {
         P::PARAM_CONTRACTS
             .iter()
@@ -854,6 +867,7 @@ macro_rules! primitive {
             ),* $(,)?
         },
         params: [ $($params:tt)* ] $(,)?
+        depth_rule: $depth_rule:ident,
         $( composition_notes: $notes:literal, )?
         $( examples: [ $($ex:literal),* $(,)? ], )?
         $( picker: { label: $picker_label:literal, category: $picker_cat:ident $(,)? }, )?
@@ -916,6 +930,9 @@ macro_rules! primitive {
             ];
 
             const PARAMS: &'static [$crate::node_graph::parameters::ParamDef] = &[ $($params)* ];
+
+            const DEPTH_RULE: $crate::node_graph::depth_rule::DepthRule =
+                $crate::node_graph::depth_rule::DepthRule::$depth_rule;
 
             $( const PURE: bool = $pure; )?
             $( const FUSION_KIND: $crate::node_graph::freeze::classify::FusionKind =
@@ -1336,6 +1353,7 @@ mod tests {
                 enum_values: &[],
             },
         ],
+        depth_rule: Terminal,
         composition_notes: "Used by tests; do not reference from real code.",
         examples: ["test.smoke_preset"],
     }
@@ -1403,6 +1421,7 @@ mod tests {
         inputs: { in: Texture2D },
         outputs: { out: Texture2D },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestNoExtras {
@@ -1454,6 +1473,7 @@ mod tests {
             items_out: Array(ArraySmokeItem),
         },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestArrayPorts {
@@ -1517,6 +1537,7 @@ mod tests {
             edges: Channels[A_INDEX: U32, B_INDEX: U32],
         },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestChannelsProducer {
@@ -1547,6 +1568,7 @@ mod tests {
         },
         outputs: {},
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestChannelsConsumer {
@@ -1564,6 +1586,7 @@ mod tests {
             data: Channels[POSITION: Vec3F, "custom_attr": F32, COLOR: Vec4F],
         },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestChannelsMixedNames {
@@ -1590,6 +1613,7 @@ mod tests {
         },
         outputs: {},
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestChannelsPermissive {
@@ -1740,6 +1764,7 @@ mod tests {
             flow: Texture2D[R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID],
         },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestTexture2DTypedOutput {
@@ -1756,6 +1781,7 @@ mod tests {
         },
         outputs: {},
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestTexture2DTypedInput {
@@ -1774,6 +1800,7 @@ mod tests {
             tex: Texture2D[R: "custom_meaning", G: CONFIDENCE, B: B, A: A],
         },
         params: [],
+        depth_rule: Terminal,
     }
 
     impl Primitive for SmokeTestTexture2DTypedInlineLiteral {

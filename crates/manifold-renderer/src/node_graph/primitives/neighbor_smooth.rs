@@ -57,6 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "grid_size must match the producer upstream (DigitalPlants uses 400×400 = 160k instances). Total active = grid_size² capped at buffer capacity. center_weight=0.6 matches the DigitalPlants default; 1.0 disables smoothing; 0.2 is heavy smoothing. The 4 neighbor weights are uniformly (1-center)/4 each.",
     examples: [],
     picker: { label: "Smooth (neighbors)", category: Atom },

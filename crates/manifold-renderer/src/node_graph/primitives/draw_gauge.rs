@@ -104,6 +104,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire detections into `detections` and the video into `in` (Blob Track uses offset 50, height 8, min width 80, fill scale 20, thickness 1.5). fill_scale is port-shadowed — drive it to make the gauge respond to something other than area. Skips to a zero-cost passthrough while the detector reports nothing.",
     examples: [],
     picker: { label: "Draw Gauge", category: Atom },

@@ -64,6 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: CombineNearest,
     composition_notes: "Each input reads `.r` of the source — to pack a multi-channel input use `node.scale_offset_image` or `node.field_combine` upstream to project the desired channel onto R. When an input port is unwired the corresponding output channel takes the `default_*` value. All wired inputs must share dimensions; output matches.",
     examples: [],
     picker: { label: "Pack RGBA", category: Atom },

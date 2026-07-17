@@ -66,6 +66,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Output is fully opaque RGB. Sum with `node.rim_light` (additive) and `node.shininess` (additive) via `node.compose` (mode=Add) to build the full stylised-PBR shading layer. For a single-axis 2-tone matcap, set the unused-axis colors equal (e.g. color_x_low = color_x_high) — the side contribution becomes a constant added to the base.",
     examples: [],
     picker: { label: "Matcap Two-Tone", category: Atom },

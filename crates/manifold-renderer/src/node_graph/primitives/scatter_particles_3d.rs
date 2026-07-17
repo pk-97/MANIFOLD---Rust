@@ -83,6 +83,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "vol_res × vol_res × vol_depth = total cells; accumulator buffer must be sized vol_res² × vol_depth × 4 bytes upstream. Particle positions are in [0,1]³; cells outside that range are toroidally wrapped (% vr / % vd). scaled_energy = 4096 ≈ 1.0 in float density after Resolve divides by 4096 (matches FluidSim3D convention).",
     examples: [],
     picker: { label: "Draw Particles (3D scatter)", category: Atom },

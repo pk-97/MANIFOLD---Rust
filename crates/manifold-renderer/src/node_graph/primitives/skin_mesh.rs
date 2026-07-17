@@ -75,6 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire node.gltf_skinned_mesh_source's vertices/joints/weights and node.gltf_skeleton_pose's joint_matrices into this node's matching inputs. `joint_count` must match the skeleton pose node's own `joint_count` param (gltf_import.rs sets both from the same GltfObjectSkin) — out-of-range joint indices clamp to the last valid joint rather than reading out of bounds.",
     examples: [],
     picker: { label: "Skin Mesh", category: Atom },

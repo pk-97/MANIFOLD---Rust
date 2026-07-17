@@ -45,6 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "modulus = 7 matches FluidSim's seed-pattern cycle; other generators dial in their own row count. Both inputs are port-shadows-param. Idempotent within a frame: repeated calls at the same trigger_count return the cached emission.",
     examples: [],
     picker: { label: "Clip Trigger Cycle", category: Driver },

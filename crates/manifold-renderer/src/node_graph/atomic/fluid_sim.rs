@@ -146,6 +146,9 @@ impl Default for FluidSim2D {
 }
 
 impl EffectNode for FluidSim2D {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Warp
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

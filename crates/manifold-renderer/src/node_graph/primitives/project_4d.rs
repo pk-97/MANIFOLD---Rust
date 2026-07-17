@@ -57,6 +57,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "PROJ_SCALE = 0.25 matches the legacy Wireframe / Tesseract default. The 4D → 3D collapse uses proj_dist as the W-axis camera distance; small values produce strong 4D distortion. Active count = input vertex buffer's capacity; output must be sized at least as large.",
     examples: [],
     picker: { label: "Flatten 4D → 3D", category: Atom },

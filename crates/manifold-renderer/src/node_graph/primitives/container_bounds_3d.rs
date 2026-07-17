@@ -72,6 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus); None is the default toroidal-wrap [0,1]^3 policy (the 3D wrap_particles_torus). `ctr_scale` is port-shadow. Wire downstream of node.move_particles_3d; the soft pre-integration boundary cushion is node.push_from_walls_3d. For alternative policies, swap for a future boundary_death / wall_bounce sibling.",
     examples: ["FluidSim3D"],
     picker: { label: "Keep In Box (3D)", category: Atom },

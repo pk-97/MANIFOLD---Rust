@@ -134,6 +134,7 @@ crate::primitive! {
             enum_values: SHAFT_QUALITIES,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire `atmosphere` into render_scene's `atmosphere` input (unwired = fog off, byte-identical to no atmosphere). fog_density is per-world-unit — ~0.05 is a light haze over tens of units, ~0.3 is thick. height_falloff > 0 concentrates fog near y=0 (ground haze). Each param is independently port-shadowed: wire fog_density to a macro/LFO for a live depth-mood fader, leave the rest static.",
     examples: [],
     picker: { label: "Atmosphere", category: Driver },

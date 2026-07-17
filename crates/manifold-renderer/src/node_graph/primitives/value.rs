@@ -35,6 +35,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "First-class building block of the control-wire surface. Future LFO / Math / Beat primitives slot in next to this with the same Scalar(F32) output shape.",
     examples: [],
     picker: { label: "Value", category: Driver },
@@ -88,6 +89,9 @@ mod tests {
             seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
         }
         impl EffectNode for ScalarSink {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }

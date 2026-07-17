@@ -132,6 +132,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: zero-input IO bridge loading an externally-authored .exr — same reasoning as gltf_texture_source
+    depth_rule: Inherit,
     composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.gltf_texture_source's `path`. Wire `out` into node.render_scene's `envmap` input directly (D6: the bake/prefilter path is unchanged — render_scene already consumes any equirect texture on that port) or through node.switch_texture alongside a node.bake_environment output to let a card enum (Softbox vs HDRI) pick between them live. width/height set the output resolution — the decoded EXR is stretched to fill it every frame; the default 2048x1024 keeps the split-sum IBL prefilter's per-frame convolution cost bounded (GLB_CONFORMANCE_DESIGN.md G-P6's cost measurement).",
     examples: [],
     picker: { label: "HDRI Source", category: Atom },

@@ -53,6 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Output texture must be Rgba16Float — the shader writes via texture_storage_2d<rgba16float, write>. Dispatch dimensions match the output texture (allocated by the backend at canvas size), so paired ScatterParticles + ResolveAccumulator automatically span the full canvas without param tuning. fixed_point_scale = scatter's scaled_energy gives unit-density output.",
     examples: [],
     picker: { label: "Resolve Scatter", category: Atom },

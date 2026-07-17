@@ -73,6 +73,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Reach for this to turn a flat 2D shape (polygon_shape, generate_range + array_math profile, pack_curve_xy) into an extruded 3D solid — letters, ribbons, beveled panels. `close=true` wraps the outline into a closed loop (duplicates the first outline point as the last column) for a tube-like cross-section; `close=false` leaves an open sheet. Wire node.make_triangles downstream with src_cols = outline point count (+1 if close), src_rows = steps+1. No end caps — pair with a separate flat cap mesh if a sealed solid is needed (Deferred #3).",
     examples: [],
     picker: { label: "Extrude Curve", category: Atom },

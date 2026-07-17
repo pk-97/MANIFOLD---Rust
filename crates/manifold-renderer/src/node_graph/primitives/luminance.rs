@@ -49,6 +49,7 @@ crate::primitive! {
         out: ScalarF32,
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Texture→Scalar bridge. Sparse-samples at 256 grid positions — fast and constant-time regardless of input resolution, but not pixel-exact. Chain a `MipChain` upstream if exact reduction matters. Output lags input by one frame due to GPU readback.",
     examples: [],
     picker: { label: "Luminance", category: Driver },

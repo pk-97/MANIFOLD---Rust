@@ -96,6 +96,7 @@ crate::primitive! {
             enum_values: SEED_MODES,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "max_capacity is read by the chain build at allocation time and triggers a rebuild when changed — set it once when authoring the preset. active_count is a free slider (port-shadowed). Pick `seed_mode = OnceOnReset` for any pipeline where the buffer must persist across frames so the downstream simulator can accumulate state; pick `EveryFrame` for advection-style effects where each frame starts from a fresh random scatter.",
     examples: [],
     picker: { label: "Spawn Particles", category: Atom },

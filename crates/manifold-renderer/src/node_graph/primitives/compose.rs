@@ -66,6 +66,7 @@ crate::primitive! {
             enum_values: MIX_MODES,
         },
     ],
+    depth_rule: CombineNearest,
     composition_notes: "Use Lerp for pure crossfades; Add/Screen for additive bloom-style merges; Multiply for darkening masks; Max for tonemap-safe brightening; Overlay for contrast-preserving combines; Divide for per-channel `a/b` (useful for normalising one field by another — e.g. density-driven scaling fields in fluid sims). Divide guards against divide-by-near-zero by returning 0 when `b` is below 1e-6.",
     examples: ["composite.bloom", "composite.halation"],
     picker: { label: "Mix", category: Atom },

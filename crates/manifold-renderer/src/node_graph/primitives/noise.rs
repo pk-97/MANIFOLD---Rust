@@ -114,6 +114,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Type picks the base function: Perlin (square-grid lobes), Simplex (cleaner, fewer directional artifacts), Random (uncorrelated per-pixel hash for grain / dither / LIC ink — writes R only, G=B=0), Value (smooth bilinear-interpolated hash grid — soft, slightly blobby, already in [0,1]; the value-noise that drives the website mosh's per-band and domain-warp displacement). Detail (octaves) stacks frequencies into fBM for Perlin/Simplex/Value — Detail 1 is single-octave, raise toward 8 for richer fractal texture. Lacunarity (frequency step per octave) and Persistence (amplitude falloff) shape the fractal spectrum; classic pink fBM is lacunarity 2.0 + persistence 0.5. Detail / Lacunarity / Persistence are ignored by Random. scale / offset_x / offset_y are port-shadow inputs: wire an LFO into offset to animate. Output is grayscale pre-remapped to [0, 1]; chain node.scale_offset_image (a=2, b=-1) to recover signed noise. Legacy IDs alias here: perlin_noise_2d (Perlin, Detail 1), fbm_2d (Perlin, Detail 4), simplex_noise_2d (Simplex), hash_noise_field_2d (Random).",
     examples: [],
     picker: { label: "Noise", category: Atom },

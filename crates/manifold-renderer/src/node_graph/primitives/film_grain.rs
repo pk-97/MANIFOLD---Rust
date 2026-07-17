@@ -43,6 +43,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "white_noise(coord) = fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453), coord in pixels. Static (no time) — for animated grain, wire a time-varying scalar into amount or chain a per-frame hash offset. Wire wins over param.",
     examples: ["preset.effect.watercolor"],
     picker: { label: "Film Grain", category: Atom },

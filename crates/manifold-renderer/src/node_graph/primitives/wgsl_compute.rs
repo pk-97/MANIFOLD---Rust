@@ -1896,6 +1896,9 @@ fn parse_fusion_param(rest: &str) -> Option<ParamDef> {
 // ─────────────────────────────────────────────────────────────────────
 
 impl EffectNode for WgslCompute {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
     fn type_id(&self) -> &EffectNodeType {
         Self::cached_type_id()
     }

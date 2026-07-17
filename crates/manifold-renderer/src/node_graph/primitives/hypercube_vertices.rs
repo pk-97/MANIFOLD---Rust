@@ -75,6 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Vertex i = (sign(i&1), sign(i&2), sign(i&4), sign(i&8)) * 0.125 * clamp(dimension - axis, 0, 1) per axis (x=0,y=1,z=2,w=3). The 0.125 = 0.25 / 2 bake normalises the corner magnitude (sqrt(4)=2) to 0.25 (legacy PROJ_SCALE) so project_4d.proj_scale defaults to 1.0. dimension=4 is the full tesseract (bit-exact to the legacy generate_tesseract_vertices bake); lower values collapse a higher axis to zero (cube at 3, square at 2, line at 1). Output is pre-sized to 16. Wire `dimension` from an LFO / macro for the live dimension-morph reveal.",
     examples: [],
     picker: { label: "Hypercube Points (4D)", category: Atom },

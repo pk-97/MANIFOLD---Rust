@@ -67,6 +67,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Single-pixel read at the configured UV (clamped to [0, 1]). Pair upstream with a `MipChain` to sample a *region* average instead of a single texel — sampling mip N reads the box-filtered 2^N×2^N neighbourhood. Use the `luma` port directly when you only need brightness — it's the same Rec.709 weighting Luminance applies frame-wide.",
     examples: [],
     picker: { label: "Color Sample", category: Driver },

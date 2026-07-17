@@ -56,6 +56,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
+    depth_rule: Inherit,
     composition_notes: "Insert between node.coc_from_depth and the two node.variable_blur (H then V) nodes that consume its `width` input: coc_from_depth.out -> coc_dilate.in, coc_dilate.out -> variable_blur_h.width AND -> variable_blur_v.width (both H and V read the SAME dilated CoC texture, matching the existing convention where both blur passes read the same undilated coc_from_depth.out today). Preserves coc_from_depth's output convention exactly (R==G==B in [0,1], alpha=1.0), so no downstream unit change is needed — variable_blur's width contract (step_size = width_sample * max_radius + 1.0) is unaffected other than reading a spatially-widened value. Also feeds node.bokeh_gather (the CINEMATIC_POST P4 upgrade) equally — dilation is upstream of whichever gather consumes the CoC.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "CoC Dilate", category: Atom },

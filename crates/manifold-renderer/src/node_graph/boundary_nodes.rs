@@ -149,6 +149,14 @@ impl EffectNode for Source {
     fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
         Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
     }
+    // depth_rule: the host pre-binds an externally-supplied frame to this
+    // node's output slot every frame (design doc DEPTH_RELIGHT_DESIGN.md D1)
+    // — there is no upstream to inherit FROM, but it is the depth chain's
+    // entry point, not a dead end, so `Inherit` (not `Terminal`) per the
+    // task brief's explicit boundary-node ruling.
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Inherit
+    }
     fn inputs(&self) -> &[NodeInput] {
         &[]
     }
@@ -190,6 +198,11 @@ impl EffectNode for FinalOutput {
     }
     fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
         Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    }
+    // depth_rule: passes the input's depth straight through to the host
+    // display — the exit boundary, symmetric with Source's entry boundary.
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Inherit
     }
     fn inputs(&self) -> &[NodeInput] {
         &FINAL_OUTPUT_INPUTS
@@ -331,6 +344,11 @@ impl EffectNode for GeneratorInput {
     }
     fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
         Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    }
+    // depth_rule: emits only control-rate scalars (time/beat/aspect/…), no
+    // texture — a generator graph's depth chain has no origin here.
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
     }
     fn inputs(&self) -> &[NodeInput] {
         &[]

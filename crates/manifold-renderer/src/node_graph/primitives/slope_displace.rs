@@ -61,6 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Warp,
     composition_notes: "Sobel uses Rec.709 luma. `base` is the soft-light blend layer (Watercolor wires the original source); `image` is both the blend's lower layer and the texture that gets displaced (Watercolor wires the diffusion-blurred result). step is in pixels, weight in UV units (Watercolor: strength 5, step 5, weight = displace 0.001).",
     examples: ["preset.effect.watercolor"],
     picker: { label: "Slope Displace", category: Atom },

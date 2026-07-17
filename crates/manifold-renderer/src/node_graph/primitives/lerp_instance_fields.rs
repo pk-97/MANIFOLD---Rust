@@ -54,6 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows `a` (and run() truncates dispatch to min(a, b, out) so the shader can't read past either input). `t` is not clamped — values outside [0, 1] produce honest extrapolation, useful for over- or under-shoot effects. Both pos_scale.w (instance scale) and rot_pad get lerped — when both upstream sources write the same scale and zero rotation those fields stay invariant under the lerp, leaving the perceptible effect on pos.xyz alone.",
     examples: [],
     picker: { label: "Blend Copies", category: Atom },

@@ -45,6 +45,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity is grid_size² × 2 at plan time; runtime topology fills [0..n²·2) and sentinel-pads the tail so a smaller-than-buffer active grid (after a grid_size shrink) keeps render_lines's sentinel-skip filter correct. Wraparound makes the topology closed (every grid edge connects two real vertices); for an open mesh (terrain) suppress the wrap edges by clamping rather than wrapping — future work, not currently exposed. Drive the same scalar into generate_grid_uv.grid_size and edges_from_grid_uv.grid_size — port-shadows-param semantics on both — so layout and topology always agree.",
     examples: [],
     picker: { label: "Grid Edges", category: Atom },

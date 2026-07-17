@@ -87,6 +87,9 @@ impl Default for Threshold {
 }
 
 impl EffectNode for Threshold {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Inherit
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
@@ -251,6 +254,9 @@ impl Default for Blur {
 }
 
 impl EffectNode for Blur {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Inherit
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

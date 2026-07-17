@@ -148,6 +148,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Each op uses a subset of (scale, offset, exp, bias) — only the relevant scalars are read per op. ScaleOffset uses scale + offset; ShapePowClip uses bias + exp + scale (captures the DigitalPlants stem displacement pow(max(x, 0), 2) * 0.3 shape with bias=0, exp=2, scale=0.3); Mix uses scale as the lerp factor t (out = a + (b - a) * scale; the port-shadowed `scale` input drives the morph from a wire); Sin / Cos / MirrorRamp / Clamp01 / Abs read none. Binary ops (Add/Sub/Mul/Div/Min/Max/Mix) require both `a` and `b` wired; unary ops only require `a`. CPU dispatch reads inputs via `mapped_ptr` and writes the output via `write()` on the shared MTLBuffer.",
     examples: [],
     picker: { label: "Array Math", category: Atom },

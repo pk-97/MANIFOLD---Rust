@@ -83,6 +83,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `strength` is port-shadow so an LFO / audio band / outer-card slider can modulate the energy live. Wire a scalar Texture2D into `strength_modulator` to localize the kick (capped d/(1+d) weighting); leave it unwired for a uniform Brownian jitter. Frame seed (frame_count) reseeds the hash each frame so adjacent frames produce decorrelated kicks rather than a slow drift.",
     examples: [],
     picker: { label: "Anti-Clump Particles", category: Atom },

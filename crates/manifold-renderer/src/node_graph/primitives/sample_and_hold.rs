@@ -79,6 +79,9 @@ impl Default for SampleAndHold {
 }
 
 impl EffectNode for SampleAndHold {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

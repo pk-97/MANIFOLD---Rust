@@ -90,6 +90,7 @@ crate::primitive! {
             enum_values: PLATONIC_SHAPES,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity is fixed at PLATONIC_MAX_VERTS (20 — the dodecahedron count); slots past the active shape's vertex count are zero-padded so a downstream rotate/project chain never reads garbage. Indices written are stable per shape and match the paired `node.platonic_solid_edges` topology — wire the same `shape` scalar to both atoms so vertices and edges agree.",
     examples: [],
     picker: { label: "Platonic Solid Points", category: Atom },

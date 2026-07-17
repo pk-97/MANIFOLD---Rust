@@ -123,6 +123,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h. Downstream node.resolve_scatter self-clears the accumulator after reading it — no scatter-side pre-clear needed.",
     examples: [],
     picker: { label: "Draw Particles (camera)", category: Atom },

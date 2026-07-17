@@ -204,6 +204,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
+    depth_rule: SourceHeight,
     composition_notes: "One-shot per chain rebuild — the runtime allocates a persistent slot for this output; the shader writes once on the first frame and downstream samplers read across frames. Width:Height = 2:1 is the standard equirect ratio (matches asin(y/r) / atan2(z,x) mapping). For non-studio aesthetics author a sibling primitive (sky-gradient, file-loaded HDRI) — this one specifically reproduces the legacy MetallicGlass studio (mode=gradient) or D7's black-void softbox (mode=softbox). Softbox strips are compact-support (smoothstep-clamped falloff, EXACTLY 0.0 outside the band) so the base stays pure black — never a Gaussian tail. Sun disc direction (`sun_x/y/z`) is consumed as-is (no conversion math here); F-P4 is responsible for binding it to the scene sun.",
     examples: [],
     picker: { label: "Bake Environment (equirect)", category: Atom },

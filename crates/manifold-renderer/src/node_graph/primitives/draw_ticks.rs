@@ -96,6 +96,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire detections into `detections` and the video into `in`; stacks with the other Draw nodes (Blob Track uses offset 8, long 12, short 6, thickness 1.5). alpha is port-shadowed for a shared HUD fade. Skips to a zero-cost passthrough while the detector reports nothing.",
     examples: [],
     picker: { label: "Draw Ticks", category: Atom },

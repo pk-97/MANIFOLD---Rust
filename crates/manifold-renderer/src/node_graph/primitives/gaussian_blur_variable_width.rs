@@ -85,6 +85,7 @@ crate::primitive! {
             enum_values: BLUR_VARIABLE_WEIGHTINGS,
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte (step_size stays under the tap-densification threshold at this setting — see BUG-138 below). BUG-138: at step_size (px) > 8.0 each of the fixed 9/17/25 taps densifies into up to 4 sub-samples that fill the gap back toward the previous tap, so large CoC radii (e.g. 64px) no longer leave visible ring gaps between samples; below that threshold the kernel is bit-identical to the original fixed-tap-per-sample behaviour.",
     examples: [],
     picker: { label: "Variable Blur", category: Atom },

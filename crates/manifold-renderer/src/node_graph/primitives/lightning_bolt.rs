@@ -192,6 +192,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Coordinates are draw_lines pre-aspect curve space (origin-centred, y ±0.5); defaults strike top→bottom for the portrait rig. `reach` scatters both endpoints' x by ±reach/2 per strike so consecutive bolts land in different places. The bolt is visible for one frame only — compose the draws through node.feedback (Max) × node.scale_offset_image decay for the afterglow, and drive node.flash from strike_pulse → envelope_follower_ar for the frame kick. Capacity: points/widths/core_edges/branch_edges buffers are all pre-allocated at max_capacity; generation stops emitting branches when full.",
     examples: ["Lightning"],
     picker: { label: "Lightning Bolt", category: Atom },

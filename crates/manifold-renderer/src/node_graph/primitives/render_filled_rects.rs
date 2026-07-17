@@ -65,6 +65,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: "instanced filled-rectangle overlay" draws genuine filled shapes (real visual weight), unlike the detections-named siblings (draw_dots/draw_markers/draw_gauge/draw_ticks) which stay Terminal as diagnostic annotation
+    depth_rule: SourceHeight,
     composition_notes: "Wire a Channels[X, Y, WIDTH, HEIGHT] source (detection regions, gauge rects from a wgsl_compute, or manually authored rects) into the `rects` port. X/Y are rect centre in normalised 0..1 coords; WIDTH/HEIGHT are full extent. rect_count caps iteration — safe to leave at 32 even when the active count is lower (zero-size items are skipped). For outlined rectangles use render_lines instead.",
     examples: [],
     picker: { label: "Draw Rectangles", category: Atom },

@@ -116,6 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire `transform` into render_scene's transform_n port (unwired = identity: pos 0, rot 0, scale 1). Rotation is XYZ Euler in radians, matching render_scene's existing model_matrix. Each of the nine params is independently port-shadowed — wire only the axes you want to animate; the rest fall back to their static param values.",
     examples: [],
     picker: { label: "Transform 3D", category: Driver },

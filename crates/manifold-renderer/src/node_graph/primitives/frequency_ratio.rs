@@ -59,6 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Index rounds to nearest integer and wraps modulo 10, so wiring an unbounded counter into the input port cycles through the table. The table is small-integer ratios chosen for visually-clean closed Lissajous curves — for non-Lissajous uses the same harmonic vocabulary still produces musically-coherent outputs.",
     examples: [],
     picker: { label: "Frequency Ratio", category: Driver },
@@ -146,6 +147,9 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

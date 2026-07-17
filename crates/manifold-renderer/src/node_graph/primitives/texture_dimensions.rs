@@ -30,6 +30,7 @@ crate::primitive! {
         aspect: ScalarF32,
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Pure metadata read — no shader, no dispatch. Outputs are zero-latency this frame. `aspect = width / height`; for a 1920×1080 canvas the value is 16/9 ≈ 1.778. If the input texture isn't bound yet (e.g. first frame during graph rebuild) the outputs fall back to 1920 / 1080 / 1.778 so downstream divisions don't see zero. Generators should still use `system.generator_input.aspect` directly; this atom is for effects, which lack the boundary-node scalar exposures.",
     examples: [],
     picker: { label: "Texture Size", category: Driver },

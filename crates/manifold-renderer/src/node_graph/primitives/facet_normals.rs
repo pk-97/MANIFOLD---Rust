@@ -46,6 +46,7 @@ crate::primitive! {
         out: Array(MeshVertex),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Reach for this whenever a deformer's normal policy is left approximate (push_along_normals, morph_mesh) and the amount is large enough that the unchanged/lerped normals start reading wrong under lighting — the result is a faceted low-poly look, not smooth shading. Only correct on the flat triangle-list layout (no shared vertices, no index buffer); node.triangulate_grid's grid-topology output already carries correct finite-difference normals and doesn't need this. Buffer-gather form → a fusion boundary (like node.neighbor_smooth), so it stands alone in the graph compiler rather than fusing into an adjacent pointwise region.",
     examples: ["Breathe"],
     picker: { label: "Facet Normals", category: Atom },
