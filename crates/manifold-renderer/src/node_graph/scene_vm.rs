@@ -92,10 +92,19 @@ pub struct SceneVm {
 pub struct SceneHeaderVm {
     pub object_count: usize,
     pub light_count: usize,
-    /// Sum of resolved objects' vertex-source node count — a cheap proxy;
-    /// the panel shows it as an honest "counts, not cost" line (§9 Deferred
-    /// owns real per-scene ms attribution).
     pub shadow_caster_count: usize,
+    /// BUG-194: sum of every resolved object's mesh-source vertex count —
+    /// import-time provenance on `node.gltf_mesh_source` /
+    /// `node.gltf_skinned_mesh_source` (`source_vertex_count` param) plus a
+    /// closed-form table for the trivially-computable procedural generators
+    /// (`node.cube_mesh`, `node.grid_mesh`). Honest, not a fabricated
+    /// proxy — see `vertex_count_exact`.
+    pub vertex_count: u64,
+    /// `false` when at least one object's mesh source didn't resolve to a
+    /// known count (an unmapped procedural generator, an unparseable
+    /// modifier chain, a malformed def) — the panel must render this as
+    /// "≥ N", never a bare "N", when `false`.
+    pub vertex_count_exact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -468,7 +477,7 @@ impl SceneVm {
         let multiple_scenes = candidates.len() > 1;
         let scene_node = root.node(scene_root_node_id)?;
 
-        let objects = trace_objects(&root, scene_node);
+        let (objects, vertex_count, vertex_count_exact) = trace_objects(&root, scene_node);
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
@@ -481,7 +490,13 @@ impl SceneVm {
         Some(SceneVm {
             scene_root_node_id,
             multiple_scenes,
-            header: SceneHeaderVm { object_count, light_count, shadow_caster_count },
+            header: SceneHeaderVm {
+                object_count,
+                light_count,
+                shadow_caster_count,
+                vertex_count,
+                vertex_count_exact,
+            },
             objects,
             lights,
             camera,
@@ -512,32 +527,54 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
     seen
 }
 
-fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneObjectVm> {
+/// BUG-194 (D4): alongside the objects themselves, returns the summed
+/// vertex count and whether that sum is exact (`true`) or a lower bound
+/// (`false` — at least one object's mesh source didn't resolve to a known
+/// count, e.g. a hand-wired procedural generator outside the closed-form
+/// table, or an unparseable chain).
+fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
-    (0..objects)
-        .map(|k| {
-            let mesh_port = format!("mesh_{k}");
+    let mut vertex_count: u64 = 0;
+    let mut vertex_count_exact = true;
+    let mut out = Vec::with_capacity(objects);
+    for k in 0..objects {
+        let mesh_port = format!("mesh_{k}");
 
-            match level.producer(scene_node.id, &mesh_port) {
-                Some((producer_id, _port)) => {
-                    let Some(producer_node) = level.node(producer_id) else {
-                        // No node at all for the mesh producer id (a
-                        // malformed def) — the root-level `transform_k` is
-                        // the only place left to look (D3's Custom case).
-                        let transform = trace_root_transform(level, scene_node.id, k);
-                        return SceneObjectVm::Custom { index: k, transform };
-                    };
-                    if producer_node.type_id != manifold_core::effect_graph_def::GROUP_TYPE_ID {
-                        let transform = trace_root_transform(level, scene_node.id, k);
-                        return SceneObjectVm::Custom { index: k, transform };
-                    }
-                    let name = producer_node
-                        .handle
-                        .clone()
-                        .unwrap_or_else(|| format!("Object {k}"));
-                    let tint = producer_node.group.as_ref().and_then(|g| g.tint);
+        let object = match level.producer(scene_node.id, &mesh_port) {
+            Some((producer_id, _port)) if level.node(producer_id).is_none() => {
+                // No node at all for the mesh producer id (a malformed
+                // def) — the root-level `transform_k` is the only place
+                // left to look (D3's Custom case).
+                vertex_count_exact = false;
+                let transform = trace_root_transform(level, scene_node.id, k);
+                SceneObjectVm::Custom { index: k, transform }
+            }
+            Some((producer_id, _port))
+                if level.node(producer_id).is_some_and(|n| {
+                    n.type_id != manifold_core::effect_graph_def::GROUP_TYPE_ID
+                }) =>
+            {
+                let producer_node = level.node(producer_id).expect("checked above");
+                // Not wrapped in a group — may still be a bare source
+                // node feeding `mesh_k` directly (a hand-built Custom
+                // object), so give it the same vertex-count chance as a
+                // grouped object's terminal node before falling back.
+                match node_source_vertex_count(producer_node) {
+                    Some(v) => vertex_count += v as u64,
+                    None => vertex_count_exact = false,
+                }
+                let transform = trace_root_transform(level, scene_node.id, k);
+                SceneObjectVm::Custom { index: k, transform }
+            }
+            Some((producer_id, _port)) => {
+                let producer_node = level.node(producer_id).expect("checked above");
+                let name = producer_node
+                    .handle
+                    .clone()
+                    .unwrap_or_else(|| format!("Object {k}"));
+                let tint = producer_node.group.as_ref().and_then(|g| g.tint);
 
-                    // Modifier chain + material + transform: walk the
+                // Modifier chain + material + transform: walk the
                     // group's INNER wires (a nested `Level`) — the shipped
                     // shape (`AddSceneObjectCommand`, the glTF importer) puts
                     // `node.transform_3d` INSIDE the object's group, passing
@@ -549,11 +586,17 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneObject
                     // effort: an unparseable chain still shows the group as
                     // Known with an empty modifier list (nothing errors,
                     // per D3).
-                    let (modifier_chain, material, transform, modifier_chain_parseable) = producer_node
-                        .group
-                        .as_ref()
-                        .map(|g| trace_group_body(producer_id, g))
-                        .unwrap_or((Vec::new(), MaterialVm::None, None, false));
+                    let (modifier_chain, material, transform, modifier_chain_parseable, source_vertex_count) =
+                        producer_node
+                            .group
+                            .as_ref()
+                            .map(|g| trace_group_body(producer_id, g))
+                            .unwrap_or((Vec::new(), MaterialVm::None, None, false, None));
+
+                    match source_vertex_count {
+                        Some(v) => vertex_count += v as u64,
+                        None => vertex_count_exact = false,
+                    }
 
                     SceneObjectVm::Known {
                         index: k,
@@ -565,14 +608,16 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneObject
                         modifier_chain,
                         modifier_chain_parseable,
                     }
-                }
-                None => {
-                    let transform = trace_root_transform(level, scene_node.id, k);
-                    SceneObjectVm::Custom { index: k, transform }
-                }
             }
-        })
-        .collect()
+            None => {
+                vertex_count_exact = false;
+                let transform = trace_root_transform(level, scene_node.id, k);
+                SceneObjectVm::Custom { index: k, transform }
+            }
+        };
+        out.push(object);
+    }
+    (out, vertex_count, vertex_count_exact)
 }
 
 /// D3's Custom-row transform fallback: `transform_k` traced at the SAME
@@ -620,12 +665,12 @@ fn trace_transform(level: &Level, scope_path: Vec<u32>, node_id: u32) -> Transfo
 fn trace_group_body(
     group_node_id: u32,
     group: &manifold_core::effect_graph_def::GroupDef,
-) -> (Vec<ModifierVm>, MaterialVm, Option<TransformVm>, bool) {
+) -> (Vec<ModifierVm>, MaterialVm, Option<TransformVm>, bool, Option<u32>) {
     use manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID;
     let inner = Level { nodes: &group.nodes, wires: &group.wires };
     let scope = vec![group_node_id];
     let Some(out_node) = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID) else {
-        return (Vec::new(), MaterialVm::None, None, false);
+        return (Vec::new(), MaterialVm::None, None, false, None);
     };
 
     let mut chain = Vec::new();
@@ -635,6 +680,13 @@ fn trace_group_body(
     // cycle) — an empty-but-resolved chain (mesh source feeds the output
     // directly, zero modifiers) stays `true`.
     let mut parseable = cursor.is_some();
+    // BUG-194 (SCENE_SETUP_PANEL_DESIGN.md D4): the terminal node of this
+    // walk — the one the loop below stops on because it isn't a modifier —
+    // is the object's mesh SOURCE. Its vertex count (declared param on the
+    // glTF source primitives, or a closed-form procedural table) is what the
+    // header's vertex-count row sums; `None` here means this object's
+    // contribution is unknown and the header degrades to "≥ N".
+    let mut source_vertex_count: Option<u32> = None;
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -647,6 +699,7 @@ fn trace_group_body(
             break;
         };
         if !MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
+            source_vertex_count = node_source_vertex_count(node);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
         let driven: HashSet<String> = inner
@@ -705,7 +758,48 @@ fn trace_group_body(
         .filter(|(n, _)| inner.node(*n).is_some_and(|nn| nn.type_id == TRANSFORM_3D_TYPE_ID))
         .map(|(n, _)| trace_transform(&inner, scope.clone(), n));
 
-    (chain, material, transform, parseable)
+    (chain, material, transform, parseable, source_vertex_count)
+}
+
+/// BUG-194 (SCENE_SETUP_PANEL_DESIGN.md D4): read a mesh-source (or
+/// closed-form procedural generator) node's vertex count, honestly. `None`
+/// means unknown — the caller must never fabricate a number, it degrades the
+/// header to "≥ N" instead.
+fn node_source_vertex_count(node: &EffectGraphNode) -> Option<u32> {
+    match node.type_id.as_str() {
+        // `node.gltf_mesh_source` / `node.gltf_skinned_mesh_source`: import-time
+        // provenance, a declared param (`source_vertex_count`, default -1 =
+        // unknown) stamped by `gltf_import.rs` at import/merge time — see
+        // those primitives' `params` block.
+        "node.gltf_mesh_source" | "node.gltf_skinned_mesh_source" => {
+            let v = param_f32(node, "source_vertex_count", -1.0);
+            if v >= 0.0 { Some(v.round() as u32) } else { None }
+        }
+        _ => procedural_vertex_count(node),
+    }
+}
+
+/// Closed-form vertex counts for procedural mesh generators whose output
+/// size is a pure function of their own declared params — no GPU readback,
+/// no fabricated numbers. §2.5 audit of every `Array(MeshVertex)`-producing
+/// `Source`-role primitive: only `node.cube_mesh` (a fixed 36-vertex
+/// constant — 6 faces × 2 triangles × 3 vertices, `generate_cube_mesh.rs`)
+/// and `node.grid_mesh` (`resolution_x * resolution_y`, confirmed against
+/// `generate_grid_mesh_body.wgsl`'s own index math) are trivially
+/// closed-form; the rest (`node.revolve_curve`, `node.extrude_curve`,
+/// `node.tube_from_path`, `node.platonic_solid_points`, …) depend on curve
+/// length, topology tables, or a dynamically wired selector — genuinely not
+/// computable from static params alone, so they fall through to `None`.
+fn procedural_vertex_count(node: &EffectGraphNode) -> Option<u32> {
+    match node.type_id.as_str() {
+        "node.cube_mesh" => Some(36),
+        "node.grid_mesh" => {
+            let res_x = param_f32(node, "resolution_x", 256.0).max(2.0).round() as u32;
+            let res_y = param_f32(node, "resolution_y", 256.0).max(2.0).round() as u32;
+            Some(res_x * res_y)
+        }
+        _ => None,
+    }
 }
 
 fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm> {
@@ -1573,5 +1667,114 @@ mod tests {
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert!(matches!(vm.camera, CameraVm::Custom { node_doc_id: 1 }));
+    }
+
+    /// BUG-194: a `node.gltf_mesh_source` with a known `source_vertex_count`
+    /// feeds the header's vertex-count row exactly, with `vertex_count_exact
+    /// == true` — the honest, non-fabricated case.
+    #[test]
+    fn header_vertex_count_sums_known_gltf_mesh_source() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = with_param(
+            node(1, "node.gltf_mesh_source", Some("mesh")),
+            "source_vertex_count",
+            SerializedParamValue::Int { value: 1234 },
+        );
+        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices")],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.header.vertex_count, 1234);
+        assert!(vm.header.vertex_count_exact, "a known source_vertex_count must report exact, not ≥");
+    }
+
+    /// BUG-194: `source_vertex_count` still at its `-1` "unknown" default
+    /// (a hand-built node the importer never touched) degrades the header
+    /// to a lower bound — `vertex_count_exact == false` — never a
+    /// fabricated 0 or a silently-omitted object.
+    #[test]
+    fn header_vertex_count_degrades_to_lower_bound_when_unknown() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        // No source_vertex_count param at all == the primitive's own -1
+        // "unknown" default (never read, so absent-from-map behaves the
+        // same as an explicit -1).
+        let mesh = node(1, "node.gltf_mesh_source", Some("mesh"));
+        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices")],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.header.vertex_count, 0, "no known contribution — sum stays 0, never fabricated");
+        assert!(!vm.header.vertex_count_exact, "an unresolved mesh source must degrade to ≥, not report 0 as exact");
+    }
+
+    /// BUG-194's closed-form table: `node.cube_mesh` (fixed 36) and
+    /// `node.grid_mesh` (`resolution_x * resolution_y`) contribute exact
+    /// counts with no import-time provenance needed at all.
+    #[test]
+    fn header_vertex_count_covers_procedural_closed_form_generators() {
+        let group_iface = || GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+
+        let cube_gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut cube_group = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Cube"));
+        cube_group.group = Some(Box::new(GroupDef {
+            interface: group_iface(),
+            nodes: vec![node(1, "node.cube_mesh", Some("mesh")), cube_gout],
+            wires: vec![wire(1, "vertices", 2, "vertices")],
+            tint: None,
+        }));
+
+        let grid = with_param(
+            with_param(
+                node(3, "node.grid_mesh", Some("mesh")),
+                "resolution_x",
+                SerializedParamValue::Int { value: 8 },
+            ),
+            "resolution_y",
+            SerializedParamValue::Int { value: 4 },
+        );
+        let grid_gout = node(4, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut grid_group = node(11, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Grid"));
+        grid_group.group = Some(Box::new(GroupDef {
+            interface: group_iface(),
+            nodes: vec![grid, grid_gout],
+            wires: vec![wire(3, "vertices", 4, "vertices")],
+            tint: None,
+        }));
+
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 2.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![cube_group, grid_group, scene, out],
+            vec![
+                wire(10, "vertices", 20, "mesh_0"),
+                wire(11, "vertices", 20, "mesh_1"),
+                wire(20, "color", 30, "in"),
+            ],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.header.vertex_count, 36 + 8 * 4);
+        assert!(vm.header.vertex_count_exact);
     }
 }

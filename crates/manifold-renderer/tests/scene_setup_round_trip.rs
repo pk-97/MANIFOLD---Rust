@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface, SerializedParamValue,
+    GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
 };
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
@@ -131,4 +132,91 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
              show 'None' + an Add Fog button instead of the user's edit"
         ),
     }
+}
+
+/// A minimal one-object graph: a `node.gltf_mesh_source` (carrying a known
+/// `source_vertex_count`) wrapped in a group, wired to `render_scene`'s
+/// `mesh_0`.
+fn def_with_mesh_source_object(source_vertex_count: i32) -> EffectGraphDef {
+    let mut mesh_params = BTreeMap::new();
+    mesh_params.insert(
+        "source_vertex_count".to_string(),
+        SerializedParamValue::Int { value: source_vertex_count },
+    );
+    let mesh = node(1, "node.gltf_mesh_source", mesh_params);
+    let gout = node(2, GROUP_OUTPUT_TYPE_ID, BTreeMap::new());
+
+    let mut group = node(10, GROUP_TYPE_ID, BTreeMap::new());
+    group.group = Some(Box::new(GroupDef {
+        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+        nodes: vec![mesh, gout],
+        wires: vec![wire(1, "vertices", 2, "vertices")],
+        tint: None,
+    }));
+
+    let mut scene_params = BTreeMap::new();
+    scene_params.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
+    let scene = node(20, "node.render_scene", scene_params);
+
+    let output = node(30, "system.final_output", BTreeMap::new());
+
+    EffectGraphDef {
+        version: 1,
+        name: None,
+        description: None,
+        preset_metadata: None,
+        nodes: vec![group, scene, output],
+        wires: vec![
+            wire(10, "vertices", 20, "mesh_0"),
+            wire(20, "color", 30, "in"),
+        ],
+    }
+}
+
+/// BUG-194 (SCENE_SETUP_PANEL_DESIGN.md D4): `source_vertex_count` is a
+/// DECLARED node param (not UI-only state), so it must persist through the
+/// same save → reload path as any other param, and `SceneVm`'s header must
+/// re-derive the same vertex count from the reloaded def — not silently
+/// drop to 0 (which would misreport "unknown" as "empty scene").
+#[test]
+fn scene_setup_mesh_source_vertex_count_survives_save_reload_and_header_resums_it() {
+    let mut project = Project::default();
+    let idx = project.timeline.add_layer(
+        "Scene",
+        LayerType::Generator,
+        PresetTypeId::from_string("SceneStarter".to_string()),
+    );
+    {
+        let layer = &mut project.timeline.layers[idx];
+        layer.gen_params_or_init().graph = Some(def_with_mesh_source_object(4321));
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_scene_setup_vertex_count_round_trip_{}_{}.manifold",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    manifold_io::saver::save_project_v1(&project, &path).expect("save v1");
+
+    let reloaded = manifold_io::loader::load_project(&path);
+    let _ = std::fs::remove_file(&path);
+    let reloaded = reloaded.expect("reload");
+    let layer = reloaded
+        .timeline
+        .layers
+        .iter()
+        .find(|l| l.layer_type == LayerType::Generator)
+        .expect("generator layer survived reload");
+    let def = layer
+        .generator_graph()
+        .expect("graph override survived reload — source_vertex_count is a declared param");
+    let vm = SceneVm::from_def(def).expect("scene still resolves after reload");
+    assert_eq!(
+        vm.header.vertex_count, 4321,
+        "the header must re-sum the reloaded def's source_vertex_count exactly"
+    );
+    assert!(vm.header.vertex_count_exact, "a known, round-tripped count must report exact");
 }

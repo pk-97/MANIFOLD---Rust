@@ -709,6 +709,12 @@ fn build_object_group(
     node_anims_by_clip: &[BTreeMap<usize, gltf_load::GltfNodeAnimation>],
     used_group_names: &mut std::collections::HashSet<String>,
     fresh_id: &mut impl FnMut() -> u32,
+    // BUG-194/BUG-195: the whole-scene bbox radius from THIS parse (build_import_graph's
+    // `radius` / merge_import_into_graph's `incoming_radius`) — stamped onto every
+    // mesh-source node this call creates as `source_bbox_radius`, so SceneVm's
+    // header and a future merge's scale-sanity have a real per-node provenance
+    // fact to read instead of BUG-195's orbit-camera proxy.
+    bbox_radius: f32,
 ) -> ObjectGroupOutput {
     let k = local_k;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
@@ -804,6 +810,13 @@ fn build_object_group(
                     .insert("material_index".to_string(), int(m.material_index as i32));
                 n.params
                     .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+                // BUG-194/BUG-195: import-time provenance, read by SceneVm
+                // (header vertex count) + merge_import_into_graph (scale
+                // sanity's reference radius). Never read by evaluate()/run().
+                n.params
+                    .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
+                n.params
+                    .insert("source_bbox_radius".to_string(), float(bbox_radius));
                 n
             };
             group_nodes.push(skinned_src);
@@ -887,6 +900,15 @@ fn build_object_group(
             mesh_node
                 .params
                 .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+            // BUG-194/BUG-195: import-time provenance, read by SceneVm
+            // (header vertex count) + merge_import_into_graph (scale
+            // sanity's reference radius). Never read by evaluate()/run().
+            mesh_node
+                .params
+                .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
+            mesh_node
+                .params
+                .insert("source_bbox_radius".to_string(), float(bbox_radius));
             group_nodes.push(mesh_node);
             None
         };
@@ -2170,6 +2192,7 @@ fn build_import_graph(
             &node_anims_by_clip,
             &mut used_group_names,
             &mut fresh_id,
+            radius,
         );
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
@@ -2567,6 +2590,39 @@ fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
         .unwrap_or(0)
 }
 
+/// BUG-195's real fix: the largest KNOWN `source_bbox_radius` (BUG-194's
+/// import-time provenance param, stamped on every `node.gltf_mesh_source`/
+/// `node.gltf_skinned_mesh_source` this session's importer creates) among
+/// every mesh-source node already in the target def, searched recursively
+/// (mesh-source nodes live inside each object's group, same nesting
+/// `max_node_id_recursive` walks). `-1.0` (the "unknown" sentinel — a
+/// hand-built node the importer never touched) is excluded, never treated
+/// as a real radius of zero. `None` when the def has no mesh-source node
+/// with a known radius at all (a hand-built scene with no glTF import in
+/// its history) — the caller falls back to the orbit-camera proxy.
+fn max_known_source_bbox_radius(nodes: &[EffectGraphNode]) -> Option<f32> {
+    nodes
+        .iter()
+        .filter_map(|n| {
+            let own = matches!(
+                n.type_id.as_str(),
+                "node.gltf_mesh_source" | "node.gltf_skinned_mesh_source"
+            )
+            .then(|| match n.params.get("source_bbox_radius") {
+                Some(SerializedParamValue::Float { value }) if *value >= 0.0 => Some(*value),
+                _ => None,
+            })
+            .flatten();
+            let inner = n.group.as_ref().and_then(|g| max_known_source_bbox_radius(&g.nodes));
+            match (own, inner) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, b) => b,
+            }
+        })
+        .fold(None, |acc, v| Some(acc.map_or(v, |a: f32| a.max(v))))
+}
+
 /// D5's merge plan: everything `ImportModelIntoSceneCommand`
 /// (`manifold-editing`) needs to splice a SECOND (third, nth) glTF's object
 /// groups into an EXISTING scene's `render_scene`, without touching that
@@ -2626,20 +2682,17 @@ pub struct MergePlan {
 /// new object's `transform_3d` is seeded with `pos = -center` (the
 /// importer's own recenter convention). A uniform `scale` is ALSO seeded,
 /// but only when the incoming bbox radius differs from a "scene reference
-/// radius" by more than 10× in either direction. **Escalated, not guessed:**
-/// the def stores no per-object bbox/vertex metadata (BUG-193/194 found the
-/// identical gap for object counts and vertex counts — geometry simply
-/// isn't tracked in the graph def), so there is no literal "largest existing
-/// object's radius" to read back. Logged as BUG-195
-/// (`docs/BUG_BACKLOG.md`); the proxy used here — defaulted, not
-/// invented from nothing — is the target's own synthesized
-/// `node.orbit_camera`'s `distance` param, inverted through the EXACT
-/// formula [`build_import_graph`] used to seed it (`distance = 2.2 *
-/// radius`), since that value already encodes "how big is everything in
-/// this scene" as of the last import/creation that mattered. No top-level
-/// `node.orbit_camera` found → normalization is skipped entirely (native
-/// units), never guessed. Revisit trigger: BUG-195's real fix (a stored
-/// per-object size signal).
+/// radius" by more than 10× in either direction. **BUG-195, fixed:** the
+/// reference radius is [`max_known_source_bbox_radius`] — the largest
+/// `source_bbox_radius` (BUG-194's import-time provenance param) among the
+/// target def's own existing mesh-source nodes, a real per-object size fact
+/// rather than an inversion of a camera value the user may have hand-retuned.
+/// The old proxy — the target's own synthesized `node.orbit_camera`'s
+/// `distance` param, inverted through the EXACT formula [`build_import_graph`]
+/// used to seed it (`distance = 2.2 * radius`) — is kept as the fallback for
+/// a scene with no known-radius mesh-source node at all (a hand-built scene
+/// with no glTF import in its history). No top-level `node.orbit_camera`
+/// either → normalization is skipped entirely (native units), never guessed.
 fn merge_import_into_graph(
     def: &EffectGraphDef,
     summary: &GltfImportSummary,
@@ -2709,16 +2762,25 @@ fn merge_import_into_graph(
     let incoming_radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
 
-    // See the doc comment above for why this is a proxy, not a stored fact.
-    let scene_reference_radius: Option<f32> = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.orbit_camera")
-        .and_then(|n| match n.params.get("distance") {
-            Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
-            _ => None,
-        })
-        .filter(|r| *r > 1e-6);
+    // BUG-195 real fix: prefer a STORED per-object radius (BUG-194's
+    // `source_bbox_radius` provenance param) over the orbit-camera proxy
+    // below — the largest known radius among the target's own existing
+    // mesh-source nodes is a real fact about the scene's geometry, not an
+    // inversion of a camera framing value the user may have hand-retuned.
+    // Only when no mesh-source node in the def has a known radius (e.g. a
+    // scene built entirely by hand, never touched by this importer) does
+    // the proxy apply — kept unchanged as the fallback, never removed.
+    let scene_reference_radius: Option<f32> =
+        max_known_source_bbox_radius(&def.nodes).filter(|r| *r > 1e-6).or_else(|| {
+            def.nodes
+                .iter()
+                .find(|n| n.type_id == "node.orbit_camera")
+                .and_then(|n| match n.params.get("distance") {
+                    Some(SerializedParamValue::Float { value }) => Some(*value / 2.2),
+                    _ => None,
+                })
+                .filter(|r| *r > 1e-6)
+        });
 
     let normalize_scale: Option<f32> = scene_reference_radius.and_then(|ref_radius| {
         let ratio = incoming_radius / ref_radius;
@@ -2766,6 +2828,7 @@ fn merge_import_into_graph(
             &node_anims_by_clip,
             &mut used_group_names,
             &mut fresh_id,
+            incoming_radius,
         );
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
@@ -2914,11 +2977,11 @@ mod tests {
         // chunk (zero-padded to 4 bytes). Chunk type magics per the Binary
         // glTF spec: 0x4E4F534A = "JSON", 0x004E4942 = "BIN\0".
         let mut json_padded = json_bytes;
-        while json_padded.len() % 4 != 0 {
+        while !json_padded.len().is_multiple_of(4) {
             json_padded.push(b' ');
         }
         let mut bin_padded = bin;
-        while bin_padded.len() % 4 != 0 {
+        while !bin_padded.len().is_multiple_of(4) {
             bin_padded.push(0);
         }
         let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
@@ -3056,11 +3119,11 @@ mod tests {
         let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
 
         let mut json_padded = json_bytes;
-        while json_padded.len() % 4 != 0 {
+        while !json_padded.len().is_multiple_of(4) {
             json_padded.push(b' ');
         }
         let mut bin_padded = bin;
-        while bin_padded.len() % 4 != 0 {
+        while !bin_padded.len().is_multiple_of(4) {
             bin_padded.push(0);
         }
         let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
@@ -3764,6 +3827,64 @@ mod tests {
         }
     }
 
+    /// BUG-194/BUG-195: `build_import_graph` stamps `source_vertex_count`
+    /// (exactly `GltfMaterialInfo::vertex_count`) and `source_bbox_radius`
+    /// (the whole-import bbox radius, the same value the synthesized
+    /// orbit camera's `distance` is derived from) onto every mesh-source
+    /// node it creates — read back by `SceneVm`'s header and by a future
+    /// merge's scale-sanity rule.
+    #[test]
+    fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
+        let half_extent = 3.0_f32;
+        let summary = GltfImportSummary {
+            materials: vec![full_material(0, "Leaf", 250), full_material(1, "Bark", 900)],
+            bbox_min: [-half_extent, -half_extent, -half_extent],
+            bbox_max: [half_extent, half_extent, half_extent],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: Vec::new(),
+            animation_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
+
+        // Same radius formula `build_import_graph` uses for the synthesized
+        // orbit camera (dims are the full cube, diag/2).
+        let dims = 2.0 * half_extent;
+        let expected_radius = ((3.0 * dims * dims).sqrt() * 0.5).max(1e-3);
+
+        let mesh_sources: Vec<&EffectGraphNode> = def
+            .nodes
+            .iter()
+            .filter_map(|n| n.group.as_ref())
+            .flat_map(|g| g.nodes.iter())
+            .filter(|n| n.type_id == "node.gltf_mesh_source")
+            .collect();
+        assert_eq!(mesh_sources.len(), 2, "one node.gltf_mesh_source per material");
+
+        // Largest-by-vertex-count-first ordering (build_import_graph sorts
+        // materials that way) — Bark (900) is object 0, Leaf (250) is
+        // object 1.
+        let mut seen_counts: Vec<i32> = Vec::new();
+        for mesh in &mesh_sources {
+            let vcount = match mesh.params.get("source_vertex_count") {
+                Some(SerializedParamValue::Int { value }) => *value,
+                other => panic!("expected an Int source_vertex_count, got {other:?}"),
+            };
+            seen_counts.push(vcount);
+            let radius = match mesh.params.get("source_bbox_radius") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                other => panic!("expected a Float source_bbox_radius, got {other:?}"),
+            };
+            assert!(
+                (radius - expected_radius).abs() < 1e-4,
+                "expected {expected_radius}, got {radius}"
+            );
+        }
+        seen_counts.sort_unstable();
+        assert_eq!(seen_counts, vec![250, 900]);
+    }
+
     // -----------------------------------------------------------------
     // SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
     // -----------------------------------------------------------------
@@ -4010,6 +4131,64 @@ mod tests {
         assert!(
             !plan.report_lines.iter().any(|l| l.contains("scaled ×")),
             "no normalize report line when the ratio is within bounds"
+        );
+    }
+
+    /// BUG-195 real fix: when the target's own mesh-source node carries a
+    /// KNOWN `source_bbox_radius` that disagrees with what the
+    /// orbit-camera-distance proxy would derive (e.g. the user hand-retuned
+    /// Camera Distance on the card after import, per the confessed BUG-195
+    /// blind spot), the stored radius wins — never the proxy.
+    #[test]
+    fn merge_scale_sanity_prefers_stored_radius_over_camera_proxy() {
+        let mut def = scene_def_with_bbox_half_extent(1.0);
+        // The proxy (unmutated orbit_camera.distance / 2.2) is ~= sqrt(3) ~=
+        // 1.732 — same as the stored radius build_import_graph seeded, by
+        // construction. Mutate ONLY the stored radius to something wildly
+        // different, simulating a scene whose stored provenance no longer
+        // agrees with the (user-editable) camera distance.
+        let group = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID)
+            .expect("one object group");
+        let mesh = group
+            .group
+            .as_mut()
+            .unwrap()
+            .nodes
+            .iter_mut()
+            .find(|n| n.type_id == "node.gltf_mesh_source")
+            .expect("object group has a mesh source");
+        mesh.params
+            .insert("source_bbox_radius".to_string(), SerializedParamValue::Float { value: 100.0 });
+
+        // Incoming asset has the SAME bbox as the (unmutated) target scene —
+        // against the proxy (~1.732) the ratio is 1.0 (no normalize); against
+        // the mutated stored radius (100.0) the ratio is ~0.017 (normalizes).
+        let summary = merge_summary(vec![full_material(0, "Same", 100)], 1.0);
+        let path = std::path::Path::new("/tmp/synthetic_merge_prefers_stored_radius.glb");
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge");
+
+        let new_group = plan.new_nodes.first().unwrap();
+        let transform = new_group
+            .group
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.transform_3d")
+            .expect("object group has a transform_3d");
+        let scale = match transform.params.get("scale_x") {
+            Some(SerializedParamValue::Float { value }) => *value,
+            other => panic!(
+                "expected a seeded scale_x — the stored radius (100.0), not the camera proxy \
+                 (~1.732), must have driven this decision, got {other:?}"
+            ),
+        };
+        assert!(
+            scale > 10.0,
+            "stored radius (100.0) vs incoming (~1.732) should normalize UP by ~57x, got {scale}"
         );
     }
 
@@ -6209,12 +6388,12 @@ mod tests {
         bin.extend(uvs.iter().flatten().flat_map(|f| f.to_le_bytes()));
         let idx_off = bin.len();
         bin.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         let png_off = bin.len();
         bin.extend_from_slice(&png);
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
 
@@ -6253,7 +6432,7 @@ mod tests {
             "buffers": [{"byteLength": bin.len()}]
         });
         let mut json_bytes = serde_json::to_vec(&json).expect("fixture json");
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
 
