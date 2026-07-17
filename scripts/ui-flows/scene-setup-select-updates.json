@@ -1,0 +1,53 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "QS1694-W02-1-1" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "■ Material.001" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "Material.001" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "QS1694-W02-1-1" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "■ QS1694-W02-1-1" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "QS1694-W02-1-1" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "Material.001" } },
+      "check": { "Count": 0 }
+    }
+  }
+]
