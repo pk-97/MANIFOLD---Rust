@@ -274,6 +274,16 @@ Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF r
 
 **Escaped:** SCENE_PANEL_UX P3a/P3b-i (landed `76251784`) — those flows proved dispatch and exposure for these rows but never the render effect, exactly the gap this entry closes the visibility on.
 
+### BUG-233 (gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis) — the P6 move/scale gizmo's red X-axis handle and the P5 grid overlay's red X-axis line use near-identical colors, so with both visible the gizmo's X handle is hard to pick out — found 2026-07-17, `lane/realtime3d-viewport` P6 session, while eyeballing the gizmo demo PNGs
+
+**Status:** OPEN — LOW (cosmetic; functionally the axes are still distinguishable by direction/geometry and the color IS correct per D8's lock-state contract — a unit test asserts the exact RGBA value — this is purely a legibility issue when both overlays render together).
+
+**Symptom:** `viewport_overlay::grid_lines`'s X-axis tint (`GRID_AXIS_X_COLOR = [180, 70, 70, 255]`) and `viewport_gizmo`'s X-axis handle color (`X_COLOR = [225, 70, 70, 255]`) are close enough in hue/saturation that in a rendered frame with the grid on AND an object's Move/Scale gizmo showing, the gizmo's red X handle blends into the grid's red X-axis line running through the same general screen region. The P6 demo PNGs (`viewport_p6_demo.rs`) had to disable the grid overlay (`ViewportOverlayConfig { grid: false, .. }`) to get a legible gizmo screenshot — the production app renders both together with no such override.
+
+**Root cause:** the two overlay systems (P5 `viewport_overlay` and P6 `viewport_gizmo`) picked their axis-tint colors independently, both converging on "reddish" for X (a reasonable per-module choice — X-as-red is the universal DCC convention) without checking for a value collision against the other overlay that's usually on at the same time.
+
+**Fix shape:** either (a) desaturate/darken the grid's axis tint further so it reads as "chrome" rather than competing with gizmo saturation, or (b) shift the gizmo's axis palette a few degrees off pure DCC red/green/blue (e.g. a warmer/brighter red distinct from the grid's), or (c) auto-dim the grid opacity while a gizmo is showing (selection implies "I'm working on this object, not reading the grid"). (b) is probably the smallest, most contained fix — touches only `viewport_gizmo.rs`'s three color constants, no cross-module coupling. One short session; needs a quick visual check (headless PNG, eyeballed) rather than a new automated gate, since this is a legibility judgment call.
+
 ### BUG-230 (beat-this-short-clip-bpm-convergence) — Beat This reports the same ~142.86 BPM for 4 of 5 unrelated ~13s isolated-drum-loop test clips — found 2026-07-17, AUDIO_ANALYSIS_ACCURACY P2 listen-list render
 
 **Status:** OPEN — LOW-MED (accuracy; affects short/isolated clips specifically, not full-length mixes — none of the P2 beat/downbeat scoring fixtures, which are full songs, showed this pattern).

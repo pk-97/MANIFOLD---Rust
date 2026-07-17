@@ -22,7 +22,7 @@ from manifold_audio.conflict_resolution import (
     _count_event_types,
     _overlap_rate,
 )
-from manifold_audio.adtof_detection import detect_drums_adtof
+from manifold_audio.adtof_detection import detect_drums_adtof, resolve_thresholds as resolve_adtof_thresholds
 from manifold_audio.basic_pitch_detection import (
     classify_synth_notes,
     detect_notes_basic_pitch,
@@ -145,6 +145,14 @@ def analyze_percussion(
 
     # ADTOF drum transcription (runs in main process).
     if want_drums and onset_audio_path is not None:
+        # Log the EFFECTIVE per-class thresholds (P4 acceptance, 2026-07-18)
+        # via the same resolver detect_drums_adtof itself uses, so this line
+        # can never drift from what's actually applied.
+        _effective_thresholds = resolve_adtof_thresholds(adtof_thresholds)
+        _progress(
+            0.735,
+            "ADTOF thresholds (kick,snare,tom,hihat,cymbal)=" + ",".join(f"{t:.3f}" for t in _effective_thresholds),
+        )
         _progress(0.74, "drum transcription (ADTOF)")
         adtof_drum_events = detect_drums_adtof(onset_audio_path, thresholds=adtof_thresholds)
         if adtof_drum_events is not None:

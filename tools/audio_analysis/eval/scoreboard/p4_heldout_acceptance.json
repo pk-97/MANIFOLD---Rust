@@ -1,0 +1,189 @@
+{
+  "generated_at": "2026-07-17T14:08:35.145893+00:00",
+  "phase": "P4 one-shot heldout acceptance read (round-2 orchestrator picks)",
+  "fixtures": [
+    "liveshow_stagnate",
+    "liveshow_basalt"
+  ],
+  "truth_type": "sparse_visual (all heldout fixtures)",
+  "picks_evaluated": {
+    "kick": 1.15,
+    "snare": 1.3,
+    "hat": 0.5
+  },
+  "per_class": {
+    "kick": {
+      "pick_params": {
+        "knob": "threshold_factor",
+        "factor": 1.15,
+        "threshold": 0.13799999999999998
+      },
+      "baseline": {
+        "per_track": [
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 214,
+            "n_truth": 30,
+            "recall": 1.0,
+            "active_passage_precision": 0.7894736842105263,
+            "n_pred_in_active_window": 38
+          }
+        ],
+        "mean_recall": 1.0,
+        "mean_active_passage_precision": 0.7894736842105263,
+        "one_shot_recall_overall": null,
+        "one_shot_n_truth_total": 0,
+        "n_tracks_scored": 1
+      },
+      "pick": {
+        "per_track": [
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 206,
+            "n_truth": 30,
+            "recall": 1.0,
+            "active_passage_precision": 0.8333333333333334,
+            "n_pred_in_active_window": 36
+          }
+        ],
+        "mean_recall": 1.0,
+        "mean_active_passage_precision": 0.8333333333333334,
+        "one_shot_recall_overall": null,
+        "one_shot_n_truth_total": 0,
+        "n_tracks_scored": 1
+      }
+    },
+    "snare": {
+      "pick_params": {
+        "knob": "threshold_factor",
+        "factor": 1.3,
+        "threshold": 0.18200000000000002
+      },
+      "baseline": {
+        "per_track": [
+          {
+            "id": "liveshow_stagnate",
+            "domain": "electronic",
+            "n_pred": 229,
+            "n_truth": 64,
+            "recall": 0.75,
+            "active_passage_precision": 0.32,
+            "n_pred_in_active_window": 150,
+            "one_shot_recall": 0.125,
+            "one_shot_n_truth": 8
+          },
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 184,
+            "n_truth": 95,
+            "recall": 0.6210526315789474,
+            "active_passage_precision": 0.48360655737704916,
+            "n_pred_in_active_window": 122
+          }
+        ],
+        "mean_recall": 0.6855263157894738,
+        "mean_active_passage_precision": 0.4018032786885246,
+        "one_shot_recall_overall": 0.125,
+        "one_shot_n_truth_total": 8,
+        "n_tracks_scored": 2
+      },
+      "pick": {
+        "per_track": [
+          {
+            "id": "liveshow_stagnate",
+            "domain": "electronic",
+            "n_pred": 190,
+            "n_truth": 64,
+            "recall": 0.75,
+            "active_passage_precision": 0.35555555555555557,
+            "n_pred_in_active_window": 135,
+            "one_shot_recall": 0.125,
+            "one_shot_n_truth": 8
+          },
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 163,
+            "n_truth": 95,
+            "recall": 0.6210526315789474,
+            "active_passage_precision": 0.5412844036697247,
+            "n_pred_in_active_window": 109
+          }
+        ],
+        "mean_recall": 0.6855263157894738,
+        "mean_active_passage_precision": 0.44841997961264013,
+        "one_shot_recall_overall": 0.125,
+        "one_shot_n_truth_total": 8,
+        "n_tracks_scored": 2
+      }
+    },
+    "hat": {
+      "pick_params": {
+        "knob": "threshold_factor",
+        "factor": 0.5,
+        "threshold": 0.09
+      },
+      "baseline": {
+        "per_track": [
+          {
+            "id": "liveshow_stagnate",
+            "domain": "electronic",
+            "n_pred": 946,
+            "n_truth": 286,
+            "recall": 0.9300699300699301,
+            "active_passage_precision": 0.49906191369606,
+            "n_pred_in_active_window": 533,
+            "one_shot_recall": 1.0,
+            "one_shot_n_truth": 1
+          },
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 529,
+            "n_truth": 217,
+            "recall": 0.7788018433179723,
+            "active_passage_precision": 0.4592391304347826,
+            "n_pred_in_active_window": 368
+          }
+        ],
+        "mean_recall": 0.8544358866939512,
+        "mean_active_passage_precision": 0.4791505220654213,
+        "one_shot_recall_overall": 1.0,
+        "one_shot_n_truth_total": 1,
+        "n_tracks_scored": 2
+      },
+      "pick": {
+        "per_track": [
+          {
+            "id": "liveshow_stagnate",
+            "domain": "electronic",
+            "n_pred": 1093,
+            "n_truth": 286,
+            "recall": 0.9440559440559441,
+            "active_passage_precision": 0.4753521126760563,
+            "n_pred_in_active_window": 568,
+            "one_shot_recall": 1.0,
+            "one_shot_n_truth": 1
+          },
+          {
+            "id": "liveshow_basalt",
+            "domain": "electronic",
+            "n_pred": 633,
+            "n_truth": 217,
+            "recall": 0.8755760368663594,
+            "active_passage_precision": 0.46228710462287104,
+            "n_pred_in_active_window": 411
+          }
+        ],
+        "mean_recall": 0.9098159904611518,
+        "mean_active_passage_precision": 0.4688196086494637,
+        "one_shot_recall_overall": 1.0,
+        "one_shot_n_truth_total": 1,
+        "n_tracks_scored": 2
+      }
+    }
+  }
+}

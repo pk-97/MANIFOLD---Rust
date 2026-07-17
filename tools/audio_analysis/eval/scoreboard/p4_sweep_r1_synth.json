@@ -1,0 +1,841 @@
+{
+  "class": "synth",
+  "baseline": {
+    "params": {
+      "knob": "baseline",
+      "config": "all defaults"
+    },
+    "per_track": [
+      {
+        "id": "self_render_arp_16th_128bpm",
+        "domain": "electronic",
+        "source": "self_render",
+        "n_pred": 17,
+        "n_truth": 64,
+        "synth_f1": 0.41975308641975306,
+        "precision": 1.0,
+        "recall": 0.265625
+      }
+    ],
+    "mean_f1": 0.41975308641975306,
+    "by_domain": {
+      "electronic": {
+        "mean": 0.41975308641975306,
+        "n": 1
+      },
+      "overall": {
+        "mean": 0.41975308641975306,
+        "n": 1
+      }
+    },
+    "one_shot_recall_overall": null,
+    "one_shot_n_truth_total": 0,
+    "n_tracks_scored": 1
+  },
+  "per_family": {
+    "threshold": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.35
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 56,
+              "n_truth": 64,
+              "synth_f1": 0.9166666666666665,
+              "precision": 0.9821428571428571,
+              "recall": 0.859375
+            }
+          ],
+          "mean_f1": 0.9166666666666665,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.9166666666666665,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.9166666666666665,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.425
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 32,
+              "n_truth": 64,
+              "synth_f1": 0.6458333333333334,
+              "precision": 0.96875,
+              "recall": 0.484375
+            }
+          ],
+          "mean_f1": 0.6458333333333334,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.6458333333333334,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.6458333333333334,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.0,
+            "threshold": 0.5
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.15,
+            "threshold": 0.575
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 1,
+              "n_truth": 64,
+              "synth_f1": 0.03076923076923077,
+              "precision": 1.0,
+              "recall": 0.015625
+            }
+          ],
+          "mean_f1": 0.03076923076923077,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.03076923076923077,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.03076923076923077,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.3,
+            "threshold": 0.65
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 0,
+              "n_truth": 64,
+              "synth_f1": 0.0,
+              "precision": 0.0,
+              "recall": 0.0
+            }
+          ],
+          "mean_f1": 0.0,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.0,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.0,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.35
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 56,
+              "n_truth": 64,
+              "synth_f1": 0.9166666666666665,
+              "precision": 0.9821428571428571,
+              "recall": 0.859375
+            }
+          ],
+          "mean_f1": 0.9166666666666665,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.9166666666666665,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.9166666666666665,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.425
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 32,
+              "n_truth": 64,
+              "synth_f1": 0.6458333333333334,
+              "precision": 0.96875,
+              "recall": 0.484375
+            }
+          ],
+          "mean_f1": 0.6458333333333334,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.6458333333333334,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.6458333333333334,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "threshold_factor",
+            "factor": 1.0,
+            "threshold": 0.5
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        }
+      ],
+      "dead_knob": false,
+      "best_delta_vs_baseline": 0.49691358024691346
+    },
+    "refractory": {
+      "all_configs": [
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 15.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 30.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 50.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 80.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        }
+      ],
+      "top_3_by_dev_f1": [
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 0.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 15.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        },
+        {
+          "params": {
+            "knob": "refractory_ms",
+            "value": 30.0
+          },
+          "per_track": [
+            {
+              "id": "self_render_arp_16th_128bpm",
+              "domain": "electronic",
+              "source": "self_render",
+              "n_pred": 17,
+              "n_truth": 64,
+              "synth_f1": 0.41975308641975306,
+              "precision": 1.0,
+              "recall": 0.265625
+            }
+          ],
+          "mean_f1": 0.41975308641975306,
+          "by_domain": {
+            "electronic": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            },
+            "overall": {
+              "mean": 0.41975308641975306,
+              "n": 1
+            }
+          },
+          "one_shot_recall_overall": null,
+          "one_shot_n_truth_total": 0,
+          "n_tracks_scored": 1
+        }
+      ],
+      "dead_knob": true,
+      "best_delta_vs_baseline": 0.0
+    }
+  },
+  "top2_families_by_delta": [
+    "threshold",
+    "refractory"
+  ],
+  "joint_top2_sweep": [
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "refractory"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.35
+          },
+          {
+            "knob": "refractory_ms",
+            "value": 0.0
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "self_render_arp_16th_128bpm",
+          "domain": "electronic",
+          "source": "self_render",
+          "n_pred": 56,
+          "n_truth": 64,
+          "synth_f1": 0.9166666666666665,
+          "precision": 0.9821428571428571,
+          "recall": 0.859375
+        }
+      ],
+      "mean_f1": 0.9166666666666665,
+      "by_domain": {
+        "electronic": {
+          "mean": 0.9166666666666665,
+          "n": 1
+        },
+        "overall": {
+          "mean": 0.9166666666666665,
+          "n": 1
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 1
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "refractory"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.7,
+            "threshold": 0.35
+          },
+          {
+            "knob": "refractory_ms",
+            "value": 15.0
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "self_render_arp_16th_128bpm",
+          "domain": "electronic",
+          "source": "self_render",
+          "n_pred": 56,
+          "n_truth": 64,
+          "synth_f1": 0.9166666666666665,
+          "precision": 0.9821428571428571,
+          "recall": 0.859375
+        }
+      ],
+      "mean_f1": 0.9166666666666665,
+      "by_domain": {
+        "electronic": {
+          "mean": 0.9166666666666665,
+          "n": 1
+        },
+        "overall": {
+          "mean": 0.9166666666666665,
+          "n": 1
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 1
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "refractory"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.425
+          },
+          {
+            "knob": "refractory_ms",
+            "value": 0.0
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "self_render_arp_16th_128bpm",
+          "domain": "electronic",
+          "source": "self_render",
+          "n_pred": 32,
+          "n_truth": 64,
+          "synth_f1": 0.6458333333333334,
+          "precision": 0.96875,
+          "recall": 0.484375
+        }
+      ],
+      "mean_f1": 0.6458333333333334,
+      "by_domain": {
+        "electronic": {
+          "mean": 0.6458333333333334,
+          "n": 1
+        },
+        "overall": {
+          "mean": 0.6458333333333334,
+          "n": 1
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 1
+    },
+    {
+      "params": {
+        "knob": "joint",
+        "families": [
+          "threshold",
+          "refractory"
+        ],
+        "from": [
+          {
+            "knob": "threshold_factor",
+            "factor": 0.85,
+            "threshold": 0.425
+          },
+          {
+            "knob": "refractory_ms",
+            "value": 15.0
+          }
+        ]
+      },
+      "per_track": [
+        {
+          "id": "self_render_arp_16th_128bpm",
+          "domain": "electronic",
+          "source": "self_render",
+          "n_pred": 32,
+          "n_truth": 64,
+          "synth_f1": 0.6458333333333334,
+          "precision": 0.96875,
+          "recall": 0.484375
+        }
+      ],
+      "mean_f1": 0.6458333333333334,
+      "by_domain": {
+        "electronic": {
+          "mean": 0.6458333333333334,
+          "n": 1
+        },
+        "overall": {
+          "mean": 0.6458333333333334,
+          "n": 1
+        }
+      },
+      "one_shot_recall_overall": null,
+      "one_shot_n_truth_total": 0,
+      "n_tracks_scored": 1
+    }
+  ],
+  "generated_at": "2026-07-17T13:52:00.195710+00:00",
+  "corpus_summary": [
+    {
+      "id": "babyslakh_Track00001",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00002",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00003",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00004",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00005",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00006",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00007",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "babyslakh_Track00008",
+      "domain": "other",
+      "source": "babyslakh"
+    },
+    {
+      "id": "self_render_kick_hat_128bpm",
+      "domain": "electronic",
+      "source": "self_render"
+    },
+    {
+      "id": "self_render_arp_16th_128bpm",
+      "domain": "electronic",
+      "source": "self_render"
+    },
+    {
+      "id": "liveshow_midnight_patience",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_integer",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_pattern",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_all_in_for_you",
+      "domain": "electronic",
+      "source": "liveshow"
+    },
+    {
+      "id": "liveshow_oh_so_suddenly",
+      "domain": "electronic",
+      "source": "liveshow"
+    }
+  ]
+}
