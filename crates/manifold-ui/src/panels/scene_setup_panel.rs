@@ -160,7 +160,19 @@ const fn object_slider_row_automation_name(base_offset: u64) -> Option<&'static 
 /// Per-light dynamic keys (P3), same convention as `obj_key`: Lights is a
 /// variable-length list, so every light gets a private key range.
 const LIGHT_KEY_BASE: u64 = 84_000;
-const LIGHT_KEY_STRIDE: u64 = 32;
+// UX-P3b-i: bumped 32→44 — same fix `OBJ_KEY_STRIDE` needed for P3a, applied
+// here by the collision audit this phase's brief calls out. Bumping also
+// retired a pre-existing bug the audit found while sizing the new range: the
+// light-name button (`build_light_properties_header`) used to key itself at
+// `light_key(index, LIGHT_OFF_MODE_MINUS) + 100`, an out-of-stride offset
+// that reached 100 slots past its own light's 0..31 range and, at the OLD
+// stride of 32, landed exactly on light (index+3)'s Color-G cell
+// (`light_key(index, 1) + 100 == light_key(index + 3, LIGHT_OFF_COLOR_R + 1)`
+// — both equal `LIGHT_KEY_BASE + index*32 + 101`) whenever a scene had 4+
+// lights. `LIGHT_OFF_NAME` below replaces the hack with a real in-range
+// offset; no scene with 4+ lights ever exercised the old collision in a
+// shipped flow, but it was live in the read path.
+const LIGHT_KEY_STRIDE: u64 = 44;
 const LIGHT_OFF_MODE_MINUS: u64 = 1;
 const LIGHT_OFF_COLOR_R: u64 = 4;
 const LIGHT_OFF_INTENSITY_MINUS: u64 = 7;
@@ -171,9 +183,43 @@ const LIGHT_OFF_SHADOW_SOFTNESS_MINUS: u64 = 19;
 const LIGHT_OFF_LIGHT_SIZE_MINUS: u64 = 22;
 /// BUG-193 per-row "✕" remove button, on the title row next to the label.
 const LIGHT_OFF_REMOVE: u64 = 26;
+/// UX-P3b-i: the light-name drag/rename button's own offset, replacing the
+/// `LIGHT_OFF_MODE_MINUS + 100` out-of-stride hack (see the stride comment
+/// above).
+const LIGHT_OFF_NAME: u64 = 27;
+// UX-P3b-i: mod-button keys, one per exposable field — offsets 28..38 (10
+// slots, matching the doc's "intensity/pos/aim/cast_shadows/shadow_softness/
+// light_size = 10 more slots" inventory). Mode and Color stay unexposable —
+// Mode is a structural type switch (same reasoning `mod_button_automation_name`
+// already applies to Object rows' Color, D4: display-only) and Color's
+// per-channel exposure is out of scope for the same reason.
+const LIGHT_OFF_INTENSITY_MOD: u64 = 28;
+const LIGHT_OFF_POS_X_MOD: u64 = 29;
+const LIGHT_OFF_AIM_X_MOD: u64 = 32;
+const LIGHT_OFF_CAST_SHADOWS_MOD: u64 = 35;
+const LIGHT_OFF_SHADOW_SOFTNESS_MOD: u64 = 36;
+const LIGHT_OFF_LIGHT_SIZE_MOD: u64 = 37;
 
 const fn light_key(index: usize, offset: u64) -> u64 {
     LIGHT_KEY_BASE + index as u64 * LIGHT_KEY_STRIDE + offset
+}
+
+/// UX-P3b-i: stable automation name for one exposable LIGHT row's mod
+/// button — same convention as `mod_button_automation_name` (Object rows).
+const fn light_mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
+    match (base_offset, axis) {
+        (LIGHT_OFF_INTENSITY_MOD, 0) => Some("scene_setup.mod.light_intensity"),
+        (LIGHT_OFF_POS_X_MOD, 0) => Some("scene_setup.mod.light_pos_x"),
+        (LIGHT_OFF_POS_X_MOD, 1) => Some("scene_setup.mod.light_pos_y"),
+        (LIGHT_OFF_POS_X_MOD, 2) => Some("scene_setup.mod.light_pos_z"),
+        (LIGHT_OFF_AIM_X_MOD, 0) => Some("scene_setup.mod.light_aim_x"),
+        (LIGHT_OFF_AIM_X_MOD, 1) => Some("scene_setup.mod.light_aim_y"),
+        (LIGHT_OFF_AIM_X_MOD, 2) => Some("scene_setup.mod.light_aim_z"),
+        (LIGHT_OFF_CAST_SHADOWS_MOD, 0) => Some("scene_setup.mod.light_cast_shadows"),
+        (LIGHT_OFF_SHADOW_SOFTNESS_MOD, 0) => Some("scene_setup.mod.light_shadow_softness"),
+        (LIGHT_OFF_LIGHT_SIZE_MOD, 0) => Some("scene_setup.mod.light_size"),
+        _ => None,
+    }
 }
 
 /// Stable automation name for a light row's numeric-stepper value cell —
@@ -224,6 +270,24 @@ const CAMERA_OFF_LENS_FOCUS_MINUS: u64 = 27;
 const CAMERA_OFF_LENS_FSTOP_MINUS: u64 = 30;
 const CAMERA_OFF_LENS_SHUTTER_MINUS: u64 = 33;
 const CAMERA_OFF_LENS_EXPOSURE_MINUS: u64 = 36;
+// UX-P3b-i: mod-button keys, one per exposable camera field — offsets
+// 39..55 (well clear of the highest value offset in use,
+// `CAMERA_OFF_LENS_EXPOSURE_MINUS + 2 == 38`). Camera has no per-index
+// stride (exactly one row set per scene), so — like the value offsets
+// above — each field gets its own fixed offset rather than a formula.
+const CAMERA_OFF_ORBIT_MOD: u64 = 39;
+const CAMERA_OFF_TILT_MOD: u64 = 40;
+const CAMERA_OFF_DISTANCE_MOD: u64 = 41;
+const CAMERA_OFF_FOV_MOD: u64 = 42;
+const CAMERA_OFF_POS_X_MOD: u64 = 43;
+const CAMERA_OFF_YAW_MOD: u64 = 46;
+const CAMERA_OFF_PITCH_MOD: u64 = 47;
+const CAMERA_OFF_ROLL_MOD: u64 = 48;
+const CAMERA_OFF_TARGET_X_MOD: u64 = 49;
+const CAMERA_OFF_LENS_FOCUS_MOD: u64 = 52;
+const CAMERA_OFF_LENS_FSTOP_MOD: u64 = 53;
+const CAMERA_OFF_LENS_SHUTTER_MOD: u64 = 54;
+const CAMERA_OFF_LENS_EXPOSURE_MOD: u64 = 55;
 
 /// D6's curated "Add modifier" vocabulary: `(display name, type_id)`, in the
 /// design's own order. Plain string literals — no `manifold-renderer`
@@ -256,6 +320,14 @@ const MODIFIER_OFF_REMOVE: u64 = 2;
 /// Stride-3 `[−] value [+]` stepper rows follow, up to 4 param slots per
 /// modifier (12 offsets) — well under `MODIFIER_ROW_STRIDE`'s 20.
 const MODIFIER_OFF_PARAM_BASE: u64 = 3;
+/// UX-P3b-i: one mod-button offset per param slot (up to 4), placed after
+/// the 3..14 value range. Collision audit: `MODIFIER_ROW_STRIDE`'s existing
+/// 20-wide budget already had 5 spare offsets (15..19) — unlike
+/// `LIGHT_KEY_STRIDE`, no bump was needed here to fit the 4 new offsets.
+/// Only `Numeric` param rows get a mod button (`ModifierParamRowVm::Axis`
+/// stays unexposable — a structural axis-selector switch, same reasoning as
+/// Light's Mode row).
+const MODIFIER_OFF_PARAM_MOD_BASE: u64 = 15;
 /// Reserved sub-range within the per-object budget for the "+ Add Modifier"
 /// button (UX-P2 D6: one control now, was 7 chips) — well clear of any real
 /// modifier stack (never more than a handful of rows).
@@ -285,6 +357,18 @@ const fn modifier_param_row_automation_name(param_slot: usize) -> Option<&'stati
     }
 }
 
+/// UX-P3b-i: stable automation name for a modifier param row's mod button,
+/// by param slot — same convention as `modifier_param_row_automation_name`.
+const fn modifier_param_mod_automation_name(param_slot: usize) -> Option<&'static str> {
+    match param_slot {
+        0 => Some("scene_setup.mod.modifier_param0"),
+        1 => Some("scene_setup.mod.modifier_param1"),
+        2 => Some("scene_setup.mod.modifier_param2"),
+        3 => Some("scene_setup.mod.modifier_param3"),
+        _ => None,
+    }
+}
+
 const fn camera_numeric_row_automation_name(offset: u64) -> Option<&'static str> {
     match offset {
         CAMERA_OFF_ORBIT_MINUS => Some("scene_setup.camera.orbit_value"),
@@ -298,6 +382,33 @@ const fn camera_numeric_row_automation_name(offset: u64) -> Option<&'static str>
         CAMERA_OFF_LENS_FSTOP_MINUS => Some("scene_setup.camera.lens_f_stop_value"),
         CAMERA_OFF_LENS_SHUTTER_MINUS => Some("scene_setup.camera.lens_shutter_angle_value"),
         CAMERA_OFF_LENS_EXPOSURE_MINUS => Some("scene_setup.camera.lens_exposure_ev_value"),
+        _ => None,
+    }
+}
+
+/// UX-P3b-i: stable automation name for one exposable CAMERA row's mod
+/// button — same convention as `mod_button_automation_name`/
+/// `light_mod_button_automation_name`. `axis` disambiguates a triplet cell
+/// (Position/Target); numeric rows always pass `0`.
+const fn camera_mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
+    match (base_offset, axis) {
+        (CAMERA_OFF_ORBIT_MOD, 0) => Some("scene_setup.mod.camera_orbit"),
+        (CAMERA_OFF_TILT_MOD, 0) => Some("scene_setup.mod.camera_tilt"),
+        (CAMERA_OFF_DISTANCE_MOD, 0) => Some("scene_setup.mod.camera_distance"),
+        (CAMERA_OFF_FOV_MOD, 0) => Some("scene_setup.mod.camera_fov_y"),
+        (CAMERA_OFF_POS_X_MOD, 0) => Some("scene_setup.mod.camera_pos_x"),
+        (CAMERA_OFF_POS_X_MOD, 1) => Some("scene_setup.mod.camera_pos_y"),
+        (CAMERA_OFF_POS_X_MOD, 2) => Some("scene_setup.mod.camera_pos_z"),
+        (CAMERA_OFF_YAW_MOD, 0) => Some("scene_setup.mod.camera_yaw"),
+        (CAMERA_OFF_PITCH_MOD, 0) => Some("scene_setup.mod.camera_pitch"),
+        (CAMERA_OFF_ROLL_MOD, 0) => Some("scene_setup.mod.camera_roll"),
+        (CAMERA_OFF_TARGET_X_MOD, 0) => Some("scene_setup.mod.camera_target_x"),
+        (CAMERA_OFF_TARGET_X_MOD, 1) => Some("scene_setup.mod.camera_target_y"),
+        (CAMERA_OFF_TARGET_X_MOD, 2) => Some("scene_setup.mod.camera_target_z"),
+        (CAMERA_OFF_LENS_FOCUS_MOD, 0) => Some("scene_setup.mod.camera_lens_focus_distance"),
+        (CAMERA_OFF_LENS_FSTOP_MOD, 0) => Some("scene_setup.mod.camera_lens_f_stop"),
+        (CAMERA_OFF_LENS_SHUTTER_MOD, 0) => Some("scene_setup.mod.camera_lens_shutter_angle"),
+        (CAMERA_OFF_LENS_EXPOSURE_MOD, 0) => Some("scene_setup.mod.camera_lens_exposure_ev"),
         _ => None,
     }
 }
@@ -1625,6 +1736,7 @@ impl ScenePanel {
                     row.group_node_id.unwrap_or(row.object_node_id),
                     m,
                     row.modifiers.len(),
+                    obj_label,
                 );
             }
             cy = self.build_add_modifier_button(
@@ -1665,7 +1777,7 @@ impl ScenePanel {
             ROW_H,
             drag_value_style(),
             &row.name,
-            light_key(row.index, LIGHT_OFF_MODE_MINUS) + 100,
+            light_key(row.index, LIGHT_OFF_NAME),
         );
         self.light_name_ids.push((row.node_doc_id, name_id, row.name.clone()));
         let remove_id = tree.add_button_keyed(
@@ -1694,18 +1806,32 @@ impl ScenePanel {
         row: &LightKnownRow,
     ) -> f32 {
         let index = row.index;
-        cy = self.build_light_enum_row(tree, inner_x, inner_w, cy, "Mode", &row.mode, index, LIGHT_OFF_MODE_MINUS);
-        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Color", &row.color, index, LIGHT_OFF_COLOR_R);
+        let obj_label = row.name.as_str();
+        cy = self.build_light_enum_row(
+            tree, inner_x, inner_w, cy, "Mode", &row.mode, index, LIGHT_OFF_MODE_MINUS, None, None,
+        );
+        cy = self.build_light_triplet_row(
+            tree, inner_x, inner_w, cy, "Color", &row.color, index, LIGHT_OFF_COLOR_R, None, None,
+        );
         cy = self.build_light_numeric_row(
             tree, inner_x, inner_w, cy, "Intensity", &row.intensity, index, LIGHT_OFF_INTENSITY_MINUS,
+            obj_label, LIGHT_OFF_INTENSITY_MOD,
         );
-        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, index, LIGHT_OFF_POS_X);
-        cy = self.build_light_triplet_row(tree, inner_x, inner_w, cy, "Aim", &row.aim, index, LIGHT_OFF_AIM_X);
+        cy = self.build_light_triplet_row(
+            tree, inner_x, inner_w, cy, "Position", &row.pos, index, LIGHT_OFF_POS_X,
+            Some(obj_label), Some(LIGHT_OFF_POS_X_MOD),
+        );
+        cy = self.build_light_triplet_row(
+            tree, inner_x, inner_w, cy, "Aim", &row.aim, index, LIGHT_OFF_AIM_X,
+            Some(obj_label), Some(LIGHT_OFF_AIM_X_MOD),
+        );
         cy = self.build_light_enum_row(
             tree, inner_x, inner_w, cy, "Cast Shadows", &row.cast_shadows, index, LIGHT_OFF_CAST_SHADOWS_MINUS,
+            Some(obj_label), Some(LIGHT_OFF_CAST_SHADOWS_MOD),
         );
         cy = self.build_light_enum_row(
             tree, inner_x, inner_w, cy, "Shadow Softness", &row.shadow_softness, index, LIGHT_OFF_SHADOW_SOFTNESS_MINUS,
+            Some(obj_label), Some(LIGHT_OFF_SHADOW_SOFTNESS_MOD),
         );
         cy = self.build_light_numeric_row(
             tree,
@@ -1716,6 +1842,8 @@ impl ScenePanel {
             &row.light_size,
             index,
             LIGHT_OFF_LIGHT_SIZE_MINUS,
+            obj_label,
+            LIGHT_OFF_LIGHT_SIZE_MOD,
         );
         cy + ROW_GAP
     }
@@ -1981,6 +2109,13 @@ impl ScenePanel {
     /// light's own range. Lights' numeric params (intensity, light size)
     /// don't get UX-P2's slider treatment — D2 scopes sliders to the
     /// Objects material rows this phase; the stepper shape stays here.
+    /// UX-P3b-i: `object_label` (the light's own name) + `mod_offset` add
+    /// the same mod-button parity Object rows already have — always present
+    /// here (both call sites, Intensity and Light Size, are in the doc's
+    /// exposable-slot inventory), so unlike `build_triplet_row`'s
+    /// `Option<u64>` this takes a bare offset, mirroring
+    /// `build_object_slider_row`'s `mod_key_offset: u64`.
+    #[allow(clippy::too_many_arguments)]
     fn build_light_numeric_row(
         &mut self,
         tree: &mut UITree,
@@ -1991,7 +2126,11 @@ impl ScenePanel {
         row: &RowValue,
         index: usize,
         base_offset: u64,
+        object_label: &str,
+        mod_offset: u64,
     ) -> f32 {
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         if row.driven {
             tree.add_label(
@@ -2002,6 +2141,10 @@ impl ScenePanel {
                 ROW_H,
                 &format!("{:.2} (driven)", row.value),
                 driven_label_style(),
+            );
+            self.build_mod_button(
+                tree, mod_x, cy, row, object_label, label, false, light_key(index, mod_offset),
+                light_mod_button_automation_name(mod_offset, 0),
             );
             return cy + ROW_H;
         }
@@ -2035,11 +2178,19 @@ impl ScenePanel {
         self.light_steppers.push((minus_id, row.clone(), -0.05));
         self.light_value_cells.push((value_id, row.clone()));
         self.light_steppers.push((plus_id, row.clone(), 0.05));
+        self.build_mod_button(
+            tree, mod_x, cy, row, object_label, label, false, light_key(index, mod_offset),
+            light_mod_button_automation_name(mod_offset, 0),
+        );
         cy + ROW_H
     }
 
     /// A light-row `[label] X/Y/Z` drag-value triplet — same shape as
-    /// `build_triplet_row`, keyed into the light's own range.
+    /// `build_triplet_row`, keyed into the light's own range. UX-P3b-i:
+    /// `object_label`/`mod_base_offset` follow `build_triplet_row`'s own
+    /// `Option` convention — `None` for Color (out of scope, D4), `Some` for
+    /// Position/Aim.
+    #[allow(clippy::too_many_arguments)]
     fn build_light_triplet_row(
         &mut self,
         tree: &mut UITree,
@@ -2050,12 +2201,19 @@ impl ScenePanel {
         triplet: &(RowValue, RowValue, RowValue),
         index: usize,
         base_offset: u64,
+        object_label: Option<&str>,
+        mod_base_offset: Option<u64>,
     ) -> f32 {
+        let reserve = mod_base_offset.is_some();
+        let per_cell_reserve = if reserve { MOD_BTN_W + MOD_BTN_GAP } else { 0.0 };
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         let cell_x = inner_x + LABEL_W;
-        let cell_w = ((inner_w - LABEL_W) / 3.0 - 2.0).max(20.0);
+        let cell_total_w = (inner_w - LABEL_W) / 3.0 - 2.0;
+        let cell_w = (cell_total_w - per_cell_reserve).max(20.0);
+        const AXIS: [&str; 3] = ["X", "Y", "Z"];
         for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
-            let x = cell_x + i as f32 * (cell_w + 2.0);
+            let x = cell_x + i as f32 * (cell_total_w + 2.0);
+            let mod_x = x + cell_w + MOD_BTN_GAP;
             if row.driven {
                 tree.add_label(
                     Some(self.content_parent),
@@ -2066,6 +2224,13 @@ impl ScenePanel {
                     &format!("{:.2}\u{2022}", row.value),
                     driven_label_style(),
                 );
+                if let (Some(obj), Some(mod_base)) = (object_label, mod_base_offset) {
+                    let param_label = format!("{label} {}", AXIS[i]);
+                    self.build_mod_button(
+                        tree, mod_x, cy, row, obj, &param_label, false, light_key(index, mod_base + i as u64),
+                        light_mod_button_automation_name(mod_base, i),
+                    );
+                }
                 continue;
             }
             let cell_id = tree.add_button_keyed(
@@ -2082,6 +2247,13 @@ impl ScenePanel {
                 tree.set_name(cell_id, name);
             }
             self.light_value_cells.push((cell_id, row.clone()));
+            if let (Some(obj), Some(mod_base)) = (object_label, mod_base_offset) {
+                let param_label = format!("{label} {}", AXIS[i]);
+                self.build_mod_button(
+                    tree, mod_x, cy, row, obj, &param_label, false, light_key(index, mod_base + i as u64),
+                    light_mod_button_automation_name(mod_base, i),
+                );
+            }
         }
         cy + ROW_H
     }
@@ -2096,6 +2268,12 @@ impl ScenePanel {
     /// a click on a 3+-label row (e.g. `shadow_softness`) opens the
     /// dropdown; a 2-label row (`mode`, `cast_shadows`) stays a stepper —
     /// the `[-]/[+]` buttons above already cycle it either way.
+    /// UX-P3b-i: `object_label`/`mod_offset` follow `build_triplet_row`'s
+    /// `Option` convention — `None` for Mode (a structural type switch, not
+    /// a modulatable scalar), `Some` for Cast Shadows/Shadow Softness (both
+    /// labeled steppers over an underlying continuous/threshold param, same
+    /// as Object's Metallic/Roughness sliders).
+    #[allow(clippy::too_many_arguments)]
     fn build_light_enum_row(
         &mut self,
         tree: &mut UITree,
@@ -2106,7 +2284,11 @@ impl ScenePanel {
         enum_row: &EnumRowValue,
         index: usize,
         base_offset: u64,
+        object_label: Option<&str>,
+        mod_offset: Option<u64>,
     ) -> f32 {
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let inner_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         let row = &enum_row.row;
         let label_text = enum_row
@@ -2124,6 +2306,12 @@ impl ScenePanel {
                 &format!("{label_text} (driven)"),
                 driven_label_style(),
             );
+            if let (Some(obj), Some(mod_off)) = (object_label, mod_offset) {
+                self.build_mod_button(
+                    tree, mod_x, cy, row, obj, label, false, light_key(index, mod_off),
+                    light_mod_button_automation_name(mod_off, 0),
+                );
+            }
             return cy + ROW_H;
         }
         let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
@@ -2156,6 +2344,12 @@ impl ScenePanel {
         self.light_steppers.push((minus_id, row.clone(), -1.0));
         self.light_enum_cells.push((value_id, row.clone(), enum_row.labels.clone()));
         self.light_steppers.push((plus_id, row.clone(), 1.0));
+        if let (Some(obj), Some(mod_off)) = (object_label, mod_offset) {
+            self.build_mod_button(
+                tree, mod_x, cy, row, obj, label, false, light_key(index, mod_off),
+                light_mod_button_automation_name(mod_off, 0),
+            );
+        }
         cy + ROW_H
     }
 
@@ -2167,26 +2361,49 @@ impl ScenePanel {
         cy += ROW_H;
         match &vm.camera {
             CameraRowVm::Orbit(row) => {
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Orbit", &row.orbit, CAMERA_OFF_ORBIT_MINUS);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Tilt", &row.tilt, CAMERA_OFF_TILT_MINUS);
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Orbit", &row.orbit, CAMERA_OFF_ORBIT_MINUS, CAMERA_OFF_ORBIT_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Tilt", &row.tilt, CAMERA_OFF_TILT_MINUS, CAMERA_OFF_TILT_MOD,
+                );
                 cy = self.build_camera_numeric_row(
                     tree, inner_x, inner_w, cy, "Distance", &row.distance, CAMERA_OFF_DISTANCE_MINUS,
+                    CAMERA_OFF_DISTANCE_MOD,
                 );
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS, CAMERA_OFF_FOV_MOD,
+                );
                 cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
             }
             CameraRowVm::Free(row) => {
-                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Yaw", &row.yaw, CAMERA_OFF_YAW_MINUS);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Pitch", &row.pitch, CAMERA_OFF_PITCH_MINUS);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "Roll", &row.roll, CAMERA_OFF_ROLL_MINUS);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_triplet_row(
+                    tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X, CAMERA_OFF_POS_X_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Yaw", &row.yaw, CAMERA_OFF_YAW_MINUS, CAMERA_OFF_YAW_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Pitch", &row.pitch, CAMERA_OFF_PITCH_MINUS, CAMERA_OFF_PITCH_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "Roll", &row.roll, CAMERA_OFF_ROLL_MINUS, CAMERA_OFF_ROLL_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS, CAMERA_OFF_FOV_MOD,
+                );
                 cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
             }
             CameraRowVm::LookAt(row) => {
-                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X);
-                cy = self.build_camera_triplet_row(tree, inner_x, inner_w, cy, "Target", &row.target, CAMERA_OFF_TARGET_X);
-                cy = self.build_camera_numeric_row(tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS);
+                cy = self.build_camera_triplet_row(
+                    tree, inner_x, inner_w, cy, "Position", &row.pos, CAMERA_OFF_POS_X, CAMERA_OFF_POS_X_MOD,
+                );
+                cy = self.build_camera_triplet_row(
+                    tree, inner_x, inner_w, cy, "Target", &row.target, CAMERA_OFF_TARGET_X, CAMERA_OFF_TARGET_X_MOD,
+                );
+                cy = self.build_camera_numeric_row(
+                    tree, inner_x, inner_w, cy, "FOV", &row.fov_y, CAMERA_OFF_FOV_MINUS, CAMERA_OFF_FOV_MOD,
+                );
                 cy = self.build_camera_lens(tree, inner_x, inner_w, cy, &row.lens);
             }
             CameraRowVm::Custom => {
@@ -2213,17 +2430,29 @@ impl ScenePanel {
         let body_w = inner_w - PAD;
         cy = self.build_camera_numeric_row(
             tree, body_x, body_w, cy, "Focus Distance", &lens.focus_distance, CAMERA_OFF_LENS_FOCUS_MINUS,
+            CAMERA_OFF_LENS_FOCUS_MOD,
         );
-        cy = self.build_camera_numeric_row(tree, body_x, body_w, cy, "F-Stop", &lens.f_stop, CAMERA_OFF_LENS_FSTOP_MINUS);
+        cy = self.build_camera_numeric_row(
+            tree, body_x, body_w, cy, "F-Stop", &lens.f_stop, CAMERA_OFF_LENS_FSTOP_MINUS, CAMERA_OFF_LENS_FSTOP_MOD,
+        );
         cy = self.build_camera_numeric_row(
             tree, body_x, body_w, cy, "Shutter Angle", &lens.shutter_angle, CAMERA_OFF_LENS_SHUTTER_MINUS,
+            CAMERA_OFF_LENS_SHUTTER_MOD,
         );
-        self.build_camera_numeric_row(tree, body_x, body_w, cy, "Exposure (EV)", &lens.exposure_ev, CAMERA_OFF_LENS_EXPOSURE_MINUS)
+        self.build_camera_numeric_row(
+            tree, body_x, body_w, cy, "Exposure (EV)", &lens.exposure_ev, CAMERA_OFF_LENS_EXPOSURE_MINUS,
+            CAMERA_OFF_LENS_EXPOSURE_MOD,
+        )
     }
 
     /// A camera-row `[label] [−] value [+]` numeric row — same shape as
     /// `build_light_numeric_row`, keyed into the fixed camera-section range
     /// (no per-index stride: exactly one Camera row set exists per frame).
+    /// UX-P3b-i: `mod_offset` is a bare offset, not `Option` — every camera
+    /// numeric row this phase wires (orbit/tilt/distance/fov/yaw/pitch/roll/
+    /// the four lens fields) is in the doc's exposable inventory, same
+    /// "always present" convention as `build_light_numeric_row`.
+    #[allow(clippy::too_many_arguments)]
     fn build_camera_numeric_row(
         &mut self,
         tree: &mut UITree,
@@ -2233,7 +2462,10 @@ impl ScenePanel {
         label: &str,
         row: &RowValue,
         base_offset: u64,
+        mod_offset: u64,
     ) -> f32 {
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         let degrees = is_degrees_param(&row.addr.param_id);
         if row.driven {
@@ -2250,6 +2482,10 @@ impl ScenePanel {
                 ROW_H,
                 &text,
                 driven_label_style(),
+            );
+            self.build_mod_button(
+                tree, mod_x, cy, row, "Camera", label, degrees, CAMERA_KEY_BASE + mod_offset,
+                camera_mod_button_automation_name(mod_offset, 0),
             );
             return cy + ROW_H;
         }
@@ -2287,11 +2523,19 @@ impl ScenePanel {
         self.camera_steppers.push((minus_id, row.clone(), -0.05));
         self.camera_value_cells.push((value_id, row.clone()));
         self.camera_steppers.push((plus_id, row.clone(), 0.05));
+        self.build_mod_button(
+            tree, mod_x, cy, row, "Camera", label, degrees, CAMERA_KEY_BASE + mod_offset,
+            camera_mod_button_automation_name(mod_offset, 0),
+        );
         cy + ROW_H
     }
 
     /// A camera-row `[label] X/Y/Z` drag-value triplet — same shape as
     /// `build_light_triplet_row`, keyed into the fixed camera-section range.
+    /// UX-P3b-i: `mod_base_offset` is a bare offset (both call sites,
+    /// Position and Target, are in the doc's exposable inventory) — every
+    /// axis is independently exposable, same "own mod button per cell"
+    /// convention `build_triplet_row` uses for Object rows.
     fn build_camera_triplet_row(
         &mut self,
         tree: &mut UITree,
@@ -2301,12 +2545,18 @@ impl ScenePanel {
         label: &str,
         triplet: &(RowValue, RowValue, RowValue),
         base_offset: u64,
+        mod_base_offset: u64,
     ) -> f32 {
+        let per_cell_reserve = MOD_BTN_W + MOD_BTN_GAP;
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         let cell_x = inner_x + LABEL_W;
-        let cell_w = ((inner_w - LABEL_W) / 3.0 - 2.0).max(20.0);
+        let cell_total_w = (inner_w - LABEL_W) / 3.0 - 2.0;
+        let cell_w = (cell_total_w - per_cell_reserve).max(20.0);
+        const AXIS: [&str; 3] = ["X", "Y", "Z"];
         for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
-            let x = cell_x + i as f32 * (cell_w + 2.0);
+            let x = cell_x + i as f32 * (cell_total_w + 2.0);
+            let mod_x = x + cell_w + MOD_BTN_GAP;
+            let param_label = format!("{label} {}", AXIS[i]);
             if row.driven {
                 tree.add_label(
                     Some(self.content_parent),
@@ -2316,6 +2566,10 @@ impl ScenePanel {
                     ROW_H,
                     &format!("{:.2}\u{2022}", row.value),
                     driven_label_style(),
+                );
+                self.build_mod_button(
+                    tree, mod_x, cy, row, "Camera", &param_label, false, CAMERA_KEY_BASE + mod_base_offset + i as u64,
+                    camera_mod_button_automation_name(mod_base_offset, i),
                 );
                 continue;
             }
@@ -2330,6 +2584,10 @@ impl ScenePanel {
                 CAMERA_KEY_BASE + base_offset + i as u64,
             );
             self.camera_value_cells.push((cell_id, row.clone()));
+            self.build_mod_button(
+                tree, mod_x, cy, row, "Camera", &param_label, false, CAMERA_KEY_BASE + mod_base_offset + i as u64,
+                camera_mod_button_automation_name(mod_base_offset, i),
+            );
         }
         cy + ROW_H
     }
@@ -2339,7 +2597,12 @@ impl ScenePanel {
     /// are always rendered (never conditionally hidden,
     /// `feedback_no_conditionally_visible_ui`) but only recorded as live
     /// targets when they wouldn't push past a stack boundary; clicking an
-    /// inert one at the boundary is simply a no-op.
+    /// inert one at the boundary is simply a no-op. UX-P3b-i: `object_label`
+    /// (the owning object's name — modifiers live inside an object's own
+    /// group, so the mod-button's exposure card name follows the same
+    /// `<ObjectName> · <ParamLabel>` convention every other exposable row
+    /// uses, not a modifier-scoped identity) threads down to
+    /// `build_modifier_numeric_row`.
     #[allow(clippy::too_many_arguments)]
     fn build_modifier_row(
         &mut self,
@@ -2351,6 +2614,7 @@ impl ScenePanel {
         group_node_id: u32,
         m: &ModifierKnownRow,
         mod_count: usize,
+        object_label: &str,
     ) -> f32 {
         let name_w = inner_w - STEP_W * 3.0;
         tree.add_label(Some(self.content_parent), inner_x, cy, name_w, ROW_H, &m.display_name, label_style());
@@ -2398,8 +2662,14 @@ impl ScenePanel {
         let param_w = inner_w - PAD;
         for (slot, p) in m.params.iter().enumerate() {
             cy = match p {
+                // UX-P3b-i: the mod-button's `param_label` disambiguates
+                // WHICH modifier's field this is (an object can carry
+                // several modifiers, each with its own "Angle"/"Amount") —
+                // "Bend Angle", not a bare "Angle" that would collide with
+                // a Twist modifier's own numeric row on the same object.
                 ModifierParamRowVm::Numeric { label, row } => self.build_modifier_numeric_row(
-                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot,
+                    tree, param_x, param_w, cy, label, row, object_index, m.index, slot, object_label,
+                    &format!("{} {label}", m.display_name),
                 ),
                 ModifierParamRowVm::Axis { label, row } => self.build_modifier_enum_row(
                     tree, param_x, param_w, cy, label, row, object_index, m.index, slot,
@@ -2417,6 +2687,10 @@ impl ScenePanel {
     /// every other Objects-section numeric row uses (those are already
     /// generic `(NodeId, RowValue, …)` lookups keyed by write address, not
     /// object identity — no separate modifier-specific drag plumbing needed).
+    /// UX-P3b-i: `object_label`/`param_label` feed the mod button's
+    /// exposure name — always present (every modifier `Numeric` param is in
+    /// the doc's exposable inventory; only `Axis` rows are excluded, a
+    /// structural switch, same reasoning as Light's Mode row).
     #[allow(clippy::too_many_arguments)]
     fn build_modifier_numeric_row(
         &mut self,
@@ -2429,7 +2703,12 @@ impl ScenePanel {
         object_index: usize,
         modifier_index: usize,
         param_slot: usize,
+        object_label: &str,
+        param_label: &str,
     ) -> f32 {
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
+        let mod_offset = MODIFIER_OFF_PARAM_MOD_BASE + param_slot as u64;
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         if row.driven {
             tree.add_label(
@@ -2440,6 +2719,11 @@ impl ScenePanel {
                 ROW_H,
                 &format!("{:.2} (driven)", row.value),
                 driven_label_style(),
+            );
+            self.build_mod_button(
+                tree, mod_x, cy, row, object_label, param_label, false,
+                modifier_row_key(object_index, modifier_index, mod_offset),
+                modifier_param_mod_automation_name(param_slot),
             );
             return cy + ROW_H;
         }
@@ -2481,6 +2765,11 @@ impl ScenePanel {
         self.object_steppers.push((minus_id, row.clone(), -0.05));
         self.object_value_cells.push((value_id, row.clone()));
         self.object_steppers.push((plus_id, row.clone(), 0.05));
+        self.build_mod_button(
+            tree, mod_x, cy, row, object_label, param_label, false,
+            modifier_row_key(object_index, modifier_index, mod_offset),
+            modifier_param_mod_automation_name(param_slot),
+        );
         cy + ROW_H
     }
 
@@ -4201,6 +4490,249 @@ mod tests {
             !panel.mod_button_ids.iter().any(|(_, ctx)| ctx.param_label == "Position X"),
             "a driven row's mod button must not be a click target"
         );
+    }
+
+    /// UX-P3b-i: the same mod-button parity as
+    /// `mod_button_click_emits_expose_param_named_object_and_param`, proven
+    /// on a LIGHT row (`build_light_numeric_row`'s Intensity field) — the
+    /// family this phase adds. `Sun` is the azalea fixture's own light name
+    /// (`azalea_shaped_vm`'s `LightKnownRow.name`).
+    #[test]
+    fn light_mod_button_click_emits_expose_param_named_light_and_param() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let (intensity_id, ctx) = panel
+            .mod_button_ids
+            .iter()
+            .find(|(_, ctx)| ctx.object_label == "Sun" && ctx.param_label == "Intensity")
+            .expect("the light's Intensity row must be a mod-button row");
+        assert_eq!(ctx.addr.param_id, "intensity");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: *intensity_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        match &actions[..] {
+            [PanelAction::SceneSetupExposeParam { object_label, param_label, param_id, .. }] => {
+                assert_eq!(object_label, "Sun");
+                assert_eq!(param_label, "Intensity");
+                assert_eq!(param_id, "intensity");
+            }
+            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
+        }
+    }
+
+    /// UX-P3b-i: mod-button parity on a CAMERA row (`build_camera_numeric_row`'s
+    /// Orbit field, the azalea fixture's `OrbitCameraRowVm`) — `object_label`
+    /// is the fixed `"Camera"` string (no per-instance camera name exists).
+    #[test]
+    fn camera_mod_button_click_emits_expose_param_named_camera_and_param() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let (orbit_id, ctx) = panel
+            .mod_button_ids
+            .iter()
+            .find(|(_, ctx)| ctx.object_label == "Camera" && ctx.param_label == "Orbit")
+            .expect("the camera's Orbit row must be a mod-button row");
+        assert_eq!(ctx.addr.param_id, "orbit");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: *orbit_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        match &actions[..] {
+            [PanelAction::SceneSetupExposeParam { object_label, param_label, .. }] => {
+                assert_eq!(object_label, "Camera");
+                assert_eq!(param_label, "Orbit");
+            }
+            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
+        }
+    }
+
+    /// UX-P3b-i: mod-button parity on a MODIFIER param row
+    /// (`build_modifier_numeric_row`'s "Angle" slot on the azalea fixture's
+    /// Bend modifier) — `object_label` is the OWNING OBJECT's name ("Azalea"),
+    /// and `param_label` is disambiguated by the modifier's own display name
+    /// ("Bend Angle"), not a bare "Angle" that would collide across modifiers.
+    #[test]
+    fn modifier_mod_button_click_emits_expose_param_named_object_and_modifier_param() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        // azalea_shaped_vm's default selection already targets the Azalea object.
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let (angle_id, ctx) = panel
+            .mod_button_ids
+            .iter()
+            .find(|(_, ctx)| ctx.object_label == "Azalea" && ctx.param_label == "Bend Angle")
+            .expect("the Bend modifier's Angle row must be a mod-button row");
+        assert_eq!(ctx.addr.param_id, "angle");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: *angle_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        match &actions[..] {
+            [PanelAction::SceneSetupExposeParam { object_label, param_label, param_id, .. }] => {
+                assert_eq!(object_label, "Azalea");
+                assert_eq!(param_label, "Bend Angle");
+                assert_eq!(param_id, "angle");
+            }
+            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
+        }
+        // The modifier's Axis row (a structural switch) must stay unexposable
+        // — same reasoning as Light's Mode row.
+        assert!(
+            !panel.mod_button_ids.iter().any(|(_, ctx)| ctx.param_label.ends_with("Axis")),
+            "a modifier's Axis row must not be a mod-button click target"
+        );
+    }
+
+    /// UX-P3b-i's own deliverable: the per-row key-range collision audit the
+    /// design doc's "as attempted" note calls out, extended from Objects
+    /// (P3a's own `OBJ_KEY_STRIDE` 32→44 bump) to Light/Camera/Modifier.
+    /// Computational proof (oracle discipline: a countable arithmetic
+    /// question gets a script, not an eyeball) — every named offset within
+    /// each family's own key formula must be pairwise distinct AND (for the
+    /// per-index families) strictly less than that family's stride, so no
+    /// two DIFFERENT logical rows can ever key the same node under
+    /// `UITree::mint`'s "keys only need to be unique among siblings of the
+    /// same parent" contract (`tree.rs`'s own `debug_assert` catches a live
+    /// violation; this test catches it at the constant-arithmetic level,
+    /// before any panel is ever built).
+    #[test]
+    fn no_key_offset_collisions_across_row_families() {
+        fn assert_no_dupes_and_fits_stride(family: &str, offsets: &[u64], stride: Option<u64>) {
+            let mut sorted = offsets.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted.len(),
+                offsets.len(),
+                "{family}: duplicate offset among {offsets:?} — two logical rows would key the same node"
+            );
+            if let Some(stride) = stride {
+                assert!(
+                    offsets.iter().all(|&o| o < stride),
+                    "{family}: an offset in {offsets:?} reaches into the next index's range (stride {stride})"
+                );
+            }
+        }
+
+        assert_no_dupes_and_fits_stride(
+            "OBJECT",
+            &[
+                OBJ_OFF_NAME,
+                OBJ_OFF_POS_X, OBJ_OFF_POS_X + 1, OBJ_OFF_POS_X + 2,
+                OBJ_OFF_ROT_X, OBJ_OFF_ROT_X + 1, OBJ_OFF_ROT_X + 2,
+                OBJ_OFF_SCALE_X, OBJ_OFF_SCALE_X + 1, OBJ_OFF_SCALE_X + 2,
+                OBJ_OFF_COLOR_R, OBJ_OFF_COLOR_R + 1, OBJ_OFF_COLOR_R + 2,
+                OBJ_OFF_METALLIC,
+                OBJ_OFF_ROUGHNESS,
+                OBJ_OFF_REMOVE, OBJ_OFF_REMOVE + 1,
+                OBJ_OFF_POS_X_MOD, OBJ_OFF_POS_X_MOD + 1, OBJ_OFF_POS_X_MOD + 2,
+                OBJ_OFF_ROT_X_MOD, OBJ_OFF_ROT_X_MOD + 1, OBJ_OFF_ROT_X_MOD + 2,
+                OBJ_OFF_SCALE_X_MOD, OBJ_OFF_SCALE_X_MOD + 1, OBJ_OFF_SCALE_X_MOD + 2,
+                OBJ_OFF_METALLIC_MOD,
+                OBJ_OFF_ROUGHNESS_MOD,
+            ],
+            Some(OBJ_KEY_STRIDE),
+        );
+
+        assert_no_dupes_and_fits_stride(
+            "LIGHT",
+            &[
+                LIGHT_OFF_MODE_MINUS, LIGHT_OFF_MODE_MINUS + 1, LIGHT_OFF_MODE_MINUS + 2,
+                LIGHT_OFF_COLOR_R, LIGHT_OFF_COLOR_R + 1, LIGHT_OFF_COLOR_R + 2,
+                LIGHT_OFF_INTENSITY_MINUS, LIGHT_OFF_INTENSITY_MINUS + 1, LIGHT_OFF_INTENSITY_MINUS + 2,
+                LIGHT_OFF_POS_X, LIGHT_OFF_POS_X + 1, LIGHT_OFF_POS_X + 2,
+                LIGHT_OFF_AIM_X, LIGHT_OFF_AIM_X + 1, LIGHT_OFF_AIM_X + 2,
+                LIGHT_OFF_CAST_SHADOWS_MINUS, LIGHT_OFF_CAST_SHADOWS_MINUS + 1, LIGHT_OFF_CAST_SHADOWS_MINUS + 2,
+                LIGHT_OFF_SHADOW_SOFTNESS_MINUS, LIGHT_OFF_SHADOW_SOFTNESS_MINUS + 1, LIGHT_OFF_SHADOW_SOFTNESS_MINUS + 2,
+                LIGHT_OFF_LIGHT_SIZE_MINUS, LIGHT_OFF_LIGHT_SIZE_MINUS + 1, LIGHT_OFF_LIGHT_SIZE_MINUS + 2,
+                LIGHT_OFF_REMOVE,
+                LIGHT_OFF_NAME,
+                LIGHT_OFF_INTENSITY_MOD,
+                LIGHT_OFF_POS_X_MOD, LIGHT_OFF_POS_X_MOD + 1, LIGHT_OFF_POS_X_MOD + 2,
+                LIGHT_OFF_AIM_X_MOD, LIGHT_OFF_AIM_X_MOD + 1, LIGHT_OFF_AIM_X_MOD + 2,
+                LIGHT_OFF_CAST_SHADOWS_MOD,
+                LIGHT_OFF_SHADOW_SOFTNESS_MOD,
+                LIGHT_OFF_LIGHT_SIZE_MOD,
+            ],
+            Some(LIGHT_KEY_STRIDE),
+        );
+
+        // Camera has no per-index stride (exactly one row set per scene) —
+        // just pairwise-distinct offsets, plus a headroom check against the
+        // next section's base (`MODIFIER_KEY_BASE`, 2_000 above `CAMERA_KEY_BASE`).
+        let camera_offsets = [
+            CAMERA_OFF_ORBIT_MINUS, CAMERA_OFF_ORBIT_MINUS + 1, CAMERA_OFF_ORBIT_MINUS + 2,
+            CAMERA_OFF_TILT_MINUS, CAMERA_OFF_TILT_MINUS + 1, CAMERA_OFF_TILT_MINUS + 2,
+            CAMERA_OFF_DISTANCE_MINUS, CAMERA_OFF_DISTANCE_MINUS + 1, CAMERA_OFF_DISTANCE_MINUS + 2,
+            CAMERA_OFF_FOV_MINUS, CAMERA_OFF_FOV_MINUS + 1, CAMERA_OFF_FOV_MINUS + 2,
+            CAMERA_OFF_POS_X, CAMERA_OFF_POS_X + 1, CAMERA_OFF_POS_X + 2,
+            CAMERA_OFF_YAW_MINUS, CAMERA_OFF_YAW_MINUS + 1, CAMERA_OFF_YAW_MINUS + 2,
+            CAMERA_OFF_PITCH_MINUS, CAMERA_OFF_PITCH_MINUS + 1, CAMERA_OFF_PITCH_MINUS + 2,
+            CAMERA_OFF_ROLL_MINUS, CAMERA_OFF_ROLL_MINUS + 1, CAMERA_OFF_ROLL_MINUS + 2,
+            CAMERA_OFF_TARGET_X, CAMERA_OFF_TARGET_X + 1, CAMERA_OFF_TARGET_X + 2,
+            CAMERA_OFF_LENS_FOCUS_MINUS, CAMERA_OFF_LENS_FOCUS_MINUS + 1, CAMERA_OFF_LENS_FOCUS_MINUS + 2,
+            CAMERA_OFF_LENS_FSTOP_MINUS, CAMERA_OFF_LENS_FSTOP_MINUS + 1, CAMERA_OFF_LENS_FSTOP_MINUS + 2,
+            CAMERA_OFF_LENS_SHUTTER_MINUS, CAMERA_OFF_LENS_SHUTTER_MINUS + 1, CAMERA_OFF_LENS_SHUTTER_MINUS + 2,
+            CAMERA_OFF_LENS_EXPOSURE_MINUS, CAMERA_OFF_LENS_EXPOSURE_MINUS + 1, CAMERA_OFF_LENS_EXPOSURE_MINUS + 2,
+            CAMERA_OFF_ORBIT_MOD,
+            CAMERA_OFF_TILT_MOD,
+            CAMERA_OFF_DISTANCE_MOD,
+            CAMERA_OFF_FOV_MOD,
+            CAMERA_OFF_POS_X_MOD, CAMERA_OFF_POS_X_MOD + 1, CAMERA_OFF_POS_X_MOD + 2,
+            CAMERA_OFF_YAW_MOD,
+            CAMERA_OFF_PITCH_MOD,
+            CAMERA_OFF_ROLL_MOD,
+            CAMERA_OFF_TARGET_X_MOD, CAMERA_OFF_TARGET_X_MOD + 1, CAMERA_OFF_TARGET_X_MOD + 2,
+            CAMERA_OFF_LENS_FOCUS_MOD,
+            CAMERA_OFF_LENS_FSTOP_MOD,
+            CAMERA_OFF_LENS_SHUTTER_MOD,
+            CAMERA_OFF_LENS_EXPOSURE_MOD,
+        ];
+        assert_no_dupes_and_fits_stride("CAMERA", &camera_offsets, None);
+        assert!(
+            camera_offsets.iter().all(|&o| CAMERA_KEY_BASE + o < MODIFIER_KEY_BASE),
+            "a camera offset reaches into MODIFIER_KEY_BASE's range"
+        );
+
+        // Modifier: per-slot offsets (up to 4 param slots) must fit inside
+        // MODIFIER_ROW_STRIDE, same per-index-range contract as OBJECT/LIGHT.
+        for slot in 0..4u64 {
+            let base = MODIFIER_OFF_PARAM_BASE + slot * 3;
+            assert_no_dupes_and_fits_stride(
+                "MODIFIER (per-row)",
+                &[
+                    MODIFIER_OFF_UP,
+                    MODIFIER_OFF_DOWN,
+                    MODIFIER_OFF_REMOVE,
+                    base, base + 1, base + 2,
+                    MODIFIER_OFF_PARAM_MOD_BASE + slot,
+                ],
+                Some(MODIFIER_ROW_STRIDE),
+            );
+        }
     }
 
     /// BUG-193/P5: the Lights-section twin of the object-removal test above
