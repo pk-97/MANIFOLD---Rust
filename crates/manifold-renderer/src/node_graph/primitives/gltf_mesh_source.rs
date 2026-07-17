@@ -150,6 +150,29 @@ crate::primitive! {
             range: None,
             enum_values: &[],
         },
+        // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
+        // provenance, never read by `evaluate()`/`run()` — stamped by
+        // `gltf_import.rs` at import/merge time and read back by
+        // `SceneVm::from_def` (the header's vertex-count row) and
+        // `merge_import_into_graph` (scale-sanity's reference-radius pick).
+        // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
+        // importer) — never a fabricated non-negative default.
+        ParamDef {
+            name: Cow::Borrowed("source_vertex_count"),
+            label: "Source Vertex Count",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 8_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_bbox_radius"),
+            label: "Source Bbox Radius",
+            ty: ParamType::Float,
+            default: ParamValue::Float(-1.0),
+            range: None,
+            enum_values: &[],
+        },
     ],
     composition_notes: "path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card Browse field into this primitive's `path` param, same convention as node.image_folder's `folder`. mesh_index=-1 means whole scene, world-combined under the default scene's transform hierarchy (the default — \"just drop a model in\"); mesh_index >= 0 plus primitive_index select a single mesh or primitive in LOCAL space so the importer can place it via node.render_scene's per-object pos_*/rot_*/scale_* transforms instead of baking a node transform in. max_capacity is the pre-allocation ceiling in vertices; the glTF importer sets it to the exact parsed vertex count, so manual drops of meshes exceeding it are truncated with a logged warning rather than silently dropping the tail. fit=unit_box uniformly scales the parsed mesh so its longest bounding-box axis is 1.0 — every scan arrives at arbitrary scale, and this makes deformer defaults (push_along_normals amount, mesh_ramp bounds) meaningful without hand-tuning per-asset. recenter (default true, only consulted under fit=unit_box) additionally translates the bounding-box center to the origin; false keeps the box's original center and only rescales around it. fit defaults to `none`, a strict no-op — every pre-existing gltf preset is byte-identical after this param was added. Both apply once on the background parse thread, not per-frame.",
     examples: [],
@@ -386,7 +409,9 @@ mod tests {
                 "material_index",
                 "max_capacity",
                 "fit",
-                "recenter"
+                "recenter",
+                "source_vertex_count",
+                "source_bbox_radius"
             ]
         );
     }
