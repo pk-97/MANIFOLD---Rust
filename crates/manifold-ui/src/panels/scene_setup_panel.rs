@@ -2422,8 +2422,21 @@ impl ScenePanel {
         match event {
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
-                    self.close();
-                    return (true, Vec::new());
+                    // BUG-220: this used to call `self.close()` directly —
+                    // that only flips the panel-local `open` flag, so
+                    // `ui_root.layout.scene_setup_width` (the dock's actual
+                    // screen footprint) never reset to 0, no rebuild ever
+                    // fired (no `PanelAction` means `app_render.rs`'s
+                    // dispatch loop never runs), and the header toggle
+                    // button's highlight went stale — the × visibly did
+                    // nothing. `AudioSetupPanel::handle_event`'s close arm
+                    // (see its own doc comment) already has the correct
+                    // one-toggle-path pattern: emit the same
+                    // `PanelAction::OpenSceneSetup` the header button and
+                    // Escape use, so `ui.toggle_scene_dock()` runs through
+                    // the single owning path (width + open + rebuild +
+                    // header sync all in lockstep).
+                    return (true, vec![PanelAction::OpenSceneSetup]);
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
@@ -3207,6 +3220,42 @@ mod tests {
             &actions[0],
             PanelAction::SceneSetupAddModifier(l, 42, t) if *l == LayerId::new("layer-1") && t == "node.bend_mesh"
         ));
+    }
+
+    /// BUG-220 regression: the × close button used to call `self.close()`
+    /// directly, which only flips the panel-local `open` flag — it never
+    /// told the app to reset `layout.scene_setup_width` back to 0 or to
+    /// rebuild, so on the real app the dock's screen footprint and content
+    /// never went away (Peter: "the close button doesn't work"). The fix
+    /// mirrors `AudioSetupPanel::handle_event`'s close arm exactly: emit
+    /// `PanelAction::OpenSceneSetup`, the SAME toggle action the header
+    /// button and Escape use — that's the one path that resets width, closes
+    /// the panel, and triggers the structural rebuild
+    /// (`ui_bridge::dispatch`'s `OpenSceneSetup` arm).
+    #[test]
+    fn close_button_click_routes_through_the_shared_toggle_action() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_ne!(panel.close_id, NodeId::PLACEHOLDER);
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: panel.close_id,
+            pos: crate::node::Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::OpenSceneSetup]),
+            "close (×) must emit the shared toggle action, not flip `open` \
+             locally: got {actions:?}"
+        );
+        // The direct `self.close()` bypass is gone: `open` is untouched by
+        // this click alone (the app-level `toggle_scene_dock()` — driven by
+        // dispatching the action above — is what actually closes it).
+        assert!(panel.is_open(), "handle_event itself must not close the panel — that's the app's job now");
     }
 
     #[test]
