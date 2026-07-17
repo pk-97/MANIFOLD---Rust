@@ -34,10 +34,16 @@ pub struct ViewportClip {
     /// Audio only: offset into the source file where this clip starts playing
     /// (seconds). The left edge of the waveform window. Ignored for non-audio.
     pub in_point_seconds: f32,
-    /// Audio only: warped source-seconds per beat (`60 / clip_bpm` with warp on,
-    /// `60 / project_bpm` with warp off). Times `duration_beats` gives the source
-    /// window length, so the waveform scale is set by warp, not by trim.
-    pub warped_secs_per_beat: f32,
+    /// Audio only: piecewise beat→file-seconds breakpoints mirroring what
+    /// playback actually does (`AudioLayerPlayback::update`, which integrates
+    /// the project's tempo map — NOT a flat seconds-per-beat). Each entry is
+    /// `(x_frac, file_secs)`: `x_frac` beat-linear in `[0, 1]` across the clip
+    /// (matches pixel x), `file_secs` the source-file position for that beat.
+    /// A constant-tempo clip has exactly 2 entries (start, end); a varying
+    /// tempo map adds one entry per tempo-map point strictly inside the clip.
+    /// Empty for non-audio clips. See `crates/manifold-app/src/ui_bridge/
+    /// state_sync.rs::audio_waveform_breakpoints` (the producer).
+    pub waveform_breakpoints: Vec<(f32, f32)>,
 }
 
 /// A visible clip resolved to its on-screen rectangle and the style inputs the
@@ -70,9 +76,9 @@ pub struct ClipScreenRect {
     /// Audio only: source-file offset (seconds) where this clip starts — the left
     /// edge of the waveform window. Mirrors `ViewportClip::in_point_seconds`.
     pub in_point_seconds: f32,
-    /// Audio only: warped source-seconds per beat. `× duration` gives the source
-    /// window length (the waveform scale is set by warp, not trim).
-    pub warped_secs_per_beat: f32,
+    /// Audio only: piecewise beat→file-seconds breakpoints. Mirrors
+    /// `ViewportClip::waveform_breakpoints` — see its doc comment.
+    pub waveform_breakpoints: Vec<(f32, f32)>,
 }
 
 // `HitRegion` and `ClipHitResult` live once in `crate::clip_hit_tester` — the
