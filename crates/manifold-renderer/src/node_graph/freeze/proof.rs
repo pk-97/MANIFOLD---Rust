@@ -2083,34 +2083,32 @@ fn fusion_coverage_baseline() {
         detail.join("\n")
     );
 
-    // Floors RAISED again (D4/P6 ratchet, same discipline P5 established —
-    // not just non-regression). Isolated measurement (this exact walk against
-    // P5 HEAD via `git stash`): pre-P6 measures 33 preset(s) / 55 region(s) /
-    // 222 atom(s) — every preset that fuses today already fused before P6
-    // (voronoi_2d's/block_displace_field's downstream consumers already
-    // formed their own region reading the multi-output atom as an external
-    // texture; cut rule 6 only decided whether the PRODUCER itself could join
-    // that region, not whether one existed). P6's narrowed cut rule 6
-    // (`tex_out == 0` boundary only, was `tex_out != 1`) admits both
-    // multi-output atoms as region MEMBERS: VoronoiPrism's `cells` (voronoi)
-    // and StarField's own voronoi instance each fold into their preset's
-    // existing region (+1 atom each), Glitch's `block_displace_field` folds
-    // into its existing 2-region split (+1 atom) — net +0 presets, +0
-    // regions, +3 atoms, landing at the 33/55/225 measured just above (no
-    // preset gained a NEW region; three gained one more member each). Floors
-    // sit at the pre-P6 numbers plus P6's real delta, with a little headroom
-    // for unrelated atom-mix churn.
+    // Floor LOWERED on the preset count, 2026-07-17 (BUG-183) — this is not a
+    // partition regression, so lowering is the correct fix rather than the
+    // backlog entry's default assumption. Root cause: commit `a065dec4`
+    // (2026-07-16) unbundled eight 3D-infra presets out to
+    // `assets/reference-presets/` (no longer part of the bundled set this
+    // test walks); CinematicScene was one of them, and it used to fuse — its
+    // fused-WGSL golden was deleted in the same commit. That alone drops the
+    // bundled fused-preset count by one. Meanwhile regions/atoms RATCHETED
+    // UP from unrelated post-P6 work landed since. Measured at tip `1a161d91`
+    // (this session, via the test's own `eprintln!` above): 32 presets / 56
+    // regions / 243 atoms — preset floor moves 33 → 32 (CinematicScene's
+    // departure, verified not a regression elsewhere: every other preset
+    // that fused before still fuses); regions floor moves 55 → 56 and atoms
+    // floor moves 225 → 240 (measured 243, small churn headroom per this
+    // test's own convention).
     assert!(
-        fused_presets >= 33,
-        "expected ≥33 bundled presets to fuse, got {fused_presets} — partition regressed?"
+        fused_presets >= 32,
+        "expected ≥32 bundled presets to fuse, got {fused_presets} — partition regressed?"
     );
     assert!(
-        total_regions >= 55,
-        "expected ≥55 regions library-wide, got {total_regions} — partition regressed?"
+        total_regions >= 56,
+        "expected ≥56 regions library-wide, got {total_regions} — partition regressed?"
     );
     assert!(
-        total_fused_atoms >= 225,
-        "expected ≥225 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
+        total_fused_atoms >= 240,
+        "expected ≥240 atoms folded library-wide, got {total_fused_atoms} — partition regressed?"
     );
 }
 
