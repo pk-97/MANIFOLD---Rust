@@ -26,7 +26,7 @@ use std::sync::mpsc;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_load::load_gltf_morph_deltas;
+use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -52,7 +52,13 @@ crate::primitive! {
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            range: Some((0.0, 1024.0)),
+            // BUG-207: -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
+            // the sole mesh-owning node contributing the glTF default
+            // (materialless) material — real glTF material indices are
+            // always >= 0, so widening the range down to -2 costs nothing
+            // for every existing selection.
+            range: Some((-2.0, 1024.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -108,11 +114,20 @@ impl Primitive for GltfMorphDeltasSource {
             self.staging = None;
             self.staging_len_bytes = 0;
             self.uploaded = false;
-            if !path.is_empty() && material_index >= 0 {
+            if !path.is_empty() && (material_index >= 0 || material_index == DEFAULT_MATERIAL_MESH_PARAM) {
+                // BUG-207: translate the "-2" param sentinel back to the
+                // `gltf_load` sentinel `load_gltf_morph_deltas` expects —
+                // same two-sentinel-space split `gltf_mesh_source.rs` uses
+                // (`-1` stays the param's own "unset" default).
+                let load_material_index = if material_index == DEFAULT_MATERIAL_MESH_PARAM {
+                    DEFAULT_MATERIAL_SENTINEL
+                } else {
+                    material_index as u32
+                };
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_morph_deltas(&path_buf, material_index as u32);
+                    let result = load_gltf_morph_deltas(&path_buf, load_material_index);
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);

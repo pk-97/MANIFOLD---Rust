@@ -8052,7 +8052,7 @@
           "label": "Material Index",
           "name": "material_index",
           "range": [
-            "0",
+            "-2",
             "1024"
           ],
           "type": "int"
@@ -8378,7 +8378,7 @@
           "label": "Material Index",
           "name": "material_index",
           "range": [
-            "0",
+            "-2",
             "1024"
           ],
           "type": "int"

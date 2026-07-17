@@ -77,7 +77,7 @@ pub struct ImportReport {
     /// How many objects got a `node.gltf_texture_source` → `base_color_map_N` wire.
     pub textures_wired: usize,
     /// Triangle-list vertices belonging to glTF's unassigned default
-    /// material — v1 does not import these (mirrors
+    /// material — imported as a real object since BUG-171 (mirrors
     /// [`gltf_load::GltfImportSummary::default_material_vertex_count`]).
     pub default_material_vertex_count: u32,
     /// Always `true` today — the assembler always synthesizes a framing
@@ -795,9 +795,9 @@ fn build_object_group(
         // comes ENTIRELY from its joint hierarchy (glTF 2.0 §3.7.3.3) — the
         // rigid-object `node.gltf_mesh_source` Material selector, which
         // world-transforms vertices by the mesh-owning node's OWN
-        // transform, would double-transform a skinned mesh. `m.skin` is
-        // only `Some` for a real glTF material (never the synthetic
-        // default-material entry — that path never resolves a skin).
+        // transform, would double-transform a skinned mesh. BUG-207: `m.skin`
+        // now resolves for the synthetic default-material entry too — a
+        // materialless skinned rig is exactly as valid as a materialed one.
         let skinned_vertices_source: Option<u32> = if let Some(obj_skin) = &m.skin {
             let skinned_src = {
                 let mut n = plain_node(
@@ -806,8 +806,19 @@ fn build_object_group(
                     "node.gltf_skinned_mesh_source",
                     &mesh_node_id,
                 );
+                // BUG-207: `m.material_index == DEFAULT_MATERIAL_SENTINEL`
+                // (u32::MAX) marks the synthetic default-material entry —
+                // translate it to `gltf_skinned_mesh_source`'s own reserved
+                // param sentinel, mirroring the static branch below
+                // (`u32::MAX as i32` would collide with -1, the param's
+                // pre-existing "unset" value).
+                let skinned_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
+                    gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+                } else {
+                    m.material_index as i32
+                };
                 n.params
-                    .insert("material_index".to_string(), int(m.material_index as i32));
+                    .insert("material_index".to_string(), int(skinned_material_param));
                 n.params
                     .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
                 // BUG-194/BUG-195: import-time provenance, read by SceneVm
@@ -959,9 +970,17 @@ fn build_object_group(
             let deltas_id = fresh_id();
             let mut deltas_node =
                 plain_node(deltas_id, &deltas_node_id, "node.gltf_morph_deltas_source", &deltas_node_id);
+            // BUG-207: same sentinel translation as the skinned/static
+            // branches above — `u32::MAX` never re-queried as a document
+            // material index.
+            let deltas_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
+                gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+            } else {
+                m.material_index as i32
+            };
             deltas_node
                 .params
-                .insert("material_index".to_string(), int(m.material_index as i32));
+                .insert("material_index".to_string(), int(deltas_material_param));
             deltas_node.params.insert(
                 "max_capacity".to_string(),
                 int((morph.target_count.max(1) * m.vertex_count.max(1)) as i32),
@@ -1972,9 +1991,14 @@ fn build_import_graph(
     materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
     let n = materials.len();
     if summary.default_material_vertex_count > 0 {
+        // BUG-171 made this geometry import as a real object (a synthetic
+        // default-material entry); BUG-207 made that entry resolve its own
+        // skin/morph/animation too. This log line is informational, not a
+        // warning about dropped data — kept at `warn!` so it's still easy
+        // to spot in a log dump when triaging an import.
         log::warn!(
             "gltf_import::assemble_import_graph({}): {} vertices belong to glTF's unassigned \
-             default material — v1 does not import these",
+             default material — imported as a normal object (glTF spec §3.9.2 implicit default)",
             path.display(),
             summary.default_material_vertex_count,
         );
