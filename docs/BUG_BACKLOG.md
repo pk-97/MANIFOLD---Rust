@@ -172,7 +172,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-227 (manifold-app-tests-gate-clippy-debt-recurrence) — `cargo clippy -p manifold-app --tests -- -D warnings` fails on 3 pre-existing, unrelated lints — found 2026-07-17, lane/import-responsiveness P3 session, while scoping this phase's clippy gate — LOW (lint-only, same class as BUG-088/BUG-110)
+### BUG-228 (manifold-app-tests-gate-clippy-debt-recurrence) — `cargo clippy -p manifold-app --tests -- -D warnings` fails on 3 pre-existing, unrelated lints — found 2026-07-17, lane/import-responsiveness P3 session, while scoping this phase's clippy gate — LOW (lint-only, same class as BUG-088/BUG-110)
 
 **Status:** OPEN — LOW. Confirmed pre-existing and unrelated to this session's changes: `git stash` reproduced all three on the unmodified `HEAD` (`6af40d52`) before any P3 edits landed.
 
