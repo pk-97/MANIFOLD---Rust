@@ -21,6 +21,17 @@
 //! stubbed `content_tx` channel is a faithful, unmodified call of the real
 //! UI-thread code path.
 //!
+//! P3 (`IMPORT_RESPONSIVENESS_DESIGN.md` D3) moved the blocking work off
+//! `import_model_file` onto a background thread — the method now returns
+//! almost immediately (spawn+enqueue only). [`drive_import_to_completion`]
+//! is this harness's adaptation: it drains `Application::drain_import_progress`
+//! in a loop until the worker reports idle, the same "poll until done" shape
+//! a real UI event loop gets for free from ticking every frame. The
+//! sequential-pressure repro below still calls the real
+//! `import_model_file`/`drain_import_progress` pair 3 times in one process —
+//! only the "block until it's done" mechanism changed, from "the call itself
+//! blocks" to "drain in a loop after the call returns".
+//!
 //! To emulate the app's actual runtime shape (a live content thread holding
 //! its own real GPU device, ticking frames, WHILE the "UI thread" runs
 //! `import_model_file` synchronously) a background thread runs a real
@@ -92,6 +103,27 @@ fn log_rss(label: &str) {
     match rss_mb() {
         Some(mb) => eprintln!("[BUG-219] RSS {label}: {mb} MB"),
         None => eprintln!("[BUG-219] RSS {label}: <unavailable>"),
+    }
+}
+
+/// P3 adaptation: `import_model_file` now only spawns+enqueues, so the old
+/// "call it and it's done" repro shape needs an explicit drain loop —
+/// `drain_import_progress` until the worker (and any queued follow-up) goes
+/// idle, or `timeout` elapses (a hang here IS a repro-worthy finding, same
+/// posture as the pre-P3 code catching a panic). Polls every 5ms, matching
+/// the frame-cadence a real UI event loop would drain at.
+fn drive_import_to_completion(app: &mut crate::app::Application, timeout: std::time::Duration) {
+    let started = std::time::Instant::now();
+    loop {
+        app.drain_import_progress();
+        if !app.import_worker_busy && app.import_queue.is_empty() {
+            return;
+        }
+        assert!(
+            started.elapsed() < timeout,
+            "BUG-219: import worker never reported done within {timeout:?} — treat as a repro"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -178,33 +210,37 @@ fn bug219_interactive_import_sequential_pressure() {
     let mut app = headless_application();
     log_rss("before any import");
 
+    // P3: `import_model_file` is spawn+enqueue only now — the blocking work
+    // (and anything that could crash) runs on a background thread this
+    // process's default panic hook still prints to stderr on its own, even
+    // though `catch_unwind` here can no longer intercept it (that only
+    // catches panics on THIS thread). A worker-thread crash now shows up as
+    // `drive_import_to_completion`'s timeout assert failing below, with the
+    // panic message visible above it in `--nocapture` output — the repro
+    // artifact just moved from "caught panic" to "timeout + stderr line".
     for i in 1..=3u32 {
         eprintln!("[BUG-219] --- import attempt {i}/3 ---");
         log_rss(&format!("before import {i}"));
         let started = std::time::Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             app.import_model_file(&path, 0.0, None);
+            drive_import_to_completion(&mut app, std::time::Duration::from_secs(60));
         }));
         let elapsed = started.elapsed();
         eprintln!(
-            "[BUG-219] import {i} wall-clock (blocking on this thread, exactly as the real \
-             UI thread would block): {elapsed:?}"
+            "[BUG-219] import {i} wall-clock (spawn + drain-to-done on this thread, the \
+             real UI thread's per-frame drain compressed into a poll loop): {elapsed:?}"
         );
         log_rss(&format!("after import {i}"));
         match result {
-            Ok(()) => eprintln!("[BUG-219] import {i} returned normally (no panic)"),
+            Ok(()) => eprintln!("[BUG-219] import {i} completed (no UI-thread panic, no timeout)"),
             Err(payload) => {
                 let msg = payload
                     .downcast_ref::<&str>()
                     .map(|s| s.to_string())
                     .or_else(|| payload.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "<non-string panic payload>".to_string());
-                eprintln!("[BUG-219] import {i} PANICKED: {msg}");
-                // Surface the panic to the test harness rather than
-                // silently swallowing it — a caught panic here IS the
-                // repro artifact; let the test fail loudly with the
-                // captured message plus whatever RUST_BACKTRACE printed
-                // above.
+                eprintln!("[BUG-219] import {i} PANICKED or TIMED OUT: {msg}");
                 stop_bg.store(true, Ordering::Relaxed);
                 panic!("BUG-219 reproduced on import attempt {i}/3: {msg}");
             }
@@ -256,8 +292,9 @@ fn bug219_interactive_import_with_existing_gpu_context_reuses_device() {
         log_rss(&format!("before import {i}"));
         let started = std::time::Instant::now();
         app.import_model_file(&path, 0.0, None);
+        drive_import_to_completion(&mut app, std::time::Duration::from_secs(60));
         let elapsed = started.elapsed();
-        eprintln!("[BUG-219 P2] import {i} wall-clock: {elapsed:?}");
+        eprintln!("[BUG-219 P2] import {i} wall-clock (spawn + drain-to-done): {elapsed:?}");
         log_rss(&format!("after import {i}"));
     }
 

@@ -159,6 +159,23 @@ pub struct Application {
     /// never a log-only failure. `None` while no import is in flight.
     pub(crate) import_failures_rx: Option<std::sync::mpsc::Receiver<Vec<String>>>,
 
+    /// IMPORT_RESPONSIVENESS_DESIGN.md D3: the background model-import
+    /// worker's progress channel — one long-lived pair for the process's
+    /// lifetime (unlike `import_failures_rx`, which is created fresh per
+    /// batch), since imports queue rather than run in parallel (see
+    /// `import_queue` below). Drained once per frame by
+    /// `drain_import_progress` (`app_render.rs`, same site as
+    /// `tick_import_failures`).
+    pub(crate) import_progress_tx: crossbeam_channel::Sender<crate::import_worker::ImportProgress>,
+    pub(crate) import_progress_rx: crossbeam_channel::Receiver<crate::import_worker::ImportProgress>,
+    /// True while a background import worker thread is in flight — gates
+    /// whether `import_model_file` spawns immediately or enqueues.
+    pub(crate) import_worker_busy: bool,
+    /// FIFO queue of drops that arrived while a worker was already running
+    /// (D3: "concurrent drops queue... one worker at a time"). Drained by
+    /// `drain_import_progress` immediately after each `Done`/`Failed`.
+    pub(crate) import_queue: std::collections::VecDeque<crate::import_worker::ImportRequest>,
+
     /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1), phase
     /// P2. Cadence gate — pure logic, ticked from the content-state drain in
     /// both editor and perform mode (unlike autosave, NOT parked in perform
@@ -604,10 +621,15 @@ impl Application {
 
     pub fn new() -> Self {
         let default_project = Self::create_default_project();
+        let (import_progress_tx, import_progress_rx) = crossbeam_channel::unbounded();
 
         Self {
             gpu: None,
             import_validation_device: None,
+            import_progress_tx,
+            import_progress_rx,
+            import_worker_busy: false,
+            import_queue: std::collections::VecDeque::new(),
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
             app_menu: None,
