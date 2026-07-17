@@ -58,13 +58,21 @@ struct Args {
     frames_max: u32,
     non_black_floor: f64,
     trace: bool,
+    /// BUG-210: the render clock is FROZEN at this time (seconds) for the
+    /// whole convergence loop — auto-playing imports (GLTF_ANIMATION
+    /// A1–A4) re-pose every frame under an advancing clock, so
+    /// byte-stability never lands and every animated asset reads as
+    /// "never converged". Pick the animation moment with `--time`;
+    /// texture-decode convergence still works (a decode swap breaks the
+    /// stability streak once, then re-stabilizes).
+    time: f64,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     let glb = argv
         .next()
-        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--trace]")?;
+        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace]")?;
     let mut args = Args {
         glb: PathBuf::from(glb),
         width: 1280,
@@ -74,6 +82,7 @@ fn parse_args() -> Result<Args, String> {
         frames_max: 300,
         non_black_floor: 0.02,
         trace: false,
+        time: 0.0,
     };
     while let Some(flag) = argv.next() {
         if flag == "--trace" {
@@ -98,6 +107,9 @@ fn parse_args() -> Result<Args, String> {
             "--non-black-floor" => {
                 args.non_black_floor =
                     value.parse().map_err(|e| format!("bad non-black-floor: {e}"))?;
+            }
+            "--time" => {
+                args.time = value.parse().map_err(|e| format!("bad time: {e}"))?;
             }
             "--param" => {
                 let (id, v) = value
@@ -231,7 +243,9 @@ fn main() {
     let mut last_fraction = 0.0f64;
     let mut final_rgba = Vec::new();
     for frame in 0..args.frames_max {
-        let time = frame as f64 * DT as f64;
+        // BUG-210: frozen clock (see `Args::time`) — `frame_count` still
+        // advances for the decode/io paths.
+        let time = args.time;
         let ctx = PresetContext {
             time,
             beat: time * 2.0, // 120 bpm
@@ -244,7 +258,7 @@ fn main() {
             owner_key: 0,
             is_clip_level: false,
             frame_count: frame as i64,
-            anim_progress: (frame as f32 / 60.0).min(1.0),
+            anim_progress: 1.0,
             trigger_count: 0,
         };
         let mut enc = device.create_encoder("render-import-frame");
