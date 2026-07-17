@@ -125,12 +125,14 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 }
 
 /// Wire one glTF map texture (normal / metallic-roughness / occlusion /
-/// emissive) into this object's group: creates a `node.gltf_texture_source`
+/// emissive / …) into this object's group: creates a `node.gltf_texture_source`
 /// (or reuses one already created for the same `texture_index` within this
 /// object — D5's ORM-packing case, where the occlusion and
-/// metallic-roughness maps are the same physical image), adds the group's
-/// outward `port_name` interface port, wires the source into it, and adds
-/// the outer-card Model File → source-node `path` string binding (the same
+/// metallic-roughness maps are the same physical image), wires the source
+/// directly into the object's `node.scene_object` input named `port_name`
+/// (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3 — snake_case, matching
+/// `SceneObjectNode`'s port names, e.g. `normal_map`/`mr_map`), and adds the
+/// outer-card Model File → source-node `path` string binding (the same
 /// convention `assemble_import_graph`'s base-color wiring above uses).
 /// `cache` is scoped to ONE object (`k`) — keyed by glTF `texture_index` so
 /// a second map wired from the same physical image reuses the first map's
@@ -146,10 +148,9 @@ fn wire_map_texture(
     fresh_id: &mut impl FnMut() -> u32,
     group_nodes: &mut Vec<EffectGraphNode>,
     group_wires: &mut Vec<EffectGraphWire>,
-    outputs: &mut Vec<InterfacePortDef>,
     string_bindings: &mut Vec<StringBindingDef>,
     cache: &mut std::collections::HashMap<(u32, u32, u32), (u32, String)>,
-    out_id: u32,
+    scene_object_id: u32,
     channel_mode: u32,
 ) {
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 bugfix: the cache key MUST
@@ -196,8 +197,7 @@ fn wire_map_texture(
         entry
     };
 
-    outputs.push(InterfacePortDef { name: port_name.to_string(), port_type: "Texture2D".to_string() });
-    group_wires.push(wire(node_numeric_id, "out", out_id, port_name));
+    group_wires.push(wire(node_numeric_id, "out", scene_object_id, port_name));
 }
 
 fn float(v: f32) -> SerializedParamValue {
@@ -1307,30 +1307,29 @@ fn build_object_group(
             "scene_ambient", "Ambient", 0.0, &mat_node_id, "ambient", 1.0,
         ));
 
-        // The group's outward interface: the mesh geometry, the material,
-        // this object's transform, and (when present) the base-color
-        // texture, each exposed through the `system.group_output` and wired
-        // out to the shared render node.
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: the group's outward
+        // interface is a single `object: Object` port. Internally, the mesh
+        // geometry, the material, this object's transform, and every
+        // present map/instances wire into a `node.scene_object` node (NOT
+        // directly to render_scene's legacy per-object ports, which no
+        // longer exist post-P2); that node's single `object` output is what
+        // crosses the group boundary via `system.group_output`.
+        let scene_object_id = fresh_id();
         let out_id = fresh_id();
-        let mut outputs = vec![
-            InterfacePortDef { name: "vertices".to_string(), port_type: "Array(Vertex)".to_string() },
-            InterfacePortDef { name: "material".to_string(), port_type: "Material".to_string() },
-            InterfacePortDef { name: "transform".to_string(), port_type: "Transform".to_string() },
-        ];
-        // A2: a skinned object's group-output vertices come from
-        // node.skin_mesh's `out`, not directly from the mesh source (which
-        // for a skinned object outputs UNDEFORMED bind-pose geometry). A3:
-        // likewise a morphed object's vertices come from
-        // node.morph_targets_blend's `out`, not the base mesh source
-        // directly (which outputs the UNBLENDED bind/rest geometry) — a
-        // morphed object's base geometry alone is never what should
-        // render once targets are non-static.
+        let outputs = vec![InterfacePortDef { name: "object".to_string(), port_type: "Object".to_string() }];
+        // A2: a skinned object's vertices come from node.skin_mesh's `out`,
+        // not directly from the mesh source (which for a skinned object
+        // outputs UNDEFORMED bind-pose geometry). A3: likewise a morphed
+        // object's vertices come from node.morph_targets_blend's `out`, not
+        // the base mesh source directly (which outputs the UNBLENDED
+        // bind/rest geometry) — a morphed object's base geometry alone is
+        // never what should render once targets are non-static.
         match (skinned_vertices_source, morphed_vertices_source) {
-            (Some(skinmesh_id), _) => group_wires.push(wire(skinmesh_id, "out", out_id, "vertices")),
-            (None, Some(blend_id)) => group_wires.push(wire(blend_id, "out", out_id, "vertices")),
-            (None, None) => group_wires.push(wire(mesh_id, "vertices", out_id, "vertices")),
+            (Some(skinmesh_id), _) => group_wires.push(wire(skinmesh_id, "out", scene_object_id, "vertices")),
+            (None, Some(blend_id)) => group_wires.push(wire(blend_id, "out", scene_object_id, "vertices")),
+            (None, None) => group_wires.push(wire(mesh_id, "vertices", scene_object_id, "vertices")),
         }
-        group_wires.push(wire(mat_id, "out", out_id, "material"));
+        group_wires.push(wire(mat_id, "out", scene_object_id, "material"));
 
         // Recenter this object at the origin so the fixed-target orbit
         // camera frames the (not-recentered) gltf_mesh_source output — same
@@ -1352,7 +1351,7 @@ fn build_object_group(
         transform_node.params.insert("pos_y".to_string(), float(-center[1]));
         transform_node.params.insert("pos_z".to_string(), float(-center[2]));
         group_nodes.push(transform_node);
-        group_wires.push(wire(transform_id, "transform", out_id, "transform"));
+        group_wires.push(wire(transform_id, "transform", scene_object_id, "transform"));
 
         // GLTF_ANIMATION_DESIGN.md A1/A4 (D1): "animating a rigid node is
         // animating params" — when this object's animation resolved in AT
@@ -1460,7 +1459,6 @@ fn build_object_group(
             },
         });
 
-        let has_tex = m.base_color_texture.is_some();
         if let Some(tex_index) = m.base_color_texture {
             let tex_node_id = format!("tex_{k}");
             let tex_id = fresh_id();
@@ -1479,11 +1477,7 @@ fn build_object_group(
             tex_node.params.insert("height".to_string(), int(1024));
             group_nodes.push(tex_node);
 
-            outputs.push(InterfacePortDef {
-                name: "baseColor".to_string(),
-                port_type: "Texture2D".to_string(),
-            });
-            group_wires.push(wire(tex_id, "out", out_id, "baseColor"));
+            group_wires.push(wire(tex_id, "out", scene_object_id, "base_color_map"));
 
             string_bindings.push(StringBindingDef {
                 id: MODEL_FILE_PARAM_ID.to_string(),
@@ -1508,41 +1502,37 @@ fn build_object_group(
         // (a colour map, same as base-colour).
         let mut map_tex_cache: std::collections::HashMap<(u32, u32, u32), (u32, String)> =
             std::collections::HashMap::new();
-        let has_normal = m.normal_texture.is_some();
         if let Some(tex_index) = m.normal_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear
                 "normal_tex",
-                "normalMap",
+                "normal_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_mr = m.mr_texture.is_some();
         if let Some(tex_index) = m.mr_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear
                 "mr_tex",
-                "mrMap",
+                "mr_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 // GLB_XFAIL_BURNDOWN_DESIGN.md D2: this is a spec-gloss
                 // specularGlossinessTexture standing in for mrMap — repack
                 // its alpha (gloss) into G=roughness/B=metallic at blit
@@ -1550,41 +1540,37 @@ fn build_object_group(
                 if m.mr_texture_is_gloss_alpha { 1 } else { 0 },
             );
         }
-        let has_occlusion = m.occlusion_texture.is_some();
         if let Some(tex_index) = m.occlusion_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear
                 "occlusion_tex",
-                "occlusionMap",
+                "occlusion_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_emissive = m.emissive_texture.is_some();
         if let Some(tex_index) = m.emissive_texture {
             wire_map_texture(
                 tex_index,
                 0, // sRGB — a colour map, same convention as base-colour
                 "emissive_tex",
-                "emissiveMap",
+                "emissive_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
@@ -1594,98 +1580,88 @@ fn build_object_group(
         // above. sheenColorTexture is a colour map (sRGB); every other
         // extension texture here is a data map (linear) per its own spec
         // section.
-        let has_sheen_color_tex = m.sheen_color_texture.is_some();
         if let Some(tex_index) = m.sheen_color_texture {
             wire_map_texture(
                 tex_index,
                 0, // sRGB — sheenColorTexture is a colour map
                 "sheen_color_tex",
-                "sheenColorMap",
+                "sheen_color_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_sheen_roughness_tex = m.sheen_roughness_texture.is_some();
         if let Some(tex_index) = m.sheen_roughness_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (alpha channel)
                 "sheen_roughness_tex",
-                "sheenRoughnessMap",
+                "sheen_roughness_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_iridescence_tex = m.iridescence_texture.is_some();
         if let Some(tex_index) = m.iridescence_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (R channel = factor scale)
                 "iridescence_tex",
-                "iridescenceMap",
+                "iridescence_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_iridescence_thickness_tex = m.iridescence_thickness_texture.is_some();
         if let Some(tex_index) = m.iridescence_thickness_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (G channel = thickness lerp)
                 "iridescence_thickness_tex",
-                "iridescenceThicknessMap",
+                "iridescence_thickness_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_anisotropy_tex = m.anisotropy_texture.is_some();
         if let Some(tex_index) = m.anisotropy_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (RG = rotation, B = strength)
                 "anisotropy_tex",
-                "anisotropyMap",
+                "anisotropy_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
@@ -1697,149 +1673,150 @@ fn build_object_group(
         // is a data map (alpha channel); specularColorTexture is a colour
         // map (sRGB, tints an RGB factor); transmissionTexture and
         // thicknessTexture are data maps (R/G channels).
-        let has_clearcoat_tex = m.clearcoat_texture.is_some();
         if let Some(tex_index) = m.clearcoat_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (R channel = clearcoatFactor scale)
                 "clearcoat_tex",
-                "clearcoatMap",
+                "clearcoat_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_clearcoat_roughness_tex = m.clearcoat_roughness_texture.is_some();
         if let Some(tex_index) = m.clearcoat_roughness_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (G channel = clearcoatRoughnessFactor scale)
                 "clearcoat_roughness_tex",
-                "clearcoatRoughnessMap",
+                "clearcoat_roughness_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_clearcoat_normal_tex = m.clearcoat_normal_texture.is_some();
         if let Some(tex_index) = m.clearcoat_normal_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — tangent-space normal map, same convention as normalMap
                 "clearcoat_normal_tex",
-                "clearcoatNormalMap",
+                "clearcoat_normal_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_specular_tex = m.specular_texture.is_some();
         if let Some(tex_index) = m.specular_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (ALPHA channel = specularFactor scale)
                 "specular_tex",
-                "specularMap",
+                "specular_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_specular_color_tex = m.specular_color_texture.is_some();
         if let Some(tex_index) = m.specular_color_texture {
             wire_map_texture(
                 tex_index,
                 0, // sRGB — specularColorTexture is a colour map
                 "specular_color_tex",
-                "specularColorMap",
+                "specular_color_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_transmission_tex = m.transmission_texture.is_some();
         if let Some(tex_index) = m.transmission_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (R channel = transmissionFactor scale)
                 "transmission_tex",
-                "transmissionMap",
+                "transmission_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
-        let has_volume_thickness_tex = m.volume_thickness_texture.is_some();
         if let Some(tex_index) = m.volume_thickness_texture {
             wire_map_texture(
                 tex_index,
                 1, // Linear — data map (G channel = thicknessFactor scale)
                 "volume_thickness_tex",
-                "volumeThicknessMap",
+                "volume_thickness_map",
                 k,
                 path_str,
                 fresh_id,
                 &mut group_nodes,
                 &mut group_wires,
-                &mut outputs,
                 &mut string_bindings,
                 &mut map_tex_cache,
-                out_id,
+                scene_object_id,
                 0,
             );
         }
 
-        // `system.group_output` closes the body; its port names are the
-        // interface output names the inner wires above target. A boundary node
-        // carries no params and no title.
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3: the `node.scene_object`
+        // node binding this object's mesh/transform/material/maps/instances
+        // (wired above) into a single `Object` value — handle-stamped with
+        // this object's group name (D6: "the object IS its `scene_object`
+        // node; the name is its `handle`"). Its `object` output is what
+        // crosses the group boundary.
+        let scene_object_node = plain_node(
+            scene_object_id,
+            &format!("object_{k}_bind"),
+            "node.scene_object",
+            &group_name,
+        );
+        group_nodes.push(scene_object_node);
+
+        // `system.group_output` closes the body; its single `object` port is
+        // the interface output name the scene_object's wire above targets. A
+        // boundary node carries no params and no title.
         group_nodes.push(plain_node(
             out_id,
             &format!("object_{k}_out"),
             GROUP_OUTPUT_TYPE_ID,
             "output",
         ));
+        group_wires.push(wire(scene_object_id, "object", out_id, "object"));
 
         // The group box itself, named for the material so the top level reads as
         // labeled boxes a performer can navigate. Folded away at load; only its
@@ -1856,116 +1833,12 @@ fn build_object_group(
             tint: Some(group_tint(k)),
         }));
     let mut wires_to_render: Vec<EffectGraphWire> = Vec::new();
-        // Top-level wires: the group's outputs feed the shared render node —
-        // after flattening these become the exact `mesh_k.vertices → render.mesh_k`
-        // (etc.) wires the ungrouped assembler produced.
-        wires_to_render.push(wire(group_id, "vertices", render_id, &format!("mesh_{port_index}")));
-        wires_to_render.push(wire(group_id, "material", render_id, &format!("material_{port_index}")));
-        wires_to_render.push(wire(group_id, "transform", render_id, &format!("transform_{port_index}")));
-        if has_tex {
-            wires_to_render.push(wire(group_id, "baseColor", render_id, &format!("base_color_map_{port_index}")));
-        }
-        if has_normal {
-            wires_to_render.push(wire(group_id, "normalMap", render_id, &format!("normal_map_{port_index}")));
-        }
-        if has_mr {
-            wires_to_render.push(wire(group_id, "mrMap", render_id, &format!("mr_map_{port_index}")));
-        }
-        if has_occlusion {
-            wires_to_render.push(wire(group_id, "occlusionMap", render_id, &format!("occlusion_map_{port_index}")));
-        }
-        if has_emissive {
-            wires_to_render.push(wire(group_id, "emissiveMap", render_id, &format!("emissive_map_{port_index}")));
-        }
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-        if has_sheen_color_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "sheenColorMap",
-                render_id,
-                &format!("sheen_color_map_{port_index}"),
-            ));
-        }
-        if has_sheen_roughness_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "sheenRoughnessMap",
-                render_id,
-                &format!("sheen_roughness_map_{port_index}"),
-            ));
-        }
-        if has_iridescence_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "iridescenceMap",
-                render_id,
-                &format!("iridescence_map_{port_index}"),
-            ));
-        }
-        if has_iridescence_thickness_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "iridescenceThicknessMap",
-                render_id,
-                &format!("iridescence_thickness_map_{port_index}"),
-            ));
-        }
-        if has_anisotropy_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "anisotropyMap",
-                render_id,
-                &format!("anisotropy_map_{port_index}"),
-            ));
-        }
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised): texture-
-        // completion sweep top-level wires.
-        if has_clearcoat_tex {
-            wires_to_render.push(wire(group_id, "clearcoatMap", render_id, &format!("clearcoat_map_{port_index}")));
-        }
-        if has_clearcoat_roughness_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "clearcoatRoughnessMap",
-                render_id,
-                &format!("clearcoat_roughness_map_{port_index}"),
-            ));
-        }
-        if has_clearcoat_normal_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "clearcoatNormalMap",
-                render_id,
-                &format!("clearcoat_normal_map_{port_index}"),
-            ));
-        }
-        if has_specular_tex {
-            wires_to_render.push(wire(group_id, "specularMap", render_id, &format!("specular_map_{port_index}")));
-        }
-        if has_specular_color_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "specularColorMap",
-                render_id,
-                &format!("specular_color_map_{port_index}"),
-            ));
-        }
-        if has_transmission_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "transmissionMap",
-                render_id,
-                &format!("transmission_map_{port_index}"),
-            ));
-        }
-        if has_volume_thickness_tex {
-            wires_to_render.push(wire(
-                group_id,
-                "volumeThicknessMap",
-                render_id,
-                &format!("volume_thickness_map_{port_index}"),
-            ));
-        }
+        // Top-level wire: the group's single `object` output feeds
+        // render_scene's `object_{port_index}` port (D4 — render_scene's v2
+        // per-object surface is `object_{i}` only). After flattening this
+        // becomes the exact `object_k_bind.object → render.object_k` wire
+        // an ungrouped hand-built scene would use directly.
+        wires_to_render.push(wire(group_id, "object", render_id, &format!("object_{port_index}")));
 
     ObjectGroupOutput {
         group_node,
@@ -1986,9 +1859,10 @@ fn build_object_group(
 /// Each distinct material becomes one node **group** (`GROUP_TYPE_ID`) named for
 /// the material: its `node.gltf_mesh_source` + `node.pbr_material` +
 /// `node.transform_3d` (+ optional `node.gltf_texture_source`) live inside,
-/// exposed through a `system.group_output` as `vertices` / `material` /
-/// `transform` / `baseColor`, and the group's outputs wire to the
-/// shared `node.render_scene`. Grouping is a pure presentation layer: it flattens
+/// bound by an inner `node.scene_object` and exposed through a
+/// `system.group_output` as a single `object: Object` port, wired to the
+/// shared `node.render_scene`'s `object_{k}` port (SCENE_OBJECT_AND_PANEL_V2_DESIGN
+/// D1/D3/D4). Grouping is a pure presentation layer: it flattens
 /// away at load (`manifold_core::flatten::flatten_groups`, run inside
 /// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
 /// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
@@ -2745,9 +2619,9 @@ pub struct MergePlan {
     /// camera, NO envmap, NO lights, NO lens — the target scene's chrome is
     /// never touched or duplicated.
     pub new_nodes: Vec<EffectGraphNode>,
-    /// New top-level wires: each new group's outputs into `render_scene`'s
-    /// `mesh_{k}` / `material_{k}` / `transform_{k}` / … ports, `k`
-    /// continuing from the target's existing `objects` count.
+    /// New top-level wires: each new group's single `object` output into
+    /// `render_scene`'s `object_{k}` port, `k` continuing from the target's
+    /// existing `objects` count.
     pub new_wires: Vec<EffectGraphWire>,
     /// `render_scene`'s new `objects` param value (existing + incoming).
     pub new_objects_count: u32,
@@ -3130,16 +3004,14 @@ mod tests {
             "import is 1:1 — object_count must equal material_count, no truncation (D4)"
         );
 
-        // Every material got its own render_scene wire — mesh_0..mesh_99 all
-        // present, nothing dropped past the old 64-object boundary.
+        // Every material got its own render_scene wire — object_0..object_99
+        // all present, nothing dropped past the old 64-object boundary
+        // (SCENE_OBJECT_AND_PANEL_V2_DESIGN D4: render_scene's per-object
+        // surface is `object_{i}` only, post-P2).
         for k in 0..100 {
             assert!(
-                def.wires.iter().any(|w| w.to_port == format!("mesh_{k}")),
-                "material {k} (past the old 64-object cap) must still wire mesh_{k}"
-            );
-            assert!(
-                def.wires.iter().any(|w| w.to_port == format!("material_{k}")),
-                "material {k} must still wire material_{k}"
+                def.wires.iter().any(|w| w.to_port == format!("object_{k}")),
+                "material {k} (past the old 64-object cap) must still wire object_{k}"
             );
         }
         // render_scene's own `objects` param must reflect the true count,
@@ -3366,8 +3238,8 @@ mod tests {
             let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
             for k in 0..n {
                 assert!(
-                    flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == format!("mesh_{k}")),
-                    "{label}: object {k} must still wire mesh_{k} regardless of card curation"
+                    flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == format!("object_{k}")),
+                    "{label}: object {k} must still wire object_{k} regardless of card curation"
                 );
             }
         }
@@ -3746,12 +3618,15 @@ mod tests {
             .copied()
             .collect();
         assert_eq!(object_groups.len(), 2, "one tinted group per object");
-        // Every object group's interface declares a `transform` output (D9).
+        // Every object group's interface declares a single `object` output
+        // (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3 — the transform/material/
+        // mesh triplet is bound INSIDE the group by `node.scene_object` now,
+        // not exposed as separate interface ports).
         for g in &object_groups {
             let outputs = &g.group.as_ref().unwrap().interface.outputs;
             assert!(
-                outputs.iter().any(|o| o.name == "transform" && o.port_type == "Transform"),
-                "every object group exposes a transform output"
+                outputs.iter().any(|o| o.name == "object" && o.port_type == "Object"),
+                "every object group exposes a single object output"
             );
         }
         // Distinct tints per object group (legibility).
@@ -3775,28 +3650,45 @@ mod tests {
             .iter()
             .map(|w| (id_of(w.from_node), w.from_port.clone(), id_of(w.to_node), w.to_port.clone()))
             .collect();
-        for (from_id, from_port, to_port) in [
-            ("mesh_0", "vertices", "mesh_0"),
-            ("mat_0", "out", "material_0"),
-            ("tex_0", "out", "base_color_map_0"),
-            ("mesh_1", "vertices", "mesh_1"),
-            ("mat_1", "out", "material_1"),
-            ("transform_0", "transform", "transform_0"),
-            ("transform_1", "transform", "transform_1"),
+        // Internal wires into each object's `node.scene_object` bind node —
+        // survive flattening in-scope (SCENE_OBJECT_AND_PANEL_V2_DESIGN
+        // D1/D3: the mesh/material/transform/map triplet binds to
+        // scene_object now, not directly to render_scene).
+        for (from_id, from_port, to_id, to_port) in [
+            ("mesh_0", "vertices", "object_0_bind", "vertices"),
+            ("mat_0", "out", "object_0_bind", "material"),
+            ("tex_0", "out", "object_0_bind", "base_color_map"),
+            ("mesh_1", "vertices", "object_1_bind", "vertices"),
+            ("mat_1", "out", "object_1_bind", "material"),
+            ("transform_0", "transform", "object_0_bind", "transform"),
+            ("transform_1", "transform", "object_1_bind", "transform"),
         ] {
             assert!(
                 conn.contains(&(
                     from_id.to_string(),
                     from_port.to_string(),
+                    to_id.to_string(),
+                    to_port.to_string(),
+                )),
+                "flattened graph missing wire {from_id}.{from_port} -> {to_id}.{to_port}"
+            );
+        }
+        // Each object's single `object` output reaches render_scene's
+        // `object_{k}` port (D4 — render_scene's v2 per-object surface).
+        for (from_id, to_port) in [("object_0_bind", "object_0"), ("object_1_bind", "object_1")] {
+            assert!(
+                conn.contains(&(
+                    from_id.to_string(),
+                    "object".to_string(),
                     "render".to_string(),
                     to_port.to_string(),
                 )),
-                "flattened graph missing wire {from_id}.{from_port} -> render.{to_port}"
+                "flattened graph missing wire {from_id}.object -> render.{to_port}"
             );
         }
-        // Bark has no texture — no base_color_map_1 wire.
+        // Bark has no texture — no base_color_map wire into its scene_object.
         assert!(
-            !conn.iter().any(|(_, _, _, tp)| tp == "base_color_map_1"),
+            !conn.iter().any(|(_, _, to, tp)| to == "object_1_bind" && tp == "base_color_map"),
             "untextured object must not wire a base-color map"
         );
         // No group / boundary nodes survive flattening.
@@ -4147,7 +4039,7 @@ mod tests {
 
     /// Objects count bumps correctly: merging N materials into a scene that
     /// already has M objects produces `new_objects_count == M + N`, and the
-    /// new wires target ports `mesh_M..mesh_{M+N-1}` (continuing, never
+    /// new wires target ports `object_M..object_{M+N-1}` (continuing, never
     /// restarting at 0).
     #[test]
     fn merge_bumps_objects_count_and_continues_port_indices() {
@@ -4168,14 +4060,14 @@ mod tests {
 
         for k in existing_objects..(existing_objects + 3) {
             assert!(
-                plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == format!("mesh_{k}")),
-                "new wires must target mesh_{k} (continuing from the existing {existing_objects} objects), not restart at mesh_0"
+                plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == format!("object_{k}")),
+                "new wires must target object_{k} (continuing from the existing {existing_objects} objects), not restart at object_0"
             );
         }
         // Never re-targets an already-occupied port.
         assert!(
-            !plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == "mesh_0"),
-            "merge must not re-wire the scene's EXISTING mesh_0 port"
+            !plan.new_wires.iter().any(|w| w.to_node == render_id && w.to_port == "object_0"),
+            "merge must not re-wire the scene's EXISTING object_0 port"
         );
     }
 
@@ -4414,8 +4306,8 @@ mod tests {
             .id;
         for k in existing_objects..(existing_objects + 2) {
             assert!(
-                flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == format!("mesh_{k}")),
-                "flattened merged def must wire mesh_{k}"
+                flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == format!("object_{k}")),
+                "flattened merged def must wire object_{k}"
             );
         }
 
@@ -4481,8 +4373,8 @@ mod tests {
             .expect("flattened def keeps its render_scene node")
             .id;
         assert!(
-            flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == "mesh_2"),
-            "flattened merged def must wire the new Box object at mesh_2"
+            flat.wires.iter().any(|w| w.to_node == flat_render_id && w.to_port == "object_2"),
+            "flattened merged def must wire the new Box object at object_2"
         );
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_def(merged.clone(), &registry, None)
@@ -4519,8 +4411,8 @@ mod tests {
 
     /// D6 colour-space pinning + D3 port-wiring: a synthetic material
     /// carrying all five texture kinds (base-colour, normal, MR, occlusion,
-    /// emissive) must wire all four NEW ports (`normal_map_0`, `mr_map_0`,
-    /// `occlusion_map_0`, `emissive_map_0`) into `node.render_scene`, each
+    /// emissive) must wire all four NEW ports (`normal_map`, `mr_map`,
+    /// `occlusion_map`, `emissive_map`) into `node.scene_object`, each
     /// fed by a `node.gltf_texture_source` whose `color_space` matches D6:
     /// base-colour and emissive decode sRGB (0), normal/MR/occlusion decode
     /// Linear (1) — the data-map convention (raw bytes ARE the value).
@@ -4545,15 +4437,19 @@ mod tests {
         // uses).
         let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
 
-        let render = flat
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3: the maps wire into this
+        // object's `node.scene_object` bind node (`object_0_bind`), not
+        // directly into render_scene — render_scene only ever sees the
+        // single `object_0` port.
+        let scene_object = flat
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.render_scene")
-            .expect("render_scene node");
-        for port in ["normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+            .find(|n| n.type_id == "node.scene_object")
+            .expect("scene_object bind node");
+        for port in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
             assert!(
-                flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == port),
-                "expected a wire into render_scene port `{port}`"
+                flat.wires.iter().any(|w| w.to_node == scene_object.id && w.to_port == port),
+                "expected a wire into scene_object port `{port}`"
             );
         }
 
@@ -4636,13 +4532,13 @@ mod tests {
             "occlusion_texture == mr_texture must decode through exactly ONE source node, found {}",
             orm_sources.len()
         );
-        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+        let scene_object = flat.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
         let source_id = orm_sources[0].id;
-        for port in ["occlusion_map_0", "mr_map_0"] {
+        for port in ["occlusion_map", "mr_map"] {
             assert!(
                 flat.wires
                     .iter()
-                    .any(|w| w.to_node == render.id && w.to_port == port && w.from_node == source_id),
+                    .any(|w| w.to_node == scene_object.id && w.to_port == port && w.from_node == source_id),
                 "expected `{port}` wired directly from the shared ORM source node"
             );
         }
@@ -4716,18 +4612,20 @@ mod tests {
         assert_eq!(mat.params.get("clearcoat"), Some(&float(1.0)));
         assert_eq!(mat.params.get("clearcoat_roughness"), Some(&float(0.1)));
         // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6: the textured coat wires
-        // `clearcoatMap` from this object's group into `render.clearcoat_map_0`
-        // through the flattener, same as sheen/iridescence/anisotropy.
-        let render = flat
+        // `clearcoat_map` from this object's group into its
+        // `node.scene_object` bind node through the flattener, same as
+        // sheen/iridescence/anisotropy (SCENE_OBJECT_AND_PANEL_V2_DESIGN
+        // D1/D3 — render_scene itself only ever sees `object_0`).
+        let scene_object = flat
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.render_scene")
-            .expect("render_scene node");
+            .find(|n| n.type_id == "node.scene_object")
+            .expect("scene_object bind node");
         assert!(
             flat.wires
                 .iter()
-                .any(|w| w.to_node == render.id && w.to_port == "clearcoat_map_0"),
-            "expected clearcoat_map_0 wired on render_scene"
+                .any(|w| w.to_node == scene_object.id && w.to_port == "clearcoat_map"),
+            "expected clearcoat_map wired on scene_object"
         );
     }
 
@@ -4846,10 +4744,10 @@ mod tests {
         assert_eq!(def, reloaded, "round trip must be byte-for-byte structurally identical");
 
         let flat = manifold_core::flatten::flatten_groups(&reloaded).expect("flatten reloaded def");
-        let render = flat.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
-        for port in ["normal_map_0", "mr_map_0", "occlusion_map_0", "emissive_map_0"] {
+        let scene_object = flat.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
+        for port in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
             assert!(
-                flat.wires.iter().any(|w| w.to_node == render.id && w.to_port == port),
+                flat.wires.iter().any(|w| w.to_node == scene_object.id && w.to_port == port),
                 "reloaded def must still wire `{port}` — maps must stay bound after reload"
             );
         }
