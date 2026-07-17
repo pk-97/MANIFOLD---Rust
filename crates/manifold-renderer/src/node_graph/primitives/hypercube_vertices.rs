@@ -262,6 +262,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for VertexSink {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

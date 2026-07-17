@@ -103,6 +103,10 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: like ssao_gtao — a map derived from a single content
+    // input, read pointwise/gathered at the same coordinate; passes the
+    // input's depth through.
+    depth_rule: Inherit,
     composition_notes: "Output is a grayscale shadow map (R=G=B, A=1): 1.0 = fully lit, (1-strength) = fully shadowed — multiply it into a shading term (node.mix, Multiply mode) alongside node.basic_light's Lambert output or an AO pass; this atom never touches the color image itself, same no-fused-color contract as node.ssao_gtao. `height` expects a raw [0,1] height map (brighter = taller, same `(1-raw)*relief` convention as ssao_gtao's Height Field mode) — pair the two atoms on the SAME `relief` value so their geometric frames agree. `light_x/y/z` point FROM the scene TOWARD the light (same convention as node.basic_light); a light with no horizontal component (light_x=light_y=0) can't cast a screen-space shadow and returns fully lit everywhere. `steps` trades raymarch fidelity for cost; `softness` widens the penumbra as a fraction of `relief`; `strength` above 1.0 lets a soft shadow reach full black sooner without the shadow's edge going harder.",
     examples: [],
     picker: { label: "Heightfield Shadow", category: Atom },
