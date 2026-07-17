@@ -77,6 +77,41 @@ pub struct Workspace {
     /// playhead. Set on a press in the strip body, cleared on release; a move
     /// while set seeks the content thread.
     pub timeline_scrubbing: bool,
+
+    /// P5c (`docs/REALTIME_3D_DESIGN.md`): the persistent 3D-viewport
+    /// session backing the sidebar preview pane when the previewed node is a
+    /// top-level `node.render_scene` node and the viewport is toggled open
+    /// (the `v` editor shortcut, `window_input.rs`). `None` when the
+    /// viewport is closed, no render_scene node is previewed, or the
+    /// previewed node is nested inside a group (`override_camera_def` only
+    /// splices the camera into a node found in the TOP-LEVEL `def.nodes`
+    /// list — a known P5 constraint, not new to P5c). Only meaningful on the
+    /// graph-editor `Workspace`; the main window's never touches it.
+    pub viewport_session: Option<manifold_renderer::node_graph::ViewportSession>,
+    /// UI-device-local texture pane the viewport's composited RGBA8 blits
+    /// through — the same `TexturePane::local` + `blit_texture_pane`
+    /// pattern the audio spectrogram uses (`texture_pane.rs`), never an
+    /// IOSurface bridge: the session renders and the present pass presents
+    /// on the SAME (editor UI) thread, so there is no cross-thread hand-off
+    /// to bridge.
+    pub viewport_pane: Option<crate::texture_pane::TexturePane>,
+    /// User toggle (the `v` editor shortcut): true while the viewport is
+    /// requested open. The session itself only exists while this is `true`
+    /// AND the previewed node qualifies (see `viewport_session` doc) —
+    /// toggling this off always tears the session down immediately in the
+    /// same frame, releasing its GPU resources.
+    pub viewport_open: bool,
+    /// The viewport's screen rect in logical window pixels, as last computed
+    /// by the present pass — `None` when the viewport isn't showing this
+    /// frame. Input handlers (`window_input.rs`) hit-test against this to
+    /// route mouse events to `viewport_input::classify_*`/`apply` instead of
+    /// the canvas's own pan/zoom.
+    pub viewport_rect: Option<manifold_ui::Rect>,
+    /// Active viewport navigation drag: `(button, last_logical_x,
+    /// last_logical_y)`, set on a press inside `viewport_rect` while a
+    /// session is open, cleared on release. Drives the per-move delta fed to
+    /// `viewport_input::classify_mouse_drag`.
+    pub viewport_drag: Option<(winit::event::MouseButton, f32, f32)>,
 }
 
 impl Workspace {
@@ -103,6 +138,11 @@ impl Workspace {
             surface_resized_this_frame: false,
             dock: manifold_ui::Dock::editor(),
             timeline_scrubbing: false,
+            viewport_session: None,
+            viewport_pane: None,
+            viewport_open: false,
+            viewport_rect: None,
+            viewport_drag: None,
         }
     }
 }

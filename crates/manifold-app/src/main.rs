@@ -69,6 +69,15 @@ mod bug035_verify;
 // separate harness to maintain).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod bug037_verify;
+// BUG-219 P1 evidence harness (docs/IMPORT_RESPONSIVENESS_DESIGN.md P1):
+// drives the REAL `Application::import_model_file` (unmodified) against the
+// full 43MB ABeautifulGame.glb fixture, sequentially 3x, with a real
+// content-shaped GPU runtime alive concurrently — the interactive-app shape
+// BUG-219's headless `render-import` repro attempt never exercised. Shares
+// `journey_proof`'s headless-`ContentThread` infra (same feature gate). Its
+// one test is `#[ignore]`d — deliberate-run only, never the default sweep.
+#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
+mod bug219_verify;
 mod perform_mode;
 // `cargo xtask perf-soak <project> --seconds N [--start <beats>]
 // [--update-baseline]` — PERF_BUDGET_GATE_DESIGN.md P1: headless, real-time
@@ -97,6 +106,9 @@ mod ui_translate;
 mod user_library;
 mod user_prefs;
 mod window_input;
+mod viewport_input;
+// P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
+mod viewport_p5c_demo;
 mod window_registry;
 mod workspace;
 

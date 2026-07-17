@@ -864,6 +864,34 @@ impl Application {
             return;
         }
 
+        // P5c 3D viewport navigation: an active drag (started by a press
+        // inside `viewport_rect`, see `editor_mouse_input`) claims the move
+        // outright and routes it through `viewport_input` instead of canvas
+        // pan — same precedence tier as the dock-drag/timeline-scrub blocks
+        // above. The drag can leave the rect mid-gesture (fast mouse
+        // movement); it stays claimed until release, matching every other
+        // drag in this file.
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some((button, last_x, last_y)) = ed.viewport_drag
+        {
+            let dx = logical_x - last_x;
+            let dy = logical_y - last_y;
+            ed.viewport_drag = Some((button, logical_x, logical_y));
+            let shift = self.modifiers.shift;
+            if let Some(session) = ed.viewport_session.as_mut()
+                && let Some(gesture) =
+                    crate::viewport_input::classify_mouse_drag(button, shift, dx, dy)
+            {
+                crate::viewport_input::apply(
+                    session,
+                    gesture,
+                    &crate::viewport_input::ViewportInputSensitivity::default(),
+                );
+                ed.offscreen_dirty = true;
+            }
+            return;
+        }
+
         // Preview sidebar on the left, card lane on the right (matches the main
         // timeline's inspector docking right). Geometry from the same `Dock` the
         // present pass reads, so the canvas viewport tracks the dragged columns.
@@ -1106,6 +1134,37 @@ impl Application {
                 }
             }
         }
+        // P5c 3D viewport: a release always clears any in-flight viewport
+        // drag first (so a mouse-up outside the rect — the drag left it, or
+        // the button changed — still ends the gesture cleanly), then a press
+        // inside `viewport_rect` on a bound button (left orbit, middle pan)
+        // starts one. Both consume the event outright, same precedence tier
+        // as the dock-drag/mini-timeline blocks above — the canvas never
+        // sees clicks the viewport claims.
+        if state == ElementState::Released
+            && let Some(ed) = self.graph_editor.as_mut()
+            && ed.viewport_drag.take().is_some()
+        {
+            ed.offscreen_dirty = true;
+            return;
+        }
+        if state == ElementState::Pressed
+            && matches!(button, MouseButton::Left | MouseButton::Middle)
+        {
+            let (cx, cy) = self
+                .graph_canvas
+                .as_ref()
+                .map(|c| c.cursor())
+                .unwrap_or((0.0, 0.0));
+            if let Some(ed) = self.graph_editor.as_mut()
+                && ed.viewport_session.is_some()
+                && ed.viewport_rect.is_some_and(|r| r.contains(Vec2::new(cx, cy)))
+            {
+                ed.viewport_drag = Some((button, cx, cy));
+                ed.offscreen_dirty = true;
+                return;
+            }
+        }
         if let Some(canvas) = self.graph_canvas.as_mut() {
             let window_size = self
                 .window_registry
@@ -1283,11 +1342,48 @@ impl Application {
         // The editor rebuilds its tree every present, so updating the scroll offset
         // here takes effect on the next build_inspector_in_rect. Cursor is tracked
         // by the canvas; column geometry from the same `Dock` the present reads.
-        let (cx, _cy) = self
+        let (cx, cy) = self
             .graph_canvas
             .as_ref()
             .map(|c| c.cursor())
             .unwrap_or((0.0, 0.0));
+        // P5c 3D viewport dolly: scroll while hovering the viewport pane
+        // dollies the editor camera instead of zooming the canvas. Checked
+        // before the inspector-scroll/canvas-zoom branches below — the two
+        // rects (far-left preview column vs. right card lane vs. the canvas
+        // in between) never overlap, so precedence order is cosmetic, but
+        // this keeps the viewport's own `apply` call site together with its
+        // press/drag/release handling in `editor_mouse_input`/
+        // `editor_cursor_moved`.
+        if let Some(ed) = self.graph_editor.as_mut()
+            && let Some(rect) = ed.viewport_rect
+            && rect.contains(Vec2::new(cx, cy))
+            && let Some(session) = ed.viewport_session.as_mut()
+        {
+            // `LineDelta` is a physical mouse wheel notch → dolly. A trackpad
+            // reports `PixelDelta`: on macOS a pinch-to-zoom gesture arrives
+            // as a Ctrl-modified `PixelDelta` scroll (the OS-level pinch→
+            // scroll translation apps rely on absent a native magnify-gesture
+            // handler — this app has none), so Ctrl+PixelDelta is the pinch
+            // dolly and a bare PixelDelta is the two-finger trackpad pan.
+            let sens = crate::viewport_input::ViewportInputSensitivity::default();
+            let gesture = match delta {
+                MouseScrollDelta::LineDelta(_, y) => {
+                    Some(crate::viewport_input::classify_scroll(y * LINE_DELTA_PX))
+                }
+                MouseScrollDelta::PixelDelta(pos) if self.modifiers.ctrl => Some(
+                    crate::viewport_input::classify_trackpad_pinch_dolly(pos.y as f32),
+                ),
+                MouseScrollDelta::PixelDelta(pos) => Some(
+                    crate::viewport_input::classify_trackpad_pan(pos.x as f32, pos.y as f32),
+                ),
+            };
+            if let Some(gesture) = gesture {
+                crate::viewport_input::apply(session, gesture, &sens);
+            }
+            ed.offscreen_dirty = true;
+            return true;
+        }
         let card_x = self.graph_editor.as_ref().map(|ed| {
             let (s, sz) = {
                 let w = &self.window_registry.get(&window_id);
@@ -1618,6 +1714,12 @@ impl Application {
         //   Esc → leave the current group (pop one scope level), if
         //         the view is inside a group.
         //   `   → toggle the debug overlay HUD.
+        //   v   → toggle the P5c 3D viewport (`docs/REALTIME_3D_DESIGN.md`).
+        //         Only takes effect once the previewed node is a top-level
+        //         `node.render_scene` node (`app_render.rs`'s
+        //         `present_graph_editor_window` gates the actual session on
+        //         that + this bool) — pressing it otherwise just arms the
+        //         toggle for when a qualifying node is selected.
         // (Ctrl+G group / Ctrl+Shift+G ungroup are handled below.)
         if is_graph_editor {
             use winit::keyboard::{Key, NamedKey};
@@ -1640,6 +1742,20 @@ impl Application {
                 Key::Character(c) if c.as_str() == "`" => {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.toggle_debug_overlay();
+                    }
+                    handled = true;
+                }
+                Key::Character(c) if c.eq_ignore_ascii_case("v") => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.viewport_open = !ed.viewport_open;
+                        ed.viewport_drag = None;
+                        if !ed.viewport_open {
+                            // Tear down immediately — GPU resources release
+                            // this frame, not on some later poll.
+                            ed.viewport_session = None;
+                            ed.viewport_pane = None;
+                            ed.viewport_rect = None;
+                        }
                     }
                     handled = true;
                 }
