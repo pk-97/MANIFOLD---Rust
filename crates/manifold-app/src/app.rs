@@ -286,6 +286,13 @@ pub struct Application {
     pub(crate) clip_thumb_quad_scratch: Vec<manifold_renderer::clip_thumb_gpu::ThumbQuad>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Built once (construction walks the whole ~185-primitive inventory);
+    /// shared by every `ViewportSession::open`/`sync_def` call (P5c,
+    /// `docs/REALTIME_3D_DESIGN.md`) so opening/re-syncing the 3D viewport
+    /// never rebuilds the registry per frame — `Arc` because
+    /// `ViewportSession` doesn't need ownership, just a shared borrow that
+    /// outlives any one call.
+    pub(crate) primitive_registry: std::sync::Arc<manifold_renderer::node_graph::PrimitiveRegistry>,
     /// Audio Setup spectrogram waterfall renderer + its target texture, created
     /// lazily on the UI device when the scope opens and rebuilt if the column
     /// bin count changes. `spectrogram_num_bins` tracks the built layout.
@@ -660,6 +667,9 @@ impl Application {
             clip_thumb_quad_scratch: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
+            primitive_registry: std::sync::Arc::new(
+                manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+            ),
             spectrogram: None,
             #[cfg(target_os = "macos")]
             spectrogram_pane: None,
