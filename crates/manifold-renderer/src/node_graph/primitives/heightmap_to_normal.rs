@@ -89,6 +89,15 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/heightmap_to_normal_body.wgsl"),
     input_access: [Gather],
+    // D6(a) deliberately does NOT mark `in` precision_critical here, despite
+    // DEPTH_RELIGHT_DESIGN.md §D6 naming this atom as a "differentiate"
+    // consumer: `in` is `Gather` (see the body — 4 `textureSampleLevel`
+    // taps through a real filtering sampler), not `GatherTexel`. A
+    // non-filterable `Rgba32Float` producer can't back a filtering sampler
+    // read on Apple GPUs, so promoting an upstream intermediate here would
+    // break this atom's own read — the meta-test
+    // `precision_critical_inputs_are_texel_exact` (freeze::classify) is
+    // exactly the guard that would catch this if it were mis-marked.
 }
 
 impl Primitive for HeightmapToNormal {

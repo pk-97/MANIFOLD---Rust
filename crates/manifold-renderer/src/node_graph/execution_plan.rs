@@ -277,6 +277,39 @@ impl ExecutionPlan {
     }
 }
 
+/// D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): whether a materialized Texture2D
+/// intermediate should be allocated `Rgba32Float` instead of the backend
+/// default, given ALL of its consumers.
+///
+/// Promotes when at least one consumer names this wire's target port
+/// `precision_critical` — AND no consumer (the same one or a different one)
+/// reads it through a filtering sampler (`InputAccess::Coincident`/`Gather`).
+/// The second condition is the mixed-consumer safety rule: `Rgba32Float` is
+/// non-filterable on Apple GPUs, so a single filtering consumer anywhere in
+/// the fan-out vetoes the promotion for everyone — the texel-exact consumer
+/// stays on fp16 rather than break the filtering one. `test_mixed_consumer_stays_fp16`
+/// covers this exact shape.
+fn wants_fp32_intermediate(graph: &Graph, consumers: &[&NodeWire]) -> bool {
+    let mut has_precision_critical_consumer = false;
+    let mut has_filtering_consumer = false;
+    for wire in consumers {
+        let Some(consumer_inst) = graph.get_node(wire.to.0) else {
+            continue;
+        };
+        let node = consumer_inst.node.as_ref();
+        let port = wire.to.1;
+        if node.precision_critical_inputs().contains(&port) {
+            has_precision_critical_consumer = true;
+        }
+        if let Some(access) = crate::node_graph::freeze::classify::input_access_of(node, port)
+            && access.is_filtering_sampler()
+        {
+            has_filtering_consumer = true;
+        }
+    }
+    has_precision_critical_consumer && !has_filtering_consumer
+}
+
 /// Compile a graph into an [`ExecutionPlan`].
 ///
 /// Calls [`validate`] and [`topological_sort`] internally; errors propagate
@@ -328,6 +361,23 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         ahash::AHashSet::default();
     for w in graph.wires() {
         consumed_outputs.insert((w.from.0, std::borrow::Cow::Borrowed(w.from.1)));
+    }
+
+    // Reverse of `wire_by_target`: every (producer node, producer output
+    // port) → the wires reading it. Built for the D6(a) precision-aware
+    // format seam below — deciding a materialized Texture2D intermediate's
+    // format requires knowing ALL of its consumers (not just whether it has
+    // one), so this is computed once up front rather than re-scanning
+    // `graph.wires()` per output.
+    let mut consumers_by_output: AHashMap<
+        (NodeInstanceId, std::borrow::Cow<'static, str>),
+        Vec<&NodeWire>,
+    > = AHashMap::default();
+    for w in graph.wires() {
+        consumers_by_output
+            .entry((w.from.0, std::borrow::Cow::Borrowed(w.from.1)))
+            .or_default()
+            .push(w);
     }
 
     // First pass: assign a fresh ResourceId to every output port of every
@@ -439,7 +489,26 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             // even for non-textures so the parallel arrays stay
             // aligned — the runtime normalizes non-texture formats to
             // `None` when constructing the pool key.
-            resource_formats.push(inst.node.output_format(output_port.name.as_ref()));
+            //
+            // D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): an explicit producer
+            // format (e.g. `node.edge_slope`'s per-instance fp32 opt-in)
+            // always wins — this seam only fills in the "no opinion" case.
+            // When the producer has no opinion AND the output is a
+            // Texture2D-shaped intermediate, check whether any downstream
+            // consumer needs the extra precision.
+            let format = inst.node.output_format(output_port.name.as_ref()).or_else(|| {
+                if !output_port.ty.is_texture_2d() {
+                    return None;
+                }
+                let key = (node_id, output_port.name.clone());
+                let wires = consumers_by_output.get(&key)?;
+                if wants_fp32_intermediate(graph, wires) {
+                    Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
+                } else {
+                    None
+                }
+            });
+            resource_formats.push(format);
             if output_port.ty.is_texture_2d()
                 && inst.node.output_mipmapped(output_port.name.as_ref())
             {
@@ -878,6 +947,14 @@ mod tests {
         type_id: EffectNodeType,
         inputs: Vec<NodeInput>,
         outputs: Vec<NodeOutput>,
+        // D6(a) test hooks — empty by default (every existing test using
+        // `TestNode::new` keeps its prior behavior: Coincident access,
+        // nothing precision_critical). Set via `with_input_access` /
+        // `with_precision_critical`. `'static` to match the trait's const-
+        // array-shaped return type; test call sites pass array literals of
+        // Copy/const-constructible values, which Rust promotes to 'static.
+        input_access: &'static [crate::node_graph::freeze::classify::InputAccess],
+        precision_critical: &'static [&'static str],
     }
 
     impl TestNode {
@@ -886,7 +963,22 @@ mod tests {
                 type_id: EffectNodeType::new(name),
                 inputs,
                 outputs,
+                input_access: &[],
+                precision_critical: &[],
             }
+        }
+
+        fn with_input_access(
+            mut self,
+            access: &'static [crate::node_graph::freeze::classify::InputAccess],
+        ) -> Self {
+            self.input_access = access;
+            self
+        }
+
+        fn with_precision_critical(mut self, names: &'static [&'static str]) -> Self {
+            self.precision_critical = names;
+            self
         }
     }
 
@@ -907,6 +999,12 @@ mod tests {
             &[]
         }
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
+            self.input_access
+        }
+        fn precision_critical_inputs(&self) -> &'static [&'static str] {
+            self.precision_critical
+        }
     }
 
     fn input(name: &'static str, ty: PortType, required: bool) -> NodeInput {
@@ -1608,5 +1706,120 @@ mod tests {
         let step_b = &plan.steps()[1];
         assert_eq!(step_b.inputs.len(), 1);
         assert_eq!(step_b.inputs[0].0, "required");
+    }
+
+    // D6(a) (`docs/DEPTH_RELIGHT_DESIGN.md`): the format-selection seam
+    // promotes a materialized Texture2D intermediate to Rgba32Float when a
+    // consumer needs it, gated by the mixed-consumer sampler-safety rule.
+
+    #[test]
+    fn precision_critical_consumer_gets_fp32_intermediate() {
+        use crate::node_graph::freeze::classify::InputAccess;
+
+        // A smooth-gradient Source producer feeding a GatherTexel consumer
+        // that names its input precision_critical (the `surface_bumps`/
+        // `ssao_gtao` shape: a finite-difference / horizon-test read).
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(TestNode::new(
+            "grad",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let consumer = g.add_node(Box::new(
+            TestNode::new(
+                "depth_consumer",
+                vec![input("depth", PortType::Texture2D, true)],
+                vec![output("out", PortType::Texture2D)],
+            )
+            .with_input_access(&[InputAccess::GatherTexel])
+            .with_precision_critical(&["depth"]),
+        ));
+        g.connect((producer, "out"), (consumer, "depth")).unwrap();
+
+        let plan = compile(&g).unwrap();
+        let r_producer_out = plan.steps()[0].outputs[0].1;
+        assert_eq!(
+            plan.resource_format(r_producer_out),
+            Some(manifold_gpu::GpuTextureFormat::Rgba32Float),
+            "a Texture2D intermediate feeding a precision_critical, texel-exact \
+             consumer must be allocated fp32",
+        );
+    }
+
+    #[test]
+    fn plain_color_chain_stays_fp16() {
+        // A → B → C, all default (Coincident) access, nothing
+        // precision_critical: every intermediate stays at the backend
+        // default (None = fp16), same as before D6(a).
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let b = g.add_node(Box::new(TestNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let c = g.add_node(Box::new(TestNode::new(
+            "c",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+
+        let plan = compile(&g).unwrap();
+        let r_a = plan.steps()[0].outputs[0].1;
+        let r_b = plan.steps()[1].outputs[0].1;
+        assert_eq!(plan.resource_format(r_a), None);
+        assert_eq!(plan.resource_format(r_b), None);
+    }
+
+    #[test]
+    fn mixed_consumer_stays_fp16() {
+        use crate::node_graph::freeze::classify::InputAccess;
+
+        // One producer, two consumers of the SAME output: one texel-exact
+        // consumer marking it precision_critical (wants fp32), one filtering
+        // (Coincident) consumer that would break on a non-filterable
+        // Rgba32Float source. The mixed-consumer safety rule must veto the
+        // promotion — the filtering consumer's correctness wins, and the
+        // texel-exact consumer stays on fp16 rather than break the other.
+        let mut g = Graph::new();
+        let producer = g.add_node(Box::new(TestNode::new(
+            "depth_source",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let texel_consumer = g.add_node(Box::new(
+            TestNode::new(
+                "shadow",
+                vec![input("height", PortType::Texture2D, true)],
+                vec![],
+            )
+            .with_input_access(&[InputAccess::GatherTexel])
+            .with_precision_critical(&["height"]),
+        ));
+        let filtering_consumer = g.add_node(Box::new(TestNode::new(
+            "blur",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![],
+        )));
+        g.connect((producer, "out"), (texel_consumer, "height"))
+            .unwrap();
+        g.connect((producer, "out"), (filtering_consumer, "in"))
+            .unwrap();
+
+        let plan = compile(&g).unwrap();
+        let r_producer_out = plan.steps()[0].outputs[0].1;
+        assert_eq!(
+            plan.resource_format(r_producer_out),
+            None,
+            "a mixed-consumer intermediate (one texel-exact + one filtering \
+             reader) must stay fp16 — promoting would break the filtering \
+             consumer's sampler read",
+        );
     }
 }

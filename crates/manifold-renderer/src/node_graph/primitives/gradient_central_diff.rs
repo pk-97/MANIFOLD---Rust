@@ -87,6 +87,14 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/gradient_central_diff_body.wgsl"),
     input_access: [Gather],
+    // D6(a) deliberately does NOT mark `in` precision_critical: same
+    // reasoning as node.surface_bumps — `in` reads via `Gather`
+    // (`textureSampleLevel`, a real filtering sampler), not `GatherTexel`,
+    // so a non-filterable Rgba32Float producer would break this atom's own
+    // read. This atom's OWN output already has a per-instance fp32 opt-in
+    // (`output_format_override` below) for exactly the precision-sensitive
+    // case (FluidSim's flow field feedback) — that is the sanctioned path
+    // here, not the D6(a) input-side promotion.
     extra_fields: {
         repeat_sampler: Option<manifold_gpu::GpuSampler> = None,
         // fp32-output opt-in: an `outputFormats` override (rgba32float) lands here

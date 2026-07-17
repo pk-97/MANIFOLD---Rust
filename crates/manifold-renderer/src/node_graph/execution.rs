@@ -1686,14 +1686,54 @@ impl Executor {
                         (Some(a), Some(b)) => self.backend.swap_texture_2d(a, b),
                         _ => false,
                     };
+                    // BUG-216: the swap refuses whenever `in_slot` (or
+                    // `out_slot`) carries a borrowed shadow — the common
+                    // shape is a boundary output (`system.final_output`)
+                    // pre-binding the SAME resource a feedback loop wires
+                    // into its `in` port (mix → final_output AND mix →
+                    // feedback.in share one ResourceId/slot). Swapping
+                    // there would change final_output's physical texture
+                    // identity mid-frame, which is exactly what the
+                    // refusal protects against — but the loop's state
+                    // still needs to land somewhere. Fall back to a
+                    // format-bridge COPY (`node.feedback`'s own
+                    // `Feedback::copy_with_format_bridge`, `temporal.rs`,
+                    // is the same blit-or-resize contract): copy `in`'s
+                    // CONTENT (this frame's fresh producer write) into
+                    // `out`'s persistent texture — `in`'s physical
+                    // identity is untouched (final_output keeps pointing
+                    // at the same texture), but next frame's `run()`
+                    // reads `out` and now sees this frame's trail. One
+                    // dispatch, same as the dims-mismatch mode already
+                    // proven there.
                     if !swapped {
-                        eprintln!(
-                            "[graph error] node {:?} ({}): texture swap \
-                             {out_port}<->{in_port} failed (unbound or shadowed \
-                             slot) — feedback state did NOT advance this frame",
-                            step.node,
-                            inst.node.type_id().as_str(),
-                        );
+                        let landed = match (out_slot, in_slot, gpu.as_deref_mut()) {
+                            (Some(out_s), Some(in_s), Some(g)) => {
+                                match (self.backend.texture_2d(in_s), self.backend.texture_2d(out_s)) {
+                                    (Some(src), Some(dst)) if src.format == dst.format => {
+                                        if src.width == dst.width && src.height == dst.height {
+                                            g.copy_texture_to_texture(src, dst, dst.width, dst.height);
+                                        } else {
+                                            g.resize_sample(src, dst);
+                                        }
+                                        true
+                                    }
+                                    _ => false,
+                                }
+                            }
+                            _ => false,
+                        };
+                        if !landed {
+                            eprintln!(
+                                "[graph error] node {:?} ({}): texture swap \
+                                 {out_port}<->{in_port} failed AND no copy \
+                                 fallback was possible (missing texture or \
+                                 format mismatch) — feedback state did NOT \
+                                 advance this frame",
+                                step.node,
+                                inst.node.type_id().as_str(),
+                            );
+                        }
                     }
                 }
             }
@@ -3424,5 +3464,199 @@ mod alias_gpu_tests {
         assert_eq!(g2, g1, "static input ⇒ mux alias propagates unchanged, generation stable");
         assert_ne!(g3, g2, "source re-emitting must bump the generation downstream sees");
         assert_eq!(g4, g3, "re-stabilization after a change must also propagate as unchanged");
+    }
+}
+
+/// BUG-216 (`docs/BUG_BACKLOG.md`, D6(b) of `docs/DEPTH_RELIGHT_DESIGN.md`):
+/// a `node.feedback` loop whose blend output feeds `system.final_output`
+/// DIRECTLY (the natural authoring wiring) used to freeze at one frame of
+/// history — the boundary output's resource is pre-bound as a borrowed
+/// target, `node.feedback`'s ping-pong swap refuses under that shadow, and
+/// the executor's `late_capture` had no fallback, silently dropping the
+/// frame's capture forever. Real-GPU regression: builds exactly that shape
+/// (`node.mix` Add-blending a constant source against its own delayed
+/// output, wired straight to `FinalOutput`) and proves the readback value
+/// keeps compounding across frames instead of freezing after frame 1.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod bug_216_gpu_tests {
+    use half::f16;
+    use manifold_core::{Beats, Seconds};
+    use manifold_gpu::GpuTextureFormat;
+
+    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use crate::node_graph::{
+        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
+        PrimitiveRegistry, ResourceId, Source, StateStore, compile,
+    };
+    use crate::render_target::RenderTarget;
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+        for step in plan.steps() {
+            if step.node == node {
+                for &(name, id) in &step.outputs {
+                    if name == port {
+                        return id;
+                    }
+                }
+            }
+        }
+        panic!("no output `{port}` on node {node:?}");
+    }
+
+    /// Reads back pixel (0,0) of `res`'s CURRENT texture as rgba16float.
+    fn readback_pixel(
+        device: &manifold_gpu::GpuDevice,
+        exec: &Executor,
+        res: ResourceId,
+        w: u32,
+        h: u32,
+    ) -> [f32; 4] {
+        let slot = exec
+            .backend()
+            .slot_for(res)
+            .expect("resource must be bound to a slot");
+        let tex = exec
+            .backend()
+            .texture_2d(slot)
+            .expect("resource's texture must be retained");
+        let bytes_per_row = w * 8; // rgba16float = 8 bytes/pixel
+        let total_bytes = u64::from(h * bytes_per_row);
+        let readback_buf = device.create_buffer_shared(total_bytes);
+        let mut readback_enc = device.create_encoder("bug216-readback");
+        readback_enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
+        readback_enc.commit_and_wait_completed();
+        let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
+        let halves: &[u16] =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+        [
+            f16::from_bits(halves[0]).to_f32(),
+            f16::from_bits(halves[1]).to_f32(),
+            f16::from_bits(halves[2]).to_f32(),
+            f16::from_bits(halves[3]).to_f32(),
+        ]
+    }
+
+    #[test]
+    fn feedback_direct_to_final_output_accumulates_trails() {
+        use crate::node_graph::parameters::ParamValue;
+
+        let device = crate::test_device();
+        let (w, h) = (4u32, 4u32);
+        let format = GpuTextureFormat::Rgba16Float;
+        let registry = PrimitiveRegistry::with_builtin();
+
+        // BUG-216 shape: mix(source, feedback.out) → feedback.in AND
+        // mix.out → final_output DIRECTLY (no node sitting between the
+        // blend and the boundary — the wiring the backlog entry calls
+        // "the natural wiring", and the one that used to freeze).
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(Source::new()));
+        let mix = g.add_node(registry.construct("node.mix").expect("node.mix registered"));
+        let fb = g
+            .add_node(registry.construct("node.feedback").expect("node.feedback registered"));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+
+        g.connect((src, "out"), (mix, "a")).unwrap();
+        g.connect((fb, "out"), (mix, "b")).unwrap();
+        g.connect((mix, "out"), (fb, "in")).unwrap();
+        g.connect((mix, "out"), (out, "in")).unwrap();
+
+        // Add mode, amount=1.0 (full blend, no crossfade) — every frame's
+        // output is `source + previous frame's delayed output`, so a
+        // WORKING loop compounds monotonically; a FROZEN loop (BUG-216)
+        // reads the SAME delayed value forever and every frame after the
+        // first renders identically to frame 1.
+        {
+            let inst = g.get_node_mut(mix).expect("mix node exists");
+            inst.params
+                .insert(std::borrow::Cow::Borrowed("mode"), ParamValue::Enum(2)); // Add
+            inst.params
+                .insert(std::borrow::Cow::Borrowed("amount"), ParamValue::Float(1.0));
+        }
+
+        let plan = compile(&g).unwrap();
+        let source_res = output_resource(&plan, src, "out");
+        let mix_out_res = output_resource(&plan, mix, "out");
+
+        let source_target = RenderTarget::new(&device, w, h, format, "bug216-source");
+        let canvas_target = RenderTarget::new(&device, w, h, format, "bug216-canvas");
+        let mut native_enc = device.create_encoder("bug216-setup");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+            gpu.clear_texture(&source_target.texture, 0.05, 0.05, 0.05, 1.0);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let mut backend = MetalBackend::new(device.arc(), w, h, format);
+        backend.pre_bind_texture_2d(source_res, source_target);
+        // The exact BUG-216 condition: `mix.out` (== `feedback.in` ==
+        // `final_output.in`, one shared ResourceId) carries a BORROWED
+        // shadow via `replace_texture_2d` — the real mechanism
+        // `PresetRuntime::install_target` uses to install the host's
+        // canvas texture over `final_output.in` each frame
+        // (`preset_runtime.rs:3091`), NOT `pre_bind_texture_2d` (which
+        // installs an OWNED slot with no shadow, and would let the swap
+        // succeed every frame — a plain `pre_bind` does not reproduce
+        // this bug). `replace_texture_2d` requires the slot to already
+        // own a `RenderTarget`, so allocate one first and bind it to
+        // `mix_out_res`.
+        let placeholder = RenderTarget::new(&device, w, h, format, "bug216-mix-out-placeholder");
+        let mix_out_slot = backend.allocate_slot(placeholder);
+        backend.bind_resource_to_slot(mix_out_res, mix_out_slot);
+        assert!(
+            backend.replace_texture_2d(mix_out_slot, canvas_target.texture.clone()),
+            "replace_texture_2d requires an owned RenderTarget already at the slot"
+        );
+
+        let mut exec = Executor::new(Box::new(backend));
+        let mut store = StateStore::new();
+        let owner_key = 216;
+
+        let mut pixels: Vec<[f32; 4]> = Vec::new();
+        for _ in 0..4 {
+            let mut native_enc = device.create_encoder("bug216-frame");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+                exec.execute_frame_with_state(
+                    &mut g,
+                    &plan,
+                    frame_time(),
+                    &mut gpu,
+                    &mut store,
+                    owner_key,
+                );
+            }
+            native_enc.commit_and_wait_completed();
+            pixels.push(readback_pixel(&device, &exec, mix_out_res, w, h));
+        }
+
+        assert_ne!(
+            pixels[3][0], pixels[0][0],
+            "BUG-216: frame 4's output must differ from frame 1's — a frozen \
+             loop (the swap-refused-and-dropped bug) reproduces the SAME \
+             value every frame after the first. Frames: {pixels:?}",
+        );
+        // Frame 1 == frame 2 is EXPECTED, not the bug under test:
+        // `node.feedback`'s allocation frame seeds its state from `in` and
+        // deliberately skips ITS OWN late_capture that same frame (else the
+        // seed would be immediately clobbered — `temporal.rs`'s
+        // `just_allocated` guard), so the delayed value first advances
+        // starting frame 3. From frame 2 onward the loop is in steady
+        // state; a frozen loop (BUG-216) would hold frame 2's value
+        // forever, so frames 2→4 must strictly increase.
+        assert!(
+            pixels[2][0] > pixels[1][0] && pixels[3][0] > pixels[2][0],
+            "trails must compound monotonically frame over frame under \
+             Add-mode feedback once past the alloc-frame plateau — got {pixels:?}",
+        );
     }
 }

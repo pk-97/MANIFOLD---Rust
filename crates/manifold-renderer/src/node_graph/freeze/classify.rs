@@ -232,6 +232,61 @@ impl InputAccess {
                 | InputAccess::BufferIndex
         )
     }
+
+    /// Whether this access reads through an EXACT `textureLoad` (or the
+    /// buffer-domain equivalent, an indexed storage-array read) rather than a
+    /// filtering sampler. `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): only these
+    /// variants are safe to back with a non-filterable `Rgba32Float`
+    /// intermediate on Apple GPUs — `Coincident`/`Gather` bind a real
+    /// sampler (`textureSampleLevel`) that a non-filterable format can't
+    /// serve.
+    pub fn is_texel_exact(self) -> bool {
+        matches!(
+            self,
+            InputAccess::CoincidentTexel
+                | InputAccess::GatherTexel
+                | InputAccess::BufferGather
+                | InputAccess::BufferIndex
+        )
+    }
+
+    /// Whether this access reads through a FILTERING sampler
+    /// (`textureSampleLevel` with a possibly-linear filter) — the converse
+    /// of [`is_texel_exact`](Self::is_texel_exact) for the two texture-domain
+    /// variants a non-filterable `Rgba32Float` producer cannot serve.
+    pub fn is_filtering_sampler(self) -> bool {
+        matches!(self, InputAccess::Coincident | InputAccess::Gather)
+    }
+}
+
+/// The [`InputAccess`] a specific texture input port actually uses, resolved
+/// the same way the fusion codegen resolves it: `node.input_access()` is
+/// aligned to the node's TEXTURE-typed inputs in declaration order (scalar/
+/// control ports skipped), defaulting to [`InputAccess::Coincident`] for any
+/// port past the end of the declared list (`PrimitiveSpec::INPUT_ACCESS`'s
+/// own documented default). Returns `None` if `port_name` doesn't name a
+/// texture input on this node at all.
+pub fn input_access_of(
+    node: &dyn crate::node_graph::effect_node::EffectNode,
+    port_name: &str,
+) -> Option<InputAccess> {
+    let access = node.input_access();
+    let mut texture_index = 0usize;
+    for input in node.inputs() {
+        if !matches!(
+            input.ty,
+            crate::node_graph::ports::PortType::Texture2D
+                | crate::node_graph::ports::PortType::Texture2DTyped(_)
+                | crate::node_graph::ports::PortType::Texture3D
+        ) {
+            continue;
+        }
+        if input.name.as_ref() == port_name {
+            return Some(access.get(texture_index).copied().unwrap_or_default());
+        }
+        texture_index += 1;
+    }
+    None
 }
 
 /// Render a node's fusion classification as the single stable string both
@@ -329,6 +384,56 @@ mod tests {
         assert!(
             violations.is_empty(),
             "boundary_reason declaration violations:\n  {}",
+            violations.join("\n  "),
+        );
+    }
+
+    /// `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): a `precision_critical` input
+    /// declares that its producer benefits from an `Rgba32Float` intermediate
+    /// — but that promotion is only safe if THIS atom itself reads the input
+    /// via an exact `textureLoad` (`InputAccess::is_texel_exact`), never a
+    /// filtering sampler. Marking a `Coincident`/`Gather` input critical
+    /// would be self-defeating: the format-selection seam would hand this
+    /// very atom a non-filterable texture its own `textureSampleLevel` read
+    /// can't correctly serve on Apple GPUs. Walks every registered primitive
+    /// and asserts every name in `precision_critical_inputs()` both (a)
+    /// resolves to a real texture input and (b) is texel-exact.
+    #[test]
+    fn precision_critical_inputs_are_texel_exact() {
+        use super::input_access_of;
+        use crate::node_graph::PrimitiveRegistry;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut violations: Vec<String> = Vec::new();
+
+        for type_id in registry.known_type_ids() {
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+
+            for &name in node.precision_critical_inputs() {
+                match input_access_of(node.as_ref(), name) {
+                    None => violations.push(format!(
+                        "{type_id}: precision_critical names \"{name}\", which is not a \
+                         declared texture input on this node",
+                    )),
+                    Some(access) if !access.is_texel_exact() => violations.push(format!(
+                        "{type_id}.{name}: precision_critical requires a texel-exact \
+                         InputAccess (CoincidentTexel/GatherTexel); this input is \
+                         {access:?} (a filtering sampler read) — Rgba32Float is \
+                         non-filterable on Apple GPUs, so this atom's own read would break",
+                    )),
+                    Some(_) => {}
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "precision_critical / InputAccess mismatches:\n  {}",
             violations.join("\n  "),
         );
     }

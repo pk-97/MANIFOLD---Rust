@@ -1155,6 +1155,15 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Names of texture inputs whose consumption differentiates or
+    /// horizon-tests the value (`docs/DEPTH_RELIGHT_DESIGN.md` D6(a)) — see
+    /// the doc comment on
+    /// [`PrimitiveSpec::PRECISION_CRITICAL_INPUTS`](crate::node_graph::primitive::PrimitiveSpec::PRECISION_CRITICAL_INPUTS).
+    /// Default empty; the macro forwards `P::PRECISION_CRITICAL_INPUTS`.
+    fn precision_critical_inputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// STENCIL-FETCH body ABI (stencil tier): the `wgsl_body` reads each
     /// `Gather` texture input via a free `fetch_<port>(uv) -> vec4<f32>`
     /// function the codegen defines (a real sample standalone / for a fused
