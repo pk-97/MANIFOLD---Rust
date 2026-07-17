@@ -4018,6 +4018,7 @@ mod tick_parity_tests {
             audio: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
+            relight: manifold_ui::RelightCardConfig::default(),
         }
     }
 

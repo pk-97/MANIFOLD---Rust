@@ -2852,6 +2852,7 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         audio: Default::default(),
         automation_active: vec![],
         automation_overridden: vec![],
+        relight: crate::ui_translate::relight_card_config_from(inst),
     }
 }
 
@@ -3132,6 +3133,7 @@ fn preset_to_config(
         audio,
         automation_active: m.automation_active,
         automation_overridden: m.automation_overridden,
+        relight: crate::ui_translate::relight_card_config_from(inst),
     })
 }
 

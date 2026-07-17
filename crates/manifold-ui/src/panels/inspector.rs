@@ -2545,6 +2545,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::param_card::RelightCardConfig;
     use crate::tree::UITree;
 
     fn inspector_layout() -> ScreenLayout {
@@ -2747,6 +2748,7 @@ mod tests {
             audio: Default::default(),
             automation_active: vec![false; n],
             automation_overridden: vec![false; n],
+            relight: RelightCardConfig::default(),
         }
     }
 

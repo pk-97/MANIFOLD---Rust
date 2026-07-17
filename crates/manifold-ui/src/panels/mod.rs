@@ -97,6 +97,30 @@ pub enum GraphParamTarget {
     Generator,
 }
 
+/// D3's six "3D Shading" relight knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
+/// P5b), identified without depending on `manifold-core`/`manifold-editing`
+/// (`ui` depends only on `foundation`) — mirrors
+/// `manifold_editing::commands::effects::RelightField` one-for-one;
+/// translated at the `ui_translate.rs` boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiRelightField {
+    LightX,
+    LightY,
+    Relief,
+    AoIntensity,
+    ShadowSoftness,
+    Gain,
+}
+
+/// D4's height-origin override, mirroring
+/// `manifold_core::effects::RelightHeightFrom`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiRelightHeightFrom {
+    Auto,
+    Luminance,
+    InvertedLuminance,
+}
+
 /// Which scalar of an audio modulation's [`AudioModShape`] a drawer slider drag
 /// is editing. The three share one drag path, snapshot slot, and commit command;
 /// this records which field the live edit and the commit write.
@@ -542,6 +566,22 @@ pub enum PanelAction {
     /// `GenParamFire(ParamId)`; unified alongside `ParamToggle` for the same
     /// reason (D5b: `is_trigger` cards now exist on effect chains too).
     ParamFire(GraphParamTarget, ParamId),
+    /// Toggle the "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// D2/P5). Atomic like `ParamToggle` — a click, not a drag.
+    RelightToggle(GraphParamTarget),
+    /// Press on a D3 relight knob's track — snapshot the pre-drag value for
+    /// undo (mirrors `ParamSnapshot`).
+    RelightParamSnapshot(GraphParamTarget, UiRelightField),
+    /// Live drag of a D3 relight knob (mirrors `ParamChanged`). Always
+    /// live even while the toggle is off — the row renders greyed, not
+    /// hidden, and must still take effect for when it's switched on.
+    RelightParamChanged(GraphParamTarget, UiRelightField, f32),
+    /// Release on a D3 relight knob's track — commits one undo entry
+    /// (mirrors `ParamCommit`).
+    RelightParamCommit(GraphParamTarget, UiRelightField),
+    /// D4 "Height From" enum row click (Auto / Luminance / Inverted
+    /// Luminance) — atomic like `ParamToggle`.
+    RelightHeightFromChanged(GraphParamTarget, UiRelightHeightFrom),
     /// Double-click on a numeric param's value cell → open a type-in box. Carries
     /// the target + id, the value-cell anchor rect, the base value to prefill, the
     /// clamp range, and whether the param rounds to an integer — everything the

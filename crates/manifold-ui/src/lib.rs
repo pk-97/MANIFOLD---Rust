@@ -73,6 +73,7 @@ pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;
 pub use panels::param_card::{
     ParamCardConfig, ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, ParamInfo,
+    RelightCardConfig,
 };
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{
@@ -80,7 +81,7 @@ pub use panels::viewport::{
 };
 pub use panels::{
     AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, HitRegion, InspectorTab,
-    Panel, PanelAction, SyncSource, TrimKind,
+    Panel, PanelAction, SyncSource, TrimKind, UiRelightField, UiRelightHeightFrom,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use transform2d::Affine2;
