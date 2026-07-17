@@ -1,7 +1,7 @@
 # Scene Object & Panel v2 — objects become graph vocabulary; the panel becomes outliner + properties
 
-**Status: IN PROGRESS — P1+P2 SHIPPED @ `5c5dacfe`, P3 SHIPPED @ <landing SHA,
-filled at push> (both 2026-07-17, landing reports
+**Status: IN PROGRESS — P1+P2 SHIPPED @ `5c5dacfe`, P3 SHIPPED @ `da452351`
+(both 2026-07-17, landing reports
 `docs/landings/2026-07-17-scene-object-v2-p1-p2.md` and
 `docs/landings/2026-07-17-scene-object-v2-p3.md`); P4–P5 not implemented.
 BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. BUG-212
