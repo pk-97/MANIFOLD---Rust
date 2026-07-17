@@ -7854,7 +7854,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
@@ -8167,7 +8167,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
@@ -8286,7 +8286,7 @@
             "0",
             "1000000"
           ],
-          "type": "int"
+          "type": "trigger"
         },
         {
           "default": "0",
