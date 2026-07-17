@@ -3,6 +3,7 @@
 use manifold_core::PresetTypeId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
+use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::{BeatDivision, LayerType};
 use manifold_core::Beats;
 use manifold_ui::color;
@@ -1078,7 +1079,7 @@ pub fn sync_project_data(
                         None
                     },
                     in_point_seconds: clip.in_point.0 as f32,
-                    warped_secs_per_beat: audio_warped_spb(clip, project),
+                    waveform_breakpoints: audio_waveform_breakpoints(clip, project),
                 });
             }
         }
@@ -1248,7 +1249,7 @@ pub fn sync_clip_positions(
                     None
                 },
                 in_point_seconds: clip.in_point.0 as f32,
-                warped_secs_per_beat: audio_warped_spb(clip, project),
+                waveform_breakpoints: audio_waveform_breakpoints(clip, project),
             });
         }
     }
@@ -1277,17 +1278,67 @@ pub fn sync_clip_positions(
     }
 }
 
-/// Warped source-seconds per beat for an audio clip's waveform window:
-/// `60 / clip_bpm` with warp on, `60 / project_bpm` with warp off. Multiplying by
-/// `duration_beats` gives the source window length, so the waveform's horizontal
-/// scale is set by warp, not by trim. Zero for non-audio clips (unused).
-fn audio_warped_spb(clip: &manifold_core::clip::TimelineClip, project: &Project) -> f32 {
+/// Piecewise beat→file-seconds breakpoints for an audio clip's waveform,
+/// mirroring exactly what `AudioLayerPlayback::update` computes for the
+/// voice's expected source position (`crates/manifold-playback/src/
+/// audio_layer_playback.rs` ~:251-257): `expected = (now - clip_start) *
+/// warp_ratio + in_point`, where `now`/`clip_start` are transport seconds
+/// from `engine.beat_to_timeline_time_immut`, i.e.
+/// `TempoMapConverter::beat_to_seconds_immut` — the project's piecewise tempo
+/// map integration, NOT a constant seconds-per-beat. Audio playback is
+/// correct; the waveform painter draws a single linear window, so a varying
+/// tempo map made the two disagree.
+///
+/// Reproducing that beat→seconds function pointwise at the clip's start beat,
+/// every tempo-map point strictly inside the clip, and its end beat gives a
+/// piecewise-*linear* (in beats, matching the pixel x-axis) mapping: constant
+/// between tempo points, a new slope at each one. Each pair is `(x_frac,
+/// file_secs)` — `x_frac` beat-linear in `[0, 1]` across the clip, `file_secs`
+/// the source-file position playback would be at for that beat. A
+/// constant-tempo clip (no tempo-map point strictly inside it) yields exactly
+/// 2 breakpoints — the old single linear window, reproduced exactly since
+/// `warp_ratio` (unaffected by the tempo map) is unchanged and the only
+/// segment IS start→end.
+///
+/// Empty for non-audio clips or non-positive duration. Baked once here per
+/// clip per structural sync (not per frame in the renderer) — plain
+/// `Vec<(f32, f32)>` data, no core types, per `manifold-ui`'s layering rule
+/// (depends on `manifold-foundation` only).
+fn audio_waveform_breakpoints(
+    clip: &manifold_core::clip::TimelineClip,
+    project: &Project,
+) -> Vec<(f32, f32)> {
     if !clip.is_audio() {
-        return 0.0;
+        return Vec::new();
     }
-    let project_bpm = project.settings.bpm.0;
-    let spb = 60.0 / project_bpm.max(1.0);
-    spb * clip.warp_ratio(project_bpm)
+    let duration_beats = clip.duration_beats.as_f32();
+    if duration_beats <= 0.0 {
+        return Vec::new();
+    }
+    let start_beat = clip.start_beat;
+    let end_beat = clip.start_beat + clip.duration_beats;
+    let project_bpm = project.settings.bpm;
+    let ratio = clip.warp_ratio(project_bpm.0);
+    let in_point = clip.in_point.0 as f32;
+    let start_secs =
+        TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, start_beat, project_bpm).0;
+
+    let file_secs_at = |beat: Beats| -> f32 {
+        let secs =
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project_bpm).0;
+        ((secs - start_secs) as f32) * ratio + in_point
+    };
+
+    let mut breakpoints = Vec::with_capacity(2 + project.tempo_map.points().len());
+    breakpoints.push((0.0, file_secs_at(start_beat)));
+    for point in project.tempo_map.points() {
+        if point.beat > start_beat && point.beat < end_beat {
+            let x_frac = (point.beat - start_beat).as_f32() / duration_beats;
+            breakpoints.push((x_frac, file_secs_at(point.beat)));
+        }
+    }
+    breakpoints.push((1.0, file_secs_at(end_beat)));
+    breakpoints
 }
 
 /// Sync inspector content for the active selection.
@@ -3456,5 +3507,158 @@ mod fire_meter_roundtrip_tests {
                  evaluators disagree about this instance's identity"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod audio_waveform_breakpoints_tests {
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::project::Project;
+    use manifold_core::tempo::TempoMapConverter;
+    use manifold_core::types::TempoPointSource;
+    use manifold_core::{Bpm, Seconds};
+
+    /// (a) A single-point (i.e. effectively constant-tempo) map must yield
+    /// exactly 2 breakpoints — clip start and end — reproducing the old
+    /// `dur_beats * warped_secs_per_beat` window exactly: `file_secs_at(end)`
+    /// must equal `duration_beats * (60 / bpm) * warp_ratio + in_point`.
+    #[test]
+    fn single_tempo_point_reproduces_old_constant_mapping() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(140.0);
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(140.0), TempoPointSource::Manual, 0.001);
+
+        let clip = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(8.0),
+            Beats::from_f32(4.0),
+            Seconds(1.5),
+            Seconds(120.0),
+        );
+
+        let bp = audio_waveform_breakpoints(&clip, &project);
+        assert_eq!(bp.len(), 2, "constant tempo must yield exactly 2 breakpoints");
+        assert_eq!(bp[0], (0.0, 1.5), "clip start maps to in_point with no elapsed beats");
+
+        let expected_win_secs = 4.0 * (60.0 / 140.0_f32); // warp off (recorded_bpm unset) → project spb
+        assert!(
+            (bp[1].0 - 1.0).abs() < 1e-6,
+            "clip end must be at x_frac 1.0, got {}",
+            bp[1].0
+        );
+        assert!(
+            (bp[1].1 - (1.5 + expected_win_secs)).abs() < 1e-4,
+            "clip end file_secs {} should equal old in_point + dur*spb window {}",
+            bp[1].1,
+            1.5 + expected_win_secs
+        );
+    }
+
+    /// (b) A 3-point tempo map (120 BPM then 60 BPM partway through the clip)
+    /// must place a breakpoint exactly at the tempo-change beat, and every
+    /// breakpoint's `file_secs` must match
+    /// `TempoMapConverter::beat_to_seconds_immut` differences directly — the
+    /// same integration playback performs, not a flat per-beat scalar.
+    #[test]
+    fn three_point_map_matches_tempo_map_converter_directly() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        // Tempo halves to 60 BPM at beat 10 — inside the clip (beats 8..16).
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::from_f32(10.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+
+        let clip = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(8.0),
+            Beats::from_f32(8.0), // 8..16
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+
+        let bp = audio_waveform_breakpoints(&clip, &project);
+        assert_eq!(bp.len(), 3, "one tempo point strictly inside the clip → 3 breakpoints");
+
+        // x_frac of the tempo-change beat (10) within the clip (8..16): 2/8 = 0.25.
+        assert!((bp[1].0 - 0.25).abs() < 1e-6, "tempo point x_frac, got {}", bp[1].0);
+
+        let start_secs =
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(8.0), Bpm(120.0)).0;
+        let mid_secs =
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(10.0), Bpm(120.0)).0;
+        let end_secs =
+            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, Beats::from_f32(16.0), Bpm(120.0)).0;
+
+        // recorded_bpm unset → warp_ratio == 1.0, in_point == 0 → file_secs is
+        // exactly the tempo-map-integrated elapsed seconds since clip start.
+        assert!((bp[0].1 - 0.0).abs() < 1e-6);
+        assert!(
+            (bp[1].1 - ((mid_secs - start_secs) as f32)).abs() < 1e-4,
+            "mid breakpoint file_secs {} vs tempo-map delta {}",
+            bp[1].1,
+            (mid_secs - start_secs) as f32
+        );
+        assert!(
+            (bp[2].1 - ((end_secs - start_secs) as f32)).abs() < 1e-4,
+            "end breakpoint file_secs {} vs tempo-map delta {}",
+            bp[2].1,
+            (end_secs - start_secs) as f32
+        );
+    }
+
+    /// (c) `in_point` must offset every breakpoint's `file_secs` uniformly —
+    /// it enters the formula as a flat additive term, exactly like
+    /// `AudioLayerPlayback`'s `expected = (now - clip_start) * ratio +
+    /// clip.in_point`.
+    #[test]
+    fn in_point_offsets_every_breakpoint() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+
+        let clip_no_offset = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(0.0),
+            Beats::from_f32(4.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+        let clip_with_offset = TimelineClip::new_audio(
+            "song.wav".to_string(),
+            Beats::from_f32(0.0),
+            Beats::from_f32(4.0),
+            Seconds(3.0),
+            Seconds(120.0),
+        );
+
+        let bp_plain = audio_waveform_breakpoints(&clip_no_offset, &project);
+        let bp_offset = audio_waveform_breakpoints(&clip_with_offset, &project);
+        assert_eq!(bp_plain.len(), bp_offset.len());
+        for (plain, offset) in bp_plain.iter().zip(bp_offset.iter()) {
+            assert!((plain.0 - offset.0).abs() < 1e-6, "x_frac must be unaffected by in_point");
+            assert!(
+                (offset.1 - (plain.1 + 3.0)).abs() < 1e-4,
+                "file_secs must be shifted by exactly in_point: {} vs {} + 3.0",
+                offset.1,
+                plain.1
+            );
+        }
+    }
+
+    /// Non-audio clips (no `audio_file_path`) get no breakpoints — the
+    /// waveform painter is never invoked for them.
+    #[test]
+    fn non_audio_clip_yields_no_breakpoints() {
+        let project = Project::default();
+        let clip = TimelineClip::new_generator(Beats::ZERO, Beats::from_f32(4.0));
+        assert!(audio_waveform_breakpoints(&clip, &project).is_empty());
     }
 }
