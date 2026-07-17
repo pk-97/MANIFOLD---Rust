@@ -4914,6 +4914,115 @@ mod tests {
         );
     }
 
+    /// The hostile fixture shelf: real-world-shaped assets (Sketchfab FBX
+    /// conversions, Mixamo rigs, Blender exports) whose traits the Khronos
+    /// suite doesn't exercise — transform-bearing ancestors above joint
+    /// trees, unit-conversion scales, animated prefixes. BUG-204 and
+    /// BUG-205 both shipped through green gates because no oracle ever fed
+    /// the import pipeline this input class; every glb under
+    /// `tests/fixtures/gltf/hostile/` runs the full CPU chain here
+    /// (assemble → graph build → card lints → PresetRuntime build), and
+    /// the gpu-proofs sibling below renders each one and checks framing
+    /// invariants. Add assets by dropping a glb in the directory —
+    /// `scripts/blender/fbx2glb.py` converts FBX-only sources.
+    fn hostile_fixture_paths() -> Vec<std::path::PathBuf> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/hostile");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read hostile fixture dir {}: {e}", dir.display()))
+            .filter_map(|entry| {
+                let p = entry.ok()?.path();
+                (p.extension().and_then(|e| e.to_str()) == Some("glb")).then_some(p)
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "hostile fixture shelf is empty — the sweep is vacuous");
+        paths
+    }
+
+    #[test]
+    fn hostile_fixtures_assemble_validate_and_build() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let (def, _report) = super::assemble_import_graph(&path)
+                .unwrap_or_else(|e| panic!("{name}: assemble_import_graph failed: {e}"));
+            let registry = PrimitiveRegistry::with_builtin();
+            let graph = def
+                .clone()
+                .into_graph(&registry)
+                .unwrap_or_else(|e| panic!("{name}: import graph failed to build: {e:?}"));
+            let (errors, _warnings) =
+                crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+            assert!(errors.is_empty(), "{name}: card lints rejected the import: {errors:?}");
+            PresetRuntime::from_def(def, &registry, None)
+                .unwrap_or_else(|e| panic!("{name}: PresetRuntime::from_def failed: {e:?}"));
+        }
+    }
+
+    /// Render every hostile fixture and check framing invariants — the
+    /// automated form of "does it look plausibly right": enough lit pixels
+    /// to be a real render (BUG-205's speck fails), not a full-frame
+    /// blowout, and the lit centroid near frame center (wrong-space
+    /// framing fails). Edge-contact (object cropped at opposite frame
+    /// edges) is checked against an xfail list — mixamo_like.glb currently
+    /// trips it, tracked as BUG-206; fixing the framing removes the entry.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn hostile_fixtures_render_within_framing_invariants() {
+        let (w, h) = (256u32, 256u32);
+        const EDGE_XFAIL: &[&str] = &["mixamo_like.glb"]; // BUG-206
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let (def, _report) = super::assemble_import_graph(&path)
+                .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
+            let duration_s = skeleton_pose_duration_s(&def);
+            let rgba = render_skinned_import_at_progress(def, w, h, 0.25, duration_s);
+
+            let mut lit = 0u64;
+            let (mut cx, mut cy) = (0.0f64, 0.0f64);
+            let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
+            for y in 0..h {
+                for x in 0..w {
+                    let i = ((y * w + x) * 4) as usize;
+                    if rgba[i].max(rgba[i + 1]).max(rgba[i + 2]) > 8 {
+                        lit += 1;
+                        cx += x as f64;
+                        cy += y as f64;
+                        top |= y == 0;
+                        bottom |= y == h - 1;
+                        left |= x == 0;
+                        right |= x == w - 1;
+                    }
+                }
+            }
+            let fraction = lit as f64 / (w as u64 * h as u64) as f64;
+            assert!(
+                (0.005..=0.95).contains(&fraction),
+                "{name}: lit fraction {fraction:.4} outside [0.005, 0.95] — speck (BUG-205 \
+                 class), black frame, or full-frame blowout"
+            );
+            let (cx, cy) = (cx / lit as f64 / w as f64, cy / lit as f64 / h as f64);
+            assert!(
+                (0.2..=0.8).contains(&cx) && (0.2..=0.8).contains(&cy),
+                "{name}: lit centroid ({cx:.2}, {cy:.2}) outside the center region — \
+                 wrong-space framing/recenter"
+            );
+            let cropped = (top && bottom) || (left && right);
+            // Edge contact is pose-dependent for animated assets, so the
+            // xfail is permissive (skipped, not required-to-trip): the
+            // listed asset MAY crop at some phases (BUG-206). When BUG-206
+            // lands, empty the list so the invariant guards everything.
+            if !EDGE_XFAIL.contains(&name.as_str()) {
+                assert!(
+                    !cropped,
+                    "{name}: object touches opposite frame edges — default framing crops it \
+                     (BUG-206 class)"
+                );
+            }
+        }
+    }
+
     /// BUG-205 regression (bbox-space half): the import summary's bbox for
     /// a skinned mesh must live in bind-pose SKINNED space (what
     /// `node.skin_mesh` renders), not the mesh node's world space (which
