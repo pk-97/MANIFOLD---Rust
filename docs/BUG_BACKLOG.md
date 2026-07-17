@@ -175,6 +175,16 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-236 (scene-setup-flows-assert-stale-outliner-text) — two flow scripts assert a literal "Outliner" text label that no longer exists anywhere in `scene_setup_panel.rs` — found 2026-07-17 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1b
+
+**Status:** OPEN — LOW (flow-script rot, not a live-app defect; both flows fail at the SAME early assertion, before exercising anything C-P1b touches). Found, NOT fixed this session — pre-existing, unrelated to the Object-family conversion.
+
+**Symptom:** `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-add-object.json` and `scene-setup-scrub-fine.json` both fail at step 2, `Assert { selector: Query(text="Outliner"), check: Exists }` — "expected a match for query{text=\"Outliner\"}, found none". `rg '"Outliner"' crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits: no section label or heading in the current panel renders that literal text.
+
+**Root cause:** unknown precisely — the outliner section's header text was presumably renamed or removed in an earlier phase (SCENE_PANEL_UX or SCENE_OBJECT_AND_PANEL_V2) without sweeping these two flow scripts' selectors. Not investigated further this session (out of C-P1b's scope — neither flow touches the Object family's converted rows).
+
+**Fix shape:** grep the panel for whatever the outliner section's current header text is (or confirm it never got one post-relabel) and update both flows' step-2 selector to match, or drop the assertion if the section is unlabeled by design now.
+
 ### BUG-235 (headless-script-harness-shows-stale-value-after-nontrivial-dispatch) — a `--script` flow's PNG/tree-dump keeps showing a param's PRE-write value after a real, correctly-dispatched write — found 2026-07-17 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a
 
 **Status:** OPEN — MED (headless-verification-only; does not affect the live app or the underlying data). Found, isolated, NOT fixed this session (out of C-P1a's scope — the design's own dispatch-correctness gates are satisfied by Rust-level tests instead).
