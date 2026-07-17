@@ -59,7 +59,29 @@ struct HdriBlitUniforms {
 /// EXRs carry no alpha channel in the equirect-environment convention this
 /// primitive targets) ready for `GpuEncoder::upload_texture`.
 fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let img = image::open(path).map_err(|e| format!("image::open({}): {e}", path.display()))?;
+    let img = image::open(path).map_err(|e| {
+        let raw = e.to_string();
+        // BUG-182: the `image` crate's OpenEXR decoder only reads a flat,
+        // non-deep RGB(A) layer and reports exactly this message when a
+        // file has none — the common real-world cause is a multi-part /
+        // multi-layer EXR (e.g. Blender's "OpenEXR MultiLayer" format,
+        // which nests color under a named render-pass layer instead of a
+        // top-level R/G/B triple). Named here so the log line tells the
+        // user what to change, not just that decoding failed — confirmed
+        // by reproducing this exact message against a Blender-rendered
+        // multi-layer EXR in-session.
+        if raw.contains("does not contain non-deep rgb channels") {
+            format!(
+                "{}: this looks like a multi-layer/multi-part EXR (common when exporting from \
+                 Blender's \"OpenEXR MultiLayer\" format, or a compositor render-pass file). \
+                 node.hdri_source only reads a flat single-layer RGB(A) EXR — re-export as plain \
+                 \"OpenEXR\" (not MultiLayer), or flatten the layers first. Underlying error: {raw}",
+                path.display()
+            )
+        } else {
+            format!("image::open({}): {raw}", path.display())
+        }
+    })?;
     let rgb = img.into_rgb32f();
     let (w, h) = rgb.dimensions();
     if w == 0 || h == 0 {
@@ -524,6 +546,57 @@ mod tests {
     fn decode_reports_a_loud_error_for_a_missing_file() {
         let err = load_hdri(Path::new("/nonexistent/does-not-exist.exr")).unwrap_err();
         assert!(err.contains("does-not-exist.exr"), "error must name the path: {err}");
+    }
+
+    /// BUG-182 reproduction: the two HDRI fixtures committed for this lane
+    /// (`tests/fixtures/hdri/hdri_float32.exr`, `hdri_half16.exr` — 256x128
+    /// HDR ramps, R up to ~4.1, G up to ~8.1, authored via Blender) decode
+    /// cleanly through the real `load_hdri` path with their HDR range
+    /// intact. Confirms the fixtures do NOT carry the trait that breaks
+    /// Peter's real files — the actual failure mode (multi-layer/multi-part
+    /// EXR) is reproduced separately below.
+    #[test]
+    fn committed_hdri_fixtures_decode_with_hdr_range_intact() {
+        let fixtures_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/hdri");
+        for name in ["hdri_float32.exr", "hdri_half16.exr"] {
+            let path = fixtures_dir.join(name);
+            let (w, h, rgba16f) = load_hdri(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((w, h), (256, 128), "{name}: unexpected dimensions");
+            let mut max_r = 0f32;
+            let mut max_g = 0f32;
+            for px in rgba16f.chunks_exact(8) {
+                max_r = max_r.max(f16::from_le_bytes([px[0], px[1]]).to_f32());
+                max_g = max_g.max(f16::from_le_bytes([px[2], px[3]]).to_f32());
+            }
+            assert!(max_r > 3.0, "{name}: max_r={max_r}, expected > 3.0");
+            assert!(max_g > 6.0, "{name}: max_g={max_g}, expected > 6.0");
+        }
+    }
+
+    /// BUG-182 root-cause confirmation: a multi-layer/multi-part EXR (the
+    /// shape Blender's "OpenEXR MultiLayer" export produces — color nested
+    /// under a named render-pass layer instead of a top-level R/G/B triple)
+    /// fails to decode, and the error must name the actual cause rather
+    /// than surfacing the crate's raw internal wording alone.
+    #[test]
+    fn multilayer_exr_reports_an_actionable_cause_not_a_bare_decode_error() {
+        // `tests/fixtures/hdri/multilayer_unsupported.exr` — a real
+        // Blender "OpenEXR MultiLayer" render (Combined + Z + Normal
+        // passes on a named view-layer, so color lives under
+        // "ViewLayer.Combined.*" rather than a top-level R/G/B triple).
+        // Reproduces the actual shape of BUG-182's suspected root cause:
+        // the `image` crate's OpenEXR decoder only reads a flat non-deep
+        // RGB(A) layer and rejects this with "does not contain non-deep
+        // rgb channels" — confirmed against this exact fixture in-session.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/hdri/multilayer_unsupported.exr");
+        let err = load_hdri(&path).unwrap_err();
+        assert!(
+            err.contains("multi-layer") || err.contains("multi-part"),
+            "error must name multi-layer/multi-part EXR as the cause: {err}"
+        );
+        assert!(err.contains("Blender"), "error must name the common real-world source: {err}");
     }
 }
 
