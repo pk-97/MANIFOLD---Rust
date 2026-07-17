@@ -55,6 +55,31 @@ pub struct SceneObject {
     pub occlusion_map: Option<Slot>,
     /// `Texture2D` slot — emissive map.
     pub emissive_map: Option<Slot>,
+    /// `Texture2D` slot — sheen color map (GLTF_MATERIAL_EXTENSIONS_DESIGN
+    /// E3/E4/E5).
+    pub sheen_color_map: Option<Slot>,
+    /// `Texture2D` slot — sheen roughness map.
+    pub sheen_roughness_map: Option<Slot>,
+    /// `Texture2D` slot — iridescence map.
+    pub iridescence_map: Option<Slot>,
+    /// `Texture2D` slot — iridescence thickness map.
+    pub iridescence_thickness_map: Option<Slot>,
+    /// `Texture2D` slot — anisotropy map.
+    pub anisotropy_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat map (GLTF_MATERIAL_EXTENSIONS_DESIGN E6).
+    pub clearcoat_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat roughness map.
+    pub clearcoat_roughness_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat normal map.
+    pub clearcoat_normal_map: Option<Slot>,
+    /// `Texture2D` slot — specular map.
+    pub specular_map: Option<Slot>,
+    /// `Texture2D` slot — specular color map.
+    pub specular_color_map: Option<Slot>,
+    /// `Texture2D` slot — transmission map.
+    pub transmission_map: Option<Slot>,
+    /// `Texture2D` slot — volume thickness map.
+    pub volume_thickness_map: Option<Slot>,
     /// `Array<InstanceTransform>` slot, for instanced draws. `None` for a
     /// single-instance object.
     pub instances: Option<Slot>,
@@ -94,6 +119,18 @@ mod tests {
             mr_map: None,
             occlusion_map: None,
             emissive_map: None,
+            sheen_color_map: None,
+            sheen_roughness_map: None,
+            iridescence_map: None,
+            iridescence_thickness_map: None,
+            anisotropy_map: None,
+            clearcoat_map: None,
+            clearcoat_roughness_map: None,
+            clearcoat_normal_map: None,
+            specular_map: None,
+            specular_color_map: None,
+            transmission_map: None,
+            volume_thickness_map: None,
             instances: None,
         };
         assert!(!obj.visible);
@@ -113,6 +150,18 @@ mod tests {
             mr_map: None,
             occlusion_map: None,
             emissive_map: None,
+            sheen_color_map: None,
+            sheen_roughness_map: None,
+            iridescence_map: None,
+            iridescence_thickness_map: None,
+            anisotropy_map: None,
+            clearcoat_map: None,
+            clearcoat_roughness_map: None,
+            clearcoat_normal_map: None,
+            specular_map: None,
+            specular_color_map: None,
+            transmission_map: None,
+            volume_thickness_map: None,
             instances: Some(Slot(2)),
         };
         let copy = obj;

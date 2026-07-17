@@ -76,7 +76,7 @@ use crate::node_graph::effect_node::{
 };
 use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -592,39 +592,16 @@ pub struct RenderScene {
     /// ≈ O(objects²). `evaluate()` now indexes this `Vec` by object number
     /// and resolves each name through a per-frame [`bindings::Slot`] index
     /// (built once via `NodeInputs::build_index`) instead.
-    object_port_names: Vec<ObjectPortNames>,
+    /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: one `object_{i}` port
+    /// name per object, pre-formatted once in [`Self::rebuild`] (only
+    /// reached on an `objects` param change), same treatment
+    /// `light_port_names` gets below. Replaces the 21 legacy per-object
+    /// port-name families (`mesh_i`/`material_i`/17 maps/`transform_i`/
+    /// `instances_i`) — every one of those resources now arrives bundled
+    /// in the single `SceneObject` read off this one port.
+    object_port_names: Vec<Box<str>>,
     /// Same treatment for `light_{i}` port names.
     light_port_names: Vec<Box<str>>,
-}
-
-/// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4: one object's pre-formatted
-/// port names (mesh/material/every optional map/transform/instances),
-/// rebuilt only when `objects` changes. Field order matches the push order
-/// in [`RenderScene::rebuild`] — cosmetic only, nothing depends on it (each
-/// field is looked up by name through the frame's port index, never by
-/// position).
-struct ObjectPortNames {
-    mesh: Box<str>,
-    material: Box<str>,
-    base_color_map: Box<str>,
-    normal_map: Box<str>,
-    mr_map: Box<str>,
-    occlusion_map: Box<str>,
-    emissive_map: Box<str>,
-    sheen_color_map: Box<str>,
-    sheen_roughness_map: Box<str>,
-    iridescence_map: Box<str>,
-    iridescence_thickness_map: Box<str>,
-    anisotropy_map: Box<str>,
-    clearcoat_map: Box<str>,
-    clearcoat_roughness_map: Box<str>,
-    clearcoat_normal_map: Box<str>,
-    specular_map: Box<str>,
-    specular_color_map: Box<str>,
-    transmission_map: Box<str>,
-    volume_thickness_map: Box<str>,
-    transform: Box<str>,
-    instances: Box<str>,
 }
 
 /// VOLUMETRIC_LIGHT_DESIGN.md D1/V1: the sole CPU gate for the whole
@@ -774,146 +751,17 @@ impl RenderScene {
                 required: false,
             });
         }
-        let mesh_ty = PortType::Array(ArrayType::of_known::<MeshVertex>());
-        let instance_ty = PortType::Array(ArrayType::of_known::<InstanceTransform>());
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: one `object_{i}:
+        // Object` port per object, replacing the 21 legacy per-object port
+        // families (mesh_i/material_i/17 maps/transform_i/instances_i).
+        // `node.scene_object` binds all of that into one `SceneObject`;
+        // unwired = skip (no draw, no shadow — D4). Optional, not required:
+        // an in-progress edit that hasn't wired every object slot yet must
+        // not error the whole scene, it just skips that object.
         for i in 0..n_obj {
             inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("mesh_{i}")),
-                ty: mesh_ty,
-                kind: PortKind::Input,
-                required: true,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("material_{i}")),
-                ty: PortType::Material,
-                kind: PortKind::Input,
-                required: true,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("base_color_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            // IMPORT_FIDELITY_DESIGN.md D3/F-P2: four new optional per-object
-            // texture ports, each following the P8 always-bind-stub pattern
-            // exactly like base_color_map_n above — unwired binds a dummy,
-            // its texture_flags/texture_flags2 bit stays 0.
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("normal_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("mr_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("occlusion_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("emissive_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised — full
-            // spec surface per family): sheen/iridescence/anisotropy extension
-            // textures, same always-bind-stub pattern as the five maps above.
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("sheen_color_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("sheen_roughness_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("iridescence_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("iridescence_thickness_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("anisotropy_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
-            // completion sweep): clearcoat/specular/transmission/volume-
-            // thickness extension textures, same always-bind-stub pattern.
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("clearcoat_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("clearcoat_roughness_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("clearcoat_normal_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("specular_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("specular_color_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("transmission_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("volume_thickness_map_{i}")),
-                ty: PortType::Texture2D,
-                kind: PortKind::Input,
-                required: false,
-            });
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("transform_{i}")),
-                ty: PortType::Transform,
-                kind: PortKind::Input,
-                required: false,
-            });
-            // D11: unwired = this object draws once with a cached 1-entry
-            // identity stub (see `ensure_identity_instance_stub`); wired =
-            // instance_count = buffer_size / 32, each instance transformed
-            // by `model_n · T_instance`.
-            inputs.push(NodePort {
-                name: std::borrow::Cow::Owned(format!("instances_{i}")),
-                ty: instance_ty,
+                name: std::borrow::Cow::Owned(format!("object_{i}")),
+                ty: PortType::Object,
                 kind: PortKind::Input,
                 required: false,
             });
@@ -961,32 +809,8 @@ impl RenderScene {
         // `objects`/`lights` param change — never per frame). `evaluate()`
         // indexes these by object/light number instead of calling `format!`
         // itself.
-        self.object_port_names = (0..n_obj)
-            .map(|i| ObjectPortNames {
-                mesh: format!("mesh_{i}").into_boxed_str(),
-                material: format!("material_{i}").into_boxed_str(),
-                base_color_map: format!("base_color_map_{i}").into_boxed_str(),
-                normal_map: format!("normal_map_{i}").into_boxed_str(),
-                mr_map: format!("mr_map_{i}").into_boxed_str(),
-                occlusion_map: format!("occlusion_map_{i}").into_boxed_str(),
-                emissive_map: format!("emissive_map_{i}").into_boxed_str(),
-                sheen_color_map: format!("sheen_color_map_{i}").into_boxed_str(),
-                sheen_roughness_map: format!("sheen_roughness_map_{i}").into_boxed_str(),
-                iridescence_map: format!("iridescence_map_{i}").into_boxed_str(),
-                iridescence_thickness_map: format!("iridescence_thickness_map_{i}")
-                    .into_boxed_str(),
-                anisotropy_map: format!("anisotropy_map_{i}").into_boxed_str(),
-                clearcoat_map: format!("clearcoat_map_{i}").into_boxed_str(),
-                clearcoat_roughness_map: format!("clearcoat_roughness_map_{i}").into_boxed_str(),
-                clearcoat_normal_map: format!("clearcoat_normal_map_{i}").into_boxed_str(),
-                specular_map: format!("specular_map_{i}").into_boxed_str(),
-                specular_color_map: format!("specular_color_map_{i}").into_boxed_str(),
-                transmission_map: format!("transmission_map_{i}").into_boxed_str(),
-                volume_thickness_map: format!("volume_thickness_map_{i}").into_boxed_str(),
-                transform: format!("transform_{i}").into_boxed_str(),
-                instances: format!("instances_{i}").into_boxed_str(),
-            })
-            .collect();
+        self.object_port_names =
+            (0..n_obj).map(|i| format!("object_{i}").into_boxed_str()).collect();
         self.light_port_names =
             (0..n_lights).map(|i| format!("light_{i}").into_boxed_str()).collect();
     }
@@ -2426,18 +2250,33 @@ impl EffectNode for RenderScene {
         let mut has_transmission = false;
 
         for n in 0..objects {
-            // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 (R5): port names
-            // are pre-formatted once in `rebuild()` (no static name tables —
-            // object count is unbounded, but the per-object names ARE sized
-            // to the instance and cached there); every lookup below resolves
+            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): every object's
+            // full bundle (mesh/transform/material/17 maps/instances/
+            // visible) arrives on ONE `object_n: Object` port — resolved
             // through `port_index` (built once per frame, above) instead of
-            // a per-lookup `NodeInputs::slot` scan.
-            let names = &self.object_port_names[n];
-            let mesh_slot = port_index.get(names.mesh.as_ref()).copied();
+            // a per-lookup `NodeInputs::slot` scan, same treatment the
+            // legacy per-port lookups got.
+            let object_port = &self.object_port_names[n];
+            let object_slot_id = port_index.get(object_port.as_ref()).copied();
+            let Some(object) = object_slot_id.and_then(|s| ctx.inputs.object_slot(s)) else {
+                // Unwired `object_n` (no `node.scene_object` feeding this
+                // index yet — an in-progress edit): skip this object
+                // entirely, no error. Matches an unwired `visible` object's
+                // "no draw, no shadow" treatment below.
+                continue;
+            };
+            if !object.visible {
+                // D4: `visible == false` is no draw AND no shadow cast — an
+                // invisible object leaves no shadow. Skipping here (never
+                // pushed into `draws`) removes it from both the main pass
+                // and the shadow-caster pass below, which filters from
+                // `draws`.
+                continue;
+            }
+            let mesh_slot = object.mesh;
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.error(format!(
-                    "missing required `{}` input; renderer fell back to magenta clear",
-                    names.mesh
+                    "object_{n}: missing required `vertices` input (its scene_object's `vertices` port is unwired); renderer fell back to magenta clear"
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2448,11 +2287,9 @@ impl EffectNode for RenderScene {
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
             // `mesh_n` write generation, feeds the shadow cache key below.
             let vertices_generation = mesh_slot.and_then(|s| ctx.inputs.slot_generation_of(s));
-            let material_slot = port_index.get(names.material.as_ref()).copied();
-            let Some(material) = material_slot.and_then(|s| ctx.inputs.material_slot(s)) else {
+            let Some(material) = object.material else {
                 ctx.error(format!(
-                    "missing required `{}` input; renderer fell back to magenta clear",
-                    names.material
+                    "object_{n}: missing required `material` input (its scene_object's `material` port is unwired); renderer fell back to magenta clear"
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2462,8 +2299,8 @@ impl EffectNode for RenderScene {
             };
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.error(format!(
-                    "{:?} material on `{}` requires `envmap` input but it is unwired; renderer fell back to magenta",
-                    material.kind, names.material
+                    "{:?} material on `object_{n}` requires `envmap` input but it is unwired; renderer fell back to magenta",
+                    material.kind
                 ));
                 if let Some(target) = ctx.outputs.texture_2d("color") {
                     let gpu = ctx.gpu_encoder();
@@ -2472,44 +2309,43 @@ impl EffectNode for RenderScene {
                 return;
             }
             // `NodeInputs` is `Copy` (bindings.rs) — capture it by value so
-            // this closure doesn't borrow `ctx` (which `ctx.error`/
+            // these lookups don't hold `ctx` borrowed (`ctx.error`/
             // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
             let inputs = ctx.inputs;
-            let tex =
-                |name: &str| port_index.get(name).copied().and_then(|s| inputs.texture_2d_slot(s));
-            let base_color_map = tex(&names.base_color_map);
+            let base_color_map = object.base_color_map.and_then(|s| inputs.texture_2d_slot(s));
             // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional
             // per-object texture ports.
-            let normal_map = tex(&names.normal_map);
-            let mr_map = tex(&names.mr_map);
-            let occlusion_map = tex(&names.occlusion_map);
-            let emissive_map = tex(&names.emissive_map);
+            let normal_map = object.normal_map.and_then(|s| inputs.texture_2d_slot(s));
+            let mr_map = object.mr_map.and_then(|s| inputs.texture_2d_slot(s));
+            let occlusion_map = object.occlusion_map.and_then(|s| inputs.texture_2d_slot(s));
+            let emissive_map = object.emissive_map.and_then(|s| inputs.texture_2d_slot(s));
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised).
-            let sheen_color_map = tex(&names.sheen_color_map);
-            let sheen_roughness_map = tex(&names.sheen_roughness_map);
-            let iridescence_map = tex(&names.iridescence_map);
-            let iridescence_thickness_map = tex(&names.iridescence_thickness_map);
-            let anisotropy_map = tex(&names.anisotropy_map);
+            let sheen_color_map = object.sheen_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            let sheen_roughness_map =
+                object.sheen_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_map = object.iridescence_map.and_then(|s| inputs.texture_2d_slot(s));
+            let iridescence_thickness_map =
+                object.iridescence_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let anisotropy_map = object.anisotropy_map.and_then(|s| inputs.texture_2d_slot(s));
             // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E6 (D1 revised — texture-
             // completion sweep).
-            let clearcoat_map = tex(&names.clearcoat_map);
-            let clearcoat_roughness_map = tex(&names.clearcoat_roughness_map);
-            let clearcoat_normal_map = tex(&names.clearcoat_normal_map);
-            let specular_map = tex(&names.specular_map);
-            let specular_color_map = tex(&names.specular_color_map);
-            let transmission_map = tex(&names.transmission_map);
-            let volume_thickness_map = tex(&names.volume_thickness_map);
+            let clearcoat_map = object.clearcoat_map.and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_roughness_map =
+                object.clearcoat_roughness_map.and_then(|s| inputs.texture_2d_slot(s));
+            let clearcoat_normal_map =
+                object.clearcoat_normal_map.and_then(|s| inputs.texture_2d_slot(s));
+            let specular_map = object.specular_map.and_then(|s| inputs.texture_2d_slot(s));
+            let specular_color_map =
+                object.specular_color_map.and_then(|s| inputs.texture_2d_slot(s));
+            let transmission_map = object.transmission_map.and_then(|s| inputs.texture_2d_slot(s));
+            let volume_thickness_map =
+                object.volume_thickness_map.and_then(|s| inputs.texture_2d_slot(s));
 
-            // Unwired `transform_n` = identity (`Transform::default()`) —
-            // matches the old scattered params' defaults exactly (pos 0,
-            // rot 0, scale 1). See SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
-            // D3: no per-object param fallback — `node.transform_3d` is the
-            // only producer now.
-            let t = port_index
-                .get(names.transform.as_ref())
-                .copied()
-                .and_then(|s| ctx.inputs.transform_slot(s))
-                .unwrap_or_default();
+            // `object.transform` already defaults to `Transform::default()`
+            // (identity) when scene_object's own `transform` input is
+            // unwired (D2) — matches the old scattered params' defaults
+            // exactly (pos 0, rot 0, scale 1).
+            let t = object.transform;
             let model = model_matrix(t.pos, t.rot_euler, t.scale);
             // GBUFFER_DESIGN.md §2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
@@ -2624,10 +2460,7 @@ impl EffectNode for RenderScene {
             // copies (0 → that object's draw becomes a legal instance-count-0
             // no-op); unwired draws once via the identity stub (bound at
             // Pass 2 — this object carries no self-owned buffer reference).
-            // Resolved BEFORE `pipeline_for` below: `names` borrows
-            // `self.object_port_names`, which the `&mut self` pipeline call
-            // can't coexist with.
-            let instances_slot = port_index.get(names.instances.as_ref()).copied();
+            let instances_slot = object.instances;
             let instances = instances_slot.and_then(|s| inputs.array_slot(s));
             let instances_generation = instances_slot.and_then(|s| inputs.slot_generation_of(s));
             let instance_count = match instances {
@@ -3563,6 +3396,7 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::ports::ArrayType;
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
@@ -3762,58 +3596,29 @@ mod tests {
     #[test]
     fn defaults_to_two_objects_one_light() {
         let s = RenderScene::new();
-        // camera + envmap + atmosphere + light_0 +
-        // (mesh_0,material_0,base_color_map_0,normal_map_0,mr_map_0,
-        //  occlusion_map_0,emissive_map_0,sheen_color_map_0,
-        //  sheen_roughness_map_0,iridescence_map_0,
-        //  iridescence_thickness_map_0,anisotropy_map_0,clearcoat_map_0,
-        //  clearcoat_roughness_map_0,clearcoat_normal_map_0,specular_map_0,
-        //  specular_color_map_0,transmission_map_0,volume_thickness_map_0,
-        //  transform_0,instances_0) × 2 objects — 21 ports/object.
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E3/E4/E5 (D1 revised) added
-        // five new per-object texture ports; E6 (D1 revised — texture-
-        // completion sweep) added seven more (clearcoat×3, specular×2,
-        // transmission×1, volume-thickness×1).
-        assert_eq!(s.inputs().len(), 3 + 1 + 42);
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
+        // atmosphere + light_0 + object_0 + object_1 — ONE `Object` port
+        // per object now, replacing the 21 legacy per-object port families
+        // (mesh_n/material_n/17 maps/transform_n/instances_n).
+        assert_eq!(s.inputs().len(), 3 + 1 + 2);
         assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
         assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
         assert_eq!(
             s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
             PortType::Atmosphere
         );
-        assert!(s.inputs().iter().any(|p| p.name == "mesh_1"));
-        assert!(s.inputs().iter().any(|p| p.name == "material_1"));
-        assert!(!s.inputs().iter().any(|p| p.name == "mesh_2"));
+        let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
+        assert!(!by_name("object_0").required);
+        assert!(!by_name("object_1").required);
+        assert_eq!(by_name("object_0").ty, PortType::Object);
+        assert!(!s.inputs().iter().any(|p| p.name == "object_2"));
         assert!(s.inputs().iter().any(|p| p.name == "light_0"));
         assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
-        let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
-        assert!(!by_name("base_color_map_0").required);
-        assert!(!by_name("base_color_map_1").required);
-        // IMPORT_FIDELITY_DESIGN.md D3/F-P2: the four new optional per-object
-        // texture ports, same optional/Texture2D shape as base_color_map_n.
-        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
-            let p0 = by_name(&format!("{kind}_0"));
-            assert!(!p0.required, "{kind}_0 must be optional");
-            assert_eq!(p0.ty, PortType::Texture2D, "{kind}_0 must be Texture2D");
-            let p1 = by_name(&format!("{kind}_1"));
-            assert!(!p1.required, "{kind}_1 must be optional");
-        }
-        assert!(!by_name("transform_0").required);
-        assert!(!by_name("transform_1").required);
-        assert_eq!(by_name("transform_0").ty, PortType::Transform);
-        assert!(!by_name("instances_0").required);
-        assert!(!by_name("instances_1").required);
-        assert_eq!(
-            by_name("instances_0").ty,
-            PortType::Array(ArrayType::of_known::<InstanceTransform>())
-        );
-        assert!(!s.inputs().iter().any(|p| p.name == "base_color_map_2"));
-        assert!(!s.inputs().iter().any(|p| p.name == "transform_2"));
-        assert!(!s.inputs().iter().any(|p| p.name == "instances_2"));
         // Only `objects` + `lights` remain as params — per-object TRS moved
-        // to the `transform_n` port (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-        // §2 D3); instances_n carries no per-object instance_count param
-        // either (REALTIME_3D_DESIGN.md §10 D11).
+        // to `node.scene_object`'s `transform` input
+        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3); instances carries
+        // no per-object instance_count param either (REALTIME_3D_DESIGN.md
+        // §10 D11).
         assert_eq!(s.parameters().len(), 2);
         assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
     }
@@ -3823,36 +3628,16 @@ mod tests {
         let mut s = RenderScene::new();
         let node: &mut dyn EffectNode = &mut s;
         node.reconfigure(&params_with(5.0, 3.0));
-        assert!(node.inputs().iter().any(|p| p.name == "mesh_4"));
-        assert!(node.inputs().iter().any(|p| p.name == "material_4"));
-        assert!(node.inputs().iter().any(|p| p.name == "base_color_map_4"));
-        // IMPORT_FIDELITY_DESIGN.md D3/F-P2 ports must grow/shrink with the
-        // object count exactly like base_color_map_n.
-        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
-            assert!(node.inputs().iter().any(|p| p.name == format!("{kind}_4")));
-            assert!(!node.inputs().iter().any(|p| p.name == format!("{kind}_5")));
-        }
-        assert!(node.inputs().iter().any(|p| p.name == "transform_4"));
-        assert!(node.inputs().iter().any(|p| p.name == "instances_4"));
-        assert!(!node.inputs().iter().any(|p| p.name == "mesh_5"));
-        assert!(!node.inputs().iter().any(|p| p.name == "transform_5"));
-        assert!(!node.inputs().iter().any(|p| p.name == "instances_5"));
+        assert!(node.inputs().iter().any(|p| p.name == "object_4"));
+        assert!(!node.inputs().iter().any(|p| p.name == "object_5"));
         assert!(node.inputs().iter().any(|p| p.name == "light_2"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
         assert_eq!(node.parameters().len(), 2, "object count never grows the param list anymore");
 
         node.reconfigure(&params_with(1.0, 0.0));
-        assert!(!node.inputs().iter().any(|p| p.name == "mesh_1"));
-        assert!(!node.inputs().iter().any(|p| p.name == "base_color_map_1"));
-        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
-            assert!(!node.inputs().iter().any(|p| p.name == format!("{kind}_1")));
-        }
-        assert!(!node.inputs().iter().any(|p| p.name == "transform_1"));
-        assert!(!node.inputs().iter().any(|p| p.name == "instances_1"));
+        assert!(!node.inputs().iter().any(|p| p.name == "object_1"));
         assert!(!node.inputs().iter().any(|p| p.name == "light_0"));
-        assert!(node.inputs().iter().any(|p| p.name == "mesh_0"));
-        assert!(node.inputs().iter().any(|p| p.name == "transform_0"));
-        assert!(node.inputs().iter().any(|p| p.name == "instances_0"));
+        assert!(node.inputs().iter().any(|p| p.name == "object_0"));
     }
 
     #[test]
@@ -3864,26 +3649,11 @@ mod tests {
         // not a UI convenience — a producer that would exceed it must error
         // at import time rather than rely on this silent clamp).
         let last_obj = OBJECT_SAFETY_MAX - 1;
-        assert!(node.inputs().iter().any(|p| p.name == format!("mesh_{last_obj}")));
+        assert!(node.inputs().iter().any(|p| p.name == format!("object_{last_obj}")));
         assert!(!node
             .inputs()
             .iter()
-            .any(|p| p.name == format!("mesh_{OBJECT_SAFETY_MAX}")));
-        assert!(node
-            .inputs()
-            .iter()
-            .any(|p| p.name == format!("base_color_map_{last_obj}")));
-        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
-            assert!(node.inputs().iter().any(|p| p.name == format!("{kind}_{last_obj}")));
-        }
-        assert!(node
-            .inputs()
-            .iter()
-            .any(|p| p.name == format!("transform_{last_obj}")));
-        assert!(node
-            .inputs()
-            .iter()
-            .any(|p| p.name == format!("instances_{last_obj}")));
+            .any(|p| p.name == format!("object_{OBJECT_SAFETY_MAX}")));
         // Lights clamp to LIGHT_SLIDER_MAX — a soft UI bound now, NOT a
         // structural cap (lights ride a runtime-sized storage buffer).
         let last_light = LIGHT_SLIDER_MAX - 1;
@@ -3913,28 +3683,24 @@ mod tests {
         let mut s = RenderScene::new();
         let node: &mut dyn EffectNode = &mut s;
         node.reconfigure(&params_with(32.0, 2.0));
-        assert!(node.inputs().iter().any(|p| p.name == "mesh_31"));
-        assert!(node.inputs().iter().any(|p| p.name == "material_31"));
-        assert!(node.inputs().iter().any(|p| p.name == "transform_31"));
+        assert!(node.inputs().iter().any(|p| p.name == "object_31"));
         // objects/lights only — object count never grows the param list.
         assert_eq!(node.parameters().len(), 2);
     }
 
     #[test]
-    fn camera_and_mesh_material_ports_are_required_envmap_and_lights_are_not() {
+    fn camera_is_required_envmap_lights_and_objects_are_not() {
         let s = RenderScene::new();
         let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
         assert!(by_name("camera").required);
         assert!(!by_name("envmap").required);
         assert!(!by_name("light_0").required);
-        assert!(by_name("mesh_0").required);
-        assert!(by_name("material_0").required);
-        assert!(!by_name("base_color_map_0").required);
-        for kind in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
-            assert!(!by_name(&format!("{kind}_0")).required);
-        }
-        assert!(!by_name("transform_0").required);
-        assert!(!by_name("instances_0").required);
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4: object_n is optional, not
+        // required — an unwired object_n is a skip (no draw, no shadow),
+        // not a render error. `node.scene_object`'s OWN `vertices`/
+        // `material` inputs remain the structured-error path once an
+        // object IS wired (see the draw-assembly loop's error branches).
+        assert!(!by_name("object_0").required);
     }
 
     #[test]
@@ -3992,8 +3758,8 @@ mod tests {
 
     /// Minimal stand-in producer: no inputs, one output of the given type.
     /// Just enough to satisfy `validate()`'s required-input check for
-    /// `camera`/`mesh_0`/`material_0` — `compile()` never runs `evaluate()`,
-    /// so this never needs to touch a GPU device.
+    /// `camera` — `compile()` never runs `evaluate()`, so this never needs
+    /// to touch a GPU device.
     struct StubProducer {
         type_id: EffectNodeType,
         out: NodeOutput,
@@ -4030,11 +3796,13 @@ mod tests {
     }
 
     /// Build a one-object, zero-light `render_scene` fed by stub
-    /// camera/mesh/material producers, `color` always wired to a
+    /// camera/mesh/material producers through a `node.scene_object` (the
+    /// same shape a real graph wires post-P2), `color` always wired to a
     /// `FinalOutput`; `depth` wired to a second `FinalOutput` iff
     /// `wire_depth`. Returns the compiled plan plus the scene node's id so
     /// the caller can inspect its step's `outputs` list.
     fn compile_scene(wire_depth: bool) -> (crate::node_graph::ExecutionPlan, crate::node_graph::NodeInstanceId) {
+        use crate::node_graph::primitives::scene_object::SceneObjectNode;
         use crate::node_graph::{FinalOutput, Graph, compile};
 
         let mut graph = Graph::new();
@@ -4044,6 +3812,7 @@ mod tests {
             PortType::Array(ArrayType::of_known::<MeshVertex>()),
         )));
         let mat = graph.add_node(Box::new(StubProducer::new("stub.material", PortType::Material)));
+        let scene_object = graph.add_node(Box::new(SceneObjectNode::new()));
 
         // `Graph::add_node` (via `NodeInstance::new`) reconfigures the node
         // against its OWN default params right after insertion — a
@@ -4061,8 +3830,11 @@ mod tests {
 
         let color_sink = graph.add_node(Box::new(FinalOutput::new()));
         graph.connect((cam, "out"), (scene_id, "camera")).expect("camera wires");
-        graph.connect((mesh, "out"), (scene_id, "mesh_0")).expect("mesh wires");
-        graph.connect((mat, "out"), (scene_id, "material_0")).expect("material wires");
+        graph.connect((mesh, "out"), (scene_object, "vertices")).expect("mesh wires");
+        graph.connect((mat, "out"), (scene_object, "material")).expect("material wires");
+        graph
+            .connect((scene_object, "object"), (scene_id, "object_0"))
+            .expect("object wires");
         graph.connect((scene_id, "color"), (color_sink, "in")).expect("color wires");
 
         if wire_depth {

@@ -35,8 +35,8 @@
       {
         "id": "camOrbit",
         "name": "Camera Orbit",
-        "min": -3.14159265,
-        "max": 3.14159265,
+        "min": -3.1415927,
+        "max": 3.1415927,
         "defaultValue": 0.55,
         "wholeNumbers": false,
         "isToggle": false,
@@ -174,16 +174,15 @@
   "nodes": [
     {
       "id": 0,
-      "typeId": "system.generator_input",
       "nodeId": "input",
+      "typeId": "system.generator_input",
       "handle": "input"
     },
     {
       "id": 1,
-      "typeId": "node.grid_mesh",
       "nodeId": "terrain_grid",
+      "typeId": "node.grid_mesh",
       "handle": "terrain_grid",
-      "title": "Terrain Grid",
       "params": {
         "max_capacity": {
           "type": "Int",
@@ -205,22 +204,18 @@
           "type": "Float",
           "value": 14.0
         }
-      }
+      },
+      "title": "Terrain Grid"
     },
     {
       "id": 5,
-      "typeId": "node.gltf_mesh_source",
       "nodeId": "blossom_mesh",
+      "typeId": "node.gltf_mesh_source",
       "handle": "blossom_mesh",
-      "title": "Blossom Cluster (LOD)",
       "params": {
-        "mesh_index": {
-          "type": "Int",
-          "value": -1
-        },
-        "primitive_index": {
-          "type": "Int",
-          "value": -1
+        "fit": {
+          "type": "Enum",
+          "value": 1
         },
         "material_index": {
           "type": "Int",
@@ -230,56 +225,52 @@
           "type": "Int",
           "value": 240000
         },
-        "fit": {
-          "type": "Enum",
-          "value": 1
+        "mesh_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "primitive_index": {
+          "type": "Int",
+          "value": -1
         },
         "recenter": {
           "type": "Bool",
           "value": true
         }
-      }
+      },
+      "title": "Blossom Cluster (LOD)"
     },
     {
       "id": 6,
-      "typeId": "node.gltf_texture_source",
       "nodeId": "blossom_tex",
+      "typeId": "node.gltf_texture_source",
       "handle": "blossom_tex",
-      "title": "Blossom Atlas",
       "params": {
-        "texture_index": {
-          "type": "Int",
-          "value": 0
-        },
         "color_space": {
           "type": "Enum",
+          "value": 0
+        },
+        "height": {
+          "type": "Int",
+          "value": 1024
+        },
+        "texture_index": {
+          "type": "Int",
           "value": 0
         },
         "width": {
           "type": "Int",
           "value": 1024
-        },
-        "height": {
-          "type": "Int",
-          "value": 1024
         }
-      }
+      },
+      "title": "Blossom Atlas"
     },
     {
       "id": 2,
-      "typeId": "node.simplex_field_2d",
       "nodeId": "terrain_noise",
+      "typeId": "node.simplex_field_2d",
       "handle": "terrain_noise",
-      "title": "Terrain Noise",
       "params": {
-        "scale_x": {
-          "type": "Float",
-          "value": 1.6
-        },
-        "scale_y": {
-          "type": "Float",
-          "value": 1.6
-        },
         "offset_x": {
           "type": "Float",
           "value": 3.7
@@ -288,24 +279,28 @@
           "type": "Float",
           "value": -1.2
         },
+        "scale_x": {
+          "type": "Float",
+          "value": 1.6
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.6
+        },
         "z": {
           "type": "Float",
           "value": 0.0
         }
-      }
+      },
+      "title": "Terrain Noise"
     },
     {
       "id": 3,
-      "typeId": "node.push_mesh",
       "nodeId": "terrain_push",
+      "typeId": "node.push_mesh",
       "handle": "terrain_push",
-      "title": "Terrain Relief",
       "params": {
         "cols": {
-          "type": "Int",
-          "value": 64
-        },
-        "rows": {
           "type": "Int",
           "value": 64
         },
@@ -316,15 +311,19 @@
         "height_bias": {
           "type": "Float",
           "value": 0.0
+        },
+        "rows": {
+          "type": "Int",
+          "value": 64
         }
-      }
+      },
+      "title": "Terrain Relief"
     },
     {
       "id": 4,
-      "typeId": "node.make_triangles",
       "nodeId": "terrain_tris",
+      "typeId": "node.make_triangles",
       "handle": "terrain_tris",
-      "title": "Terrain Triangles",
       "params": {
         "src_cols": {
           "type": "Int",
@@ -334,56 +333,48 @@
           "type": "Int",
           "value": 64
         }
-      }
+      },
+      "title": "Terrain Triangles"
     },
     {
       "id": 12,
-      "typeId": "node.scatter_on_mesh",
       "nodeId": "scatter",
+      "typeId": "node.scatter_on_mesh",
       "handle": "scatter",
-      "title": "Scatter",
       "params": {
+        "align_to_normal": {
+          "type": "Bool",
+          "value": true
+        },
         "count": {
           "type": "Int",
           "value": 48
         },
-        "seed": {
-          "type": "Float",
-          "value": 11.0
-        },
-        "scale_min": {
-          "type": "Float",
-          "value": 1.2
+        "max_capacity": {
+          "type": "Int",
+          "value": 64
         },
         "scale_max": {
           "type": "Float",
           "value": 3.6
         },
-        "align_to_normal": {
-          "type": "Bool",
-          "value": true
+        "scale_min": {
+          "type": "Float",
+          "value": 1.2
         },
-        "max_capacity": {
-          "type": "Int",
-          "value": 64
+        "seed": {
+          "type": "Float",
+          "value": 11.0
         }
-      }
+      },
+      "title": "Scatter"
     },
     {
       "id": 13,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": {
-          "type": "Float",
-          "value": 0.55
-        },
-        "tilt": {
-          "type": "Float",
-          "value": 0.24
-        },
         "distance": {
           "type": "Float",
           "value": 9.5
@@ -395,54 +386,94 @@
         "look_y": {
           "type": "Float",
           "value": 0.3
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.24
         }
-      }
+      },
+      "title": "Camera"
     },
     {
       "id": 14,
-      "typeId": "node.phong_material",
       "nodeId": "terrain_mat",
+      "typeId": "node.phong_material",
       "handle": "terrain_mat",
-      "title": "Soil",
       "params": {
-        "color_r": {
+        "ambient": {
           "type": "Float",
           "value": 0.1
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 0.115
         },
         "color_b": {
           "type": "Float",
           "value": 0.07
         },
-        "ambient": {
+        "color_g": {
+          "type": "Float",
+          "value": 0.115
+        },
+        "color_r": {
           "type": "Float",
           "value": 0.1
         }
-      }
+      },
+      "title": "Soil"
     },
     {
       "id": 15,
-      "typeId": "node.phong_material",
       "nodeId": "flower_mat",
+      "typeId": "node.phong_material",
       "handle": "flower_mat",
-      "title": "Blossom Material",
       "params": {
         "ambient": {
           "type": "Float",
           "value": 0.18
         }
-      }
+      },
+      "title": "Blossom Material"
     },
     {
       "id": 16,
-      "typeId": "node.light",
       "nodeId": "sun",
+      "typeId": "node.light",
       "handle": "sun",
-      "title": "Low Sun",
       "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.62
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.82
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 2.8
+        },
         "mode": {
           "type": "Enum",
           "value": 0
@@ -459,79 +490,60 @@
           "type": "Float",
           "value": 5.0
         },
-        "aim_x": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "aim_y": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "aim_z": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "color_r": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 0.82
-        },
-        "color_b": {
-          "type": "Float",
-          "value": 0.62
-        },
-        "intensity": {
-          "type": "Float",
-          "value": 2.8
-        },
-        "cast_shadows": {
-          "type": "Float",
-          "value": 1.0
-        },
         "shadow_bias": {
           "type": "Float",
           "value": 0.002
         }
-      }
+      },
+      "title": "Low Sun"
     },
     {
       "id": 17,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": {
-          "type": "Int",
-          "value": 2
-        },
         "lights": {
           "type": "Int",
           "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 2
         }
-      }
+      },
+      "title": "Render Scene"
     },
     {
       "id": 99,
-      "typeId": "system.final_output",
       "nodeId": "out",
+      "typeId": "system.final_output",
       "handle": "out"
     },
     {
       "id": 18,
-      "typeId": "node.transform_3d",
       "nodeId": "blossom_lift",
+      "typeId": "node.transform_3d",
       "handle": "blossom_lift",
-      "title": "Nestle Lift",
       "params": {
         "pos_y": {
           "type": "Float",
           "value": 1.0
         }
-      }
+      },
+      "title": "Nestle Lift"
+    },
+    {
+      "id": 100,
+      "nodeId": "11f95bb5",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
+    },
+    {
+      "id": 101,
+      "nodeId": "3959ca4f",
+      "typeId": "node.scene_object",
+      "handle": "Object 1"
     }
   ],
   "wires": [
@@ -568,26 +580,26 @@
     {
       "fromNode": 4,
       "fromPort": "out",
-      "toNode": 17,
-      "toPort": "mesh_0"
+      "toNode": 100,
+      "toPort": "vertices"
     },
     {
       "fromNode": 14,
       "fromPort": "out",
-      "toNode": 17,
-      "toPort": "material_0"
+      "toNode": 100,
+      "toPort": "material"
     },
     {
       "fromNode": 15,
       "fromPort": "out",
-      "toNode": 17,
-      "toPort": "material_1"
+      "toNode": 101,
+      "toPort": "material"
     },
     {
       "fromNode": 12,
       "fromPort": "instances",
-      "toNode": 17,
-      "toPort": "instances_1"
+      "toNode": 101,
+      "toPort": "instances"
     },
     {
       "fromNode": 16,
@@ -604,20 +616,32 @@
     {
       "fromNode": 5,
       "fromPort": "vertices",
-      "toNode": 17,
-      "toPort": "mesh_1"
+      "toNode": 101,
+      "toPort": "vertices"
     },
     {
       "fromNode": 6,
       "fromPort": "out",
-      "toNode": 17,
-      "toPort": "base_color_map_1"
+      "toNode": 101,
+      "toPort": "base_color_map"
     },
     {
       "fromNode": 18,
       "fromPort": "transform",
+      "toNode": 101,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
       "toNode": 17,
-      "toPort": "transform_1"
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "object",
+      "toNode": 17,
+      "toPort": "object_1"
     }
   ]
 }

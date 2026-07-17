@@ -4,6 +4,7 @@
 //! ```text
 //! graph_tool validate <file.json> --kind effect|generator [--json]
 //! graph_tool fusion <file.json> [--json]
+//! graph_tool migrate <file.json> [--in-place]
 //! ```
 //!
 //! `validate` runs the file through the exact load + compile pipeline
@@ -17,6 +18,15 @@
 //! pipeline itself uses ([`fusion_report`] — GRAPH_TOOLING_DESIGN P3, D10)
 //! and prints per-node classification, region membership, cut reasons, and
 //! an estimated dispatch count.
+//!
+//! `migrate` runs [`manifold_core::scene_object_migration::migrate_scene_object_wires`]
+//! (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5) over the file — the same
+//! structural, version-gate-free rewrite `instantiate_def` applies at every
+//! load path — and prints the (possibly unchanged) def to stdout, or writes
+//! it back to `<file.json>` with `--in-place`. Used to regenerate the
+//! in-repo bundled/reference preset JSON so the checked-in files carry the
+//! modern `object_k` wiring instead of relying on the load-time migration
+//! to paper over the legacy shape forever.
 //!
 //! Exit codes: `0` valid / report produced, `1` invalid graph (`validate`
 //! only — errors present), `2` usage / file-read / parse failure.
@@ -39,6 +49,7 @@ fn main() -> ExitCode {
     match verb.as_str() {
         "validate" => run_validate(rest),
         "fusion" => run_fusion(rest),
+        "migrate" => run_migrate(rest),
         "-h" | "--help" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -55,6 +66,7 @@ fn print_usage() {
     eprintln!(
         "usage: graph_tool validate <file.json> --kind effect|generator [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool fusion <file.json> [--json]\n\
+         \x20\x20\x20\x20\x20\x20\x20graph_tool migrate <file.json> [--in-place]\n\
          \n\
          validate: runs a graph document JSON file through the same load +\n\
          compile pipeline the runtime loader takes. Exit codes: 0 valid,\n\
@@ -62,7 +74,13 @@ fn print_usage() {
          \n\
          fusion: reports per-node fusion classification, region membership,\n\
          cut reasons, and an estimated dispatch count, using the exact\n\
-         flatten + partition the freeze pipeline itself runs."
+         flatten + partition the freeze pipeline itself runs.\n\
+         \n\
+         migrate: rewrites node.render_scene's legacy per-object port wiring\n\
+         into node.scene_object nodes feeding object_k ports (structural,\n\
+         idempotent, no version gate). Prints the migrated JSON to stdout;\n\
+         --in-place overwrites <file.json>. A def with nothing to migrate is\n\
+         printed/written unchanged."
     );
 }
 
@@ -286,4 +304,74 @@ fn print_fusion_human(
             println!("    cut: {reason}");
         }
     }
+}
+
+fn run_migrate(args: &[String]) -> ExitCode {
+    let mut file: Option<PathBuf> = None;
+    let mut in_place = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--in-place" => {
+                in_place = true;
+                i += 1;
+            }
+            positional if file.is_none() => {
+                file = Some(PathBuf::from(positional));
+                i += 1;
+            }
+            other => {
+                eprintln!("error: unexpected argument '{other}'");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let Some(file) = file else {
+        eprintln!("error: missing <file.json>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+
+    let bytes = match std::fs::read_to_string(&file) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {e}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+    let mut def: EffectGraphDef = match serde_json::from_str(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {}: parse failed: {e}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    let changed = manifold_core::scene_object_migration::migrate_scene_object_wires(&mut def);
+
+    let out = match serde_json::to_string_pretty(&def) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: failed to serialize migrated def: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if in_place {
+        if let Err(e) = std::fs::write(&file, format!("{out}\n")) {
+            eprintln!("error: cannot write {}: {e}", file.display());
+            return ExitCode::from(2);
+        }
+        eprintln!(
+            "{}: {}",
+            file.display(),
+            if changed { "migrated" } else { "no legacy wires — unchanged" }
+        );
+    } else {
+        println!("{out}");
+    }
+
+    ExitCode::SUCCESS
 }

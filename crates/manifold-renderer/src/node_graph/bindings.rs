@@ -238,6 +238,15 @@ impl<'a> NodeInputs<'a> {
     pub fn slot_generation_of(&self, slot: Slot) -> Option<u64> {
         self.generations.get(slot.0 as usize).copied()
     }
+
+    /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name
+    /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
+    /// resolves `object_k` through its per-frame `build_index()` map
+    /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4), same shape as
+    /// `material_slot`/`transform_slot` above.
+    pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
+        self.backend.object(slot)
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port

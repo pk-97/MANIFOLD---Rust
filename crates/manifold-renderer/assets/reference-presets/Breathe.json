@@ -90,148 +90,369 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
     {
       "id": 1,
-      "typeId": "node.grid_mesh",
       "nodeId": "grid",
+      "typeId": "node.grid_mesh",
       "handle": "grid",
-      "title": "Grid",
       "params": {
-        "max_capacity": { "type": "Int", "value": 2000 },
-        "resolution_x": { "type": "Int", "value": 40 },
-        "resolution_y": { "type": "Int", "value": 40 },
-        "size_x": { "type": "Float", "value": 2.0 },
-        "size_y": { "type": "Float", "value": 2.0 }
-      }
+        "max_capacity": {
+          "type": "Int",
+          "value": 2000
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 40
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 40
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 2.0
+        }
+      },
+      "title": "Grid"
     },
     {
       "id": 2,
-      "typeId": "node.make_triangles",
       "nodeId": "tris",
+      "typeId": "node.make_triangles",
       "handle": "tris",
-      "title": "Triangulate",
       "params": {
-        "src_cols": { "type": "Int", "value": 40 },
-        "src_rows": { "type": "Int", "value": 40 }
-      }
+        "src_cols": {
+          "type": "Int",
+          "value": 40
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 40
+        }
+      },
+      "title": "Triangulate"
     },
     {
       "id": 3,
-      "typeId": "node.mesh_ramp",
       "nodeId": "growth_mask",
+      "typeId": "node.mesh_ramp",
       "handle": "growth_mask",
-      "title": "Growth Mask",
       "params": {
-        "axis": { "type": "Enum", "value": 2 },
-        "origin_x": { "type": "Float", "value": 0.0 },
-        "origin_y": { "type": "Float", "value": 0.0 },
-        "origin_z": { "type": "Float", "value": 0.0 },
-        "phase": { "type": "Float", "value": 0.5 },
-        "feather": { "type": "Float", "value": 0.15 },
-        "bound_min": { "type": "Float", "value": -0.8 },
-        "bound_max": { "type": "Float", "value": 0.8 },
-        "invert": { "type": "Bool", "value": false }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 2
+        },
+        "bound_max": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "bound_min": {
+          "type": "Float",
+          "value": -0.8
+        },
+        "feather": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "invert": {
+          "type": "Bool",
+          "value": false
+        },
+        "origin_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Growth Mask"
     },
     {
       "id": 4,
-      "typeId": "node.push_along_normals",
       "nodeId": "breathe",
+      "typeId": "node.push_along_normals",
       "handle": "breathe",
-      "title": "Breathe",
       "params": {
-        "amount": { "type": "Float", "value": 0.2 },
-        "field_bias": { "type": "Float", "value": 0.5 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "field_bias": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Breathe"
     },
-    { "id": 5, "typeId": "node.facet_normals", "nodeId": "facets", "handle": "facets", "title": "Facet Normals" },
+    {
+      "id": 5,
+      "nodeId": "facets",
+      "typeId": "node.facet_normals",
+      "handle": "facets",
+      "title": "Facet Normals"
+    },
     {
       "id": 6,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": { "type": "Float", "value": 0.6 },
-        "tilt": { "type": "Float", "value": 0.6 },
-        "distance": { "type": "Float", "value": 4.0 },
-        "fov_y": { "type": "Float", "value": 0.8 }
-      }
+        "distance": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.6
+        }
+      },
+      "title": "Camera"
     },
     {
       "id": 7,
-      "typeId": "node.phong_material",
       "nodeId": "mat",
+      "typeId": "node.phong_material",
       "handle": "mat",
-      "title": "Material",
       "params": {
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 0.85 },
-        "color_b": { "type": "Float", "value": 0.6 },
-        "ambient": { "type": "Float", "value": 0.1 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Material"
     },
     {
       "id": 8,
-      "typeId": "node.light",
       "nodeId": "key_light",
+      "typeId": "node.light",
       "handle": "key_light",
-      "title": "Key Light",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "pos_x": { "type": "Float", "value": 0.0 },
-        "pos_y": { "type": "Float", "value": 30.0 },
-        "pos_z": { "type": "Float", "value": 0.0 },
-        "aim_x": { "type": "Float", "value": 0.0 },
-        "aim_y": { "type": "Float", "value": 0.0 },
-        "aim_z": { "type": "Float", "value": 0.0 },
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 1.0 },
-        "color_b": { "type": "Float", "value": 1.0 },
-        "intensity": { "type": "Float", "value": 1.0 },
-        "cast_shadows": { "type": "Float", "value": 0.0 }
-      }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 30.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Key Light"
     },
     {
       "id": 9,
-      "typeId": "node.lfo",
       "nodeId": "breathe_lfo",
+      "typeId": "node.lfo",
       "handle": "breathe_lfo",
-      "title": "Breathe LFO",
       "params": {
-        "rate_mode": { "type": "Enum", "value": 0 },
-        "rate": { "type": "Enum", "value": 2 },
-        "shape": { "type": "Enum", "value": 0 },
-        "phase": { "type": "Float", "value": 0.0 },
-        "min": { "type": "Float", "value": 0.0 },
-        "max": { "type": "Float", "value": 0.2 }
-      }
+        "max": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "min": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rate": {
+          "type": "Enum",
+          "value": 2
+        },
+        "rate_mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Breathe LFO"
     },
     {
       "id": 20,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": { "type": "Int", "value": 1 },
-        "lights": { "type": "Int", "value": 1 }
-      }
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "title": "Render Scene"
     },
-    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+    {
+      "id": 99,
+      "nodeId": "out",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 100,
+      "nodeId": "156785c5",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
+    }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "vertices", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 3, "fromPort": "weights", "toNode": 4, "toPort": "weights" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 4, "toPort": "amount" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 20, "toPort": "camera" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 20, "toPort": "material_0" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 20, "toPort": "light_0" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 20, "toPort": "mesh_0" },
-    { "fromNode": 20, "fromPort": "color", "toNode": 99, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "weights",
+      "toNode": 4,
+      "toPort": "weights"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 20,
+      "toPort": "object_0"
+    }
   ]
 }

@@ -15575,214 +15575,14 @@
           "type": "Light"
         },
         {
-          "name": "mesh_0",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "material_0",
-          "required": true,
-          "type": "Material"
-        },
-        {
-          "name": "base_color_map_0",
+          "name": "object_0",
           "required": false,
-          "type": "Texture2D"
+          "type": "Object"
         },
         {
-          "name": "normal_map_0",
+          "name": "object_1",
           "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "mr_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "occlusion_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "emissive_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "sheen_color_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "sheen_roughness_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "iridescence_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "iridescence_thickness_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "anisotropy_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_roughness_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_normal_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "specular_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "specular_color_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "transmission_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "volume_thickness_map_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "transform_0",
-          "required": false,
-          "type": "Transform"
-        },
-        {
-          "name": "instances_0",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "mesh_1",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "material_1",
-          "required": true,
-          "type": "Material"
-        },
-        {
-          "name": "base_color_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "normal_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "mr_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "occlusion_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "emissive_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "sheen_color_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "sheen_roughness_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "iridescence_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "iridescence_thickness_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "anisotropy_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_roughness_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "clearcoat_normal_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "specular_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "specular_color_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "transmission_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "volume_thickness_map_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "transform_1",
-          "required": false,
-          "type": "Transform"
-        },
-        {
-          "name": "instances_1",
-          "required": false,
-          "type": "Array"
+          "type": "Object"
         }
       ],
       "label": "Render Scene",
@@ -17356,7 +17156,10 @@
         "object bundle"
       ],
       "category": "3D Geometry",
-      "examples": [],
+      "examples": [
+        "ApricotWeather",
+        "SceneStarter"
+      ],
       "fusion": "boundary:non_gpu",
       "inputs": [
         {
@@ -17400,6 +17203,66 @@
           "type": "Texture2D"
         },
         {
+          "name": "sheen_color_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "sheen_roughness_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "iridescence_thickness_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "anisotropy_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_roughness_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "clearcoat_normal_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "specular_color_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "transmission_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "volume_thickness_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
           "name": "instances",
           "required": false,
           "type": "Array"
@@ -17429,7 +17292,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Binds one scene object's mesh vertices, transform, material, five maps (base colour / normal / metallic-roughness / occlusion / emissive), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
+      "purpose": "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
       "role": "Source",
       "stratum": "driver",
       "summary": "Binds one object's mesh, transform, material, maps, and instances into a single wire. Wire it into a render_scene object slot.",

@@ -35,8 +35,8 @@
       {
         "id": "camOrbit",
         "name": "Camera Orbit",
-        "min": -3.14159265,
-        "max": 3.14159265,
+        "min": -3.1415927,
+        "max": 3.1415927,
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
@@ -187,202 +187,450 @@
   "nodes": [
     {
       "id": 0,
-      "typeId": "system.generator_input",
       "nodeId": "input",
+      "typeId": "system.generator_input",
       "handle": "input"
     },
     {
       "id": 1,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": { "type": "Float", "value": 0.5 },
-        "tilt": { "type": "Float", "value": 0.08 },
-        "distance": { "type": "Float", "value": 2.4 },
-        "fov_y": { "type": "Float", "value": 0.8 },
-        "look_y": { "type": "Float", "value": 0.0 }
-      }
+        "distance": {
+          "type": "Float",
+          "value": 2.4
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.08
+        }
+      },
+      "title": "Camera"
     },
     {
       "id": 2,
-      "typeId": "node.gltf_mesh_source",
       "nodeId": "sprig",
+      "typeId": "node.gltf_mesh_source",
       "handle": "sprig",
-      "title": "Sprig Cluster",
       "params": {
-        "mesh_index": { "type": "Int", "value": -1 },
-        "primitive_index": { "type": "Int", "value": -1 },
-        "material_index": { "type": "Int", "value": 1 },
-        "max_capacity": { "type": "Int", "value": 1800000 },
-        "fit": { "type": "Enum", "value": 1 },
-        "recenter": { "type": "Bool", "value": true }
-      }
+        "fit": {
+          "type": "Enum",
+          "value": 1
+        },
+        "material_index": {
+          "type": "Int",
+          "value": 1
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 1800000
+        },
+        "mesh_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "primitive_index": {
+          "type": "Int",
+          "value": -1
+        },
+        "recenter": {
+          "type": "Bool",
+          "value": true
+        }
+      },
+      "title": "Sprig Cluster"
     },
     {
       "id": 3,
-      "typeId": "node.gltf_texture_source",
       "nodeId": "sprig_tex",
+      "typeId": "node.gltf_texture_source",
       "handle": "sprig_tex",
-      "title": "Sprig Atlas",
       "params": {
-        "texture_index": { "type": "Int", "value": 1 },
-        "color_space": { "type": "Enum", "value": 0 },
-        "width": { "type": "Int", "value": 1024 },
-        "height": { "type": "Int", "value": 1024 }
-      }
+        "color_space": {
+          "type": "Enum",
+          "value": 0
+        },
+        "height": {
+          "type": "Int",
+          "value": 1024
+        },
+        "texture_index": {
+          "type": "Int",
+          "value": 1
+        },
+        "width": {
+          "type": "Int",
+          "value": 1024
+        }
+      },
+      "title": "Sprig Atlas"
     },
     {
       "id": 4,
-      "typeId": "node.value",
       "nodeId": "grow",
+      "typeId": "node.value",
       "handle": "grow",
-      "title": "Grow Phase",
       "params": {
-        "value": { "type": "Float", "value": 1.0 }
-      }
+        "value": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Grow Phase"
     },
     {
       "id": 5,
-      "typeId": "node.scale_offset_value",
       "nodeId": "front_y",
+      "typeId": "node.scale_offset_value",
       "handle": "front_y",
-      "title": "Growth Front Y",
       "params": {
-        "scale": { "type": "Float", "value": 1.2 },
-        "offset": { "type": "Float", "value": -0.6 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": -0.6
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.2
+        }
+      },
+      "title": "Growth Front Y"
     },
     {
       "id": 6,
-      "typeId": "node.taper_mesh",
       "nodeId": "reveal",
+      "typeId": "node.taper_mesh",
       "handle": "reveal",
-      "title": "Growth Front (collapse above)",
       "params": {
-        "axis": { "type": "Enum", "value": 1 },
-        "taper": { "type": "Float", "value": 0.0 },
-        "center": { "type": "Float", "value": 0.75 },
-        "length": { "type": "Float", "value": 0.05 }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "center": {
+          "type": "Float",
+          "value": 0.75
+        },
+        "length": {
+          "type": "Float",
+          "value": 0.05
+        },
+        "taper": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Growth Front (collapse above)"
     },
     {
       "id": 13,
-      "typeId": "node.scale_offset_value",
       "nodeId": "curl_phase",
+      "typeId": "node.scale_offset_value",
       "handle": "curl_phase",
-      "title": "Curl Phase (lags front)",
       "params": {
-        "scale": { "type": "Float", "value": 1.0 },
-        "offset": { "type": "Float", "value": -0.25 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": -0.25
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Curl Phase (lags front)"
     },
     {
       "id": 10,
-      "typeId": "node.mesh_ramp",
       "nodeId": "curl_mask",
+      "typeId": "node.mesh_ramp",
       "handle": "curl_mask",
-      "title": "Curl Mask (1 above front)",
       "params": {
-        "axis": { "type": "Enum", "value": 1 },
-        "origin_x": { "type": "Float", "value": 0.0 },
-        "origin_y": { "type": "Float", "value": 0.0 },
-        "origin_z": { "type": "Float", "value": 0.0 },
-        "phase": { "type": "Float", "value": 1.0 },
-        "feather": { "type": "Float", "value": 0.3 },
-        "bound_min": { "type": "Float", "value": -0.6 },
-        "bound_max": { "type": "Float", "value": 0.6 },
-        "invert": { "type": "Bool", "value": true }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "bound_max": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "bound_min": {
+          "type": "Float",
+          "value": -0.6
+        },
+        "feather": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "invert": {
+          "type": "Bool",
+          "value": true
+        },
+        "origin_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "phase": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Curl Mask (1 above front)"
     },
     {
       "id": 12,
-      "typeId": "node.bend_mesh",
       "nodeId": "unfurl_droop",
+      "typeId": "node.bend_mesh",
       "handle": "unfurl_droop",
-      "title": "Unfurl Droop (tip nods, hinged at front)",
       "params": {
-        "angle": { "type": "Float", "value": 0.28 },
-        "center": { "type": "Float", "value": -0.55 }
-      }
+        "angle": {
+          "type": "Float",
+          "value": 0.28
+        },
+        "center": {
+          "type": "Float",
+          "value": -0.55
+        }
+      },
+      "title": "Unfurl Droop (tip nods, hinged at front)"
     },
     {
       "id": 14,
-      "typeId": "node.scale_offset_value",
       "nodeId": "droop_hinge",
+      "typeId": "node.scale_offset_value",
       "handle": "droop_hinge",
-      "title": "Droop Hinge (just below front)",
       "params": {
-        "scale": { "type": "Float", "value": 1.2 },
-        "offset": { "type": "Float", "value": -0.95 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": -0.95
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.2
+        }
+      },
+      "title": "Droop Hinge (just below front)"
     },
     {
       "id": 7,
-      "typeId": "node.phong_material",
       "nodeId": "mat",
+      "typeId": "node.phong_material",
       "handle": "mat",
-      "title": "Sprig Material",
       "params": {
-        "ambient": { "type": "Float", "value": 0.22 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.22
+        }
+      },
+      "title": "Sprig Material"
     },
     {
       "id": 8,
-      "typeId": "node.light",
       "nodeId": "sun",
+      "typeId": "node.light",
       "handle": "sun",
-      "title": "Warm Key",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "pos_x": { "type": "Float", "value": 2.5 },
-        "pos_y": { "type": "Float", "value": 3.5 },
-        "pos_z": { "type": "Float", "value": 2.5 },
-        "aim_x": { "type": "Float", "value": 0.0 },
-        "aim_y": { "type": "Float", "value": 0.0 },
-        "aim_z": { "type": "Float", "value": 0.0 },
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 0.88 },
-        "color_b": { "type": "Float", "value": 0.72 },
-        "intensity": { "type": "Float", "value": 2.6 },
-        "cast_shadows": { "type": "Float", "value": 0.0 }
-      }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.72
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.88
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 2.6
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 2.5
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.5
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 2.5
+        }
+      },
+      "title": "Warm Key"
     },
     {
       "id": 9,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": { "type": "Int", "value": 1 },
-        "lights": { "type": "Int", "value": 1 }
-      }
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "title": "Render Scene"
     },
     {
       "id": 99,
-      "typeId": "system.final_output",
       "nodeId": "out",
+      "typeId": "system.final_output",
       "handle": "final_output"
+    },
+    {
+      "id": 100,
+      "nodeId": "f11464d3",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
     }
   ],
   "wires": [
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "vertices", "toNode": 6, "toPort": "in" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "center" },
-    { "fromNode": 2, "fromPort": "vertices", "toNode": 10, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 13, "toPort": "a" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 10, "toPort": "phase" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 12, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "weights", "toNode": 12, "toPort": "weights" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 14, "toPort": "a" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 12, "toPort": "center" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "camera" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 9, "toPort": "mesh_0" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "material_0" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "base_color_map_0" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "light_0" },
-    { "fromNode": 9, "fromPort": "color", "toNode": 99, "toPort": "in" }
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "vertices",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "center"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "vertices",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "phase"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "weights",
+      "toNode": 12,
+      "toPort": "weights"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "center"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "base_color_map"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 9,
+      "toPort": "object_0"
+    }
   ]
 }

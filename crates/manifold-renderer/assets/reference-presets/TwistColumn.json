@@ -66,148 +66,364 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
     {
       "id": 1,
-      "typeId": "node.grid_mesh",
       "nodeId": "grid",
+      "typeId": "node.grid_mesh",
       "handle": "grid",
-      "title": "Grid",
       "params": {
-        "max_capacity": { "type": "Int", "value": 1000 },
-        "resolution_x": { "type": "Int", "value": 60 },
-        "resolution_y": { "type": "Int", "value": 8 },
-        "size_x": { "type": "Float", "value": 3.0 },
-        "size_y": { "type": "Float", "value": 0.5 }
-      }
+        "max_capacity": {
+          "type": "Int",
+          "value": 1000
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 60
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 8
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Grid"
     },
     {
       "id": 2,
-      "typeId": "node.make_triangles",
       "nodeId": "tris",
+      "typeId": "node.make_triangles",
       "handle": "tris",
-      "title": "Triangulate",
       "params": {
-        "src_cols": { "type": "Int", "value": 60 },
-        "src_rows": { "type": "Int", "value": 8 }
-      }
+        "src_cols": {
+          "type": "Int",
+          "value": 60
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 8
+        }
+      },
+      "title": "Triangulate"
     },
     {
       "id": 3,
-      "typeId": "node.mesh_ramp",
       "nodeId": "growth_mask",
+      "typeId": "node.mesh_ramp",
       "handle": "growth_mask",
-      "title": "Growth Mask",
       "params": {
-        "axis": { "type": "Enum", "value": 0 },
-        "origin_x": { "type": "Float", "value": 0.0 },
-        "origin_y": { "type": "Float", "value": 0.0 },
-        "origin_z": { "type": "Float", "value": 0.0 },
-        "phase": { "type": "Float", "value": 0.0 },
-        "feather": { "type": "Float", "value": 1.0 },
-        "bound_min": { "type": "Float", "value": -1.5 },
-        "bound_max": { "type": "Float", "value": 1.5 },
-        "invert": { "type": "Bool", "value": false }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "bound_max": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "bound_min": {
+          "type": "Float",
+          "value": -1.5
+        },
+        "feather": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "invert": {
+          "type": "Bool",
+          "value": false
+        },
+        "origin_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "origin_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Growth Mask"
     },
     {
       "id": 4,
-      "typeId": "node.lfo",
       "nodeId": "twist_lfo",
+      "typeId": "node.lfo",
       "handle": "twist_lfo",
-      "title": "Twist LFO",
       "params": {
-        "rate_mode": { "type": "Enum", "value": 1 },
-        "rate": { "type": "Enum", "value": 2 },
-        "angular_rate": { "type": "Float", "value": 1.0 },
-        "shape": { "type": "Enum", "value": 2 },
-        "phase": { "type": "Float", "value": 0.0 },
-        "min": { "type": "Float", "value": 0.0 },
-        "max": { "type": "Float", "value": 9.42477796 }
-      }
+        "angular_rate": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "max": {
+          "type": "Float",
+          "value": 9.424778
+        },
+        "min": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rate": {
+          "type": "Enum",
+          "value": 2
+        },
+        "rate_mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Twist LFO"
     },
     {
       "id": 5,
-      "typeId": "node.twist_mesh",
       "nodeId": "twist",
+      "typeId": "node.twist_mesh",
       "handle": "twist",
-      "title": "Twist",
       "params": {
-        "axis": { "type": "Enum", "value": 0 },
-        "angle": { "type": "Float", "value": 1.0 },
-        "center": { "type": "Float", "value": 0.0 }
-      }
+        "angle": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "center": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Twist"
     },
     {
       "id": 6,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": { "type": "Float", "value": 0.55 },
-        "tilt": { "type": "Float", "value": 0.5 },
-        "distance": { "type": "Float", "value": 4.5 },
-        "fov_y": { "type": "Float", "value": 0.8 }
-      }
+        "distance": {
+          "type": "Float",
+          "value": 4.5
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Camera"
     },
     {
       "id": 7,
-      "typeId": "node.phong_material",
       "nodeId": "mat",
+      "typeId": "node.phong_material",
       "handle": "mat",
-      "title": "Material",
       "params": {
-        "color_r": { "type": "Float", "value": 0.7 },
-        "color_g": { "type": "Float", "value": 0.85 },
-        "color_b": { "type": "Float", "value": 1.0 },
-        "ambient": { "type": "Float", "value": 0.15 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.7
+        }
+      },
+      "title": "Material"
     },
     {
       "id": 8,
-      "typeId": "node.light",
       "nodeId": "key_light",
+      "typeId": "node.light",
       "handle": "key_light",
-      "title": "Key Light",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "pos_x": { "type": "Float", "value": 0.0 },
-        "pos_y": { "type": "Float", "value": 30.0 },
-        "pos_z": { "type": "Float", "value": 0.0 },
-        "aim_x": { "type": "Float", "value": 0.0 },
-        "aim_y": { "type": "Float", "value": 0.0 },
-        "aim_z": { "type": "Float", "value": 0.0 },
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 1.0 },
-        "color_b": { "type": "Float", "value": 1.0 },
-        "intensity": { "type": "Float", "value": 1.0 },
-        "cast_shadows": { "type": "Float", "value": 0.0 }
-      }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 30.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Key Light"
     },
     {
       "id": 20,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": { "type": "Int", "value": 1 },
-        "lights": { "type": "Int", "value": 1 }
-      }
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "title": "Render Scene"
     },
-    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+    {
+      "id": 99,
+      "nodeId": "out",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 100,
+      "nodeId": "5b7ba7a3",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
+    }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "vertices", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "in" },
-    { "fromNode": 3, "fromPort": "weights", "toNode": 5, "toPort": "weights" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "angle" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 20, "toPort": "camera" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 20, "toPort": "material_0" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 20, "toPort": "light_0" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 20, "toPort": "mesh_0" },
-    { "fromNode": 20, "fromPort": "color", "toNode": 99, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "weights",
+      "toNode": 5,
+      "toPort": "weights"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "angle"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 20,
+      "toPort": "object_0"
+    }
   ]
 }

@@ -35,7 +35,7 @@ use crate::node_graph::scene_object::SceneObject;
 crate::primitive! {
     name: SceneObjectNode,
     type_id: "node.scene_object",
-    purpose: "Binds one scene object's mesh vertices, transform, material, five maps (base colour / normal / metallic-roughness / occlusion / emissive), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
+    purpose: "Binds one scene object's mesh vertices, transform, material, seventeen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / volume thickness), and instances into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
     inputs: {
         vertices: Array(MeshVertex) optional,
         transform: Transform optional,
@@ -45,6 +45,18 @@ crate::primitive! {
         mr_map: Texture2D optional,
         occlusion_map: Texture2D optional,
         emissive_map: Texture2D optional,
+        sheen_color_map: Texture2D optional,
+        sheen_roughness_map: Texture2D optional,
+        iridescence_map: Texture2D optional,
+        iridescence_thickness_map: Texture2D optional,
+        anisotropy_map: Texture2D optional,
+        clearcoat_map: Texture2D optional,
+        clearcoat_roughness_map: Texture2D optional,
+        clearcoat_normal_map: Texture2D optional,
+        specular_map: Texture2D optional,
+        specular_color_map: Texture2D optional,
+        transmission_map: Texture2D optional,
+        volume_thickness_map: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         visible: ScalarF32 optional,
     },
@@ -82,6 +94,18 @@ impl Primitive for SceneObjectNode {
         let mr_map = ctx.inputs.slot_of("mr_map");
         let occlusion_map = ctx.inputs.slot_of("occlusion_map");
         let emissive_map = ctx.inputs.slot_of("emissive_map");
+        let sheen_color_map = ctx.inputs.slot_of("sheen_color_map");
+        let sheen_roughness_map = ctx.inputs.slot_of("sheen_roughness_map");
+        let iridescence_map = ctx.inputs.slot_of("iridescence_map");
+        let iridescence_thickness_map = ctx.inputs.slot_of("iridescence_thickness_map");
+        let anisotropy_map = ctx.inputs.slot_of("anisotropy_map");
+        let clearcoat_map = ctx.inputs.slot_of("clearcoat_map");
+        let clearcoat_roughness_map = ctx.inputs.slot_of("clearcoat_roughness_map");
+        let clearcoat_normal_map = ctx.inputs.slot_of("clearcoat_normal_map");
+        let specular_map = ctx.inputs.slot_of("specular_map");
+        let specular_color_map = ctx.inputs.slot_of("specular_color_map");
+        let transmission_map = ctx.inputs.slot_of("transmission_map");
+        let volume_thickness_map = ctx.inputs.slot_of("volume_thickness_map");
         let instances = ctx.inputs.slot_of("instances");
 
         let object = SceneObject {
@@ -94,6 +118,18 @@ impl Primitive for SceneObjectNode {
             mr_map,
             occlusion_map,
             emissive_map,
+            sheen_color_map,
+            sheen_roughness_map,
+            iridescence_map,
+            iridescence_thickness_map,
+            anisotropy_map,
+            clearcoat_map,
+            clearcoat_roughness_map,
+            clearcoat_normal_map,
+            specular_map,
+            specular_color_map,
+            transmission_map,
+            volume_thickness_map,
             instances,
         };
 
