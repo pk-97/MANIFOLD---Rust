@@ -250,7 +250,7 @@ mod tests {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry);
+            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, false);
             assert!(
                 result.is_some(),
                 "bundled preset {} failed to splice into a chain — preset and chain runtime have \
@@ -320,7 +320,7 @@ mod tests {
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
             let Some(result) =
-                splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, false)
             else {
                 failures.push(format!("{preset_id}: splice failed"));
                 continue;
@@ -421,7 +421,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, false)
             .expect("Color Compass splices");
 
         // Resolve handle → chain-node-id map for the inner nodes the
@@ -591,7 +591,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, false)
             .expect("splice ok");
 
         // Look up smoothing_y (vertical axis = N-S compass).
@@ -783,7 +783,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, false)
             .expect("splice");
         let final_out = chain.add_node(Box::new(FinalOutput::new()));
         chain.connect(result.output, (final_out, "in")).unwrap();

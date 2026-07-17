@@ -2,7 +2,7 @@
 
 <!-- index: The "3D Shading" toggle: depth as a compiler-propagated companion channel, a fixed relight stage (Lambert + specular + heightfield GTAO + shadows), heightfield-native shadow atom, fp32 precision for derivative consumers. Zero graph edits for existing presets. -->
 
-**Status:** APPROVED 2026-07-17 (Peter, in-session, after the rendered probe sweep) — EXECUTING. P1/P2/P4 dispatched to Sonnet lanes same session; P3/P5/P6 follow.
+**Status:** APPROVED 2026-07-17 (Peter, in-session, after the rendered probe sweep) — EXECUTING. P1/P2 landed (`lane/depth-relight-p1`, `lane/depth-relight-p2`). P3 landed on `lane/depth-relight-p3` (not yet merged to main): `relight_augment` (`node_graph/relight.rs`) + the `relight: bool` compile-level toggle threaded through `splice_def_into_chain` and `Generators::create_with_override` (default `false`, byte-identical when off — golden test in `relight.rs`). P4/P5/P6 remain; P4 is independent, P5 depends on P3.
 **Author:** Fable, from the 2026-07-17 depth-relight probe session.
 **Prior landings from the probe (already on main):** GTAO `slices`/`steps` quality params; GTAO `projection = Height Field` mode (ortho frame, raw-height read, fp32 in-kernel); `graph_tool render` verb; BUG-216/217 logged.
 

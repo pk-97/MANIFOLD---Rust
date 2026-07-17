@@ -146,7 +146,7 @@ impl GeneratorRegistry {
         // No override, no watch context (perf-gate tuning / tests / non-editor
         // call sites) — fuse normally per the device verdict. No instance
         // manifest in scope here, so the reshape reads the def's own shadow.
-        self.create_with_override(device, gen_type, None, width, height, false, None)
+        self.create_with_override(device, gen_type, None, width, height, false, None, false)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
@@ -164,6 +164,15 @@ impl GeneratorRegistry {
     ///
     /// Returns `None` if neither the override nor the bundled preset
     /// can be loaded.
+    ///
+    /// `relight` is the "3D Shading" toggle at the compile level
+    /// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P3): when `true`, the effective def
+    /// is passed through [`crate::node_graph::relight::relight_augment`]
+    /// before `from_def_with_device` — the depth-companion synthesis + fixed
+    /// relight template appended before `final_output`. `false` (every
+    /// production call site today) is the exact unaugmented def,
+    /// byte-identical to pre-P3 behavior; P5 wires this to the real
+    /// per-instance card toggle.
     pub fn create_with_override(
         &self,
         device: std::sync::Arc<GpuDevice>,
@@ -173,6 +182,7 @@ impl GeneratorRegistry {
         height: u32,
         is_watched: bool,
         manifest: Option<&manifold_core::params::ParamManifest>,
+        relight: bool,
     ) -> Option<Box<PresetRuntime>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -213,6 +223,11 @@ impl GeneratorRegistry {
                 }
             } else {
                 def
+            };
+            let render_def = if relight {
+                crate::node_graph::relight::relight_augment(&render_def, &registry)
+            } else {
+                render_def
             };
             match PresetRuntime::from_def_with_device(
                 render_def,

@@ -1068,6 +1068,7 @@ impl PresetRuntime {
                             (prev_node, prev_out_port),
                             &view.def,
                             primitives,
+                            false, // P5 wires the per-instance "3D Shading" toggle here
                         )
                     else {
                         // Near-unreachable: compile_segment_view verified the def
@@ -1307,6 +1308,7 @@ impl PresetRuntime {
                 (prev_node, prev_out_port),
                 splice_def,
                 primitives,
+                false, // P5 wires the per-instance "3D Shading" toggle here
             ) {
                 Some(r) => r,
                 None => {
@@ -1324,6 +1326,7 @@ impl PresetRuntime {
                         (prev_node, prev_out_port),
                         &base_view.canonical_def,
                         primitives,
+                        false, // P5 wires the per-instance "3D Shading" toggle here
                     ) {
                         Some(r) => r,
                         None => {

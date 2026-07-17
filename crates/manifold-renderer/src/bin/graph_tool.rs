@@ -68,7 +68,7 @@ fn print_usage() {
         "usage: graph_tool validate <file.json> --kind effect|generator [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool fusion <file.json> [--json]\n\
          \x20\x20\x20\x20\x20\x20\x20graph_tool migrate <file.json> [--in-place]\n\
-         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png]\n\
+         \x20\x20\x20\x20\x20\x20\x20graph_tool render <file.json> --kind effect|generator [--size N] [--out out.png] [--relight]\n\
          \n\
          validate: runs a graph document JSON file through the same load +\n\
          compile pipeline the runtime loader takes. Exit codes: 0 valid,\n\
@@ -183,10 +183,15 @@ fn run_render(args: &[String]) -> ExitCode {
     let mut kind: Option<manifold_core::preset_def::PresetKind> = None;
     let mut size: u32 = 512;
     let mut out: Option<PathBuf> = None;
+    let mut relight = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--relight" => {
+                relight = true;
+                i += 1;
+            }
             "--kind" => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!("error: --kind requires a value (effect|generator)");
@@ -248,6 +253,14 @@ fn run_render(args: &[String]) -> ExitCode {
             eprintln!("error: {}: parse failed: {e}", file.display());
             return ExitCode::from(2);
         }
+    };
+    // `--relight`: the "3D Shading" toggle (DEPTH_RELIGHT_DESIGN.md P3) — the
+    // smallest honest surface to render an augmented def for the visual
+    // proof, ahead of P5's card toggle.
+    let def = if relight {
+        manifold_renderer::node_graph::relight::relight_augment(&def, &PrimitiveRegistry::with_builtin())
+    } else {
+        def
     };
 
     let device = std::sync::Arc::new(GpuDevice::new());

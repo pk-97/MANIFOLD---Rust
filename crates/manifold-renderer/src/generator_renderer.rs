@@ -938,6 +938,7 @@ impl GeneratorRenderer {
             self.height,
             is_watched,
             manifest,
+            false, // P5 wires the per-instance "3D Shading" toggle here
         ) else {
             return false;
         };
@@ -1016,6 +1017,7 @@ impl GeneratorRenderer {
                 // Cold-start thumbnail shows the bundled default look, not
                 // live override/calibration state (see fn doc) — no manifest.
                 None,
+                false, // P5 wires the per-instance "3D Shading" toggle here
             )?;
             let rt = RenderTarget::new(
                 self.device(),

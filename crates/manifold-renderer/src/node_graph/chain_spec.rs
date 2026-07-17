@@ -100,12 +100,29 @@ pub fn is_skipped_for(skip: SkipMode, _type_id: &PresetTypeId, fx: &PresetInstan
 ///
 /// Returns `None` on malformed input (no Source / no FinalOutput /
 /// unknown type id / orphan wire).
+///
+/// `relight` is the "3D Shading" toggle at the compile level
+/// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P3): when `true`, `def` is passed
+/// through [`crate::node_graph::relight::relight_augment`] before splicing —
+/// the depth-companion synthesis + fixed relight template appended before
+/// `final_output`. `false` (every production call site today) is the exact
+/// unaugmented def, byte-identical to pre-P3 behavior; P5 wires this to the
+/// real per-instance card toggle.
 pub fn splice_def_into_chain(
     graph: &mut Graph,
     source: (NodeInstanceId, &'static str),
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
+    relight: bool,
 ) -> Option<SpliceResult> {
+    let augmented;
+    let def = if relight {
+        augmented = crate::node_graph::relight::relight_augment(def, registry);
+        &augmented
+    } else {
+        def
+    };
+
     // Delegate every per-node + per-wire concern to the shared
     // graph_loader pipeline. The same pipeline runs for the generator
     // path (`persistence::into_graph`), so any per-node feature added
