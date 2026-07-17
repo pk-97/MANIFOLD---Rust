@@ -308,6 +308,11 @@ pub fn dispatch(
         // before it ever reaches this dispatcher; this arm only keeps the
         // match exhaustive.
         PanelAction::SceneSetupEnumClicked { .. } => DispatchResult::handled(),
+        // UX-P2 D6: the "+ Add Modifier" button's dropdown is intercepted by
+        // `UIRoot::try_open_dropdown` the same way `SceneSetupEnumClicked`
+        // is, before it ever reaches this dispatcher; this arm only keeps
+        // the match exhaustive.
+        PanelAction::SceneSetupAddModifierClicked(..) => DispatchResult::handled(),
         // D1 of SCENE_PANEL_UX_DESIGN.md: the panel already updated its
         // UI-local selection before emitting this action; its only job here
         // is to ride `structural_change: true` back to app_render.rs's

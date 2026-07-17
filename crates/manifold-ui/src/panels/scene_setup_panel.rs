@@ -57,10 +57,12 @@ const OBJ_OFF_POS_X: u64 = 2;
 const OBJ_OFF_ROT_X: u64 = 5;
 const OBJ_OFF_SCALE_X: u64 = 8;
 const OBJ_OFF_COLOR_R: u64 = 11;
-// Numeric stepper rows (`build_object_numeric_row`) likewise take only the
-// minus offset — value/plus key off `base_offset + 1`/`+ 2`.
-const OBJ_OFF_METALLIC_MINUS: u64 = 14;
-const OBJ_OFF_ROUGHNESS_MINUS: u64 = 17;
+// UX-P2 (D2 of SCENE_PANEL_UX_DESIGN.md): Metallic/Roughness are now single
+// `BitmapSlider` rows (`build_object_slider_row`), one key per row — the old
+// `[-] value [+]` stepper's `+1`/`+2` value/plus slots are unused now, kept
+// reserved (harmless) rather than renumbering every offset below.
+const OBJ_OFF_METALLIC: u64 = 14;
+const OBJ_OFF_ROUGHNESS: u64 = 17;
 /// BUG-193 per-row "✕" remove button, on the title row next to the name.
 const OBJ_OFF_REMOVE: u64 = 20;
 
@@ -92,12 +94,12 @@ const fn triplet_cell_automation_name(base_offset: u64, axis: usize) -> Option<&
     }
 }
 
-/// Stable automation name for an object-row numeric stepper's value cell
-/// (metallic/roughness).
-const fn object_numeric_row_automation_name(base_offset: u64) -> Option<&'static str> {
+/// Stable automation name for an object-row slider's value cell
+/// (metallic/roughness, UX-P2 D2).
+const fn object_slider_row_automation_name(base_offset: u64) -> Option<&'static str> {
     match base_offset {
-        OBJ_OFF_METALLIC_MINUS => Some("scene_setup.object.metallic_value"),
-        OBJ_OFF_ROUGHNESS_MINUS => Some("scene_setup.object.roughness_value"),
+        OBJ_OFF_METALLIC => Some("scene_setup.object.metallic_value"),
+        OBJ_OFF_ROUGHNESS => Some("scene_setup.object.roughness_value"),
         _ => None,
     }
 }
@@ -123,7 +125,7 @@ const fn light_key(index: usize, offset: u64) -> u64 {
 
 /// Stable automation name for a light row's numeric-stepper value cell —
 /// `nth` (per-light) disambiguates which light a flow means, same convention
-/// as `object_numeric_row_automation_name`.
+/// as `object_slider_row_automation_name`.
 const fn light_numeric_row_automation_name(base_offset: u64) -> Option<&'static str> {
     match base_offset {
         LIGHT_OFF_INTENSITY_MINUS => Some("scene_setup.light.intensity_value"),
@@ -189,8 +191,9 @@ pub const MESH_MODIFIER_CHOICES: &[(&str, &str)] = &[
 /// modifier slot within that object), unlike `obj_key`'s single-level
 /// stride: each object gets a generous per-object budget wide enough for
 /// several modifier rows (remove/up/down + up to 4 param cells each) PLUS
-/// the 7-chip "Add modifier" row, reserved in its own sub-range so neither
-/// can collide with the other as the stack grows.
+/// the single "+ Add Modifier" button (UX-P2 D6 — was a 7-chip grid),
+/// reserved in its own sub-range so neither can collide with the other as
+/// the stack grows.
 const MODIFIER_KEY_BASE: u64 = 88_000;
 const MODIFIER_OBJ_STRIDE: u64 = 480;
 const MODIFIER_ROW_STRIDE: u64 = 20;
@@ -200,17 +203,17 @@ const MODIFIER_OFF_REMOVE: u64 = 2;
 /// Stride-3 `[−] value [+]` stepper rows follow, up to 4 param slots per
 /// modifier (12 offsets) — well under `MODIFIER_ROW_STRIDE`'s 20.
 const MODIFIER_OFF_PARAM_BASE: u64 = 3;
-/// Reserved sub-range within the per-object budget for the 7 "Add modifier"
-/// chips — `400 / MODIFIER_ROW_STRIDE = 20` modifier rows of headroom before
-/// a real stack (never more than a handful) could reach it.
-const MODIFIER_ADD_CHIP_OFFSET: u64 = 400;
+/// Reserved sub-range within the per-object budget for the "+ Add Modifier"
+/// button (UX-P2 D6: one control now, was 7 chips) — well clear of any real
+/// modifier stack (never more than a handful of rows).
+const MODIFIER_ADD_BUTTON_OFFSET: u64 = 400;
 
 const fn modifier_row_key(object_index: usize, modifier_index: usize, offset: u64) -> u64 {
     MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + modifier_index as u64 * MODIFIER_ROW_STRIDE + offset
 }
 
-const fn modifier_add_chip_key(object_index: usize, choice_index: usize) -> u64 {
-    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_CHIP_OFFSET + choice_index as u64
+const fn modifier_add_button_key(object_index: usize) -> u64 {
+    MODIFIER_KEY_BASE + object_index as u64 * MODIFIER_OBJ_STRIDE + MODIFIER_ADD_BUTTON_OFFSET
 }
 
 /// Stable automation name for a modifier param row's value cell, by its slot
@@ -286,6 +289,12 @@ const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
 const LABEL_W: f32 = 130.0;
 const VALUE_W: f32 = 70.0;
+/// UX-P2 (D4/D7 of SCENE_PANEL_UX_DESIGN.md): the color row's live swatch —
+/// the ONE new style constant this phase's §4 negative gate allows. Sized
+/// to sit inside a `ROW_H` row with visible margin top/bottom, echoing the
+/// audio dock's identity swatch (`audio_setup_panel.rs`'s `SWATCH_W`) at a
+/// square, not that dock's send-row proportions.
+const SWATCH_W: f32 = 14.0;
 
 /// A single editable node-param address: the exact `(scope_path,
 /// node_doc_id, param_id)` triple `SetGraphNodeParamCommand::with_scope`
@@ -314,6 +323,18 @@ pub struct RowValue {
     pub min: f32,
     pub max: f32,
     pub driven: bool,
+}
+
+/// UX-P2 (D2): which of the panel's two persistent slider widgets a call to
+/// `build_object_slider_row` is targeting — selects the `SliderDragState` +
+/// row-presence flag pair, same idea as `layer_header.rs`'s per-row `index`
+/// but degenerate to two named slots (Metallic/Roughness are the only two
+/// bounded material scalars the VM exposes today; a third would need this
+/// generalized to a `Vec`, per D2's own "any future 0..1 material scalar").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObjSlider {
+    Metallic,
+    Roughness,
 }
 
 /// The outliner row template's trailing affordance slot (D5 of
@@ -702,9 +723,12 @@ pub struct ScenePanel {
     /// last index are rendered but inert, per
     /// `feedback_no_conditionally_visible_ui`).
     modifier_move_ids: Vec<(NodeId, u32, u32, u32)>,
-    /// P5: `(node_id, group_node_id, type_id)` for every "Add modifier" chip
-    /// built this frame.
-    modifier_add_ids: Vec<(NodeId, u32, String)>,
+    /// UX-P2 (D6): `(button_node_id, group_node_id)` for the single "+ Add
+    /// Modifier" button built this frame, when the selected object's chain
+    /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
+    /// entry per chip — the click now opens the shared dropdown instead of
+    /// resolving directly, so there's at most one entry and no `type_id`).
+    add_modifier_button_id: Option<(NodeId, u32)>,
     /// P4 (D9): every Objects-scoped enum value cell built this frame
     /// (modifier Axis rows) — `(cell_node_id, row, labels)`. A cell here
     /// with `labels.len() >= 3` opens the dropdown on click; a 2-label cell
@@ -747,6 +771,22 @@ pub struct ScenePanel {
     /// an unrelated `configure`, per D1 "no staleness": the drag itself
     /// still targets the layer it started on).
     drag_layer_id: Option<LayerId>,
+    /// UX-P2 (D2): the Metallic slider's widget infra — shared `BitmapSlider`
+    /// drag machinery, same pattern as `layer_header.rs`'s gain slider.
+    /// Persists across rebuilds (unlike the `Vec`-based cell tables above)
+    /// so a drag survives the panel's per-frame tree rebuild; `set_ids` is
+    /// called fresh every frame the row renders, which keeps its
+    /// `track_rect` current without disturbing `drag`'s active state.
+    metallic_slider: crate::slider::SliderDragState,
+    /// The Metallic row's write address for the currently-built frame, or
+    /// `None` when the selected object has no PBR material this frame — the
+    /// signal `build_nodes` uses to `clear()` the slider above instead of
+    /// leaving it pointing at a stale (possibly since-reused) `NodeId`.
+    metallic_slider_row: Option<RowValue>,
+    /// Same as `metallic_slider`, for Roughness.
+    roughness_slider: crate::slider::SliderDragState,
+    /// Same as `metallic_slider_row`, for Roughness.
+    roughness_slider_row: Option<RowValue>,
 }
 
 impl Default for ScenePanel {
@@ -778,7 +818,7 @@ impl Default for ScenePanel {
             object_duplicate_ids: Vec::new(),
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
-            modifier_add_ids: Vec::new(),
+            add_modifier_button_id: None,
             object_enum_cells: Vec::new(),
             light_value_cells: Vec::new(),
             light_steppers: Vec::new(),
@@ -790,6 +830,10 @@ impl Default for ScenePanel {
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             drag: DragController::new(),
             drag_layer_id: None,
+            metallic_slider: crate::slider::SliderDragState::with_range(0.0, 1.0, false),
+            metallic_slider_row: None,
+            roughness_slider: crate::slider::SliderDragState::with_range(0.0, 1.0, false),
+            roughness_slider_row: None,
         }
     }
 }
@@ -896,7 +940,7 @@ impl ScenePanel {
         self.object_duplicate_ids.clear();
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
-        self.modifier_add_ids.clear();
+        self.add_modifier_button_id = None;
         self.object_enum_cells.clear();
         self.light_value_cells.clear();
         self.light_steppers.clear();
@@ -905,6 +949,14 @@ impl ScenePanel {
         self.light_enum_cells.clear();
         self.camera_value_cells.clear();
         self.camera_steppers.clear();
+        // UX-P2: the row-presence flags below are cleared here and only set
+        // back by `build_object_slider_row` if the selected object still has
+        // a PBR material this frame; the end-of-`build_nodes` check clears
+        // the slider `ids` (not the drag machinery) when the row didn't
+        // rebuild, so a stale `NodeId` from a since-reused tree slot can
+        // never resolve as a hit.
+        self.metallic_slider_row = None;
+        self.roughness_slider_row = None;
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -923,6 +975,22 @@ impl ScenePanel {
             SceneSetupState::NoScene { .. } => self.build_no_scene(tree, inner_x, inner_w, cy),
             SceneSetupState::Live(vm) => self.build_live(tree, inner_x, inner_w, cy, &vm),
         };
+
+        // UX-P2: a slider whose row didn't rebuild this frame (selection
+        // moved off a PBR object, or off Objects entirely) has a stale
+        // `ids` pointing at a `NodeId` slot the fresh tree may have handed
+        // to something else — `clear()` drops `ids` to `None` so
+        // `try_start_drag` can never false-hit it. A slider whose row DID
+        // rebuild got a fresh `set_ids` already, so this is a no-op for it —
+        // and since a live drag keeps rebuilding at the same row every
+        // frame (the user's mouse is busy, selection can't move mid-scrub),
+        // `clear()` here never interrupts an in-progress drag.
+        if self.metallic_slider_row.is_none() {
+            self.metallic_slider.clear();
+        }
+        if self.roughness_slider_row.is_none() {
+            self.roughness_slider.clear();
+        }
 
         let content_height = (cy - content_top + PAD).max(0.0);
         self.scroll.set_content_height(content_height);
@@ -1309,7 +1377,7 @@ impl ScenePanel {
                     return cy;
                 };
                 cy = self.build_object_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_object_properties_body(tree, inner_x, inner_w, cy, row)
+                self.build_object_properties_body(tree, inner_x, inner_w, cy, row, &vm.layer_id)
             }
             SceneSelection::Light(id) => {
                 let Some(row) = vm.lights.iter().find_map(|l| match l {
@@ -1392,6 +1460,7 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         row: &ObjectKnownRow,
+        layer_id: &LayerId,
     ) -> f32 {
         let index = row.index;
         if let Some(t) = &row.transform {
@@ -1401,16 +1470,16 @@ impl ScenePanel {
         }
         match &row.material {
             ObjectMaterialVm::Pbr { color, metallic, roughness } => {
-                cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
-                cy = self.build_object_numeric_row(
-                    tree, inner_x, inner_w, cy, "Metallic", metallic, index, OBJ_OFF_METALLIC_MINUS,
+                cy = self.build_color_row(tree, inner_x, inner_w, cy, color, index, OBJ_OFF_COLOR_R);
+                cy = self.build_object_slider_row(
+                    tree, inner_x, inner_w, cy, "Metallic", metallic, layer_id, OBJ_OFF_METALLIC, ObjSlider::Metallic,
                 );
-                cy = self.build_object_numeric_row(
-                    tree, inner_x, inner_w, cy, "Roughness", roughness, index, OBJ_OFF_ROUGHNESS_MINUS,
+                cy = self.build_object_slider_row(
+                    tree, inner_x, inner_w, cy, "Roughness", roughness, layer_id, OBJ_OFF_ROUGHNESS, ObjSlider::Roughness,
                 );
             }
             ObjectMaterialVm::Other { color } => {
-                cy = self.build_triplet_row(tree, inner_x, inner_w, cy, "Color", color, index, OBJ_OFF_COLOR_R);
+                cy = self.build_color_row(tree, inner_x, inner_w, cy, color, index, OBJ_OFF_COLOR_R);
             }
             ObjectMaterialVm::None => {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No material", label_style());
@@ -1432,7 +1501,7 @@ impl ScenePanel {
                     row.modifiers.len(),
                 );
             }
-            cy = self.build_add_modifier_row(
+            cy = self.build_add_modifier_button(
                 tree, inner_x, inner_w, cy, index, row.group_node_id.unwrap_or(row.object_node_id),
             );
         } else {
@@ -1716,8 +1785,10 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// A light-row `[label] [−] value [+]` numeric row — same shape as
-    /// `build_object_numeric_row`, keyed into the light's own range.
+    /// A light-row `[label] [−] value [+]` numeric row, keyed into the
+    /// light's own range. Lights' numeric params (intensity, light size)
+    /// don't get UX-P2's slider treatment — D2 scopes sliders to the
+    /// Objects material rows this phase; the stepper shape stays here.
     fn build_light_numeric_row(
         &mut self,
         tree: &mut UITree,
@@ -2146,8 +2217,10 @@ impl ScenePanel {
         cy
     }
 
-    /// One modifier param's `[label] [−] value [＋]` row — same shape as
-    /// [`Self::build_object_numeric_row`], keyed into the modifier-row range.
+    /// One modifier param's `[label] [−] value [＋]` row, keyed into the
+    /// modifier-row range — a modifier's own params (bend angle, twist
+    /// turns, axis, …) stay steppers; D2 scopes sliders to Objects material
+    /// rows only.
     /// Pushed onto the SAME `object_steppers`/`object_value_cells` vectors
     /// every other Objects-section numeric row uses (those are already
     /// generic `(NodeId, RowValue, …)` lookups keyed by write address, not
@@ -2295,42 +2368,34 @@ impl ScenePanel {
         cy + ROW_H
     }
 
-    /// The curated D6 "Add modifier" chip row: up to 7 small buttons, one per
-    /// [`MESH_MODIFIER_CHOICES`] entry, wrapped across rows (no popover
-    /// widget kind needed — plain buttons, D8's "no new widget kinds").
-    fn build_add_modifier_row(
+    /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
+    /// button, replacing the old 7-chip grid (`build_add_modifier_row`).
+    /// The click opens the shared `panels::dropdown` overlay, listing the
+    /// SAME [`MESH_MODIFIER_CHOICES`] the chips used — resolved app-side
+    /// (`UIRoot::try_open_dropdown_inner`) because the panel has no
+    /// `&UITree` in `handle_event` to anchor the overlay itself, same
+    /// resolve-at-open convention `SceneSetupEnumClicked` already uses.
+    fn build_add_modifier_button(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
-        mut cy: f32,
+        cy: f32,
         object_index: usize,
         group_node_id: u32,
     ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Add modifier:", label_style());
-        cy += ROW_H;
-        const PER_ROW: usize = 3;
-        let gap = 4.0;
-        let chip_w = ((inner_w - gap * (PER_ROW as f32 - 1.0)) / PER_ROW as f32).max(40.0);
-        for (i, (label, type_id)) in MESH_MODIFIER_CHOICES.iter().enumerate() {
-            let col = i % PER_ROW;
-            let row_i = i / PER_ROW;
-            let x = inner_x + col as f32 * (chip_w + gap);
-            let y = cy + row_i as f32 * (ROW_H + 2.0);
-            let chip_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                x,
-                y,
-                chip_w,
-                ROW_H,
-                btn_style(),
-                label,
-                modifier_add_chip_key(object_index, i),
-            );
-            self.modifier_add_ids.push((chip_id, group_node_id, (*type_id).to_string()));
-        }
-        let rows = MESH_MODIFIER_CHOICES.len().div_ceil(PER_ROW);
-        cy + rows as f32 * (ROW_H + 2.0)
+        let btn_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            inner_w,
+            ROW_H,
+            btn_style(),
+            "+ Add Modifier",
+            modifier_add_button_key(object_index),
+        );
+        self.add_modifier_button_id = Some((btn_id, group_node_id));
+        cy + ROW_H
     }
 
     /// A "3 compact triplet" row (D4): label + X/Y/Z drag-value cells, no
@@ -2393,16 +2458,84 @@ impl ScenePanel {
             if let Some(name) = triplet_cell_automation_name(base_offset, i) {
                 tree.set_name(cell_id, name);
             }
+            // UX-P2 (D3b): a thin accent hairline while THIS cell is the
+            // one being scrubbed — the `MOD_TAB_INK_H`-scale idiom
+            // (param_card.rs:47), a static 2px bar rather than that idiom's
+            // sliding tween (there's nothing to slide between: one cell is
+            // either being scrubbed or it isn't). No new style constant —
+            // the fill reuses the slider rows' own accent
+            // (`color::SLIDER_FILL_C32`), tying the two value shapes'
+            // "active" language together (D7).
+            if self.drag.is_active() && self.drag.payload().is_some_and(|d| d.addr == row.addr) {
+                tree.add_panel(
+                    Some(cell_id),
+                    x,
+                    cy + ROW_H - 2.0,
+                    cell_w,
+                    2.0,
+                    UIStyle { bg_color: color::SLIDER_FILL_C32, ..UIStyle::default() },
+                );
+            }
             self.object_value_cells.push((cell_id, row.clone()));
         }
         cy + ROW_H
     }
 
-    /// One object-row `[label] [−] value [＋]` numeric row (metallic/
-    /// roughness) — same shape as [`Self::build_numeric_row`], generalized
-    /// to a dynamic per-object key range instead of the fixed `row_ids`
-    /// table (Objects is a variable-length list).
-    fn build_object_numeric_row(
+    /// UX-P2 (D4 of SCENE_PANEL_UX_DESIGN.md): the Color row — a live
+    /// square swatch (display-only, no picker: D4's rejected alternative)
+    /// left of the SAME R/G/B `build_triplet_row` cells every other object
+    /// uses. The swatch reads the identical `triplet` values the R/G/B
+    /// cells render, so it updates on the exact same cadence — live during
+    /// a scrub, with no new state or sync path.
+    fn build_color_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        triplet: &(RowValue, RowValue, RowValue),
+        index: usize,
+        base_offset: u64,
+    ) -> f32 {
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let swatch_color = Color32::new(to_u8(triplet.0.value), to_u8(triplet.1.value), to_u8(triplet.2.value), 255);
+        tree.add_panel(
+            Some(self.content_parent),
+            inner_x,
+            cy + (ROW_H - SWATCH_W) * 0.5,
+            SWATCH_W,
+            SWATCH_W,
+            UIStyle {
+                bg_color: swatch_color,
+                border_color: color::BORDER,
+                border_width: 1.0,
+                corner_radius: color::SMALL_RADIUS,
+                ..UIStyle::default()
+            },
+        );
+        self.build_triplet_row(
+            tree,
+            inner_x + SWATCH_W + ROW_GAP,
+            inner_w - SWATCH_W - ROW_GAP,
+            cy,
+            "Color",
+            triplet,
+            index,
+            base_offset,
+        )
+    }
+
+    /// UX-P2 (D2 of SCENE_PANEL_UX_DESIGN.md): a bounded material scalar
+    /// (Metallic/Roughness) as a real `BitmapSlider` row — shaped like
+    /// param_card.rs's scalar rows (label left, fill bar, value right),
+    /// replacing the old `[−] value [+]` stepper triplet
+    /// (`build_object_numeric_row`). Drag lifecycle is the shared
+    /// `SliderDragState` machine (`layer_header.rs`'s gain-slider
+    /// precedent): `PointerDown`/`Drag`/`DragEnd` in `handle_event` drive
+    /// `which`'s slider directly by track id, absolute-position (not
+    /// delta), so one drag can sweep the full range — the performer
+    /// gesture this design names.
+    fn build_object_slider_row(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
@@ -2410,11 +2543,12 @@ impl ScenePanel {
         cy: f32,
         label: &str,
         row: &RowValue,
-        index: usize,
+        layer_id: &LayerId,
         base_offset: u64,
+        which: ObjSlider,
     ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
         if row.driven {
+            tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
             tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
@@ -2426,43 +2560,43 @@ impl ScenePanel {
             );
             return cy + ROW_H;
         }
-        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
-        let minus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2212}",
-            obj_key(index, base_offset),
+        let norm = crate::slider::BitmapSlider::value_to_normalized(row.value, row.min, row.max);
+        let text = format!("{:.2}", row.value);
+        // The reset action is structurally required by `BitmapSlider::build`
+        // but this phase wires no right-click gesture for it (the panel has
+        // never had a reset gesture on any row — D2 doesn't add one); it
+        // writes the row's own current value back to itself, an inert no-op
+        // unless a later phase registers the gesture.
+        let inert_reset = PanelAction::SceneSetupParamChanged(
+            layer_id.clone(),
+            row.addr.scope_path.clone(),
+            row.addr.node_doc_id,
+            row.addr.param_id.clone(),
+            row.value,
         );
-        let value_id = tree.add_button_keyed(
+        let built = crate::slider::BitmapSlider::build(
+            tree,
             Some(self.content_parent),
-            step_x + STEP_W,
-            cy,
-            VALUE_W,
-            ROW_H,
-            drag_value_style(),
-            &format!("{:.2}", row.value),
-            obj_key(index, base_offset + 1),
+            Rect::new(inner_x, cy, inner_w, ROW_H),
+            Some(label),
+            norm,
+            &text,
+            &crate::slider::SliderColors::default_slider(),
+            color::FONT_LABEL,
+            LABEL_W,
+            norm,
+            inert_reset,
         );
-        if let Some(name) = object_numeric_row_automation_name(base_offset) {
-            tree.set_name(value_id, name);
+        if let Some(name) = object_slider_row_automation_name(base_offset) {
+            tree.set_name(built.ids.value_text, name);
         }
-        let plus_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W + VALUE_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{002B}",
-            obj_key(index, base_offset + 2),
-        );
-        self.object_steppers.push((minus_id, row.clone(), -0.05));
-        self.object_value_cells.push((value_id, row.clone()));
-        self.object_steppers.push((plus_id, row.clone(), 0.05));
+        let (slider, slider_row) = match which {
+            ObjSlider::Metallic => (&mut self.metallic_slider, &mut self.metallic_slider_row),
+            ObjSlider::Roughness => (&mut self.roughness_slider, &mut self.roughness_slider_row),
+        };
+        slider.set_range(row.min, row.max, false);
+        slider.set_ids(built.ids);
+        *slider_row = Some(row.clone());
         cy + ROW_H
     }
 
@@ -2475,6 +2609,27 @@ impl ScenePanel {
     /// drag-ownership dispatch (mirrors `AudioSetupPanel::point_in_panel`).
     pub fn point_in_panel(&self, pos: crate::node::Vec2) -> bool {
         self.open && self.panel_rect.contains(pos)
+    }
+
+    /// UX-P2 (D3a): whether `pos` is over a drag-armable value cell this
+    /// frame — every cell in the SAME lookup set `PointerDown`'s
+    /// delta-drag arm uses (fixed `row_ids` + object/light/camera value
+    /// cells; the two slider tracks have their OWN cursor language, a
+    /// resize handle doesn't apply to a track you click-to-jump on, so
+    /// they're deliberately not included). The app's cursor-priority chain
+    /// (`app.rs::update_cursor_for_position`) calls this to switch to
+    /// `TimelineCursor::ResizeHorizontal` on hover — the visible half of
+    /// D3a's affordance (the background-lighten half already ships via
+    /// `drag_value_style`'s `hover_bg_color`).
+    pub fn value_cell_at(&self, tree: &UITree, pos: crate::node::Vec2) -> bool {
+        if !self.open {
+            return false;
+        }
+        let hit = |id: NodeId| tree.get_bounds(id).contains(pos);
+        self.row_ids.iter().filter_map(|ids| ids.value).any(hit)
+            || self.object_value_cells.iter().any(|(id, _)| hit(*id))
+            || self.light_value_cells.iter().any(|(id, _)| hit(*id))
+            || self.camera_value_cells.iter().any(|(id, _)| hit(*id))
     }
 
     /// Handle one input event. Returns `(consumed, actions)`.
@@ -2569,13 +2724,18 @@ impl ScenePanel {
                             *group_node_id,
                             current_name.clone(),
                         ));
-                    } else if let Some((_, group_node_id, type_id)) =
-                        self.modifier_add_ids.iter().find(|(id, _, _)| *id == *node_id)
+                    } else if let Some((_, group_node_id)) =
+                        self.add_modifier_button_id.filter(|(id, _)| *id == *node_id)
                     {
-                        actions.push(PanelAction::SceneSetupAddModifier(
+                        // UX-P2 (D6): the button doesn't resolve a choice
+                        // itself — it asks the app to open the shared
+                        // dropdown (`SceneSetupAddModifierClicked`), which
+                        // lists `MESH_MODIFIER_CHOICES` and dispatches the
+                        // SAME `SceneSetupAddModifier` each old chip did.
+                        actions.push(PanelAction::SceneSetupAddModifierClicked(
                             vm.layer_id.clone(),
-                            *group_node_id,
-                            type_id.clone(),
+                            group_node_id,
+                            *node_id,
                         ));
                     } else if let Some((_, group_node_id, modifier_node_id)) =
                         self.modifier_remove_ids.iter().find(|(id, _, _)| *id == *node_id)
@@ -2695,6 +2855,24 @@ impl ScenePanel {
                                 .chain(self.camera_value_cells.iter())
                                 .find(|(id, _)| *id == *node_id)
                                 .map(|(_, rv)| rv.clone())
+                        })
+                        .or_else(|| {
+                            // UX-P2 (D2): the slider's own value-box node —
+                            // `BitmapSlider`'s contract defines the SAME
+                            // ValueCell+DoubleClick→EditValue intent
+                            // (slider.rs `intent_for`), so double-click-to-
+                            // type keeps working on Metallic/Roughness now
+                            // that they're sliders, not value cells.
+                            self.metallic_slider
+                                .ids()
+                                .filter(|ids| ids.value_text == *node_id)
+                                .and(self.metallic_slider_row.clone())
+                                .or_else(|| {
+                                    self.roughness_slider
+                                        .ids()
+                                        .filter(|ids| ids.value_text == *node_id)
+                                        .and(self.roughness_slider_row.clone())
+                                })
                         });
                     if let Some(row_value) = row_value
                         && !row_value.driven
@@ -2718,6 +2896,40 @@ impl ScenePanel {
             }
             UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let SceneSetupState::Live(vm) = &self.state {
+                    // UX-P2 (D2): Metallic/Roughness sliders — track-hit,
+                    // absolute-position (not delta), so one drag sweeps the
+                    // row's full range. Checked before the delta-drag value
+                    // cells below since a slider's track is a distinct node.
+                    if let Some(new_value) = self.metallic_slider.try_start_drag(*node_id, pos.x)
+                        && let Some(row) = &self.metallic_slider_row
+                    {
+                        self.drag_layer_id = Some(vm.layer_id.clone());
+                        return (
+                            true,
+                            vec![PanelAction::SceneSetupParamChanged(
+                                vm.layer_id.clone(),
+                                row.addr.scope_path.clone(),
+                                row.addr.node_doc_id,
+                                row.addr.param_id.clone(),
+                                new_value,
+                            )],
+                        );
+                    }
+                    if let Some(new_value) = self.roughness_slider.try_start_drag(*node_id, pos.x)
+                        && let Some(row) = &self.roughness_slider_row
+                    {
+                        self.drag_layer_id = Some(vm.layer_id.clone());
+                        return (
+                            true,
+                            vec![PanelAction::SceneSetupParamChanged(
+                                vm.layer_id.clone(),
+                                row.addr.scope_path.clone(),
+                                row.addr.node_doc_id,
+                                row.addr.param_id.clone(),
+                                new_value,
+                            )],
+                        );
+                    }
                     if let Some(row) = self.value_label_row_at(*node_id)
                         && let Some(row_value) = self.row_value_for(vm, row)
                         && !row_value.driven
@@ -2761,41 +2973,81 @@ impl ScenePanel {
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
-            UIEvent::DragBegin { .. } => (self.drag.is_active(), Vec::new()),
-            UIEvent::Drag { pos, .. } => match (self.drag.payload().cloned(), self.drag_layer_id.clone()) {
-                (Some(drag), Some(layer_id)) => {
-                    // D8: Shift held at drag-start ("fine") multiplies the
-                    // applied per-pixel delta by 0.1. D10: the committed
-                    // degrees-display rows scrub in degrees (0.5°/px, fine
-                    // 0.05°/px) converted to the radians the graph stores —
-                    // the ONLY place that conversion happens; everywhere
-                    // else keeps the existing 1 px = 0.01 units rate (the
-                    // audio dock's 0.1 dB/px order of magnitude, scaled for
-                    // these params' typical [0, ~2] ranges).
-                    let dx = pos.x - drag.start_x;
-                    let delta = if is_degrees_param(&drag.addr.param_id) {
-                        let deg_per_px = if drag.fine { 0.05 } else { 0.5 };
-                        (dx * deg_per_px).to_radians()
-                    } else {
-                        let unit_per_px = if drag.fine { 0.001 } else { 0.01 };
-                        dx * unit_per_px
-                    };
-                    let new_value = (drag.start_value + delta).clamp(drag.min, drag.max);
-                    (
-                        true,
-                        vec![PanelAction::SceneSetupParamChanged(
-                            layer_id,
-                            drag.addr.scope_path.clone(),
-                            drag.addr.node_doc_id,
-                            drag.addr.param_id.clone(),
-                            new_value,
-                        )],
-                    )
+            UIEvent::DragBegin { .. } => {
+                (self.drag.is_active() || self.metallic_slider.is_dragging() || self.roughness_slider.is_dragging(), Vec::new())
+            }
+            UIEvent::Drag { pos, .. } => {
+                // UX-P2 (D2): continue an active slider drag first (distinct
+                // machinery from the delta-drag `self.drag` below — see
+                // `slider_drag_value`'s doc for why there's no local tree
+                // update here).
+                if let Some(layer_id) = self.drag_layer_id.clone() {
+                    if let Some(new_value) = slider_drag_value(&self.metallic_slider, pos.x)
+                        && let Some(row) = &self.metallic_slider_row
+                    {
+                        return (
+                            true,
+                            vec![PanelAction::SceneSetupParamChanged(
+                                layer_id,
+                                row.addr.scope_path.clone(),
+                                row.addr.node_doc_id,
+                                row.addr.param_id.clone(),
+                                new_value,
+                            )],
+                        );
+                    }
+                    if let Some(new_value) = slider_drag_value(&self.roughness_slider, pos.x)
+                        && let Some(row) = &self.roughness_slider_row
+                    {
+                        return (
+                            true,
+                            vec![PanelAction::SceneSetupParamChanged(
+                                layer_id,
+                                row.addr.scope_path.clone(),
+                                row.addr.node_doc_id,
+                                row.addr.param_id.clone(),
+                                new_value,
+                            )],
+                        );
+                    }
                 }
-                _ => (false, Vec::new()),
-            },
+                match (self.drag.payload().cloned(), self.drag_layer_id.clone()) {
+                    (Some(drag), Some(layer_id)) => {
+                        // D8: Shift held at drag-start ("fine") multiplies the
+                        // applied per-pixel delta by 0.1. D10: the committed
+                        // degrees-display rows scrub in degrees (0.5°/px, fine
+                        // 0.05°/px) converted to the radians the graph stores —
+                        // the ONLY place that conversion happens; everywhere
+                        // else keeps the existing 1 px = 0.01 units rate (the
+                        // audio dock's 0.1 dB/px order of magnitude, scaled for
+                        // these params' typical [0, ~2] ranges).
+                        let dx = pos.x - drag.start_x;
+                        let delta = if is_degrees_param(&drag.addr.param_id) {
+                            let deg_per_px = if drag.fine { 0.05 } else { 0.5 };
+                            (dx * deg_per_px).to_radians()
+                        } else {
+                            let unit_per_px = if drag.fine { 0.001 } else { 0.01 };
+                            dx * unit_per_px
+                        };
+                        let new_value = (drag.start_value + delta).clamp(drag.min, drag.max);
+                        (
+                            true,
+                            vec![PanelAction::SceneSetupParamChanged(
+                                layer_id,
+                                drag.addr.scope_path.clone(),
+                                drag.addr.node_doc_id,
+                                drag.addr.param_id.clone(),
+                                new_value,
+                            )],
+                        )
+                    }
+                    _ => (false, Vec::new()),
+                }
+            }
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 self.drag.release();
+                self.metallic_slider.end_drag();
+                self.roughness_slider.end_drag();
                 self.drag_layer_id = None;
                 (false, Vec::new())
             }
@@ -2896,6 +3148,24 @@ fn stepper_hit_in(steppers: &[(NodeId, RowValue, f32)], node_id: NodeId) -> Opti
     steppers.iter().find(|(id, _, _)| *id == node_id).map(|(_, row, delta)| (row.clone(), *delta))
 }
 
+/// UX-P2 (D2): the value an active object slider drag resolves to at
+/// `pos_x`, computed from its OWN `track_rect` — the exact math
+/// [`crate::slider::SliderDragState::apply_drag`] uses, minus that method's
+/// tree-mutating visual update. `handle_event` has no `&mut UITree` (the
+/// panel's whole event surface is tree-free by design), so the slider's
+/// fill/thumb/value-box don't update mid-drag locally; they update on the
+/// SAME cadence the triplet cells' drag-scrub already does — the next
+/// `build_nodes` pass after the round trip lands (D1: no per-frame
+/// rebuild). Returns `None` when the slider isn't currently dragging.
+fn slider_drag_value(slider: &crate::slider::SliderDragState, pos_x: f32) -> Option<f32> {
+    if !slider.is_dragging() {
+        return None;
+    }
+    let ids = slider.ids()?;
+    let norm = crate::slider::BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+    Some(crate::slider::BitmapSlider::normalized_to_value(norm, slider.min, slider.max))
+}
+
 /// Stable outliner-row key, derived from the selection identity itself
 /// (Camera/World are fixed; Light/Object key off the node's own doc id,
 /// which is stable across a rebuild — removal-stable, unlike an index).
@@ -2989,12 +3259,16 @@ fn section_label_style() -> UIStyle {
 
 /// A drag-armable value label — visually distinct (subtle hover fill) from a
 /// bare `label_style()` text row so it reads as draggable, not static prose
-/// (the affordance-legibility rule: DESIGN_DOC_STANDARD §5).
+/// (the affordance-legibility rule: DESIGN_DOC_STANDARD §5). UX-P2 (D3c):
+/// `text_color` is the SAME `SLIDER_TEXT_C32` token the `BitmapSlider` value
+/// box uses — `font_size`/`text_align` already matched (both `FONT_LABEL`/
+/// `Center`) before this phase; token parity across the panel's two value
+/// shapes (slider rows vs. drag-scrub cells) is the point, not a new style.
 fn drag_value_style() -> UIStyle {
     UIStyle {
         bg_color: Color32::new(30, 30, 34, 200),
         hover_bg_color: Color32::new(44, 44, 50, 255),
-        text_color: Color32::new(214, 214, 220, 255),
+        text_color: color::SLIDER_TEXT_C32,
         font_size: color::FONT_LABEL,
         text_align: TextAlign::Center,
         corner_radius: color::SMALL_RADIUS,
@@ -3212,14 +3486,18 @@ mod tests {
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // The full body always renders (no fold state left — the outliner
         // IS the fold): 3 transform triplets (9 cells) + 1 color triplet (3
-        // cells) = 12 drag cells; metallic/roughness add 2 more value
-        // cells; the one Bend modifier's Angle param (Numeric) adds 1 more
-        // (its Axis param is an Enum row — no drag-value cell).
+        // cells) = 12 drag cells; the one Bend modifier's Angle param
+        // (Numeric) adds 1 more (its Axis param is an Enum row — no
+        // drag-value cell). UX-P2 (D2): metallic/roughness moved OFF this
+        // vector onto the two `BitmapSlider` rows (`metallic_slider`/
+        // `roughness_slider`) — asserted separately below.
         assert_eq!(
             panel.object_value_cells.len(),
-            15,
-            "9 transform + 3 color + metallic + roughness + 1 modifier numeric param value cell"
+            13,
+            "9 transform + 3 color + 1 modifier numeric param value cell"
         );
+        assert!(panel.metallic_slider_row.is_some(), "Metallic renders as a slider row");
+        assert!(panel.roughness_slider_row.is_some(), "Roughness renders as a slider row");
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
     }
@@ -3247,20 +3525,26 @@ mod tests {
         vm
     }
 
+    /// UX-P2 (D6): the "+ Add Modifier" button doesn't resolve a choice
+    /// itself anymore — it emits `SceneSetupAddModifierClicked`, which the
+    /// app resolves into the shared dropdown (`MESH_MODIFIER_CHOICES`
+    /// items, each carrying `SceneSetupAddModifier` — see
+    /// `try_open_dropdown_inner` in `manifold-app/src/ui_root.rs`, not
+    /// reachable from this crate's tests). This test only proves the
+    /// panel's half of D6: one button renders (not 7 chips) and its click
+    /// carries the right `(layer_id, group_node_id, button_node_id)`.
     #[test]
-    fn modifier_add_chip_click_emits_add_modifier_action() {
+    fn add_modifier_button_click_emits_add_modifier_clicked_action() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.modifier_add_ids.len(), MESH_MODIFIER_CHOICES.len(), "all 7 curated choices render");
-        let (chip_id, group_node_id, type_id) = panel.modifier_add_ids[0].clone();
+        let (button_id, group_node_id) = panel.add_modifier_button_id.expect("one Add Modifier button renders");
         assert_eq!(group_node_id, 42);
-        assert_eq!(type_id, "node.bend_mesh");
 
         let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: chip_id,
+            node_id: button_id,
             pos: crate::node::Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
         });
@@ -3268,7 +3552,67 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::SceneSetupAddModifier(l, 42, t) if *l == LayerId::new("layer-1") && t == "node.bend_mesh"
+            PanelAction::SceneSetupAddModifierClicked(l, 42, n)
+                if *l == LayerId::new("layer-1") && *n == button_id
+        ));
+    }
+
+    /// UX-P2 (D2): the Roughness slider's track is drag-armable (a click
+    /// anywhere on the track jumps straight to that value, then Drag
+    /// continues absolute-position — the "sweep full-range in one drag"
+    /// performer gesture the phase brief names), and its separate
+    /// value-text box still opens the type-in box on double-click (D8
+    /// parity, `dock_numeric_cells_register_full_contract`'s sibling for
+    /// the two-node slider shape that test's single-node loop can't cover).
+    #[test]
+    fn roughness_slider_sweeps_full_range_and_value_box_opens_typein() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let ids = panel.roughness_slider.ids().expect("Roughness renders a slider").clone();
+        let track = ids.track_rect;
+
+        // PointerDown at the track's left edge — jumps to (near) min.
+        let (consumed, actions) = panel.handle_event(&UIEvent::PointerDown {
+            node_id: ids.track,
+            pos: Vec2::new(track.x, 0.0),
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(consumed, "the slider track must be drag-armable");
+        let PanelAction::SceneSetupParamChanged(_, _, _, param, low_value) = &actions[0] else {
+            panic!("expected SceneSetupParamChanged, got {actions:?}");
+        };
+        assert_eq!(param, "roughness");
+        assert!(*low_value < 0.05, "PointerDown at the track's left edge lands near min, got {low_value}");
+
+        // Drag to the track's right edge — one gesture sweeps to (near) max,
+        // continuing off the SAME `try_start_drag` arm via `slider_drag_value`.
+        let (drag_consumed, drag_actions) = panel.handle_event(&UIEvent::Drag {
+            node_id: Some(ids.track),
+            pos: Vec2::new(track.x + track.width, 0.0),
+            delta: Vec2::ZERO,
+        });
+        assert!(drag_consumed);
+        let PanelAction::SceneSetupParamChanged(_, _, _, _, high_value) = &drag_actions[0] else {
+            panic!("expected SceneSetupParamChanged, got {drag_actions:?}");
+        };
+        assert!(*high_value > 0.95, "dragging to the track's right edge lands near max, got {high_value}");
+
+        panel.handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::new(track.x + track.width, 0.0) });
+        assert!(!panel.roughness_slider.is_dragging(), "PointerUp ends the drag");
+
+        // The value box (a different node than the track) opens type-in.
+        let (typein_consumed, typein_actions) = panel.handle_event(&UIEvent::DoubleClick {
+            node_id: ids.value_text,
+            pos: Vec2::ZERO,
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(typein_consumed);
+        assert!(matches!(
+            typein_actions.as_slice(),
+            [PanelAction::SceneSetupBeginNumericTextInput { param_id, .. }] if param_id == "roughness"
         ));
     }
 
@@ -3357,7 +3701,7 @@ mod tests {
         panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(false))));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.modifier_add_ids.is_empty(), "Add modifier is disabled for an unparseable chain");
+        assert!(panel.add_modifier_button_id.is_none(), "Add modifier is disabled for an unparseable chain");
         assert!(panel.modifier_remove_ids.is_empty(), "no remove buttons for an unparseable chain either");
     }
 
