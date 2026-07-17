@@ -52,7 +52,7 @@ or human can read it, and it needs no external tool.
 |---|---|---|
 | BUG-230 | **beat-this-short-clip-bpm-convergence** | Beat This converges on the same ~142.86 BPM for 4 of 5 unrelated ~13s isolated-stem test clips (apricots/bad_guy/feel_the_vibration/tears; only inhale_exhale differs, at a plausible half-tempo) — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P2 listen-list render |
 | BUG-229 | **beat-this-frame-hop-exceeds-5ms-alignment-target** | Beat This's 50fps (20ms) frame resolution puts absolute click-to-beat alignment at a measured ~14ms median / ~26ms max (D14 gate wanted <=5ms) — a real model-precision floor, not tunable in P2 — found 2026-07-17 during AUDIO_ANALYSIS_ACCURACY P2 |
-| BUG-227 | **ui-snap-script-harness-never-runs-a-content-thread-tick** | the `--script` flow harness's `Step` never invokes `evaluate_all_drivers`/`evaluate_all_envelopes`, so no L3 flow can show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param — LOW-MED, found 2026-07-17 during UX-P3a build |
+| BUG-234 | **ui-snap-script-harness-never-runs-a-content-thread-tick** | the `--script` flow harness's `Step` never invokes `evaluate_all_drivers`/`evaluate_all_envelopes`, so no L3 flow can show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param — LOW-MED, found 2026-07-17 during UX-P3a build |
 | ~~BUG-218~~ FIXED | **modifier-commands-splice-at-dead-group-output-vertices-port** | FIXED — `walk_mesh_modifier_chain`/`splice_modifier_into_chain` now resolve the group's `node.scene_object` via the group output's `object` producer and walk/splice against its own `vertices` port, not the dead `system.group_output` `vertices` port; verified via `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-modifier-stack.json`. |
 | BUG-216 | **feedback-loop-into-final-output-freezes-at-depth-one** | wiring a feedback loop's blend straight to `system.final_output` silently freezes the loop at one frame of history (swap refused on the borrowed boundary slot, no copy fallback) + per-frame stderr spam — MED |
 | BUG-217 | **non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources** | Max/Add feedback trails over an alpha-0-background source accumulate RGB but inherit the source's alpha, so the display culls them; `set_alpha` before the blend is the idiom — LOW |
@@ -175,6 +175,16 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-233 (gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis) — the P6 move/scale gizmo's red X-axis handle and the P5 grid overlay's red X-axis line use near-identical colors, so with both visible the gizmo's X handle is hard to pick out — found 2026-07-17, `lane/realtime3d-viewport` P6 session, while eyeballing the gizmo demo PNGs
+
+**Status:** OPEN — LOW (cosmetic; functionally the axes are still distinguishable by direction/geometry and the color IS correct per D8's lock-state contract — a unit test asserts the exact RGBA value — this is purely a legibility issue when both overlays render together).
+
+**Symptom:** `viewport_overlay::grid_lines`'s X-axis tint (`GRID_AXIS_X_COLOR = [180, 70, 70, 255]`) and `viewport_gizmo`'s X-axis handle color (`X_COLOR = [225, 70, 70, 255]`) are close enough in hue/saturation that in a rendered frame with the grid on AND an object's Move/Scale gizmo showing, the gizmo's red X handle blends into the grid's red X-axis line running through the same general screen region. The P6 demo PNGs (`viewport_p6_demo.rs`) had to disable the grid overlay (`ViewportOverlayConfig { grid: false, .. }`) to get a legible gizmo screenshot — the production app renders both together with no such override.
+
+**Root cause:** the two overlay systems (P5 `viewport_overlay` and P6 `viewport_gizmo`) picked their axis-tint colors independently, both converging on "reddish" for X (a reasonable per-module choice — X-as-red is the universal DCC convention) without checking for a value collision against the other overlay that's usually on at the same time.
+
+**Fix shape:** either (a) desaturate/darken the grid's axis tint further so it reads as "chrome" rather than competing with gizmo saturation, or (b) shift the gizmo's axis palette a few degrees off pure DCC red/green/blue (e.g. a warmer/brighter red distinct from the grid's), or (c) auto-dim the grid opacity while a gizmo is showing (selection implies "I'm working on this object, not reading the grid"). (b) is probably the smallest, most contained fix — touches only `viewport_gizmo.rs`'s three color constants, no cross-module coupling. One short session; needs a quick visual check (headless PNG, eyeballed) rather than a new automated gate, since this is a legibility judgment call.
+
 ### BUG-230 (beat-this-short-clip-bpm-convergence) — Beat This reports the same ~142.86 BPM for 4 of 5 unrelated ~13s isolated-drum-loop test clips — found 2026-07-17, AUDIO_ANALYSIS_ACCURACY P2 listen-list render
 
 **Status:** OPEN — LOW-MED (accuracy; affects short/isolated clips specifically, not full-length mixes — none of the P2 beat/downbeat scoring fixtures, which are full songs, showed this pattern).
@@ -245,7 +255,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** make the harness honor the app's real invalidation gating (no free first-gesture rebuild; reset `needs_structural_sync` per frame exactly as the app does), then add a negative meta-flow that scrolls WITHOUT the fix's `needs_rebuild = true` and asserts the screen does NOT move — proving the harness can now see this bug class. Evidence and mechanism detail: BUG-223's Escaped note (same file), found by instrumented divergence-diffing, 2026-07-17.
 
-### BUG-227 (ui-snap-script-harness-never-runs-a-content-thread-tick-so-driver-envelope-modulation-is-headlessly-unobservable) — the `--script` flow harness cannot show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param, effect-card or scene-panel — found 2026-07-17, UX-P3a build (`wave/scene-panel-ux-p3-build`), while gating "assign an LFO → the row's value visibly modulates (transport running, two snapshots)"
+### BUG-234 (ui-snap-script-harness-never-runs-a-content-thread-tick-so-driver-envelope-modulation-is-headlessly-unobservable) — the `--script` flow harness cannot show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param, effect-card or scene-panel — found 2026-07-17, UX-P3a build (`wave/scene-panel-ux-p3-build`), while gating "assign an LFO → the row's value visibly modulates (transport running, two snapshots)"
 
 **Status:** OPEN — LOW-MED (verification infra; blocks any future L3 flow gate phrased as "the value visibly modulates" — same family as BUG-225, different mechanism).
 

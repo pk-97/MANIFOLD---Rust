@@ -135,9 +135,7 @@ fn viewport_input_orbit_drag_changes_framing() {
     .expect("viewport session must open against a top-level render_scene node");
 
     let overlay_cfg = ViewportOverlayConfig::default();
-    let before = session
-        .render_if_dirty(&ctx(width, height, 1), &overlay_cfg, None, &[])
-        .to_vec();
+    let before = session.render_if_dirty(&ctx(width, height, 1), &overlay_cfg, None, &[], &[]);
     std::fs::write(
         "/tmp/viewport_p5c_before.png",
         encode_rgba8_png(&before, width, height),
@@ -153,9 +151,7 @@ fn viewport_input_orbit_drag_changes_framing() {
     apply(&mut session, gesture, &sens);
     assert!(session.is_dirty(), "apply(Orbit) must mark the session dirty");
 
-    let after = session
-        .render_if_dirty(&ctx(width, height, 2), &overlay_cfg, None, &[])
-        .to_vec();
+    let after = session.render_if_dirty(&ctx(width, height, 2), &overlay_cfg, None, &[], &[]);
     std::fs::write(
         "/tmp/viewport_p5c_after.png",
         encode_rgba8_png(&after, width, height),

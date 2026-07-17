@@ -129,27 +129,27 @@ fn viewport_session_navigates_and_debounces() {
 
     // ── Frame 1: default framing. ──
     assert!(session.is_dirty(), "a freshly-opened session must render its first frame");
-    let frame1 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let frame1 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
     assert!(!session.is_dirty(), "render_if_dirty must clear the dirty flag");
 
     // ── Debounce proof: call again with NO input in between — must be a
     //    cache hit (identical bytes, no new dispatch needed to prove it,
     //    since a stale/rebuilt render would still often look "similar" —
     //    what actually matters is `is_dirty()` staying false). ──
-    let frame1_again = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let frame1_again = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
     assert_eq!(frame1, frame1_again, "no camera/def change ⇒ identical cached bytes");
     assert!(!session.is_dirty(), "no-op render_if_dirty must not mark dirty");
 
     // ── Frame 2: orbit — LMB-drag equivalent. ──
     session.orbit(220.0, 40.0, 0.01);
     assert!(session.is_dirty(), "orbit() must mark the session dirty");
-    let frame2 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let frame2 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
     assert_ne!(frame1, frame2, "orbiting the camera must change the rendered pixels");
 
     // ── Frame 3: dolly in — scroll-wheel equivalent, from the orbited pose. ──
     session.dolly(1.0, 0.3);
     assert!(session.is_dirty(), "dolly() must mark the session dirty");
-    let frame3 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let frame3 = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
     assert_ne!(frame2, frame3, "dollying must change the rendered pixels");
 
     // ── sync_def on the SAME def is a no-op: doesn't reset the camera or
@@ -192,7 +192,7 @@ fn viewport_session_rebuilds_on_def_change() {
     )
     .expect("viewport session must open");
     let overlay_cfg = ViewportOverlayConfig::default();
-    let before = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let before = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
 
     // Edit the material color — a real "performer changed the graph" event.
     let mut edited = def.clone();
@@ -208,6 +208,6 @@ fn viewport_session_rebuilds_on_def_change() {
 
     session.sync_def(&edited, &registry, &frame_ctx).expect("sync_def must rebuild on a real change");
     assert!(session.is_dirty(), "a real def change must mark the session dirty");
-    let after = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[]).to_vec();
+    let after = session.render_if_dirty(&frame_ctx, &overlay_cfg, None, &[], &[]);
     assert_ne!(before, after, "a material color edit must change the rendered pixels");
 }
