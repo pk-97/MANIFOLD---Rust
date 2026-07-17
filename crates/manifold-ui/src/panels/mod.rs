@@ -222,6 +222,14 @@ pub enum PanelAction {
     /// transforms) and `[group_node_id]` for a P2 Objects material/modifier
     /// row living inside the object's own group.
     SceneSetupParamChanged(LayerId, Vec<u32>, u32, String, f32),
+    /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
+    /// The panel has already updated its UI-local selection; this action's
+    /// only job is to ride the dispatch loop back as `structural_change:
+    /// true` so `sync_inspector_data` rebuilds the panel this same frame —
+    /// same-frame Properties update, no polling, no per-frame rebuild.
+    /// Payload: the layer whose selection moved (the panel key) — the
+    /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
+    SceneSetupSelectionChanged(LayerId),
     /// "Add environment" (D3): spawn `node.bake_environment` wired to the
     /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
     SceneSetupAddEnvironment(LayerId, u32),

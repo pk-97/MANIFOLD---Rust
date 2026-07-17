@@ -316,6 +316,18 @@ pub struct RowValue {
     pub driven: bool,
 }
 
+/// The outliner row template's trailing affordance slot (D5 of
+/// SCENE_PANEL_UX_DESIGN.md): every row reserves the SAME width for this
+/// slot and renders EITHER a live eye toggle (Object rows, which carry a
+/// `visible` param) OR a dimmed, non-interactive eye glyph (Camera/World/
+/// Light rows, which don't) — never a different control. Uniformity is the
+/// point (`feedback_no_conditionally_visible_ui`): the slot's meaning never
+/// changes per row, only whether it's live.
+enum EyeSlot {
+    Live(RowValue),
+    Dimmed,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum EnvironmentRowVm {
     /// Importer shape (switch_texture selecting Softbox/HDRI) — Mode is
@@ -1058,9 +1070,12 @@ impl ScenePanel {
             .unwrap_or(SceneSelection::World)
     }
 
-    /// The outliner: one row per scene item, in committed order — Camera ·
-    /// World · each light · each object — plus the always-visible footer
-    /// (+ Object · + Light · Import Model…).
+    /// The outliner: one row per scene item, grouped under section labels
+    /// (D5) — Scene (Camera · World) · Lights · Objects — plus the compact
+    /// single-row action footer (D6: + Object · + Light · Import Model…).
+    /// Every row (selectable or not) renders the same `[type icon | name |
+    /// trailing affordance]` template — flat, no nesting (D5; inherited from
+    /// REALTIME_3D "Decided — do not reopen" §1).
     fn build_outliner(
         &mut self,
         tree: &mut UITree,
@@ -1070,15 +1085,17 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         selected: SceneSelection,
     ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Outliner", section_label_style());
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Scene", section_label_style());
         cy += ROW_H;
+        cy = self.build_outliner_row(
+            tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, EyeSlot::Dimmed,
+        );
+        cy = self.build_outliner_row(
+            tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Dimmed,
+        );
 
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, None,
-        );
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, None,
-        );
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Lights", section_label_style());
+        cy += ROW_H;
         for light in &vm.lights {
             match light {
                 LightRowVm::Known(row) => {
@@ -1091,26 +1108,27 @@ impl ScenePanel {
                         &label,
                         SceneSelection::Light(row.node_doc_id),
                         selected,
-                        None,
+                        EyeSlot::Dimmed,
                     );
                 }
                 LightRowVm::Custom { index } => {
                     // No addressable node id (D12/D3) — listed, never hidden,
                     // but not a selectable target (nothing to show in
-                    // Properties beyond the same "custom" label).
-                    tree.add_label(
-                        Some(self.content_parent),
+                    // Properties beyond the same "custom" label). Same row
+                    // template as a selectable row (D5), minus the click.
+                    cy = self.build_outliner_row_static(
+                        tree,
                         inner_x,
-                        cy,
                         inner_w,
-                        ROW_H,
+                        cy,
                         &format!("\u{1F4A1} Light {index} — custom (edit in graph)"),
-                        label_style(),
                     );
-                    cy += ROW_H;
                 }
             }
         }
+
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Objects", section_label_style());
+        cy += ROW_H;
         for obj in &vm.objects {
             match obj {
                 ObjectRowVm::Known(row) => {
@@ -1123,61 +1141,63 @@ impl ScenePanel {
                         &label,
                         SceneSelection::Object(row.object_node_id),
                         selected,
-                        Some(row.visible.clone()),
+                        EyeSlot::Live(row.visible.clone()),
                     );
                 }
                 ObjectRowVm::Custom { index } => {
-                    tree.add_label(
-                        Some(self.content_parent),
+                    cy = self.build_outliner_row_static(
+                        tree,
                         inner_x,
-                        cy,
                         inner_w,
-                        ROW_H,
+                        cy,
                         &format!("\u{25A0} Object {index} — custom (edit in graph)"),
-                        label_style(),
                     );
-                    cy += ROW_H;
                 }
             }
         }
         cy += ROW_GAP;
+
+        // D6: one compact row, three equal-width buttons — was three
+        // stacked full-width rows (~200px of permanent height reclaimed).
+        let action_w = (inner_w - 2.0 * ROW_GAP) / 3.0;
         self.add_object_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
             cy,
-            inner_w,
+            action_w,
             ROW_H,
             btn_style(),
             "+ Object",
             KEY_ADD_OBJECT,
         ));
-        cy += ROW_H;
         self.add_light_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x,
+            inner_x + action_w + ROW_GAP,
             cy,
-            inner_w,
+            action_w,
             ROW_H,
             btn_style(),
             "+ Light",
             KEY_ADD_LIGHT,
         ));
-        cy += ROW_H;
         self.import_model_id = Some(tree.add_button_keyed(
             Some(self.content_parent),
-            inner_x,
+            inner_x + 2.0 * (action_w + ROW_GAP),
             cy,
-            inner_w,
+            action_w,
             ROW_H,
             btn_style(),
-            "Import Model…",
+            "Import…",
             KEY_IMPORT_MODEL,
         ));
         cy + ROW_H
     }
 
-    /// One outliner row: a selectable name button, plus an eye toggle when
-    /// `eye` is `Some` (Object rows only). Selected-row styling per the
+    /// One selectable outliner row: a name button, plus the trailing
+    /// affordance slot (D5) — a live eye toggle (`EyeSlot::Live`) or a
+    /// dimmed, non-interactive eye glyph (`EyeSlot::Dimmed`), always at the
+    /// same width and position so the slot's meaning never shifts per row
+    /// (`feedback_no_conditionally_visible_ui`). Selected-row styling per the
     /// `layer_header.rs` precedent (`sel_accent_style`/`bg_style`): a tint
     /// using the app-wide `SELECTED_LAYER_RING` colour, never a border box.
     fn build_outliner_row(
@@ -1189,41 +1209,79 @@ impl ScenePanel {
         label: &str,
         sel: SceneSelection,
         selected: SceneSelection,
-        eye: Option<RowValue>,
+        eye: EyeSlot,
     ) -> f32 {
         let is_selected = sel == selected;
-        let eye_w = if eye.is_some() { STEP_W } else { 0.0 };
         let row_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
             cy,
-            inner_w - eye_w,
+            inner_w - STEP_W,
             ROW_H,
             outliner_row_style(is_selected),
             label,
             outliner_row_key(sel),
         );
         self.outliner_row_ids.push((row_id, sel));
-        if let Some(row) = eye {
-            let on = row.value > 0.5;
-            let object_node_id = match sel {
-                SceneSelection::Object(id) => id,
-                _ => 0,
-            };
-            let eye_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + inner_w - eye_w,
-                cy,
-                eye_w,
-                ROW_H,
-                if row.driven { driven_label_style() } else { btn_style() },
-                if on { "\u{1F441}" } else { "\u{2013}" },
-                outliner_eye_key(object_node_id),
-            );
-            if !row.driven {
-                self.outliner_eye_ids.push((eye_id, row));
+        match eye {
+            EyeSlot::Live(row) => {
+                let on = row.value > 0.5;
+                let object_node_id = match sel {
+                    SceneSelection::Object(id) => id,
+                    _ => 0,
+                };
+                let eye_id = tree.add_button_keyed(
+                    Some(self.content_parent),
+                    inner_x + inner_w - STEP_W,
+                    cy,
+                    STEP_W,
+                    ROW_H,
+                    if row.driven { driven_label_style() } else { btn_style() },
+                    if on { "\u{1F441}" } else { "\u{2013}" },
+                    outliner_eye_key(object_node_id),
+                );
+                if !row.driven {
+                    self.outliner_eye_ids.push((eye_id, row));
+                }
+            }
+            EyeSlot::Dimmed => {
+                tree.add_label(
+                    Some(self.content_parent),
+                    inner_x + inner_w - STEP_W,
+                    cy,
+                    STEP_W,
+                    ROW_H,
+                    "\u{1F441}",
+                    driven_label_style(),
+                );
             }
         }
+        cy + ROW_H
+    }
+
+    /// A non-selectable outliner row (`Custom` object/light rows, D12/D3 —
+    /// no addressable node id) rendered in the SAME `[name | dimmed eye]`
+    /// shape `build_outliner_row` uses, minus the click target — the row
+    /// template is uniform across every row regardless of interactivity
+    /// (D5).
+    fn build_outliner_row_static(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+    ) -> f32 {
+        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w - STEP_W, ROW_H, label, label_style());
+        tree.add_label(
+            Some(self.content_parent),
+            inner_x + inner_w - STEP_W,
+            cy,
+            STEP_W,
+            ROW_H,
+            "\u{1F441}",
+            driven_label_style(),
+        );
         cy + ROW_H
     }
 
@@ -1291,6 +1349,11 @@ impl ScenePanel {
             &row.name,
             obj_key(row.index, OBJ_OFF_NAME),
         );
+        // Stable automation name (UX-P1): `scripts/ui-flows/` selects the
+        // Properties header's name text by NAME, not raw text, so a flow can
+        // assert "the header text changed" without hard-coding which object
+        // it changed to.
+        tree.set_name(name_id, "scene_setup.properties.name_value");
         let identity_node_id = row.group_node_id.unwrap_or(row.object_node_id);
         self.object_name_ids.push((identity_node_id, name_id, row.name.clone()));
         let dup_id = tree.add_button_keyed(
@@ -2427,11 +2490,14 @@ impl ScenePanel {
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
-                // exists (a rebuild on the very next frame re-derives
-                // Properties from it).
+                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: also emit
+                // `SceneSetupSelectionChanged` so the dispatch loop's
+                // `structural_change: true` rebuilds Properties THIS frame
+                // instead of waiting for the next unrelated sync.
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
                     if let SceneSetupState::Live(vm) = &self.state {
                         self.selection.insert(vm.layer_id.clone(), *sel);
+                        return (true, vec![PanelAction::SceneSetupSelectionChanged(vm.layer_id.clone())]);
                     }
                     return (true, Vec::new());
                 }
