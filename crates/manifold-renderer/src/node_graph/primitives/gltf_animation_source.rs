@@ -445,6 +445,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             &out_slots,
@@ -455,6 +456,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
         Primitive::run(&mut prim, &mut ctx);
@@ -815,6 +817,7 @@ mod tests {
             let mut material_scratch = Vec::new();
             let mut transform_scratch = Vec::new();
             let mut atmosphere_scratch = Vec::new();
+            let mut object_scratch = Vec::new();
             let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
             let outputs = NodeOutputs::new(
                 &out_slots,
@@ -825,6 +828,7 @@ mod tests {
                 &mut material_scratch,
                 &mut transform_scratch,
                 &mut atmosphere_scratch,
+                &mut object_scratch,
             );
             let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
             Primitive::run(prim, &mut ctx);
@@ -899,6 +903,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             &out_slots,
@@ -909,6 +914,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
         let mut prim = GltfAnimationSource::new();
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);

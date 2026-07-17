@@ -66,6 +66,19 @@ pub enum PortType {
     /// P3). Same CPU-struct lifetime model as `Camera` / `Light` / `Material` /
     /// `Transform`; unwired = fog off = byte-identical to no atmosphere.
     Atmosphere,
+    /// CPU-only struct wire carrying a
+    /// [`SceneObject`](crate::node_graph::scene_object::SceneObject) — the
+    /// bundle of transform + material + mesh/map/instance [`Slot`](crate::node_graph::bindings::Slot)s
+    /// that together make up one scene object (SCENE_OBJECT_AND_PANEL_V2_DESIGN
+    /// D1–D3). Produced exclusively by `node.scene_object`; consumed
+    /// exclusively by `render_scene`'s `object_k` ports.
+    ///
+    /// **Single-hop invariant: `Object` wires never chain.** `node.scene_object`
+    /// is the sole producer and declares no `Object` input; every legal
+    /// consumer is a renderer boundary node (`render_scene` today — extend
+    /// this doc comment if a second renderer ever consumes `Object`).
+    /// Enforced by the `object_port_single_hop` registry-walk test.
+    Object,
 }
 
 impl PortType {
@@ -684,5 +697,59 @@ mod channel_layout_tests {
         assert_eq!(array_type.item_align, expected_align);
         assert_eq!(array_type.specs, SPECS);
         assert_eq!(array_type.match_mode, MatchMode::Exact);
+    }
+}
+
+/// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md's single-hop invariant, enforced
+/// registry-wide: `Object` wires never chain — `node.scene_object` is the
+/// sole producer (takes no `Object` input); every legal consumer is a
+/// renderer boundary node (`render_scene` from P2 on — extend
+/// `ALLOWED_OBJECT_CONSUMERS` the day a second one ships).
+#[cfg(test)]
+mod object_port_single_hop_tests {
+    use crate::node_graph::persistence::PrimitiveFactory;
+    use crate::node_graph::ports::PortType;
+
+    /// `type_id`s allowed to declare an `Object`-typed INPUT port. Extending
+    /// this list is itself the design's named escalation trigger ("any need
+    /// for a second Object consumer/producer" — §8) — don't add to it
+    /// without re-reading the design doc.
+    const ALLOWED_OBJECT_CONSUMERS: &[&str] = &["node.render_scene"];
+
+    #[test]
+    fn object_port_single_hop() {
+        for factory in inventory::iter::<PrimitiveFactory> {
+            let node = (factory.create)();
+            let has_object_output = node.outputs().iter().any(|o| o.ty == PortType::Object);
+            let has_object_input = node.inputs().iter().any(|i| i.ty == PortType::Object);
+
+            assert!(
+                !has_object_output || factory.type_id == "node.scene_object",
+                "{} declares an Object output but is not node.scene_object — \
+                 node.scene_object must be the sole Object producer",
+                factory.type_id,
+            );
+            assert!(
+                !has_object_input || ALLOWED_OBJECT_CONSUMERS.contains(&factory.type_id),
+                "{} declares an Object input but isn't in ALLOWED_OBJECT_CONSUMERS \
+                 — a second Object consumer is a design escalation, not a \
+                 mechanical addition (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §8)",
+                factory.type_id,
+            );
+        }
+    }
+
+    #[test]
+    fn scene_object_itself_takes_no_object_input() {
+        // Restates the invariant at the single known producer, so a
+        // regression here fails loudly and specifically instead of only
+        // showing up as a generic registry-walk failure.
+        let node = crate::node_graph::primitives::SceneObjectNode::new();
+        assert!(
+            !crate::node_graph::EffectNode::inputs(&node)
+                .iter()
+                .any(|i| i.ty == PortType::Object),
+            "node.scene_object must not take an Object input — Object wires never chain"
+        );
     }
 }

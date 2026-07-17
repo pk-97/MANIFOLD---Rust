@@ -238,6 +238,7 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::Material => "Material".into(),
         PortType::Transform => "Transform".into(),
         PortType::Atmosphere => "Atmosphere".into(),
+        PortType::Object => "Object".into(),
     }
 }
 

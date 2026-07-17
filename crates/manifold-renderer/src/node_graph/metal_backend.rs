@@ -166,6 +166,10 @@ pub struct MetalBackend {
     /// Same shape as `transforms` — drained after `node.atmosphere`'s
     /// `evaluate`.
     atmospheres: AHashMap<Slot, crate::node_graph::atmosphere::Atmosphere>,
+    /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
+    /// Same shape as `atmospheres` — drained after `node.scene_object`'s
+    /// `evaluate`.
+    objects: AHashMap<Slot, crate::node_graph::scene_object::SceneObject>,
 }
 
 // Safety: `MetalBackend` is only ever used on the content thread; the
@@ -206,6 +210,7 @@ impl MetalBackend {
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
+            objects: AHashMap::default(),
         }
     }
 
@@ -238,6 +243,7 @@ impl MetalBackend {
             materials: AHashMap::default(),
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
+            objects: AHashMap::default(),
         }
     }
 
@@ -681,6 +687,14 @@ impl Backend for MetalBackend {
 
     fn set_atmosphere(&mut self, slot: Slot, value: crate::node_graph::atmosphere::Atmosphere) {
         self.atmospheres.insert(slot, value);
+    }
+
+    fn object(&self, slot: Slot) -> Option<crate::node_graph::scene_object::SceneObject> {
+        self.objects.get(&slot).copied()
+    }
+
+    fn set_object(&mut self, slot: Slot, value: crate::node_graph::scene_object::SceneObject) {
+        self.objects.insert(slot, value);
     }
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
