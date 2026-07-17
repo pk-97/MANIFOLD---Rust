@@ -53,7 +53,7 @@ or human can read it, and it needs no external tool.
 | BUG-096 | **camera-rotate-sliders-jump-no-degrees** | FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open) |
 | ~~BUG-207~~ FIXED | **materialless-skinned-mesh-silently-imports-static-at-node-scale** | FIXED — the default-material bucket (`nodes_by_material`'s `None` key) is now a first-class key resolved by the SAME shared functions a real material uses, so a materialless skinned/morphed/animated rig resolves its skin/morph/animation exactly like a materialed one. |
 | BUG-209 | **animated-ancestor-above-joint-tree-sampled-statically** | root motion authored on a node ABOVE a skin's joint tree is frozen at its static TRS (`joint_root_world` is static by design; the rigid path that would have carried it is correctly excluded post-BUG-205) — LOW until a real asset exhibits it |
-| BUG-210 | **add-scene-object-command-emits-pre-migration-legacy-wires** | `AddSceneObjectCommand` still emits legacy `mesh_k`/`material_k`/`transform_k` wires render_scene v2 no longer reads — added objects don't render — MED, fix shape = SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P3's own committed deliverable |
+| ~~BUG-210~~ FIXED | **add-scene-object-command-emits-pre-migration-legacy-wires** | FIXED @ 6e8b00ba — `AddSceneObjectCommand`'s `catalog_default` now binds mesh/material/transform through an inner `node.scene_object`, wired to `render_scene`'s `object_k` port. |
 | BUG-203 | **fluidsim2d-count-dims-display** | FluidSim2D: raising Particle Count dims the image instead of reading as more particles — MED |
 | BUG-201 | **interaction-overlay-automation-callback-type-complexity** | `manifold-ui --all-targets` clippy fails on 4 `type_complexity` findings in `interaction_overlay.rs`, unrelated to BUG-112 — LOW (lint-only) |
 | BUG-170 | **gltf-crate-missing-field-node-parse-failure** | five Khronos assets fail at `gltf::import()` itself with `missing field 'node'` — a crate-level JSON-shape parse gap, not an extension-support gap |
@@ -163,16 +163,6 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
-
-### BUG-210 (add-scene-object-command-emits-pre-migration-legacy-wires) — `AddSceneObjectCommand`'s `catalog_default` still emits `mesh_k`/`material_k`/`transform_k`-shaped wires into `render_scene`, which no longer reads them post-SCENE_OBJECT_AND_PANEL_V2 P2 — found 2026-07-17 landing P1+P2
-
-**Status:** OPEN — MED (objects added via the current Add-Object gesture do not render; not caught by any existing test because the add-path test only asserts the `objects` param increments, never that the added object actually draws).
-
-**Symptom:** clicking "+ Object" in the scene panel bumps `render_scene`'s `objects` count and creates a group node, but the group wires its mesh/material/transform outputs to the legacy `mesh_k`/`material_k`/`transform_k` ports — `render_scene` v2 (P2, `object_{i}`-only surface) has no such ports anymore, so the added object is invisible and casts no shadow.
-
-**Root cause:** `AddSceneObjectCommand` (`crates/manifold-editing/src/commands/graph.rs`) was not touched by P1/P2 — its `catalog_default` (the JSON template spliced in on Add) predates the Object-wire model. `RemoveSceneObjectCommand`'s mirror-image break (found by the same landing's full workspace sweep, when a concurrent lane's same-day BUG-193 fix collided with P2's port deletion) was fixed in the same landing; Add was flagged by a Fable advisor consult but deliberately left alone — it's SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P3's own committed deliverable ("`AddSceneObjectCommand`'s `catalog_default` emit scene_object-shaped objects"), not a same-session patch.
-
-**Fix shape:** exactly P3's brief — retarget `catalog_default` to splice a `node.scene_object` (or its enclosing group, matching D5's placement rule) wired to the next free `object_{i}` port, instead of the legacy triplet. No new mechanism; P3 was always going to build this.
 
 ### BUG-209 (animated-ancestor-above-joint-tree-sampled-statically) — root motion authored on a node above a skin's joint tree is frozen — promoted from BUG-205's "known remaining approximation" note, 2026-07-17
 
@@ -1090,6 +1080,16 @@ clean).
 **Fix shape:** when an `extensionsRequired` entry is in `MANIFOLD_SUPPORTED_EXTENSIONS`'s complement (i.e. the asset is going to be vetoed anyway), suppress/reorder validation errors so the extensionsRequired veto message surfaces first — or, more directly, run the extensionsRequired veto check BEFORE invoking `json::Root::Validate` at all, so an asset requiring an unsupported extension never reaches the crate's own validator to produce a confusing secondary error. Low priority (message quality only, behavior is already correct) — no khronos asset in the manifest depends on this for anything beyond this one asset.
 
 ## Fixed
+
+### BUG-210 (add-scene-object-command-emits-pre-migration-legacy-wires) — `AddSceneObjectCommand`'s `catalog_default` still emits `mesh_k`/`material_k`/`transform_k`-shaped wires into `render_scene`, which no longer reads them post-SCENE_OBJECT_AND_PANEL_V2 P2 — found 2026-07-17 landing P1+P2
+
+**Status:** FIXED @ 6e8b00ba — P3. `catalog_default`'s spliced group now binds mesh/material/transform through an inner `node.scene_object`, exposing a single `Object` interface port wired to `render_scene`'s `object_k` port; `add_scene_object_command_bumps_count_builds_group_and_undo_restores` updated to assert the new shape (5 body nodes incl. scene_object bind, single `object` interface output, `object_2` top-level wire).
+
+**Symptom:** clicking "+ Object" in the scene panel bumps `render_scene`'s `objects` count and creates a group node, but the group wires its mesh/material/transform outputs to the legacy `mesh_k`/`material_k`/`transform_k` ports — `render_scene` v2 (P2, `object_{i}`-only surface) has no such ports anymore, so the added object is invisible and casts no shadow.
+
+**Root cause:** `AddSceneObjectCommand` (`crates/manifold-editing/src/commands/graph.rs`) was not touched by P1/P2 — its `catalog_default` (the JSON template spliced in on Add) predates the Object-wire model. `RemoveSceneObjectCommand`'s mirror-image break (found by the same landing's full workspace sweep, when a concurrent lane's same-day BUG-193 fix collided with P2's port deletion) was fixed in the same landing; Add was flagged by a Fable advisor consult but deliberately left alone — it's SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P3's own committed deliverable ("`AddSceneObjectCommand`'s `catalog_default` emit scene_object-shaped objects"), not a same-session patch.
+
+**Fix shape:** exactly P3's brief — retarget `catalog_default` to splice a `node.scene_object` (or its enclosing group, matching D5's placement rule) wired to the next free `object_{i}` port, instead of the legacy triplet. No new mechanism; P3 was always going to build this.
 
 ### BUG-207 (materialless-skinned-mesh-silently-imports-static-at-node-scale) — a rigged mesh with no material renders invisible (~100× wrong-sized) with nothing in the report — found 2026-07-17 (Fable seam-hunt session; hostile-shelf probe, Blender-exported materialless rig)
 
