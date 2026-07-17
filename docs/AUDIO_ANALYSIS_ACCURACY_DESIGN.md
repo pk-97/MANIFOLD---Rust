@@ -506,3 +506,30 @@ his call; do NOT start training without it).
 Sequencing note: runs before P5/P6 by orchestrator decision — P6 (onset swap) touches the
 same drum path and should target whichever detector wins the bake-off, not the outgoing
 one.
+
+
+### B3 verdict (2026-07-18, Fable) — Stage 1 falls short; gap documented; Stage 2 is the parity path
+
+Two judged rounds (B1 `c566539a`, B2 `d55cb2f3`). Stage-1 DSP (cluster-first,
+dev-fitted signatures, real bugs fixed en route — including a wrong-input bug in the
+bake-off scorer itself) reaches, on dev dense truth, electronic slice: kick **0.311**
+vs ADTOF **0.702** · snare 0.250/0.653 (n=1) · hat **0.592 vs 0.426** (n=2, thin) ·
+perc 0.000/0.000 (n=1). Acoustic slice: kick 0.490/0.815, snare 0.492/0.774,
+hat 0.270/0.529, perc 0.256/0.553. Kick electronic < the 0.5 round-3 bar → verdict
+called without spending round 3; heldout not consumed (a dev shortfall is sufficient
+for a negative verdict; heldout spends only on ship candidates).
+
+**Rulings:** ADTOF stays, per the gate. The per-class gap table above is the
+documented shortfall Peter asked for. The hat lead (n=2) and the lever-2 finding that
+fitted profiles regress on out-of-profile timbres both point the same way: signature
+labeling needs learned representations and much more per-class data — i.e. §7.1
+Stage 2 (small CRNN, permissive-only data, demucs-separated-render domain matching),
+which now has a quantified case: it must close kick +0.39, snare +0.40, perc +0.55
+electronic. **Stage 2 requires Peter's explicit approval (compute + dataset build)
+before any training starts** — decision pending. Meanwhile P6 (onset swap) targets
+the ADTOF path as the confirmed keeper, and BUG-069's ADTOF line remains open with
+the commercialization trigger unchanged.
+
+Stage-1 assets are NOT discarded: the multi-band onset front-end (live-kick logic,
+three real bug fixes in `spectral.py` land with this), per-track clustering, and the
+E-GMD Range-fetch infrastructure all feed Stage 2 directly.

@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-07-17T15:21:40.402557+00:00",
+  "method": "nearest-centroid classifier fit from DEV truth only (supervised threshold calibration, not model training)",
+  "feature_names": [
+    "centroid_hz",
+    "flatness",
+    "low_ratio",
+    "mid_ratio",
+    "high_ratio",
+    "decay_rate_db_per_sec"
+  ],
+  "scaler_mean": [
+    3026.868177834061,
+    0.21398170065866362,
+    0.2366506393382973,
+    0.32174685692648003,
+    0.41835352028411665,
+    99.93694870868718
+  ],
+  "scaler_scale": [
+    1944.387162725134,
+    0.14403695358515264,
+    0.24853186904386224,
+    0.17073919608415597,
+    0.21965741236134415,
+    316.3319493337025
+  ],
+  "class_profile_centroids": {
+    "clap": [
+      5.388657201017946,
+      3.820587059955935,
+      -0.9500805170839302,
+      -1.681326443329936,
+      2.4876499801765366,
+      6.898519421252643
+    ],
+    "hat": [
+      0.4976440033118028,
+      0.4460690507628827,
+      -0.2805915085692606,
+      -0.3300914633225119,
+      0.5449067990992698,
+      0.1444624545208045
+    ],
+    "kick": [
+      -0.255214959093872,
+      -0.2414267291489159,
+      0.6691305486293981,
+      -0.5609347891049721,
+      -0.4424648920369475,
+      -0.2557117173384677
+    ],
+    "perc": [
+      -0.4189709093495642,
+      -0.4147233131944903,
+      0.27556488923402317,
+      0.18068285663443617,
+      -0.39428101504753976,
+      -0.0396385896870739
+    ],
+    "snare": [
+      0.28353491179642887,
+      0.38943864826324853,
+      -0.6975664974258292,
+      0.6362907512561901,
+      0.279926961984556,
+      -0.07365522398023484
+    ],
+    "tom": [
+      -1.460167113898466,
+      -1.4784338801346506,
+      0.6141191467042827,
+      1.6822270903696124,
+      -1.9005425053043385,
+      0.06593381026258982
+    ]
+  },
+  "n_examples_per_class": {
+    "clap": 16,
+    "hat": 3570,
+    "kick": 1242,
+    "perc": 4774,
+    "snare": 1623,
+    "tom": 4
+  },
+  "n_examples_total": 11229,
+  "sources": {
+    "self_render_edm_kit_128bpm": "kick/snare/clap/hat/tom -- clean, non-colliding truth",
+    "babyslakh_dev": "kick/snare/hat/perc via GM_TO_CLASS, isolated is_drum stem audio, up to 8 tracks",
+    "egmd_dev": "kick/snare/hat/perc via GM_TO_CLASS, isolated by construction",
+    "manifold_own_kick_fixtures": "kick only, isolated drums.wav Ableton stem"
+  },
+  "excluded": {
+    "self_render_kick_hat_128bpm": "kick+hat collide at the exact same onset instant on every downbeat -- contaminated, not a clean signature"
+  }
+}
