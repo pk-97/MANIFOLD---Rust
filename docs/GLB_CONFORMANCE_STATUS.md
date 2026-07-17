@@ -4,7 +4,7 @@
 
 Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certification): every glTF-Sample-Assets asset at the pinned Khronos commit, classified `expect_pass` (numeric checks + a regression-pinning golden) or `xfail:<reason>` (a named deferred item, phase, or BUG-NNN) — no third state.
 
-**148 assets total — 134 expect_pass, 14 xfail across 7 reasons, 0 unclassified.**
+**148 assets total — 135 expect_pass, 13 xfail across 6 reasons, 0 unclassified.**
 
 ## expect_pass
 
@@ -110,6 +110,7 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 | `SheenChair.glb` | non_black_fraction_min |
 | `SheenCloth/SheenCloth.gltf` | non_black_fraction_min, golden |
 | `SheenTestGrid.glb` | non_black_fraction_min, golden |
+| `SheenWoodLeatherSofa.glb` | non_black_fraction_min |
 | `SimpleInstancing.glb` | non_black_fraction_min, golden |
 | `SimpleMaterial/SimpleMaterial.gltf` | non_black_fraction_min, golden |
 | `SimpleMeshes/SimpleMeshes.gltf` | non_black_fraction_min, golden |
@@ -168,12 +169,6 @@ Certification record for GLB_CONFORMANCE_DESIGN.md G-P7 (burn-down and certifica
 **Gap:** 10,000 materials exceeds OBJECT_SAFETY_MAX by design (D4) — not a defect
 
 - `NodePerformanceTest.glb`
-
-### `xfail:BUG-186` — 1 asset(s)
-
-**Gap:** EXT_texture_webp is extensionsRequired and unsupported (no webp decoder) — correctly rejected, but the crate's raw textures[].source validation error surfaces instead of our own clean extensionsRequired veto message
-
-- `SheenWoodLeatherSofa.glb`
 
 ### `xfail:BUG-187` — 1 asset(s)
 

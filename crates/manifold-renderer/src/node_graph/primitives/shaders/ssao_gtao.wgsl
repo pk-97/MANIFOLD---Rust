@@ -9,16 +9,14 @@
 struct Uniforms {
     radius: f32,
     intensity: f32,
+    slices: f32,
+    steps: f32,
     fov_y: f32,
     near: f32,
     far: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
 }
 
-const GTAO_SLICES: u32 = 2u;
-const GTAO_STEPS: u32 = 4u;
 const GTAO_HALF_PI: f32 = 1.5707963267948966;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -91,9 +89,12 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let rot = hash_angle(vec2<f32>(c));
 
+    let n_slices = max(1u, u32(gtao_round(u.slices)));
+    let n_steps = max(1u, u32(gtao_round(u.steps)));
+
     var visibility_sum = 0.0;
-    for (var s: u32 = 0u; s < GTAO_SLICES; s = s + 1u) {
-        let phi = rot * 0.5 + f32(s) * GTAO_HALF_PI;
+    for (var s: u32 = 0u; s < n_slices; s = s + 1u) {
+        let phi = rot * 0.5 + f32(s) * (2.0 * GTAO_HALF_PI / f32(n_slices));
         let dir2 = vec2<f32>(cos(phi), sin(phi));
         let dir3 = vec3<f32>(dir2, 0.0);
 
@@ -116,8 +117,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         var hcos_minus = -1.0;
         var hcos_plus = -1.0;
-        for (var j: u32 = 0u; j < GTAO_STEPS; j = j + 1u) {
-            let r_j = radius_px * (f32(j) + 1.0) / f32(GTAO_STEPS);
+        for (var j: u32 = 0u; j < n_steps; j = j + 1u) {
+            let r_j = radius_px * (f32(j) + 1.0) / f32(n_steps);
 
             let off_plus = vec2<i32>(vec2<f32>(gtao_round(dir2.x * r_j), gtao_round(dir2.y * r_j)));
             let c_plus = clamp(c + off_plus, vec2<i32>(0, 0), dims_i - vec2<i32>(1, 1));
@@ -147,7 +148,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         visibility_sum = visibility_sum + proj_len * arc;
     }
 
-    let visibility = clamp(visibility_sum / f32(GTAO_SLICES), 0.0, 1.0);
+    let visibility = clamp(visibility_sum / f32(n_slices), 0.0, 1.0);
     let ao = clamp(1.0 - u.intensity * (1.0 - visibility), 0.0, 1.0);
     textureStore(output_tex, c, vec4<f32>(ao, ao, ao, 1.0));
 }
