@@ -218,3 +218,52 @@ fn bug219_interactive_import_sequential_pressure() {
          instead of this line printing is itself the repro (re-run under `lldb`/`sample` to confirm)."
     );
 }
+
+/// IMPORT_RESPONSIVENESS_DESIGN.md P2 measurement: the sibling test above
+/// (`headless_application`, `Application::new()` untouched) always has
+/// `gpu: None` because `resumed()` never runs headless — so it can only
+/// exercise D2's *lazy-fallback* branch (`validation_gpu_device`'s `None`
+/// arm), never the branch that matters for the real running app: sharing
+/// the UI-side device that already exists by the time a user can drop a
+/// file (`resumed()` runs before the window can receive a drop). D2/P2
+/// eliminated `GpuDevice::new()` from `app_lifecycle.rs` entirely — this
+/// test seeds `Application.gpu` with a real `GpuContext` (its `new()` only
+/// builds a `GpuDevice`, no window/surface needed, so this is reachable
+/// headless) to measure that branch directly: with a device already
+/// resident, validation should add ZERO new devices across all 3 imports,
+/// unlike the pre-P2 code which built one throwaway `GpuDevice` PER import
+/// on top of whatever device already existed.
+#[test]
+#[ignore = "loads a real 43MB GLB through the real GPU-resident interactive import path up to 3x per run — deliberate-run only, probing a crash/OOM bug (IMPORT_RESPONSIVENESS_DESIGN P1/P2); never in the default sweep or CI"]
+fn bug219_interactive_import_with_existing_gpu_context_reuses_device() {
+    let path = fixture_path();
+    assert!(
+        path.exists(),
+        "fixture missing at {path:?} — repo-root-relative resolution broke"
+    );
+
+    let stop_bg = spawn_background_content_thread();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let mut app = headless_application();
+    // Seed `self.gpu` the way `resumed()` would have by the time a real
+    // window can receive a drop — this is the case D2/P2 optimizes for.
+    app.gpu = Some(manifold_renderer::gpu::GpuContext::new());
+    log_rss("before any import (gpu context pre-populated)");
+
+    for i in 1..=3u32 {
+        eprintln!("[BUG-219 P2] --- import attempt {i}/3 (shared-device case) ---");
+        log_rss(&format!("before import {i}"));
+        let started = std::time::Instant::now();
+        app.import_model_file(&path, 0.0, None);
+        let elapsed = started.elapsed();
+        eprintln!("[BUG-219 P2] import {i} wall-clock: {elapsed:?}");
+        log_rss(&format!("after import {i}"));
+    }
+
+    stop_bg.store(true, Ordering::Relaxed);
+    eprintln!(
+        "[BUG-219 P2] all 3 imports completed against a pre-existing GPU context — \
+         no per-import device allocation should show up as a step change in RSS."
+    );
+}

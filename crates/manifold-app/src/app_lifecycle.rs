@@ -662,8 +662,12 @@ impl Application {
         // above) rather than let a malformed def surface later as wrong pixels
         // or a load failure far from the cause. Never a silent partial
         // import — errors here are fatal to the drop, not warnings.
+        // IMPORT_RESPONSIVENESS_DESIGN.md D2/P2: never a fresh `GpuDevice`
+        // per import — reuse the app's real UI-side device, or the process's
+        // one lazily-created fallback if `resumed()` hasn't run yet. See
+        // `Application::validation_gpu_device`'s doc comment.
+        let validation_device = self.validation_gpu_device();
         let validation_registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-        let validation_device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
         let validation = manifold_renderer::node_graph::validate_def(
             &graph,
             &validation_registry,
