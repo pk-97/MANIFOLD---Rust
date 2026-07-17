@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-216 | **feedback-loop-into-final-output-freezes-at-depth-one** | wiring a feedback loop's blend straight to `system.final_output` silently freezes the loop at one frame of history (swap refused on the borrowed boundary slot, no copy fallback) + per-frame stderr spam — MED |
+| BUG-217 | **non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources** | Max/Add feedback trails over an alpha-0-background source accumulate RGB but inherit the source's alpha, so the display culls them; `set_alpha` before the blend is the idiom — LOW |
 | ~~BUG-215~~ FIXED | **conformance-sweep-panics-on-duplicate-mat-0-handle** | FIXED — a glTF material authored `"mat_N"` (e.g. `MetalRoughSpheresNoTextures.glb`, 98 such materials) collided with that object's own `mat_{k}` inner-node handle once SCENE_OBJECT_AND_PANEL_V2 P3 started stamping the group + scene_object with the material's raw name, panicking `Graph::add_node_named` on duplicate handle `"mat_0/mat_0"` — reddened the conformance sweep; independently hit by W1, W5, and W6, fixed by W5. |
 | BUG-214 | **ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist** | `EXT_mesh_gpu_instancing` is fully implemented (`gltf_load.rs:278-394`) but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — an asset marking it `extensionsRequired` would be falsely rejected as unsupported — LOW (latent, not yet observed on a real asset), found 2026-07-17 during IMPORT_ANYTHING_WAVE Lane W6's extension roadmap audit |
 | BUG-213 | **no-report-line-for-unimplemented-optional-material-extensions** | MANIFOLD never calls `document.extensions_used()`, so any *optional* (not `extensionsRequired`) extension we don't implement — `KHR_materials_diffuse_transmission` today, any future one tomorrow — silently degrades to plain PBR with no report line, violating the "never wrong, never silent" import bar — MED, found 2026-07-17 during IMPORT_ANYTHING_WAVE Lane W6's extension roadmap audit |
@@ -169,6 +171,25 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-216 (feedback-loop-into-final-output-freezes-at-depth-one) — a `node.feedback` loop whose blend output feeds `system.final_output` directly silently degrades to a one-frame loop with per-frame stderr spam — found 2026-07-17 during the depth-relight look probe (headless `PresetRuntime` path)
+
+**Status:** OPEN — MED (a user who wires their feedback loop's output straight to the graph's output node — the natural wiring — gets no trails at all, plus "[graph error] … texture swap out<->in failed" once per frame; the loop works only if some other node sits between the blend and the boundary).
+
+**Symptom:** author a standard feedback graph (`mix → feedback → transform → … → mix`, mix out → `final_output`). Trails never accumulate — every frame shows only the current source — and stderr prints `texture swap out<->in failed (unbound or shadowed slot) — feedback state did NOT advance this frame` per frame.
+
+**Root cause (observed headless, in-app chain path unverified):** the boundary output's resource is pre-bound as a borrowed target (`pre_bind_texture_2d`); when the loop's capture source shares that resource, `MetalBackend::swap_texture_2d` (`crates/manifold-renderer/src/node_graph/metal_backend.rs:624`) refuses the ping-pong because a borrowed shadow is present. Its comment says "caller falls back to copies", but the executor's `late_capture` (`crates/manifold-renderer/src/node_graph/execution.rs:1689`) has no copy fallback — it prints the error and drops the frame's capture, freezing the loop at depth 1.
+
+**Fix shape:** implement the promised fallback — when the swap refuses, land the capture via the existing format-bridge copy path (one dispatch, same as the dims-mismatch mode in `temporal.rs`) instead of skipping; alternatively (or additionally) have the compile step insert an implicit pass-through buffer between a state-capture input's producer and a boundary output so the shared-resource case can't arise. Repro artifact: `ProbeTapFeedback.json` variant from the 2026-07-17 depth-relight probe session (any minimal feedback preset wired loop→final_output reproduces).
+
+### BUG-217 (non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources) — BUG-181's "non-Lerp blends pass `a`'s alpha" makes feedback trails invisible whenever the source has a transparent background — found 2026-07-17 during the depth-relight look probe
+
+**Status:** OPEN — LOW (generator-authoring trap, deterministic workaround: force the source opaque with `node.set_alpha` before the blend).
+
+**Symptom:** a Max/Add feedback blend over a generator source with alpha-0 background (any SDF shape on transparent black) accumulates trails in RGB but every trail pixel outside the current source's alpha footprint carries alpha 0, so the display path culls them — the preset renders as if feedback were off.
+
+**Root cause:** deliberate BUG-181 contract — non-Lerp `node.mix` modes are RGB-only and pass `a`'s alpha through so an AO map's alpha=1 can't overwrite a display chain's real alpha. Correct for masks; for feedback accumulation it means the blend's alpha never widens to cover the trail RGB it just wrote.
+
+**Fix shape:** don't revert BUG-181. Either an explicit `alpha` mode enum on `node.mix` (PassA / Lerp / Max) so accumulation graphs can opt into alpha-max, or document the `set_alpha`-before-blend idiom in the mix atom's `composition_notes` and the feedback atom's notes (cheapest; the probe proved the idiom works). Decide when the depth-relight infra design lands, since that's the first consumer that hit it.
 ### BUG-214 (ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist) — `EXT_mesh_gpu_instancing` is fully implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
 
 **Status:** OPEN — LOW (latent; no local or real-world asset has yet marked this extension `extensionsRequired`, so the false-reject has not actually fired).
@@ -1096,6 +1117,8 @@ clean).
 
 **Still open — not attempted this session (out of Lane W5's scope, which targeted decode-path instrumentation only):** (b) the log line still isn't surfaced anywhere in the running app's UI — a decode error is invisible without a terminal/log file open, so an unsupported file is still indistinguishable from "HDRI does nothing" to a user at the rig. This needs a card-level error state (a small UI feature, not a log-line change) — no such per-node error-surface mechanism exists yet anywhere in the graph editor to hook into (checked: `node.gltf_texture_source` has the identical `log::error!`-only gap). (c) `hdri_file` is still a bare text field with no file picker (`GenStringParamClicked` → text input only).
 
+## Fixed
+
 ### BUG-185 (e6-texture-completion-invalidates-two-stale-goldens) — `CompareSpecular.glb` and `CompareVolume.glb` genuinely regress in `glb_conformance_sweep` after E6's texture-completion sweep wires `specularTexture`/`specularColorTexture`/`thicknessTexture` for the first time — expected consequence of fixing the gap, not a shading bug
 **Status:** FIXED with BUG-211's landing (2026-07-17) — the visual-confirmation call this entry was waiting on was made by eyeballing both renders: CompareSpecular's golden re-baselined (glossy spheres correct), CompareVolume's `region_green_minus_red_above` region moved from the bowl's upper interior (legitimately thin/clear once E6 honored `thicknessTexture`) to the thick lower interior where the Beer-Lambert tint lives (measured G-R 10.13; floor 8 → 6 for margin, ~0 with volume off). Manifest note carries the same rationale.
 
@@ -1107,8 +1130,6 @@ clean).
 - Also found and FIXED in the same session (not the cause of either failure above, but adjacent and real): `wire_map_texture`'s `map_tex_cache` was keyed by `tex_index` ALONE (`gltf_import.rs`) — safe for the base five maps (any shared index always wants the same decode, e.g. ORM) but wrong once one extension family (KHR_materials_specular here) legally reuses the SAME image index under TWO DIFFERENT decodes (linear-alpha vs sRGB-rgb). Fixed by keying on `(tex_index, color_space, channel_mode)`.
 
 **Fix shape:** this is a re-baselining call, not a code fix — visually confirm the NEW renders are correct (they read as spec-compliant per the diagnosis above), then regenerate `tests/fixtures/gltf/goldens/compare_specular.png` and move `CompareVolume.glb`'s region (to a thicker part of the bowl) or its G-R floor to match the texture-aware rendering, same discipline as every prior family's Compare-asset re-certification in this design doc. Whoever lands E6 next should do this as the final "certification" step E6's own brief describes (manifest re-classification + status-doc arithmetic) — flagging per CLAUDE.md's "bug found but not fixed this session" rule.
-
-## Fixed
 
 ### BUG-215 (conformance-sweep-panics-on-duplicate-mat-0-handle) — a glTF material named like its own inner handle (`"mat_0"`) panics `Graph::add_node_named` on duplicate handle — found 2026-07-17 during IMPORT_ANYTHING_WAVE Lane W6's landing gate, independently rediscovered and fixed by Lane W5
 
