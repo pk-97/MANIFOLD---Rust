@@ -1,0 +1,92 @@
+# Allowlist manifest for the Audio Event Classifier trainer
+# (docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md D6/§4). train/dataset.py builds its
+# corpus ONLY from the sources listed here -- every entry names its own
+# license, and eval/tests/test_train_license_allowlist.py asserts that
+# every license is in the allowed set and that no entry (or any file in
+# train/) references a banned dataset by name.
+#
+# Allowed licenses: "CC-BY", "CC0", "ours". Per D6, this file and every
+# train/*.py module must never reference any of the research-only/
+# non-commercial corpora or non-consensual-license model outputs named in
+# the design doc's licensing constraints (§1, D6) -- none of the four
+# sources below touch any of them, and the license test's own banned-name
+# regex is deliberately not repeated here, so this comment can't trip it.
+#
+# Split discipline: every loader below reads only the dev-side rows each
+# upstream module already exposes (eval.sweep_p4's own dev-only liveshow
+# filter, eval.egmd_drum_truth's own split="dev" parameter) -- the two
+# liveshow songs and the E-GMD rows reserved for the ship-candidate read are
+# never named or read here. See eval/tests/test_train_license_allowlist.py's
+# forbidden-reference gate for the enforced form of this rule.
+
+[[source]]
+id = "liveshow_dev"
+license = "ours"
+loader = "liveshow_dev"
+classes = ["kick", "snare", "hat", "synth", "vocal", "other"]
+path = "eval/liveshow_labels/onset_truth.json (dense-in-window truth) + DATA_ROOT/liveshow_song_slices/<id>.wav (MASTER slices, not the _drums stems)"
+description = """
+Peter's own live-show masters. Dense-in-window truth (kick/snare/hat/synth/
+vocal) read from onset_truth.json, restricted to each dev song's own
+beat_range. `bass_sustained` truth exists in the same file but is NOT read
+as its own class -- D3 rules sustained bodies out of scope for this
+classifier (region material, the tracker's job); an onset that happens to
+coincide with one is left to fall into `other` (or `synth`) on its own
+merits, exactly as D3 anticipates. `other`-class patches are mined from
+Stage-1 DSP front-end onsets (manifold_audio.stage1_dsp_detection.detect_onsets)
+that land inside SOME class's active passage but no closer than 50ms to any
+truth onset of any class -- real, unlabeled detections, not label noise.
+Measured 2026-07-18: on the 5 dev songs, `synth` and `vocal` truth support
+is nil (all liveshow synth/vocal truth in this project sits in the two
+songs reserved for the ship-candidate read) -- reported honestly in the
+support table, not patched around here.
+"""
+
+[[source]]
+id = "egmd_dev"
+license = "CC-BY"
+loader = "egmd_dev"
+classes = ["kick", "snare", "hat", "perc"]
+path = "DATA_ROOT/egmd (E-GMD v1.0.0, CC BY 4.0, fetched by eval/fetch/egmd.py; truth via eval/egmd_drum_truth.py's GM_TO_CLASS 4-class map)"
+description = """
+Isolated acoustic/electronic drum-kit recordings (59 dev performances) with
+aligned MIDI truth. E-GMD audio has no backing material of its own, so
+every hit is composited (train/dataset.py's own compose helper -- a minimal
+P1 stand-in; the full compositing module is P3's compose.py) over a
+randomly-gained, randomly-offset backing bed built from self_render's
+non-drum wavs (arp_16th_128bpm, sustained_pad_100bpm) before mel-patch
+extraction, so the classifier sees drum hits inside a mix rather than
+studio-isolated one-shots -- closer to D1's target domain (raw single-track
+masters). Onset side-features are extracted from the raw (uncomposited)
+E-GMD audio, not the composite -- full-track compositing (needed to compute
+those features correctly against a composited timeline) is P3 scope.
+"""
+
+[[source]]
+id = "manifold_own_kick"
+license = "ours"
+loader = "manifold_own_kick"
+classes = ["kick"]
+path = "tests/fixtures/audio/<id>/mix.wav + tests/fixtures/audio_labels/<id>.csv (mix_time_s column)"
+description = """
+5 hand-verified kick-onset tracks, Peter's own masters (mix.wav, the same
+domain sweep_p4's manifold_own kick arm scores against), 73 labeled kicks
+total across apricots_128bpm / bad_guy_128bpm / feel_the_vibration_174bpm /
+inhale_exhale_145bpm / tears_140bpm.
+"""
+
+[[source]]
+id = "self_render"
+license = "ours"
+loader = "self_render"
+classes = ["kick", "snare", "hat", "perc", "synth"]
+path = "DATA_ROOT/self_render (agent-composed MIDI, synth-rendered; eval/fetch/self_render.py)"
+description = """
+Exact-truth synthetic fixtures: kick_hat_128bpm.wav (kick/hat, GM pitches
+36/42), edm_kit_128bpm.wav (kick/snare/hat/perc via GM pitches
+36/38/42/45 -- pitch 39/clap is dropped, it has no D3 class of its own and
+folding it into any existing class would mis-teach that class's boundary),
+arp_16th_128bpm.wav (synth, every 16th note is its own labeled onset). Also
+supplies the non-drum backing-bed material (arp_16th_128bpm,
+sustained_pad_100bpm) used to composite egmd_dev's isolated hits.
+"""

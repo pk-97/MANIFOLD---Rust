@@ -237,3 +237,10 @@ JSON artifact — L2. Live-rig integration is Deferred, not this phase.
   classifier. Trigger: AUDIO_OBJECT_TRACKING ingest work resuming.
 - **Expanded E-GMD fetch** (more than 63 performances). Trigger: P3 underfitting
   finding naming acoustic-drum data as the gap.
+- **`vocal` class (added at P1, 2026-07-18).** P1 found ALL 27 vocal truth
+  labels live in the two heldout songs — zero permitted vocal training data
+  exists (heldout discipline honored). v1 trains 6 classes (D3 minus vocal);
+  vocal onsets fall to `synth`/`other` on their own merits. Trigger to revive:
+  dev-side vocal labels (Peter labels vocal moments in dev songs, or a
+  Peter-owned acapella source enters sources.toml). Surfaced at the P2
+  checkpoint for Peter's confirmation.
