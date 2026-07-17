@@ -65,6 +65,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from eval.paths import DATA_ROOT
 from eval import metrics
 from eval.run import AUDIO_ANALYSIS_ROOT, REPO_ROOT, _load_kick_truth_csv, _resolve_path, load_fixtures
 
@@ -353,7 +354,7 @@ def run_baseline_beat_downbeat_liveshow() -> Dict[str, Any]:
     from eval.beat_scoring import LIVESHOW_SONG_FIXTURES, build_song_fixture, load_tempo_points, run_beat_tracker_on_fixture, score_fixture
 
     tempo_points = load_tempo_points()
-    out_dir = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "liveshow_song_slices"
+    out_dir = DATA_ROOT / "liveshow_song_slices"
     rows = []
     for fx in LIVESHOW_SONG_FIXTURES:
         try:
@@ -524,11 +525,11 @@ def build_full_pack_baseline(fixtures_path: Path, max_babyslakh_tracks: Optional
         if babyslakh_fixture else []
     )
 
-    self_render_dir = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "self_render"
+    self_render_dir = DATA_ROOT / "self_render"
     print("[full_pack_baseline] basic_pitch on self-render generator fixtures ...", file=sys.stderr)
     report["basic_pitch_self_render"] = run_baseline_basic_pitch_self_render(self_render_dir)
 
-    maestro_dir = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "maestro_v3"
+    maestro_dir = DATA_ROOT / "maestro_v3"
     print("[full_pack_baseline] basic_pitch on MAESTRO v3 selection ...", file=sys.stderr)
     report["basic_pitch_maestro"] = run_baseline_basic_pitch_maestro(maestro_dir, max_maestro_tracks)
 
@@ -542,8 +543,8 @@ def build_full_pack_baseline(fixtures_path: Path, max_babyslakh_tracks: Optional
     print("[full_pack_baseline] beat/downbeat/tempo (Beat This) on liveshow corpus ...", file=sys.stderr)
     report["beat_downbeat_liveshow"] = run_baseline_beat_downbeat_liveshow()
 
-    harmonix_annotations = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "harmonixset" / "dataset"
-    harmonix_audio = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "harmonixset_audio"
+    harmonix_annotations = DATA_ROOT / "harmonixset" / "dataset"
+    harmonix_audio = DATA_ROOT / "harmonixset_audio"
     print("[full_pack_baseline] beat/downbeat/tempo (Beat This) on Harmonix electronic-slice sample ...", file=sys.stderr)
     report["beat_downbeat_harmonix_electronic_sample"] = run_baseline_beat_downbeat_harmonix(
         harmonix_annotations, harmonix_audio, max_harmonix_tracks

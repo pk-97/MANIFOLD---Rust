@@ -533,3 +533,22 @@ the commercialization trigger unchanged.
 Stage-1 assets are NOT discarded: the multi-band onset front-end (live-kick logic,
 three real bug fixes in `spectral.py` land with this), per-track clustering, and the
 E-GMD Range-fetch infrastructure all feed Stage 2 directly.
+
+### B3 kick-line re-read (2026-07-18, post-BUG-241 + threshold tuning, Fable)
+
+Scoreboard re-run (75-track dev corpus, eval/scoreboard/bakeoff_b1_stage1.json;
+same harness, ADTOF electronic kick unchanged at 0.702 = slices comparable; Slakh
+trickle tracks absent this run, babyslakh now complete). Electronic slice, Stage-1
+vs ADTOF: kick **0.493** vs 0.702 (was 0.311 — BUG-241 had overstated the gap by
+~0.18), snare 0.364 vs 0.653 (n=1, was 0.250), hat **0.000** vs 0.426 (n=2, was
+0.592 — the one class Stage 1 led REGRESSED to zero: the tuned front-end's extra
+quiet onsets shift per-track cluster composition and hats now label away; next
+tuning target if Stage-1 iteration continues), perc 1.000 vs 0.000 (n=1, degenerate
+small-n, don't read). Non-electronic ("other": E-GMD + babyslakh): kick 0.472 vs
+0.809, snare 0.398 vs 0.776, hat 0.261 vs 0.514, perc 0.218 vs 0.557.
+
+**Verdict unchanged:** kick electronic 0.493 still misses the 0.5 round-3 bar
+(barely) and every class still trails ADTOF on dense truth. The Stage-2 case
+tightens: required electronic closes are now kick +0.21, snare +0.29, hat +0.43.
+Eval data now lives in the shared main-checkout store (eval/paths.py) — re-runs
+need no re-download.
