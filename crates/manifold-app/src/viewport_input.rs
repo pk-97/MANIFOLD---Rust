@@ -10,15 +10,17 @@
 //! convention in `window_input.rs`. That keeps this module unit-testable
 //! without constructing winit types, and keeps the classification logic (the
 //! actual design decision — "what does a left-drag mean here") separate from
-//! the event-plumbing that will call it once the viewport panel exists.
+//! the event-plumbing that calls it (`window_input.rs`).
 //!
-//! **Wiring status (2026-07-17, P5b):** this module is the input→camera
-//! mapping layer, complete and unit-tested. It is not yet called from
-//! `window_input.rs` — that requires a live viewport panel (dock rect, open/
-//! close lifecycle, `ViewportSession` held on `Application`, and a texture
-//! presentation path) which is out of scope for this session; see the P5c
-//! brief in `docs/REALTIME_3D_DESIGN.md`. `apply` is the single call site a
-//! panel's mouse-move/mouse-wheel handlers will make once that panel exists.
+//! **Wiring status (2026-07-17, P5c):** wired into `window_input.rs` — a
+//! press inside the docked viewport rect (`editor_mouse_input`) arms a drag
+//! that `editor_cursor_moved` feeds through [`classify_mouse_drag`]/[`apply`]
+//! each move, and `editor_mouse_wheel` feeds scroll deltas over the rect
+//! through [`classify_scroll`]/[`classify_trackpad_pan`]/
+//! [`classify_trackpad_pinch_dolly`] (a `LineDelta` is a physical wheel
+//! notch → dolly; a Ctrl-held `PixelDelta` is a trackpad pinch, translated by
+//! the OS into a Ctrl-modified scroll absent a native magnify-gesture
+//! handler; a bare `PixelDelta` is a two-finger trackpad pan).
 
 use manifold_renderer::node_graph::ViewportSession;
 use winit::event::MouseButton;
@@ -29,13 +31,6 @@ use winit::event::MouseButton;
 /// get separate constants because the two devices report deltas at
 /// different natural magnitudes (trackpad two-finger gestures are gentler
 /// than a mouse drag for the same felt motion).
-// Un-suppress when the P5c viewport panel wires `apply` into
-// `window_input.rs`'s mouse-move/mouse-wheel handlers (docs/REALTIME_3D_DESIGN.md
-// P5 as-built note names this exact follow-up: "winit mouse/trackpad events
-// → ViewportCamera → re-render, docked into the graph editor"). This module
-// is the input→camera mapping layer that follow-up plugs in; it has no
-// production call site yet, only the unit tests below exercising it.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ViewportInputSensitivity {
     pub orbit: f32,
@@ -69,8 +64,6 @@ impl Default for ViewportInputSensitivity {
 /// `None` means "this input isn't a viewport navigation gesture" (e.g. a
 /// right-click, or a button the viewport doesn't bind) — the caller falls
 /// through to whatever it would otherwise do with the event.
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewportGesture {
     Orbit { dx: f32, dy: f32 },
@@ -85,8 +78,6 @@ pub enum ViewportGesture {
 /// button (right, forward/back) isn't a viewport gesture — `None`, so the
 /// caller's existing right-click handling (context menus etc.) is
 /// untouched.
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 pub fn classify_mouse_drag(button: MouseButton, shift_held: bool, dx: f32, dy: f32) -> Option<ViewportGesture> {
     match button {
         MouseButton::Left if shift_held => Some(ViewportGesture::Pan { dx, dy }),
@@ -99,8 +90,6 @@ pub fn classify_mouse_drag(button: MouseButton, shift_held: bool, dx: f32, dy: f
 /// Classify a scroll-wheel delta (already normalized to the app's line-delta
 /// convention, same units `window_input.rs::normalize_scroll_delta` already
 /// produces for the canvas-zoom path) into a dolly gesture.
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 pub fn classify_scroll(dy: f32) -> ViewportGesture {
     ViewportGesture::Dolly { delta: dy }
 }
@@ -108,15 +97,11 @@ pub fn classify_scroll(dy: f32) -> ViewportGesture {
 /// Two-finger trackpad pan gesture (distinct from a mouse middle-drag: same
 /// underlying `ViewportCamera::pan` math, different sensitivity constant —
 /// see `ViewportInputSensitivity`).
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 pub fn classify_trackpad_pan(dx: f32, dy: f32) -> ViewportGesture {
     ViewportGesture::TrackpadPan { dx, dy }
 }
 
 /// Trackpad pinch-to-zoom gesture.
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 pub fn classify_trackpad_pinch_dolly(delta: f32) -> ViewportGesture {
     ViewportGesture::TrackpadPinchDolly { delta }
 }
@@ -126,8 +111,6 @@ pub fn classify_trackpad_pinch_dolly(delta: f32) -> ViewportGesture {
 /// matching `ViewportSession` method (which itself marks the session dirty
 /// via a cheap `Graph::set_param`, never a rebuild — see
 /// `viewport_session.rs`).
-// Un-suppresses with the P5c panel wiring (see module docs above).
-#[allow(dead_code)]
 pub fn apply(session: &mut ViewportSession, gesture: ViewportGesture, sens: &ViewportInputSensitivity) {
     match gesture {
         ViewportGesture::Orbit { dx, dy } => session.orbit(dx, dy, sens.orbit),
