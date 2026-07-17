@@ -38,4 +38,5 @@ mod render_scene_pcss;
 mod render_scene_shadow_cache;
 mod render_scene_shadows;
 mod scene_object_migration_round_trip;
+mod scene_viewport_navigate;
 mod smoke;
