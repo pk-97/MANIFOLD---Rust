@@ -2654,6 +2654,197 @@ impl Command for RemoveSceneLightCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Duplicate Scene Object / Rename Scene Object / Rename Light
+// (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D11 / D6, P3)
+// ---------------------------------------------------------------------------
+
+/// The highest node `id` anywhere in `nodes`, recursively including every
+/// nested group body — ids are unique across the WHOLE document (same fact
+/// `scene_object_migration.rs`'s `max_node_id_recursive` documents), so a
+/// fresh mint must clear every scope's max, not just the scope being minted
+/// into. `0` (not `u32::MAX`) for an empty tree — callers add 1 to get the
+/// next free id, matching every other fresh-id convention in this module.
+fn max_node_id_over(nodes: &[EffectGraphNode]) -> u32 {
+    nodes
+        .iter()
+        .map(|n| {
+            let inner = n.group.as_ref().map(|g| max_node_id_over(&g.nodes)).unwrap_or(0);
+            n.id.max(inner)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Deep-clone `src` (and, recursively, its ENTIRE `group` subtree when it has
+/// one) with a FRESH doc `id` and a FRESH stable [`NodeId`] on every node —
+/// D11: "bindings are identity, never cloned; fresh NodeIds make cloned
+/// bindings dangle by construction" (a stale NodeId on the clone would let a
+/// card binding silently double-drive both the original and the copy).
+/// Internal wires are re-pointed onto the fresh ids. `exposed_params` is
+/// cleared on every cloned node — D11: card exposes are a deliberate act,
+/// never carried by a duplicate. `next_id` is threaded through so nested
+/// clones (a duplicated object's inner mesh/material/transform/scene_object
+/// nodes) each get their own fresh id, ascending.
+fn deep_clone_with_fresh_ids(src: &EffectGraphNode, next_id: &mut u32) -> EffectGraphNode {
+    let mut node = src.clone();
+    node.id = *next_id;
+    *next_id += 1;
+    node.node_id = NodeId::new(manifold_core::short_id());
+    node.exposed_params = Default::default();
+    if let Some(group) = node.group.as_deref_mut() {
+        let mut id_map: Vec<(u32, u32)> = Vec::with_capacity(group.nodes.len());
+        let mut new_nodes = Vec::with_capacity(group.nodes.len());
+        for n in &group.nodes {
+            let old_id = n.id;
+            let cloned = deep_clone_with_fresh_ids(n, next_id);
+            id_map.push((old_id, cloned.id));
+            new_nodes.push(cloned);
+        }
+        let remap = |id: u32| id_map.iter().find(|(o, _)| *o == id).map(|(_, n)| *n).unwrap_or(id);
+        let new_wires: Vec<EffectGraphWire> = group
+            .wires
+            .iter()
+            .map(|w| EffectGraphWire {
+                from_node: remap(w.from_node),
+                from_port: w.from_port.clone(),
+                to_node: remap(w.to_node),
+                to_port: w.to_port.clone(),
+            })
+            .collect();
+        group.nodes = new_nodes;
+        group.wires = new_wires;
+    }
+    node
+}
+
+/// Resolve the `object_k` wire's producer node id at `wires`' scope — the
+/// same "UI's already-resolved index is the one source of truth" lookup
+/// [`RemoveSceneObjectCommand`] uses.
+fn object_producer_id(wires: &[EffectGraphWire], render_id: u32, k: u32) -> Option<u32> {
+    let object_port = format!("object_{k}");
+    wires.iter().find(|w| w.to_node == render_id && w.to_port == object_port).map(|w| w.from_node)
+}
+
+/// The duplicate-object gesture (D11): one undoable composite edit that
+/// deep-clones the source object's `scene_object` (+ its enclosing group,
+/// when the object is grouped — the Add/importer shape) with fresh doc ids
+/// and fresh [`NodeId`]s throughout, wires the clone's `object` output into
+/// the next free `object_k` slot, bumps `objects`, offsets the clone's
+/// `node.transform_3d.pos_x` by **+0.5** so it doesn't render exactly inside
+/// the original (D11 — deliberate, visible, undoable, tune-by-feel later).
+///
+/// Ungrouped hand-built objects (a loose `scene_object` whose mesh/
+/// transform/material producers are NOT wrapped in a group) share
+/// [`RemoveSceneObjectCommand`]'s documented one-hop gap: only the bare
+/// `scene_object` node itself is cloned (no upstream producers to walk to —
+/// finding them would require a general graph-reachability search this
+/// command doesn't attempt), so the clone starts fully unwired. Every
+/// object this design's own producers (Add, importer, merge) create is
+/// grouped, so this is the shape that actually ships.
+#[derive(Debug)]
+pub struct DuplicateSceneObjectCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    source_index: u32,
+    catalog_default: EffectGraphDef,
+    /// The level's `(nodes, wires)` before this edit. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl DuplicateSceneObjectCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        source_index: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self { target, scope_path, render_scene_node_id, source_index, catalog_default, prev: None }
+    }
+}
+
+impl Command for DuplicateSceneObjectCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let src_k = self.source_index;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let source_id = object_producer_id(wires, render_id, src_k)?;
+            let source_node = nodes.iter().find(|n| n.id == source_id)?;
+
+            let mut next_id = max_node_id_over(nodes) + 1;
+            let mut clone = deep_clone_with_fresh_ids(source_node, &mut next_id);
+            let cloned_handle = clone.handle.as_ref().map(|h| format!("{h} 2"));
+            clone.handle = cloned_handle.clone();
+            clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+
+            // D6: the object's name is its scene_object's own handle — when
+            // the clone is a group, keep the inner scene_object's handle in
+            // sync with the group's (the same invariant Add/importer both
+            // maintain, and RenameSceneObjectCommand sweeps to preserve).
+            if let Some(body) = clone.group.as_deref_mut() {
+                if let Some(inner_object) =
+                    body.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")
+                {
+                    inner_object.handle = cloned_handle;
+                }
+                // D11: offset the clone's transform_3d.pos_x by +0.5.
+                if let Some(transform_node) =
+                    body.nodes.iter_mut().find(|n| n.type_id == "node.transform_3d")
+                {
+                    let cur = match transform_node.params.get("pos_x") {
+                        Some(SerializedParamValue::Float { value }) => *value,
+                        _ => 0.0,
+                    };
+                    transform_node
+                        .params
+                        .insert("pos_x".to_string(), SerializedParamValue::Float { value: cur + 0.5 });
+                }
+            }
+
+            let current_objects = match nodes.iter().find(|n| n.id == render_id)?.params.get("objects") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                Some(SerializedParamValue::Int { value }) => *value as f32,
+                _ => 0.0,
+            };
+            let new_k = current_objects as u32;
+            let clone_id = clone.id;
+            nodes.push(clone);
+            wires.push(scene_build_wire(clone_id, "object", render_id, &format!("object_{new_k}")));
+
+            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float { value: current_objects + 1.0 },
+            );
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Duplicate Object"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Add Scene Environment / Add Scene Fog
 // (SCENE_SETUP_PANEL_DESIGN.md D3/D4, P1) — shaped exactly like
 // AddSceneLightCommand above: spawn one new node at the scene's graph level
@@ -3000,23 +3191,23 @@ impl RenameGroupCommand {
             swept: Vec::new(),
         }
     }
+}
 
-    /// Resolve the `&mut PresetInstance` this command's `target` addresses —
-    /// same match every `graph.rs` command uses (mirrors
-    /// `ToggleNodeParamExposeCommand`'s identical resolve for its mirror
-    /// step). Used by the D5 sweep, which needs the manifest (`.params`)
-    /// alongside the graph — outside `with_target_graph_mut`'s narrower
-    /// `&mut EffectGraphDef` view.
-    fn resolve_instance<'p>(
-        &self,
-        project: &'p mut Project,
-    ) -> Option<&'p mut manifold_core::effects::PresetInstance> {
-        match &self.target {
-            GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
-            GraphTarget::Generator(layer_id) => project
-                .timeline
-                .find_layer_by_id_mut(layer_id)
-                .map(|(_, layer)| layer.gen_params_or_init()),
+/// Resolve the `&mut PresetInstance` a [`GraphTarget`] addresses — same match
+/// every `graph.rs` command uses (mirrors `ToggleNodeParamExposeCommand`'s
+/// identical resolve for its mirror step). Used by rename commands' D5 card-
+/// section sweep, which needs the manifest (`.params`) alongside the graph —
+/// outside `with_target_graph_mut`'s narrower `&mut EffectGraphDef` view.
+/// Free function (not a method) so both [`RenameGroupCommand`] and
+/// [`RenameSceneObjectCommand`] share one implementation.
+fn resolve_target_instance<'p>(
+    target: &GraphTarget,
+    project: &'p mut Project,
+) -> Option<&'p mut manifold_core::effects::PresetInstance> {
+    match target {
+        GraphTarget::Effect(effect_id) => project.find_effect_by_id_mut(effect_id),
+        GraphTarget::Generator(layer_id) => {
+            project.timeline.find_layer_by_id_mut(layer_id).map(|(_, layer)| layer.gen_params_or_init())
         }
     }
 }
@@ -3079,7 +3270,7 @@ impl Command for RenameGroupCommand {
             // been sectioned under it.
             return;
         };
-        let Some(inst) = self.resolve_instance(project) else {
+        let Some(inst) = resolve_target_instance(&self.target, project) else {
             return;
         };
         let target_ids: Vec<String> = inst
@@ -3112,7 +3303,7 @@ impl Command for RenameGroupCommand {
 
     fn undo(&mut self, project: &mut Project) {
         if !self.swept.is_empty()
-            && let Some(inst) = self.resolve_instance(project)
+            && let Some(inst) = resolve_target_instance(&self.target, project)
         {
             for (param_id, prev_section) in self.swept.drain(..) {
                 if let Some(p) = inst.params.get_mut(&param_id) {
@@ -3137,6 +3328,266 @@ impl Command for RenameGroupCommand {
 
     fn description(&self) -> &str {
         "Rename Group"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rename Scene Object / Rename Light (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6)
+// ---------------------------------------------------------------------------
+
+/// The rename-object gesture (D6: "the object IS its `scene_object` node;
+/// the name is its `handle`"). One undoable composite edit — extends
+/// [`RenameGroupCommand`]'s walk rather than duplicating it: sets the
+/// `scene_object` node's own `handle`, ALSO renames the enclosing group when
+/// one exists (graph-view coherence — a sweep, not a second home: this
+/// command is the single writer of both, same posture D6 states), and runs
+/// the same D5 card-section sweep `RenameGroupCommand` runs when a group is
+/// renamed. Rejected (a no-op) exactly like `RenameGroupCommand`: an empty
+/// name, a name containing `/`, or a collision with a sibling scene_object's
+/// or group's handle at the same level.
+/// `(scene_object node id, prev scene_object handle, Option<(group node id,
+/// prev group handle)>)` — [`RenameSceneObjectCommand`]'s undo snapshot.
+type RenameSceneObjectPrev = (u32, Option<String>, Option<(u32, Option<String>)>);
+
+#[derive(Debug)]
+pub struct RenameSceneObjectCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    object_index: u32,
+    new_handle: String,
+    catalog_default: EffectGraphDef,
+    /// Captured on first successful execute.
+    prev: Option<RenameSceneObjectPrev>,
+    /// D5 rename-sweep undo state — same shape as `RenameGroupCommand::swept`.
+    /// Only ever populated when the object is grouped (an ungrouped bare
+    /// scene_object has no group name for a card section to have followed).
+    swept: Vec<(String, Option<String>)>,
+}
+
+impl RenameSceneObjectCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        object_index: u32,
+        new_handle: String,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            object_index,
+            new_handle,
+            catalog_default,
+            prev: None,
+            swept: Vec::new(),
+        }
+    }
+}
+
+impl Command for RenameSceneObjectCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.object_index;
+        let new_handle = self.new_handle.clone();
+        let first_time = self.prev.is_none();
+
+        let captured = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            if new_handle.is_empty() || new_handle.contains('/') {
+                return None;
+            }
+            // Reject a collision with any sibling's handle at this level
+            // (matching RenameGroupCommand's own guard).
+            let producer_id = object_producer_id(wires, render_id, k)?;
+            if nodes
+                .iter()
+                .any(|n| n.id != producer_id && n.handle.as_deref() == Some(new_handle.as_str()))
+            {
+                return None;
+            }
+            let producer = nodes.iter_mut().find(|n| n.id == producer_id)?;
+
+            if producer.type_id == GROUP_TYPE_ID {
+                // Grouped shape (Add / importer / merge): rename the group
+                // AND the inner scene_object's own handle stays in sync
+                // (D6's single-writer-of-both posture).
+                let prev_group_handle = producer.handle.clone();
+                producer.handle = Some(new_handle.clone());
+                let body = producer.group.as_deref_mut()?;
+                let scene_object = body.nodes.iter_mut().find(|n| n.type_id == "node.scene_object")?;
+                let scene_object_id = scene_object.id;
+                let prev_object_handle = scene_object.handle.clone();
+                scene_object.handle = Some(new_handle.clone());
+
+                let mut inside = Vec::new();
+                collect_node_ids(&body.nodes, &mut inside);
+                Some((scene_object_id, prev_object_handle, Some((producer_id, prev_group_handle)), inside))
+            } else {
+                // Ungrouped bare scene_object: just its own handle, no group
+                // to keep in sync, no card-section sweep possible.
+                let prev_object_handle = producer.handle.clone();
+                producer.handle = Some(new_handle.clone());
+                Some((producer_id, prev_object_handle, None, Vec::new()))
+            }
+        });
+        let Some((scene_object_id, prev_object_handle, prev_group, inside)) = captured.flatten() else {
+            return;
+        };
+        if first_time {
+            self.prev = Some((scene_object_id, prev_object_handle, prev_group.clone()));
+        }
+        if !first_time {
+            return;
+        }
+
+        // D5 sweep — only runs when the object is grouped (`prev_group` is
+        // `Some`) and had a prior name (nothing could be sectioned under an
+        // unnamed group).
+        let Some(old_name) = prev_group.and_then(|(_, prev_handle)| prev_handle) else {
+            return;
+        };
+        let Some(inst) = resolve_target_instance(&self.target, project) else {
+            return;
+        };
+        let target_ids: Vec<String> = inst
+            .graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .map(|m| {
+                m.bindings
+                    .iter()
+                    .filter(|b| match &b.target {
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                            inside.contains(node_id)
+                        }
+                        manifold_core::effect_graph_def::BindingTarget::Composite { .. } => false,
+                    })
+                    .map(|b| b.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.swept.clear();
+        for param_id in target_ids {
+            if let Some(p) = inst.params.get_mut(&param_id)
+                && p.spec.section.as_deref() == Some(old_name.as_str())
+            {
+                self.swept.push((param_id, p.spec.section.clone()));
+                p.spec.section = Some(self.new_handle.clone());
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if !self.swept.is_empty()
+            && let Some(inst) = resolve_target_instance(&self.target, project)
+        {
+            for (param_id, prev_section) in self.swept.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.spec.section = prev_section;
+                }
+            }
+        }
+
+        let Some((scene_object_id, prev_object_handle, prev_group)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) else {
+                return;
+            };
+            if let Some((group_id, prev_group_handle)) = prev_group {
+                if let Some(group) = nodes.iter_mut().find(|n| n.id == group_id) {
+                    group.handle = prev_group_handle;
+                    if let Some(body) = group.group.as_deref_mut()
+                        && let Some(scene_object) =
+                            body.nodes.iter_mut().find(|n| n.id == scene_object_id)
+                    {
+                        scene_object.handle = prev_object_handle;
+                    }
+                }
+            } else if let Some(node) = nodes.iter_mut().find(|n| n.id == scene_object_id) {
+                node.handle = prev_object_handle;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Rename Object"
+    }
+}
+
+/// Plain rename of a node's `handle` — no card-section sweep (D6: nothing
+/// downstream displays light names today, unlike an object's group). Used
+/// for `node.light`'s name; a generic, single-purpose sibling of the
+/// heavier `RenameSceneObjectCommand`.
+#[derive(Debug)]
+pub struct SetNodeHandleCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    node_doc_id: u32,
+    new_handle: String,
+    catalog_default: EffectGraphDef,
+    prev: Option<Option<String>>,
+}
+
+impl SetNodeHandleCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        node_doc_id: u32,
+        new_handle: String,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self { target, scope_path, node_doc_id, new_handle, catalog_default, prev: None }
+    }
+}
+
+impl Command for SetNodeHandleCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let id = self.node_doc_id;
+        let new_handle = self.new_handle.clone();
+        let first_time = self.prev.is_none();
+        let captured = with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
+            let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            if new_handle.is_empty() || new_handle.contains('/') {
+                return None;
+            }
+            if nodes.iter().any(|n| n.id != id && n.handle.as_deref() == Some(new_handle.as_str())) {
+                return None;
+            }
+            let node = nodes.iter_mut().find(|n| n.id == id)?;
+            let prev = node.handle.clone();
+            node.handle = Some(new_handle.clone());
+            Some(prev)
+        });
+        if first_time {
+            self.prev = captured.flatten();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let id = self.node_doc_id;
+        let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == id)
+            {
+                node.handle = prev;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Rename Light"
     }
 }
 
@@ -6702,6 +7153,241 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
+    }
+
+    // ── SCENE_OBJECT_AND_PANEL_V2_DESIGN P3: Duplicate / Rename ──
+
+    /// Every stable [`NodeId`] and doc `id` anywhere in `nodes`, recursively
+    /// through nested groups — test helper mirroring `collect_node_ids` +
+    /// `max_node_id_over`, used to prove a duplicate mints fresh identity
+    /// throughout its whole cloned subtree, not just the top node.
+    fn collect_ids(nodes: &[EffectGraphNode], doc_ids: &mut Vec<u32>, node_ids: &mut Vec<NodeId>) {
+        for n in nodes {
+            doc_ids.push(n.id);
+            if !n.node_id.is_empty() {
+                node_ids.push(n.node_id.clone());
+            }
+            if let Some(body) = n.group.as_deref() {
+                collect_ids(&body.nodes, doc_ids, node_ids);
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_scene_object_command_clones_grouped_object_with_fresh_ids_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        )
+        .execute(&mut project);
+        let before = graph_of(&project, &fx).clone();
+        let (mut orig_doc_ids, mut orig_node_ids) = (Vec::new(), Vec::new());
+        collect_ids(&before.nodes, &mut orig_doc_ids, &mut orig_node_ids);
+
+        let mut cmd = DuplicateSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0, // duplicate object 0 (the only object)
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("objects"),
+            Some(&SerializedParamValue::Float { value: 2.0 }),
+            "objects bumped by one"
+        );
+        let clone = def
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("Object 1 2"))
+            .expect("clone named with the D11 ' 2' suffix");
+        assert!(def.wires.iter().any(|w| w.from_node == clone.id
+            && w.from_port == "object"
+            && w.to_node == 0
+            && w.to_port == "object_1"), "clone wired to the next free object slot");
+
+        // D11: every id in the clone's subtree is fresh — no overlap with
+        // the original's doc ids or stable NodeIds anywhere.
+        let (mut all_doc_ids, mut all_node_ids) = (Vec::new(), Vec::new());
+        collect_ids(&def.nodes, &mut all_doc_ids, &mut all_node_ids);
+        let mut clone_doc_ids = Vec::new();
+        let mut clone_node_ids = Vec::new();
+        collect_ids(std::slice::from_ref(clone), &mut clone_doc_ids, &mut clone_node_ids);
+        for id in &clone_doc_ids {
+            assert!(!orig_doc_ids.contains(id), "clone doc id {id} must not reuse an original doc id");
+        }
+        for nid in &clone_node_ids {
+            assert!(!orig_node_ids.contains(nid), "clone NodeId {nid:?} must not reuse an original NodeId");
+        }
+        // No duplicate doc ids anywhere in the whole def (fresh minting is
+        // globally unique, not just locally).
+        let mut sorted = all_doc_ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), all_doc_ids.len(), "no doc id collisions anywhere in the def");
+
+        // D6: the clone's inner scene_object handle stays in sync with the
+        // group's handle.
+        let clone_body = clone.group.as_deref().expect("clone is a group");
+        let inner_object = clone_body.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
+        assert_eq!(inner_object.handle.as_deref(), Some("Object 1 2"));
+
+        // D11: transform_3d.pos_x offset by +0.5 on the clone.
+        let clone_transform = clone_body.nodes.iter().find(|n| n.type_id == "node.transform_3d").unwrap();
+        assert_eq!(clone_transform.params.get("pos_x"), Some(&SerializedParamValue::Float { value: 0.5 }));
+
+        // D11: card exposes are not cloned.
+        assert!(clone_body.nodes.iter().all(|n| n.exposed_params.is_empty()));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-duplicate graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        )
+        .execute(&mut project);
+        let def = graph_of(&project, &fx).clone();
+        let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
+        let group_id = group.id;
+        let mat_node = group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.phong_material").unwrap();
+        let (mat_node_id, mat_u32_id) = (mat_node.node_id.clone(), mat_node.id);
+
+        ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            mat_node_id,
+            mat_u32_id,
+            "mat_0".to_string(),
+            "ambient".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Ambient".to_string(),
+            0.0,
+            1.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![group_id])
+        .execute(&mut project);
+        let ub_id = project.find_effect_by_id(&fx).unwrap().user_param_bindings()[0].id.clone();
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("Object 1"),
+            "setup: expose seeded the section from the group name"
+        );
+
+        let before = graph_of(&project, &fx).clone();
+        let mut cmd = RenameSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            "Hero".to_string(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let group = def.nodes.iter().find(|n| n.id == group_id).unwrap();
+        assert_eq!(group.handle.as_deref(), Some("Hero"), "group handle renamed");
+        let inner_object =
+            group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
+        assert_eq!(inner_object.handle.as_deref(), Some("Hero"), "scene_object handle kept in sync (D6)");
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("Hero"),
+            "D5: card section follows the rename"
+        );
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
+        assert_eq!(
+            project.find_effect_by_id(&fx).unwrap().params.get(&ub_id).unwrap().spec.section.as_deref(),
+            Some("Object 1"),
+            "undo restores the pre-rename section"
+        );
+    }
+
+    #[test]
+    fn rename_scene_object_command_ungrouped_renames_bare_node_and_undo_restores() {
+        let (fixture, object_ids) = render_scene_with_objects(2);
+        let (mut project, fx) = project_with_graph(fixture);
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = RenameSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            "Renamed".to_string(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let node = def.nodes.iter().find(|n| n.id == object_ids[0]).unwrap();
+        assert_eq!(node.handle.as_deref(), Some("Renamed"));
+        assert!(node.group.is_none(), "ungrouped node stays bare, no group is fabricated");
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn set_node_handle_command_renames_light_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        AddSceneLightCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        )
+        .execute(&mut project);
+        let before = graph_of(&project, &fx).clone();
+        let light_id = before.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
+
+        let mut cmd = SetNodeHandleCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            light_id,
+            "Key Light".to_string(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        assert_eq!(
+            def.nodes.iter().find(|n| n.id == light_id).unwrap().handle.as_deref(),
+            Some("Key Light")
+        );
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-rename graph exactly (inverse-pair)");
     }
 
     // ── SCENE_SETUP_PANEL_DESIGN P1: Add Environment / Add Fog ──
