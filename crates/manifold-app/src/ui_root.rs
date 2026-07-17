@@ -2824,6 +2824,27 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
+            // SCENE_PANEL_UX_DESIGN.md UX-P2, D6: the "+ Add Modifier"
+            // button opens the shared dropdown listing the SAME curated
+            // vocabulary the old 7-chip grid did — each item dispatches the
+            // SAME `SceneSetupAddModifier` action the chips fired directly.
+            // `button_node_id` resolves the anchor directly, same
+            // resolve-at-open convention as `SceneSetupEnumClicked` above.
+            PanelAction::SceneSetupAddModifierClicked(layer_id, group_node_id, button_node_id) => {
+                let trigger = self.tree.get_bounds(*button_node_id);
+                let items: Vec<DropdownItem> = manifold_ui::panels::scene_setup_panel::MESH_MODIFIER_CHOICES
+                    .iter()
+                    .map(|(label, type_id)| {
+                        DropdownItem::new(label).with_action(PanelAction::SceneSetupAddModifier(
+                            layer_id.clone(),
+                            *group_node_id,
+                            (*type_id).to_string(),
+                        ))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
             _ => false,
         }
     }

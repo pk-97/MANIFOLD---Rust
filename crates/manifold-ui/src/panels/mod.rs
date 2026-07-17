@@ -222,6 +222,14 @@ pub enum PanelAction {
     /// transforms) and `[group_node_id]` for a P2 Objects material/modifier
     /// row living inside the object's own group.
     SceneSetupParamChanged(LayerId, Vec<u32>, u32, String, f32),
+    /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
+    /// The panel has already updated its UI-local selection; this action's
+    /// only job is to ride the dispatch loop back as `structural_change:
+    /// true` so `sync_inspector_data` rebuilds the panel this same frame —
+    /// same-frame Properties update, no polling, no per-frame rebuild.
+    /// Payload: the layer whose selection moved (the panel key) — the
+    /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
+    SceneSetupSelectionChanged(LayerId),
     /// "Add environment" (D3): spawn `node.bake_environment` wired to the
     /// scene's `envmap` port. `(layer_id, render_scene_node_doc_id)`.
     SceneSetupAddEnvironment(LayerId, u32),
@@ -271,6 +279,17 @@ pub enum PanelAction {
     /// at the end of the object's stack (no position picker in v1 — D6's
     /// default: "end of stack, just before the group output").
     SceneSetupAddModifier(LayerId, u32, String),
+    /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
+    /// button click — `(layer_id, group_node_id, button_node_id)`. Replaces
+    /// the old 7-chip grid, each of which dispatched `SceneSetupAddModifier`
+    /// directly; this button doesn't resolve a choice itself, it opens the
+    /// shared `panels::dropdown` overlay (`UIRoot::try_open_dropdown_inner`,
+    /// same resolve-at-open convention as `SceneSetupEnumClicked` —
+    /// `button_node_id` anchors the overlay since the panel has no
+    /// `&UITree` in `handle_event`), listing the SAME
+    /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
+    /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
+    SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
     /// P5 modifier-row remove button: `(layer_id, group_node_id,
     /// modifier_node_id)`. Dispatches `RemoveMeshModifierCommand`.
     SceneSetupRemoveModifier(LayerId, u32, u32),
