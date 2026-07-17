@@ -1992,6 +1992,16 @@ fn summarize_node(
             Some(list) => list.iter().map(|it| mat4_mul(&world, it)).collect(),
             None => vec![world],
         };
+        // BUG-205: a SKINNED mesh's rendered position ignores the mesh
+        // node's own world transform (glTF 2.0 §3.7.3.3) — its static
+        // (bind-pose) world positions are `skin_matrix[j] * v` blended by
+        // the vertex weights, exactly what `node.skin_mesh` computes at
+        // runtime. Summarizing it through `world` instead put the bbox in
+        // a DIFFERENT space than the render (skeleton_animated.glb: bind
+        // bbox y 0.36..2.22 vs skinned y -0.57..1.20), so the synthesized
+        // camera framed and recentered a box the mesh never occupies.
+        let bind_skin_matrices: Option<Vec<Mat4>> =
+            node.skin().map(|skin| bind_pose_skin_matrices(&skin, document, buffers));
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
@@ -2005,6 +2015,32 @@ fn summarize_node(
                 None => positions.len() as u32,
             };
             *per_material.entry(prim.material().index()).or_insert(0) += vcount * instance_count as u32;
+            let joints: Option<Vec<[u16; 4]>> =
+                reader.read_joints(0).map(|it| it.into_u16().collect());
+            let weights: Option<Vec<[f32; 4]>> =
+                reader.read_weights(0).map(|it| it.into_f32().collect());
+            if let (Some(sm), Some(joints), Some(weights)) =
+                (bind_skin_matrices.as_ref(), joints.as_ref(), weights.as_ref())
+            {
+                for (i, p) in positions.iter().enumerate() {
+                    let mut wp = [0.0f32; 3];
+                    let wsum: f32 = weights[i].iter().sum::<f32>().max(1e-8);
+                    for k in 0..4 {
+                        let j = joints[i][k] as usize;
+                        let Some(m) = sm.get(j) else { continue };
+                        let tp = mat4_transform_point(m, *p);
+                        let w = weights[i][k] / wsum;
+                        for c in 0..3 {
+                            wp[c] += w * tp[c];
+                        }
+                    }
+                    for c in 0..3 {
+                        bbox_min[c] = bbox_min[c].min(wp[c]);
+                        bbox_max[c] = bbox_max[c].max(wp[c]);
+                    }
+                }
+                continue;
+            }
             for instance_world in &instance_worlds {
                 for p in &positions {
                     let wp = mat4_transform_point(instance_world, *p);
@@ -2021,6 +2057,31 @@ fn summarize_node(
         summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max)?;
     }
     Ok(())
+}
+
+/// BUG-205: per-joint bind-pose skin matrices (`static_world(joint) *
+/// inverse_bind_matrix`) — maps a skinned primitive's mesh-local vertices
+/// to their STATIC world positions, the space `node.skin_mesh` renders in.
+/// Mirrors `parse_skins`' fallback: a skin with no `inverseBindMatrices`
+/// accessor implies identity per joint.
+fn bind_pose_skin_matrices(
+    skin: &gltf::Skin,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<Mat4> {
+    let parent_of = build_parent_map(document);
+    let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+    let ibms: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
+        Some(it) => it.collect(),
+        None => vec![MAT4_IDENTITY; skin.joints().count()],
+    };
+    skin.joints()
+        .enumerate()
+        .map(|(k, joint)| {
+            let world = static_world_matrix(document, joint.index(), &parent_of);
+            mat4_mul(&world, ibms.get(k).unwrap_or(&MAT4_IDENTITY))
+        })
+        .collect()
 }
 
 /// Parse a glb's structure for the importer: the distinct materials with
