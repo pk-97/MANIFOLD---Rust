@@ -1,0 +1,8 @@
+{
+  "_comment": "D14 decode-stage correction, applied in manifold_audio/audio_io.py load_audio_mono(). Measured by eval/click_track.py against known-position click fixtures. Re-measure whenever ffmpeg or the audio_io decode path changes \u2014 this file is a measurement artifact, not a hand-tuned constant.",
+  "correction_sec_by_suffix": {
+    "wav": -1.1350173209245806e-05,
+    "mp3": -1.1347802889360992e-05,
+    "m4a": -1.1291704524185597e-05
+  }
+}

@@ -20,3 +20,7 @@ pretty_midi
 librosa
 # Spotify Basic Pitch — polyphonic pitch detection for bass/synth/pad.
 basic-pitch
+# Eval harness (AUDIO_ANALYSIS_ACCURACY_DESIGN.md P1, tools/audio_analysis/eval/):
+# metrics.py uses mir_eval where its definitions match D10; pytest gates every phase.
+mir_eval
+pytest

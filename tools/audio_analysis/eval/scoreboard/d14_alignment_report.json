@@ -1,0 +1,50 @@
+{
+  "wav": {
+    "decode_stage": {
+      "n_truth": 12,
+      "n_matched": 12,
+      "median_offset_ms": -0.011350173209245806,
+      "mean_offset_ms": -0.011350173208773962,
+      "max_abs_offset_ms": 0.011350173210189496
+    },
+    "detector_stage": {
+      "n_truth": 12,
+      "n_matched": 0,
+      "median_offset_ms": null,
+      "mean_offset_ms": null,
+      "max_abs_offset_ms": null
+    }
+  },
+  "mp3": {
+    "decode_stage": {
+      "n_truth": 12,
+      "n_matched": 12,
+      "median_offset_ms": -0.011347802889360992,
+      "mean_offset_ms": -0.011348385982906661,
+      "max_abs_offset_ms": 0.01135796866424954
+    },
+    "detector_stage": {
+      "n_truth": 12,
+      "n_matched": 1,
+      "median_offset_ms": -20.000000000000462,
+      "mean_offset_ms": -20.000000000000462,
+      "max_abs_offset_ms": 20.000000000000462
+    }
+  },
+  "aac": {
+    "decode_stage": {
+      "n_truth": 12,
+      "n_matched": 12,
+      "median_offset_ms": -0.011291704524185597,
+      "mean_offset_ms": -0.011357355621947432,
+      "max_abs_offset_ms": 0.01189703525383834
+    },
+    "detector_stage": {
+      "n_truth": 12,
+      "n_matched": 3,
+      "median_offset_ms": -20.000000000000018,
+      "mean_offset_ms": -26.66666666666684,
+      "max_abs_offset_ms": 40.000000000000924
+    }
+  }
+}
