@@ -38,6 +38,8 @@ import json
 import sys
 import time
 from pathlib import Path
+
+from eval.paths import DATA_ROOT
 from typing import Dict, List, Optional
 
 try:
@@ -116,8 +118,8 @@ def fetch_one(track_id: str, url: str, out_dir: Path, ffmpeg_bin: Optional[str])
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--annotations-dir", type=Path, default=Path("eval/data/harmonixset/dataset"))
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/harmonixset_audio"))
+    parser.add_argument("--annotations-dir", type=Path, default=DATA_ROOT / "harmonixset/dataset")
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "harmonixset_audio")
     parser.add_argument("--genre", type=str, default="Dance/Electronic", help="metadata.csv Genre filter, or empty string for all")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--ffmpeg-bin", type=str, default=None)

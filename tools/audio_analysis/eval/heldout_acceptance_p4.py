@@ -69,7 +69,8 @@ ROUND2_PICKS = {
 
 
 def build_heldout_corpus() -> List[TrackData]:
-    slices_dir = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "liveshow_song_slices"
+    from eval.paths import DATA_ROOT
+    slices_dir = DATA_ROOT / "liveshow_song_slices"
     tempo_points = load_tempo_points()
     out: List[TrackData] = []
     for fx in HELDOUT_LIVESHOW_FIXTURES:

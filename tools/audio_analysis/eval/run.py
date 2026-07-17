@@ -50,8 +50,12 @@ SAMPLE_RATE = 44100
 def _resolve_path(raw: str) -> Path:
     """fixtures.toml paths are relative to the repo root (tests/fixtures/...)
     or to tools/audio_analysis (eval/data/...) — try both, repo-root first
-    since that's what most entries use."""
-    for base in (REPO_ROOT, AUDIO_ANALYSIS_ROOT):
+    since that's what most entries use. Local (possibly-worktree) bases come
+    first so tracked files resolve at the branch's own version; the MAIN
+    checkout bases (eval/paths.py) are the fallback that makes the shared
+    gitignored data store visible from any worktree slot."""
+    from eval.paths import MAIN_AUDIO_ANALYSIS_ROOT, MAIN_REPO_ROOT
+    for base in (REPO_ROOT, AUDIO_ANALYSIS_ROOT, MAIN_REPO_ROOT, MAIN_AUDIO_ANALYSIS_ROOT):
         candidate = (base / raw).resolve()
         if candidate.exists():
             return candidate

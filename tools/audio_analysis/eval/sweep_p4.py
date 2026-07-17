@@ -72,6 +72,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from eval.paths import DATA_ROOT
 from eval import metrics  # noqa: E402
 from eval.baseline_scoreboard_p3 import BABYSLAKH_ROOT, CLASSES as ADTOF_CLASSES, _load_drum_truth  # noqa: E402
 from eval.beat_scoring import LIVESHOW_SONG_FIXTURES, load_tempo_points  # noqa: E402
@@ -258,7 +259,7 @@ def _build_manifold_own_kick_tracks() -> List[TrackData]:
 
 
 def _build_self_render_tracks() -> List[TrackData]:
-    base = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "self_render"
+    base = DATA_ROOT / "self_render"
     out: List[TrackData] = []
 
     kick_hat_wav = base / "kick_hat_128bpm.wav"
@@ -332,7 +333,7 @@ def _liveshow_song_bpm(fixture: Dict[str, Any], tempo_points) -> float:
 
 
 def _build_liveshow_dev_tracks() -> List[TrackData]:
-    slices_dir = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "liveshow_song_slices"
+    slices_dir = DATA_ROOT / "liveshow_song_slices"
     tempo_points = load_tempo_points()
     out: List[TrackData] = []
     for fx in DEV_LIVESHOW_FIXTURES:

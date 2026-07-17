@@ -72,6 +72,8 @@ import random
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+from eval.paths import DATA_ROOT
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -325,7 +327,7 @@ def fetch_selected(
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/egmd"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "egmd")
     parser.add_argument("--max-per-cell", type=int, default=MAX_PER_CELL)
     parser.add_argument("--max-total-bytes", type=int, default=MAX_TOTAL_BYTES)
     args = parser.parse_args(argv)

@@ -131,7 +131,8 @@ def _build_slakh_drum_tracks(max_tracks: Optional[int] = SLAKH_MAX_TRACKS) -> Li
 
 
 def _build_edm_kit_track() -> Optional[TrackData]:
-    base = AUDIO_ANALYSIS_ROOT / "eval" / "data" / "self_render"
+    from eval.paths import DATA_ROOT
+    base = DATA_ROOT / "self_render"
     wav = base / "edm_kit_128bpm.wav"
     if not wav.exists():
         return None
