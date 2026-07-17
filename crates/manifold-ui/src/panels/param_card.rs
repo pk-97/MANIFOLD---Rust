@@ -283,15 +283,15 @@ const MAP_CHEVRON_W: f32 = 14.0;
 /// the original D1, shrank the timeline inspector's sliders for a control
 /// that never appears there — Peter's directive was "mapping chevron the
 /// only extra" in the editor, not a lane Perform pays for and never uses).
-struct RowGeometry {
+pub(crate) struct RowGeometry {
     /// Width of the param-name label column.
-    label_width: f32,
+    pub(crate) label_width: f32,
     /// Width of the draggable slider track (content width minus the D/E/A
     /// button lane, and the chevron lane when reserved).
-    slider_w: f32,
+    pub(crate) slider_w: f32,
 }
 
-fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry {
+pub(crate) fn row_geometry(content_w: f32, reserve_chevron: bool) -> RowGeometry {
     let chevron_lane = if reserve_chevron { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 };
     let label_width = crate::slider::label_width_for_row(content_w);
     let slider_w =
