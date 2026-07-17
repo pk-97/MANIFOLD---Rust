@@ -26,9 +26,15 @@ use crate::input::UIEvent;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
-use manifold_foundation::LayerId;
+use manifold_foundation::{AudioSendId, LayerId};
 
-use super::PanelAction;
+use super::{GraphParamTarget, PanelAction};
+use super::drawer::DrawerIds;
+use super::param_card::{ParamInfo, RowGeometry};
+use super::param_slider_shared::{
+    AbletonConfigIds, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab, ParamModState,
+    RowClick, TrimHandleIds, build_param_row, match_param_row_click,
+};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -89,7 +95,7 @@ const fn obj_key(index: usize, offset: u64) -> u64 {
 /// Stable automation name for one triplet cell (a `build_triplet_row` value
 /// box), by control kind + axis — `nth` (per-object) still disambiguates
 /// which object a flow means, mirroring the audio dock's `name` + `nth`
-/// convention. Same fix as `fixed_row_automation_name` — a bare `text` +
+/// convention. Same fix as `world_row_automation_name` — a bare `text` +
 /// `under_text` selector can't tell two "0.00" cells apart in this flat
 /// (no per-section container) panel.
 const fn triplet_cell_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
@@ -129,20 +135,6 @@ const fn mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'s
         (OBJ_OFF_SCALE_X_MOD, 2) => Some("scene_setup.mod.scale_z"),
         (OBJ_OFF_METALLIC_MOD, 0) => Some("scene_setup.mod.metallic"),
         (OBJ_OFF_ROUGHNESS_MOD, 0) => Some("scene_setup.mod.roughness"),
-        _ => None,
-    }
-}
-
-/// UX-P3a: stable automation name for one of the four FIXED Environment/Fog
-/// rows' mod button, keyed by `row_index` — same set `fixed_row_automation_name`
-/// keys its value cell by (each of the four is a distinct `row_index`, so
-/// unlike the object rows this doesn't need an axis).
-const fn fixed_row_mod_automation_name(row_index: u64) -> Option<&'static str> {
-    match row_index {
-        ROW_ENV_INTENSITY => Some("scene_setup.mod.env_intensity"),
-        ROW_ENV_FILL => Some("scene_setup.mod.env_fill"),
-        ROW_FOG_DENSITY => Some("scene_setup.mod.fog_density"),
-        ROW_FOG_HEIGHT_FALLOFF => Some("scene_setup.mod.fog_height_falloff"),
         _ => None,
     }
 }
@@ -413,36 +405,75 @@ const fn camera_mod_button_automation_name(base_offset: u64, axis: usize) -> Opt
     }
 }
 
-/// Per-row stepper/drag control keys — stride leaves headroom for a handful
-/// of controls per row (value drag zone + minus + plus).
+/// Per-row control key stride — headroom for the exposure-button key below.
 const KEY_ROW_BASE: u64 = 81_000;
 const KEY_ROW_STRIDE: u64 = 8;
-const ROW_OFF_MINUS: u64 = 0;
-const ROW_OFF_VALUE: u64 = 1;
-const ROW_OFF_PLUS: u64 = 2;
 /// UX-P3a mod-button key for a fixed Environment/Fog row.
 const ROW_OFF_MOD: u64 = 3;
 
 const fn row_key(row: u64, offset: u64) -> u64 {
     KEY_ROW_BASE + row * KEY_ROW_STRIDE + offset
 }
-// Row indices for the curated P1 sliders (stable across rebuilds regardless
-// of which optional rows are present, so a widget's identity never shifts
-// under the user's cursor mid-drag).
-const ROW_ENV_INTENSITY: u64 = 0;
-const ROW_ENV_FILL: u64 = 1;
-const ROW_FOG_DENSITY: u64 = 2;
-const ROW_FOG_HEIGHT_FALLOFF: u64 = 3;
+// C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): `SceneCardState`'s FIXED
+// slot indices for the four Environment/Fog rows — stable across rebuilds
+// regardless of which optional rows are present (see `SceneCardState`'s doc
+// comment), so a widget's identity — and an armed driver/envelope/audio
+// mod's slot — never shifts under the user's cursor mid-drag or when a
+// sibling section is added/removed.
+const WORLD_ENV_INTENSITY: usize = 0;
+const WORLD_ENV_FILL: usize = 1;
+const WORLD_FOG_DENSITY: usize = 2;
+const WORLD_FOG_HEIGHT_FALLOFF: usize = 3;
+const WORLD_ROW_COUNT: usize = 4;
 
-/// Stable automation name for one of the four fixed rows' value cell —
+/// Stable automation name for one of the four fixed rows' value-text cell —
 /// `scripts/ui-flows/` selectors key on this instead of ambiguous
-/// `text`/`under_text` queries (see `build_numeric_row`'s call site).
-const fn fixed_row_automation_name(row_index: u64) -> Option<&'static str> {
-    match row_index {
-        ROW_ENV_INTENSITY => Some("scene_setup.environment.intensity_value"),
-        ROW_ENV_FILL => Some("scene_setup.environment.fill_value"),
-        ROW_FOG_DENSITY => Some("scene_setup.fog.density_value"),
-        ROW_FOG_HEIGHT_FALLOFF => Some("scene_setup.fog.height_falloff_value"),
+/// `text`/`under_text` queries.
+const fn world_row_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        WORLD_ENV_INTENSITY => Some("scene_setup.environment.intensity_value"),
+        WORLD_ENV_FILL => Some("scene_setup.environment.fill_value"),
+        WORLD_FOG_DENSITY => Some("scene_setup.fog.density_value"),
+        WORLD_FOG_HEIGHT_FALLOFF => Some("scene_setup.fog.height_falloff_value"),
+        _ => None,
+    }
+}
+
+/// Stable automation name for one of the four fixed rows' exposure ("∿")
+/// button — same set `world_row_automation_name` covers for the value cell.
+const fn world_row_mod_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        WORLD_ENV_INTENSITY => Some("scene_setup.mod.env_intensity"),
+        WORLD_ENV_FILL => Some("scene_setup.mod.env_fill"),
+        WORLD_FOG_DENSITY => Some("scene_setup.mod.fog_density"),
+        WORLD_FOG_HEIGHT_FALLOFF => Some("scene_setup.mod.fog_height_falloff"),
+        _ => None,
+    }
+}
+
+/// C-P1a: stable automation name for one of the four fixed rows' SLIDER
+/// TRACK — the real card drag target (`build_param_row`'s `BitmapSlider`),
+/// distinct from `world_row_automation_name`'s value-TEXT cell (double-
+/// click-to-type only, not drag-armable on a card slider). Flow scripts
+/// that scrub a converted row target this name.
+const fn world_row_track_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        WORLD_ENV_INTENSITY => Some("scene_setup.environment.intensity_track"),
+        WORLD_ENV_FILL => Some("scene_setup.environment.fill_track"),
+        WORLD_FOG_DENSITY => Some("scene_setup.fog.density_track"),
+        WORLD_FOG_HEIGHT_FALLOFF => Some("scene_setup.fog.height_falloff_track"),
+        _ => None,
+    }
+}
+
+/// C-P1a: stable automation name for one of the four fixed rows' driver
+/// ("D") arm button — opens the inline modulation drawer.
+const fn world_row_driver_btn_automation_name(slot: usize) -> Option<&'static str> {
+    match slot {
+        WORLD_ENV_INTENSITY => Some("scene_setup.environment.intensity_driver_btn"),
+        WORLD_ENV_FILL => Some("scene_setup.environment.fill_driver_btn"),
+        WORLD_FOG_DENSITY => Some("scene_setup.fog.density_driver_btn"),
+        WORLD_FOG_HEIGHT_FALLOFF => Some("scene_setup.fog.height_falloff_driver_btn"),
         _ => None,
     }
 }
@@ -489,6 +520,21 @@ impl RowAddr {
     }
 }
 
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: synthesize a converted scene
+/// row's stable owned `ParamId` from its write address's `node_doc_id` +
+/// the graph node's own param name. The ONE definition both sides of the
+/// UI/app boundary use: `ScenePanel::build_world_param_row` (this crate)
+/// calls it when building the row's `ParamInfo`/id map; `state_sync`'s VM
+/// construction (`manifold-app`, no access to this synthesis logic
+/// otherwise) calls it to look up that same row's driver/envelope/audio-mod
+/// state on `PresetInstance` — a driver armed via `DriverToggle` is stored
+/// keyed by exactly this string (`dispatch_inspector`'s modulation arms use
+/// `pid_at(pi)` verbatim, unchanged by C-P1a), so the two call sites must
+/// never drift.
+pub fn synth_world_param_id(node_doc_id: u32, param_key: &str) -> manifold_foundation::ParamId {
+    manifold_foundation::ParamId::from(format!("scene.{node_doc_id}.{param_key}"))
+}
+
 /// One numeric row: its write address, current value, range, and whether a
 /// wire currently drives it (driven rows render read-only — D4).
 #[derive(Clone, Debug, PartialEq)]
@@ -533,13 +579,68 @@ enum EyeSlot {
     Dimmed,
 }
 
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): the driver/envelope/
+/// audio-mod facts for one Environment/Fog row, flattened by the app layer's
+/// `row_modulation_for_id` from `lookup_param_mod_for_id`'s
+/// `(CardModulation, AudioCardState)` (both sized to 1) — this crate has no
+/// `PresetInstance`, so the app computes this and hands it across the VM
+/// boundary like every other field here. Field-for-field the same facts
+/// `ParamModState`/`AudioCardState` carry per-row; a plain idle default
+/// (`Default::default()`) means "no modulation," never an error.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RowModulation {
+    pub driver_active: bool,
+    pub trim_min: f32,
+    pub trim_max: f32,
+    pub driver_beat_div_idx: i32,
+    pub driver_waveform_idx: i32,
+    pub driver_reversed: bool,
+    pub driver_dotted: bool,
+    pub driver_triplet: bool,
+    pub driver_free_period: Option<f32>,
+    pub envelope_active: bool,
+    pub target_norm: f32,
+    pub env_decay: f32,
+    pub automation_active: bool,
+    pub automation_overridden: bool,
+    pub audio_active: bool,
+    pub audio_send_id: Option<AudioSendId>,
+    pub audio_kind_idx: i32,
+    pub audio_band_idx: i32,
+    pub audio_range_min: f32,
+    pub audio_range_max: f32,
+    pub audio_invert: bool,
+    pub audio_rate: bool,
+    pub audio_sensitivity: f32,
+    pub audio_attack_ms: f32,
+    pub audio_release_ms: f32,
+    pub audio_trigger_mode_idx: i32,
+    pub audio_action_idx: i32,
+    pub audio_step_amount: f32,
+    pub audio_wrap_idx: i32,
+}
+
+/// A [`RowValue`] paired with its [`RowModulation`] — the shape every
+/// `build_param_row`-converted row needs (C-P1a: Environment/Fog only; other
+/// families still carry a bare `RowValue` until their own sub-phase
+/// converts them).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModulatedRow {
+    pub value: RowValue,
+    /// Boxed — `RowModulation` is ~30 scalar fields; unboxed it would make
+    /// `EnvironmentRowVm`/`AtmosphereRowVm` (which carry 2-4 `ModulatedRow`s
+    /// per variant, alongside a data-less `None`/`Custom`) a clippy
+    /// `large_enum_variant` violation.
+    pub modulation: Box<RowModulation>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum EnvironmentRowVm {
     /// Importer shape (switch_texture selecting Softbox/HDRI) — Mode is
     /// shown as a static chip in P1 (toggling it is a P2+ affordance; the
     /// value is legible, just not yet a control here).
-    Importer { mode_is_hdri: bool, intensity: RowValue, fill: RowValue, hdri_file: String },
-    Bare { intensity: RowValue, fill: RowValue },
+    Importer { mode_is_hdri: bool, intensity: ModulatedRow, fill: ModulatedRow, hdri_file: String },
+    Bare { intensity: ModulatedRow, fill: ModulatedRow },
     /// Some other producer wired into `envmap` — honest custom row, no
     /// controls (D3).
     Custom,
@@ -549,7 +650,7 @@ pub enum EnvironmentRowVm {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AtmosphereRowVm {
-    Wired { density: RowValue, height_falloff: RowValue },
+    Wired { density: ModulatedRow, height_falloff: ModulatedRow },
     /// Unwired — the "Add fog" empty row.
     None,
 }
@@ -760,6 +861,12 @@ pub struct SceneSetupVm {
     pub scene_root_node_id: u32,
     pub environment: EnvironmentRowVm,
     pub atmosphere: AtmosphereRowVm,
+    /// C-P1a: every project audio send, card-level (same for every
+    /// converted row on this layer) — the `AudioCardState.send_labels`/
+    /// `send_ids` pair the shared `build_audio_mod_drawer`'s Source row
+    /// needs. Mirrors `ParamCardConfig.audio.send_labels`/`send_ids`.
+    pub audio_send_labels: Vec<String>,
+    pub audio_send_ids: Vec<AudioSendId>,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
     /// P3: the Lights section's rows, in `light_k` order. Never capped —
@@ -850,19 +957,200 @@ struct ValueDrag {
     fine: bool,
 }
 
-/// One numeric row's interactive node ids, set by `build_numeric_row` when
-/// the row is live (driven rows leave all three `None` — no steppers).
-/// Imperative `tree.add_*` calls (unlike the declarative `ChromeHost`/`View`
-/// chrome) don't register a key→NodeId lookup of their own, so — same
-/// convention `AudioSetupPanel::SendRowIds` uses — the panel stores each
-/// dynamic control's id directly instead of re-deriving it from a key.
-#[derive(Clone, Copy, Default)]
-struct RowIds {
-    minus: Option<NodeId>,
-    value: Option<NodeId>,
-    plus: Option<NodeId>,
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: the panel's card-shaped row
+/// state for a converted family — D2's synthesized-id map, D3's per-row
+/// modulation bookkeeping (the same node-id vectors `ParamCardPanel` keeps,
+/// scoped down to one family), and D4's drag cadence, all built ONCE here so
+/// every later family's own sub-phase reuses this same struct instead of
+/// re-deriving it. C-P1a populates exactly one instance — the four
+/// Environment/Fog rows, at FIXED indices `WORLD_ENV_INTENSITY`..
+/// `WORLD_FOG_HEIGHT_FALLOFF` regardless of whether that row is wired this
+/// frame (so arming a driver on Fog Density can't silently jump onto
+/// Environment Intensity's slot just because Environment got unwired in
+/// between — D3's "no scene-local driven cache beyond it" reads off the SAME
+/// per-row facts every frame, but the row's IDENTITY — its index — must stay
+/// stable across frames independent of which sections are currently wired).
+struct SceneCardState {
+    param_info: Vec<ParamInfo>,
+    mod_state: ParamModState,
+    /// D2: synthesized owned `ParamId` → `(write address, snapshot value)`.
+    /// Rebuilt fresh every `build_nodes` pass (D1 of SCENE_PANEL_UX_DESIGN.md:
+    /// "no rotting, no staleness") — `dispatch_inspector`'s three insertion
+    /// points resolve a card-shaped action's `param_id` through this before
+    /// falling into `with_preset_graph_mut`.
+    id_map: ahash::AHashMap<manifold_foundation::ParamId, (RowAddr, f32)>,
+    slider_ids: Vec<Option<crate::slider::SliderNodeIds>>,
+    row_catcher_ids: Vec<Option<NodeId>>,
+    driver_btn_ids: Vec<Option<NodeId>>,
+    envelope_btn_ids: Vec<Option<NodeId>>,
+    driver_config_ids: Vec<Option<DriverConfigIds>>,
+    /// Always `None` — no Ableton mapping surface on scene rows this phase
+    /// (D1's `match_param_row_click` still takes the slice; an all-`None`
+    /// vector is a legitimate "never active" input, not a stub).
+    ableton_config_ids: Vec<Option<AbletonConfigIds>>,
+    audio_btn_ids: Vec<Option<NodeId>>,
+    audio_configs: Vec<Option<(DrawerIds, usize)>>,
+    trim_ids: Vec<Option<TrimHandleIds>>,
+    target_ids: Vec<Option<EnvelopeTargetIds>>,
+    envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
+    /// Always `None` — no OSC address surface on scene rows this phase.
+    osc_addresses: Vec<Option<String>>,
+    mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
+    mod_active_tab: Vec<ModTab>,
+    /// One `SliderDragState` per row — the card drag protocol (D4): a
+    /// track pointer-down snapshots + starts an absolute-position drag
+    /// (mirrors `ScenePanel::metallic_slider`/`roughness_slider`, generalized
+    /// to N rows), motion writes live, release commits ONE undo unit.
+    drag_sliders: Vec<crate::slider::SliderDragState>,
 }
 
+impl SceneCardState {
+    fn new() -> Self {
+        Self {
+            param_info: Vec::new(),
+            mod_state: ParamModState::allocate(0),
+            id_map: ahash::AHashMap::new(),
+            slider_ids: Vec::new(),
+            row_catcher_ids: Vec::new(),
+            driver_btn_ids: Vec::new(),
+            envelope_btn_ids: Vec::new(),
+            driver_config_ids: Vec::new(),
+            ableton_config_ids: Vec::new(),
+            audio_btn_ids: Vec::new(),
+            audio_configs: Vec::new(),
+            trim_ids: Vec::new(),
+            target_ids: Vec::new(),
+            envelope_config_ids: Vec::new(),
+            osc_addresses: Vec::new(),
+            mod_tab_ids: Vec::new(),
+            mod_active_tab: Vec::new(),
+            drag_sliders: Vec::new(),
+        }
+    }
+
+    /// Resize every per-row vector to `n`, rebuilding `mod_state` fresh (the
+    /// build pass re-syncs every row's modulation facts from the VM's
+    /// `RowModulation` every frame — same "no rotting" contract the rest of
+    /// this panel already has, so nothing here needs to survive the
+    /// resize). `mod_active_tab` and `drag_sliders` DO need to survive a
+    /// mid-gesture rebuild (which mod tab is shown, an in-flight drag) — so
+    /// unlike the display vectors above, these two are only ever GROWN, never
+    /// truncated, even when `n` temporarily drops to 0 (a frame where World
+    /// doesn't build at all, e.g. no selection) — truncating a `SliderDragState`
+    /// mid-drag would silently drop the gesture the next time this panel
+    /// re-opens. Same intent as `ParamCardPanel::configure`'s
+    /// `mod_active_tab.resize(n, ..)`, adapted for this fixed-index family
+    /// where `n` isn't monotonic across frames.
+    fn resize(&mut self, n: usize) {
+        self.param_info.resize(n, placeholder_param_info());
+        self.mod_state = ParamModState::allocate(n);
+        self.slider_ids.resize(n, None);
+        self.row_catcher_ids.resize(n, None);
+        self.driver_btn_ids.resize(n, None);
+        self.envelope_btn_ids.resize(n, None);
+        self.driver_config_ids.resize_with(n, || None);
+        self.ableton_config_ids.resize_with(n, || None);
+        self.audio_btn_ids.resize(n, None);
+        self.audio_configs.resize_with(n, || None);
+        self.trim_ids.resize_with(n, || None);
+        self.target_ids.resize_with(n, || None);
+        self.envelope_config_ids.resize_with(n, || None);
+        self.osc_addresses.resize(n, None);
+        self.mod_tab_ids.resize_with(n, Vec::new);
+        while self.mod_active_tab.len() < n {
+            self.mod_active_tab.push(ModTab::Driver);
+        }
+        while self.drag_sliders.len() < n {
+            self.drag_sliders.push(crate::slider::SliderDragState::default());
+        }
+        self.id_map.clear();
+    }
+
+    fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
+        self.param_info[i].param_id.clone()
+    }
+
+    fn focus_mod_tab(&mut self, i: usize, tab: ModTab) {
+        if let Some(slot) = self.mod_active_tab.get_mut(i) {
+            *slot = tab;
+        }
+    }
+
+    fn mod_tab_hit(&self, id: NodeId) -> Option<(usize, ModTab)> {
+        self.mod_tab_ids.iter().enumerate().find_map(|(pi, tabs)| {
+            tabs.iter().find(|(tid, _)| *tid == id).map(|&(_, t)| (pi, t))
+        })
+    }
+
+    fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
+        let ms = &self.mod_state;
+        if ms.audio_active.get(pi).copied().unwrap_or(false) {
+            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+        } else if ms.audio_send_ids.is_empty() {
+            vec![PanelAction::OpenAudioSetup]
+        } else {
+            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+        }
+    }
+
+    fn audio_set_source_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        send_override: Option<usize>,
+        kind_override: Option<usize>,
+        band_override: Option<usize>,
+    ) -> Vec<PanelAction> {
+        use super::param_slider_shared::{audio_band_from_index, audio_kind_from_index};
+        let ms = &self.mod_state;
+        let send_k = send_override
+            .map(|k| k as i32)
+            .unwrap_or_else(|| ms.audio_send_idx.get(pi).copied().unwrap_or(-1));
+        let Some(send_id) = (send_k >= 0)
+            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
+            .flatten()
+        else {
+            return vec![];
+        };
+        let kind_idx =
+            kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
+        let band_idx =
+            band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
+        let feature = crate::types::AudioFeature::new(
+            audio_kind_from_index(kind_idx),
+            audio_band_from_index(band_idx),
+        );
+        vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
+    }
+}
+
+/// Placeholder `ParamInfo` used only to size `SceneCardState::resize`'s
+/// grow step before the real per-row info is written by the build pass —
+/// never observed by a click/drag (every live index is overwritten before
+/// `build_nodes` returns).
+fn placeholder_param_info() -> ParamInfo {
+    ParamInfo {
+        param_id: manifold_foundation::ParamId::from(""),
+        name: String::new(),
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        whole_numbers: false,
+        is_angle: false,
+        exposed: false,
+        is_toggle: false,
+        is_trigger: false,
+        is_trigger_gate: false,
+        value_labels: None,
+        osc_address: None,
+        ableton_display: None,
+        ableton_range: None,
+        mappable: false,
+        section: None,
+    }
+}
+
+/// One numeric row's interactive node ids, set by `build_numeric_row` when
 pub struct ScenePanel {
     open: bool,
     state: SceneSetupState,
@@ -876,8 +1164,11 @@ pub struct ScenePanel {
     add_fog_id: Option<NodeId>,
     new_scene_id: Option<NodeId>,
     open_graph_editor_id: Option<NodeId>,
-    /// Indexed by the `ROW_*` constants.
-    row_ids: [RowIds; 4],
+    /// C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the converted
+    /// Environment/Fog family's card-shaped row state. Replaces the deleted
+    /// `row_ids: [RowIds; 4]` — see `SceneCardState`'s doc comment for the
+    /// fixed-slot convention.
+    world_card: SceneCardState,
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
@@ -1027,7 +1318,7 @@ impl Default for ScenePanel {
             add_fog_id: None,
             new_scene_id: None,
             open_graph_editor_id: None,
-            row_ids: [RowIds::default(); 4],
+            world_card: SceneCardState::new(),
             add_object_id: None,
             add_light_id: None,
             import_model_id: None,
@@ -1151,7 +1442,11 @@ impl ScenePanel {
         self.add_fog_id = None;
         self.new_scene_id = None;
         self.open_graph_editor_id = None;
-        self.row_ids = [RowIds::default(); 4];
+        // Cleared to 0 rows here (not just resized in `build_world_properties`)
+        // so a frame where World never builds (state isn't `Live`) doesn't
+        // leave stale ids — `build_world_properties` resizes back to
+        // `WORLD_ROW_COUNT` when it does run.
+        self.world_card.resize(0);
         self.add_object_id = None;
         self.add_light_id = None;
         self.import_model_id = None;
@@ -1848,8 +2143,13 @@ impl ScenePanel {
         cy + ROW_GAP
     }
 
-    /// World properties: Environment + Fog (v1's sections, unchanged bodies
-    /// — carried forward per D7's "World → Environment + Fog sections").
+    /// World properties: Environment + Fog. C-P1a (SCENE_PANEL_CARD_
+    /// CONVERGENCE_DESIGN.md): the four numeric rows (Intensity/Fill/
+    /// Density/Height Falloff) now build through the shared card row core
+    /// (`build_world_param_row` → `build_param_row`) instead of the deleted
+    /// bespoke `build_numeric_row` — same slider chrome, mod glyphs, and
+    /// inline drawer every effect/generator card row has. Section chrome
+    /// (labels, Mode chip, "+ Add …" buttons) stays panel-shaped, unchanged.
     fn build_world_properties(
         &mut self,
         tree: &mut UITree,
@@ -1858,6 +2158,10 @@ impl ScenePanel {
         mut cy: f32,
         vm: &SceneSetupVm,
     ) -> f32 {
+        self.world_card.resize(WORLD_ROW_COUNT);
+        self.world_card.mod_state.audio_send_labels = vm.audio_send_labels.clone();
+        self.world_card.mod_state.audio_send_ids = vm.audio_send_ids.clone();
+
         tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment", section_label_style());
         cy += ROW_H;
         match &vm.environment {
@@ -1872,8 +2176,8 @@ impl ScenePanel {
                     label_style(),
                 );
                 cy += ROW_H;
-                cy = self.build_numeric_row(tree, inner_x, inner_w, cy, "Intensity", intensity, ROW_ENV_INTENSITY, "Environment");
-                cy = self.build_numeric_row(tree, inner_x, inner_w, cy, "Fill", fill, ROW_ENV_FILL, "Environment");
+                cy = self.build_world_param_row(tree, inner_x, inner_w, cy, "Intensity", intensity, WORLD_ENV_INTENSITY, "intensity");
+                cy = self.build_world_param_row(tree, inner_x, inner_w, cy, "Fill", fill, WORLD_ENV_FILL, "fill");
                 if !hdri_file.is_empty() {
                     tree.add_label(
                         Some(self.content_parent),
@@ -1888,8 +2192,8 @@ impl ScenePanel {
                 }
             }
             EnvironmentRowVm::Bare { intensity, fill } => {
-                cy = self.build_numeric_row(tree, inner_x, inner_w, cy, "Intensity", intensity, ROW_ENV_INTENSITY, "Environment");
-                cy = self.build_numeric_row(tree, inner_x, inner_w, cy, "Fill", fill, ROW_ENV_FILL, "Environment");
+                cy = self.build_world_param_row(tree, inner_x, inner_w, cy, "Intensity", intensity, WORLD_ENV_INTENSITY, "intensity");
+                cy = self.build_world_param_row(tree, inner_x, inner_w, cy, "Fill", fill, WORLD_ENV_FILL, "fill");
             }
             EnvironmentRowVm::Custom => {
                 tree.add_label(
@@ -1925,16 +2229,16 @@ impl ScenePanel {
         cy += ROW_H;
         match &vm.atmosphere {
             AtmosphereRowVm::Wired { density, height_falloff } => {
-                cy = self.build_numeric_row(tree, inner_x, inner_w, cy, "Density", density, ROW_FOG_DENSITY, "Fog");
-                cy = self.build_numeric_row(
+                cy = self.build_world_param_row(tree, inner_x, inner_w, cy, "Density", density, WORLD_FOG_DENSITY, "density");
+                cy = self.build_world_param_row(
                     tree,
                     inner_x,
                     inner_w,
                     cy,
                     "Height Falloff",
                     height_falloff,
-                    ROW_FOG_HEIGHT_FALLOFF,
-                    "Fog",
+                    WORLD_FOG_HEIGHT_FALLOFF,
+                    "height_falloff",
                 );
             }
             AtmosphereRowVm::None => {
@@ -1954,6 +2258,185 @@ impl ScenePanel {
             }
         }
         cy + ROW_GAP * 2.0
+    }
+
+    /// One Environment/Fog row, built through the shared card row core.
+    /// `slot` is the row's FIXED index into `self.world_card`
+    /// (`WORLD_ENV_INTENSITY`..`WORLD_FOG_HEIGHT_FALLOFF`). `param_key` is
+    /// the graph node's own param name (`intensity`/`fill`/`density`/
+    /// `height_falloff`) — used ONLY to synthesize this row's stable owned
+    /// `ParamId` (D2: `scene.{node_doc_id}.{param_key}`); the actual write
+    /// address is `row.value.addr` (unchanged — `RowAddr` already carries
+    /// the real `node_doc_id`/`param_id`/`scope_path` `SetGraphNodeParamCommand`
+    /// takes).
+    #[allow(clippy::too_many_arguments)]
+    fn build_world_param_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        row: &ModulatedRow,
+        slot: usize,
+        param_key: &str,
+    ) -> f32 {
+        // The exposure "∿" button keeps its own reserved lane at the row's
+        // right edge, same convention every other row family still uses —
+        // it's panel-shaped chrome (D1: the exposure MECHANISM survives
+        // unchanged), not a card widget.
+        let mod_x = inner_x + inner_w - MOD_BTN_W;
+        let usable_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
+
+        if row.value.driven {
+            // Driven rows stay read-only (D4 of SCENE_PANEL_UX_DESIGN.md) —
+            // `build_param_row` has no "driven" concept (card params are
+            // never wire-driven), so this one case keeps its own small
+            // dimmed render, same presentation the deleted bespoke builder
+            // used.
+            tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+            tree.add_label(
+                Some(self.content_parent),
+                inner_x + LABEL_W,
+                cy,
+                usable_w - LABEL_W,
+                ROW_H,
+                &format!("{:.2} (driven)", row.value.value),
+                driven_label_style(),
+            );
+            self.world_card.slider_ids[slot] = None;
+            self.world_card.param_info[slot] = placeholder_param_info();
+            self.build_mod_button(
+                tree, mod_x, cy, &row.value, "World", label, false,
+                row_key(slot as u64, ROW_OFF_MOD),
+                world_row_mod_automation_name(slot),
+            );
+            return cy + ROW_H;
+        }
+
+        let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
+        let (min, max) = (row.value.min, row.value.max);
+        let info = ParamInfo {
+            param_id: param_id.clone(),
+            name: label.to_string(),
+            min,
+            max,
+            default: row.value.value,
+            whole_numbers: false,
+            is_angle: false,
+            exposed: row.value.exposed,
+            is_toggle: false,
+            is_trigger: false,
+            is_trigger_gate: false,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+            section: None,
+        };
+        self.world_card.param_info[slot] = info.clone();
+        self.world_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
+        self.sync_world_modulation(slot, &row.modulation);
+
+        let content_w = usable_w - MOD_BTN_W - MOD_BTN_GAP;
+        let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
+        let built = build_param_row(
+            tree,
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            slider_w,
+            &info,
+            &self.world_card.mod_state,
+            slot,
+            GraphParamTarget::Generator,
+            &crate::slider::SliderColors::default_slider(),
+            color::FONT_LABEL,
+            true, // generators always support envelopes — same as ParamCardPanel's generator arm
+            label_width,
+            self.world_card.mod_active_tab.get(slot).copied().unwrap_or(ModTab::Driver),
+            true,
+            Some((slot as u64) << 8),
+            None,
+        );
+        self.world_card.row_catcher_ids[slot] = Some(built.row_catcher);
+        self.world_card.trim_ids[slot] = built.trim;
+        self.world_card.target_ids[slot] = built.target;
+        self.world_card.envelope_config_ids[slot] = built.envelope_config;
+        self.world_card.envelope_btn_ids[slot] = built.envelope_btn;
+        self.world_card.driver_btn_ids[slot] = Some(built.driver_btn);
+        self.world_card.driver_config_ids[slot] = built.driver_config;
+        self.world_card.audio_btn_ids[slot] = Some(built.audio_btn);
+        self.world_card.audio_configs[slot] = built.audio_config;
+        self.world_card.mod_tab_ids[slot] = built.mod_tabs;
+        self.world_card.slider_ids[slot] = built.slider;
+        if let Some(name) = world_row_driver_btn_automation_name(slot) {
+            tree.set_name(built.driver_btn, name);
+        }
+        if let Some(ids) = built.slider {
+            self.world_card.drag_sliders[slot].set_ids(ids);
+            self.world_card.drag_sliders[slot].set_range(min, max, false);
+            if let Some(name) = world_row_automation_name(slot) {
+                tree.set_name(ids.value_text, name);
+            }
+            if let Some(name) = world_row_track_automation_name(slot) {
+                tree.set_name(ids.track, name);
+            }
+        }
+
+        // Same reserved exposure-button lane every row family draws — sits
+        // past the card's own D/E/A buttons, at the row's far right edge.
+        self.build_mod_button(
+            tree, mod_x, cy, &row.value, "World", label, false,
+            row_key(slot as u64, ROW_OFF_MOD),
+            world_row_mod_automation_name(slot),
+        );
+
+        built.new_cy
+    }
+
+    /// Copy one row's [`RowModulation`] facts into `self.world_card.mod_state`
+    /// at `slot` — the per-row equivalent of `ParamModState::sync_from_config`
+    /// and `sync_audio` together, scalar instead of vector-sliced since a
+    /// scene row's modulation is computed one row at a time by the app
+    /// layer (`row_modulation_for_id`).
+    fn sync_world_modulation(&mut self, slot: usize, m: &RowModulation) {
+        let ms = &mut self.world_card.mod_state;
+        ms.driver_expanded[slot] = m.driver_active;
+        ms.envelope_expanded[slot] = m.envelope_active;
+        ms.trim_min[slot] = m.trim_min;
+        ms.trim_max[slot] = m.trim_max;
+        ms.target_norm[slot] = m.target_norm;
+        ms.env_decay[slot] = m.env_decay;
+        ms.driver_beat_div_idx[slot] = m.driver_beat_div_idx;
+        ms.driver_waveform_idx[slot] = m.driver_waveform_idx;
+        ms.driver_reversed[slot] = m.driver_reversed;
+        ms.driver_dotted[slot] = m.driver_dotted;
+        ms.driver_triplet[slot] = m.driver_triplet;
+        ms.driver_free_period[slot] = m.driver_free_period;
+        ms.automation_active[slot] = m.automation_active;
+        ms.automation_overridden[slot] = m.automation_overridden;
+        ms.audio_active[slot] = m.audio_active;
+        ms.audio_kind_idx[slot] = m.audio_kind_idx;
+        ms.audio_band_idx[slot] = m.audio_band_idx;
+        ms.audio_range_min[slot] = m.audio_range_min;
+        ms.audio_range_max[slot] = m.audio_range_max;
+        ms.audio_invert[slot] = m.audio_invert;
+        ms.audio_rate[slot] = m.audio_rate;
+        ms.audio_sensitivity[slot] = m.audio_sensitivity;
+        ms.audio_attack_ms[slot] = m.audio_attack_ms;
+        ms.audio_release_ms[slot] = m.audio_release_ms;
+        ms.audio_mode_idx[slot] = m.audio_trigger_mode_idx;
+        ms.audio_action_idx[slot] = m.audio_action_idx;
+        ms.audio_step_amount[slot] = m.audio_step_amount;
+        ms.audio_wrap_idx[slot] = m.audio_wrap_idx;
+        ms.audio_send_idx[slot] = m
+            .audio_send_id
+            .as_ref()
+            .and_then(|sid| ms.audio_send_ids.iter().position(|s| s == sid))
+            .map(|p| p as i32)
+            .unwrap_or(-1);
     }
 
     /// UX-P3a (D8/D9 of SCENE_PANEL_UX_DESIGN.md, sizing amendment): the mod
@@ -2010,101 +2493,6 @@ impl ScenePanel {
     /// One `[label]  [−] value [＋]` numeric row. Driven rows (D4) render
     /// with no interactive steppers and a dimmed "driven" badge — the panel
     /// never fights the graph.
-    fn build_numeric_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        row: &RowValue,
-        row_index: u64,
-        object_label: &str,
-    ) -> f32 {
-        // UX-P3a: reserve the mod-button slot out of the row's usable width
-        // before laying out the rest — the button always sits at the far
-        // right edge regardless of which branch below runs.
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let inner_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
-        tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-        let slot = &mut self.row_ids[row_index as usize];
-        if row.driven {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x + LABEL_W,
-                cy,
-                inner_w - LABEL_W,
-                ROW_H,
-                &format!("{:.2} (driven)", row.value),
-                driven_label_style(),
-            );
-            *slot = RowIds::default();
-            self.build_mod_button(
-                tree, mod_x, cy, row, object_label, label, false, row_key(row_index, ROW_OFF_MOD),
-                fixed_row_mod_automation_name(row_index),
-            );
-            return cy + ROW_H;
-        }
-        let step_x = inner_x + inner_w - VALUE_W - STEP_W * 2.0;
-        let minus = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2212}",
-            row_key(row_index, ROW_OFF_MINUS),
-        );
-        // A real interactive widget, not a plain label: `UITree::hit_test`
-        // only ever returns `INTERACTIVE`-flagged nodes (it skips a bare
-        // label and falls through to whatever's behind it — the panel
-        // background, in this dock), so the value cell must carry the flag
-        // itself to be a legitimate pointer-down/drag target. Styled to read
-        // as a drag zone, not a push-button (no press-style feedback beyond
-        // the hover fill already in `drag_value_style`).
-        let value = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W,
-            cy,
-            VALUE_W,
-            ROW_H,
-            drag_value_style(),
-            &format!("{:.2}", row.value),
-            row_key(row_index, ROW_OFF_VALUE),
-        );
-        // A stable automation name (P2 fix): `text`-based selectors like
-        // `{"text": "0.00", "under_text": "Fog"}` are ambiguous the moment
-        // ANY other row in the panel also shows "0.00" — `under_text`
-        // matches on a SHARED ancestor, not literal nesting (this panel has
-        // no per-section container, every row is a flat sibling under the
-        // same scroll-clip parent), so it can't disambiguate two rows that
-        // both read "0.00" (the P2 Objects section's default transform/
-        // color cells collided with this exact row once Objects started
-        // rendering above Environment/Fog — BUG found+fixed this phase).
-        // `scripts/ui-flows/scene-setup-add-fog-drag.json` was updated to
-        // select by name instead.
-        if let Some(name) = fixed_row_automation_name(row_index) {
-            tree.set_name(value, name);
-        }
-        let plus = tree.add_button_keyed(
-            Some(self.content_parent),
-            step_x + STEP_W + VALUE_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{002B}",
-            row_key(row_index, ROW_OFF_PLUS),
-        );
-        *slot = RowIds { minus: Some(minus), value: Some(value), plus: Some(plus) };
-        self.build_mod_button(
-            tree, mod_x, cy, row, object_label, label, false, row_key(row_index, ROW_OFF_MOD),
-            fixed_row_mod_automation_name(row_index),
-        );
-        cy + ROW_H
-    }
-
     /// A light-row `[label] [−] value [+]` numeric row, keyed into the
     /// light's own range. Lights' numeric params (intensity, light size)
     /// don't get UX-P2's slider treatment — D2 scopes sliders to the
@@ -3159,10 +3547,11 @@ impl ScenePanel {
 
     /// UX-P2 (D3a): whether `pos` is over a drag-armable value cell this
     /// frame — every cell in the SAME lookup set `PointerDown`'s
-    /// delta-drag arm uses (fixed `row_ids` + object/light/camera value
-    /// cells; the two slider tracks have their OWN cursor language, a
-    /// resize handle doesn't apply to a track you click-to-jump on, so
-    /// they're deliberately not included). The app's cursor-priority chain
+    /// delta-drag arm uses (object/light/camera value cells; the slider
+    /// tracks — Metallic/Roughness, and since C-P1a the converted
+    /// Environment/Fog rows — have their OWN cursor language, a resize
+    /// handle doesn't apply to a track you click-to-jump on, so they're
+    /// deliberately not included). The app's cursor-priority chain
     /// (`app.rs::update_cursor_for_position`) calls this to switch to
     /// `TimelineCursor::ResizeHorizontal` on hover — the visible half of
     /// D3a's affordance (the background-lighten half already ships via
@@ -3172,8 +3561,7 @@ impl ScenePanel {
             return false;
         }
         let hit = |id: NodeId| tree.get_bounds(id).contains(pos);
-        self.row_ids.iter().filter_map(|ids| ids.value).any(hit)
-            || self.object_value_cells.iter().any(|(id, _)| hit(*id))
+        self.object_value_cells.iter().any(|(id, _)| hit(*id))
             || self.light_value_cells.iter().any(|(id, _)| hit(*id))
             || self.camera_value_cells.iter().any(|(id, _)| hit(*id))
     }
@@ -3341,17 +3729,70 @@ impl ScenePanel {
                             row_value.addr.param_id.clone(),
                             new_value,
                         ));
-                    } else if let Some((row, delta)) = self.stepper_hit(*node_id)
-                        && let Some(row_value) = self.row_value_for(vm, row)
-                    {
-                        let new_value = (row_value.value + delta).clamp(row_value.min, row_value.max);
-                        actions.push(PanelAction::SceneSetupParamChanged(
-                            vm.layer_id.clone(),
-                            row_value.addr.scope_path.clone(),
-                            row_value.addr.node_doc_id,
-                            row_value.addr.param_id.clone(),
-                            new_value,
-                        ));
+                    } else if let Some(rc) = match_param_row_click(
+                        *node_id,
+                        &self.world_card.driver_btn_ids,
+                        &self.world_card.envelope_btn_ids,
+                        &self.world_card.driver_config_ids,
+                        &self.world_card.ableton_config_ids,
+                        &self.world_card.audio_btn_ids,
+                        &self.world_card.audio_configs,
+                        &self.world_card.slider_ids,
+                        &self.world_card.osc_addresses,
+                        &self.world_card.param_info,
+                        &self.world_card.mod_state,
+                    ) {
+                        // C-P1a: the converted Environment/Fog family's D/E/A
+                        // buttons + config drawers — the SAME dispatch shape
+                        // `ParamCardPanel::handle_click_generator` uses,
+                        // targeting `GraphParamTarget::Generator` (a scene
+                        // row always lives on the layer's own generator).
+                        let target = GraphParamTarget::Generator;
+                        actions.extend(match rc {
+                            RowClick::DriverToggle(pi) => {
+                                self.world_card.focus_mod_tab(pi, ModTab::Driver);
+                                vec![PanelAction::DriverToggle(target, self.world_card.pid_at(pi))]
+                            }
+                            RowClick::EnvelopeToggle(pi) => {
+                                self.world_card.focus_mod_tab(pi, ModTab::Envelope);
+                                vec![PanelAction::EnvelopeToggle(target, self.world_card.pid_at(pi))]
+                            }
+                            RowClick::DriverConfig(pi, action) => {
+                                vec![PanelAction::DriverConfig(target, self.world_card.pid_at(pi), action)]
+                            }
+                            RowClick::AbletonInvert(pi) => {
+                                vec![PanelAction::AbletonInvertToggle(target, self.world_card.pid_at(pi))]
+                            }
+                            RowClick::AudioToggle(pi) => {
+                                self.world_card.focus_mod_tab(pi, ModTab::Audio);
+                                self.world_card.audio_toggle_action(target, pi)
+                            }
+                            RowClick::AudioSelectSend(pi, k) => {
+                                self.world_card.audio_set_source_action(target, pi, Some(k), None, None)
+                            }
+                            RowClick::AudioSelectKind(pi, k) => {
+                                self.world_card.audio_set_source_action(target, pi, None, Some(k), None)
+                            }
+                            RowClick::AudioSelectBand(pi, b) => {
+                                self.world_card.audio_set_source_action(target, pi, None, None, Some(b))
+                            }
+                            RowClick::AudioToggleInvert(pi) => {
+                                vec![PanelAction::AudioModSetInvert(target, self.world_card.pid_at(pi))]
+                            }
+                            RowClick::AudioSelectTriggerMode(pi, m) => {
+                                vec![PanelAction::AudioModSetTriggerMode(target, self.world_card.pid_at(pi), m)]
+                            }
+                            RowClick::AudioSelectAction(pi, k) => {
+                                vec![PanelAction::AudioModSetActionKind(target, self.world_card.pid_at(pi), k)]
+                            }
+                            RowClick::AudioSelectWrap(pi, w) => {
+                                vec![PanelAction::AudioModSetWrap(target, self.world_card.pid_at(pi), w)]
+                            }
+                            RowClick::LabelCopy(_) => Vec::new(),
+                        });
+                    } else if let Some((pi, tab)) = self.world_card.mod_tab_hit(*node_id) {
+                        self.world_card.focus_mod_tab(pi, tab);
+                        actions.push(PanelAction::ModConfigTabChanged);
                     } else if let Some((cell_id, row_value, labels)) = self
                         .object_enum_cells
                         .iter()
@@ -3405,11 +3846,11 @@ impl ScenePanel {
             }
             // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8): double-click on a
             // drag-armable value cell opens its type-in box. Reuses the
-            // EXACT lookup PointerDown uses below (row_ids fixed rows +
-            // object/light/camera_value_cells) — the same set arms both
-            // gestures by construction, which is the drag/type-in
-            // registration parity `dock_numeric_cells_register_full_contract`
-            // checks.
+            // EXACT lookup PointerDown uses below (object/light/camera
+            // value cells + every slider's value-text cell, world_card
+            // included since C-P1a) — the same set arms both gestures by
+            // construction, which is the drag/type-in registration parity
+            // `dock_numeric_cells_register_full_contract` checks.
             UIEvent::DoubleClick { node_id, .. } => {
                 if let SceneSetupState::Live(vm) = &self.state {
                     let intent = crate::value_cell::ValueCell::intent_for(
@@ -3422,16 +3863,12 @@ impl ScenePanel {
                         "DoubleClick on a value cell must resolve to EditValue (D8's contract)"
                     );
                     let row_value = self
-                        .value_label_row_at(*node_id)
-                        .and_then(|row| self.row_value_for(vm, row))
-                        .or_else(|| {
-                            self.object_value_cells
-                                .iter()
-                                .chain(self.light_value_cells.iter())
-                                .chain(self.camera_value_cells.iter())
-                                .find(|(id, _)| *id == *node_id)
-                                .map(|(_, rv)| rv.clone())
-                        })
+                        .object_value_cells
+                        .iter()
+                        .chain(self.light_value_cells.iter())
+                        .chain(self.camera_value_cells.iter())
+                        .find(|(id, _)| *id == *node_id)
+                        .map(|(_, rv)| rv.clone())
                         .or_else(|| {
                             // UX-P2 (D2): the slider's own value-box node —
                             // `BitmapSlider`'s contract defines the SAME
@@ -3449,7 +3886,8 @@ impl ScenePanel {
                                         .filter(|ids| ids.value_text == *node_id)
                                         .and(self.roughness_slider_row.clone())
                                 })
-                        });
+                        })
+                        .or_else(|| self.world_row_value_for_value_text(*node_id));
                     if let Some(row_value) = row_value
                         && !row_value.driven
                         && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
@@ -3506,23 +3944,31 @@ impl ScenePanel {
                             )],
                         );
                     }
-                    if let Some(row) = self.value_label_row_at(*node_id)
-                        && let Some(row_value) = self.row_value_for(vm, row)
-                        && !row_value.driven
+                    // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D4): the
+                    // converted Environment/Fog rows' slider tracks —
+                    // absolute-position track-hit, same as Metallic/
+                    // Roughness above, but dispatching the card drag
+                    // protocol (`ParamSnapshot` + `ParamChanged`) instead of
+                    // the old per-tick `SceneSetupParamChanged` so a whole
+                    // scrub gesture is ONE undo unit (`ParamCommit` on
+                    // release, in the `DragEnd`/`PointerUp` arm below).
+                    if let Some((pi, new_value)) = self
+                        .world_card
+                        .drag_sliders
+                        .iter_mut()
+                        .enumerate()
+                        .find_map(|(pi, sl)| sl.try_start_drag(*node_id, pos.x).map(|v| (pi, v)))
                     {
                         self.drag_layer_id = Some(vm.layer_id.clone());
-                        self.drag.start(
-                            ValueDrag {
-                                addr: row_value.addr.clone(),
-                                start_x: pos.x,
-                                start_value: row_value.value,
-                                min: row_value.min,
-                                max: row_value.max,
-                                fine: modifiers.shift,
-                            },
-                            *pos,
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.world_card.pid_at(pi);
+                        return (
+                            true,
+                            vec![
+                                PanelAction::ParamSnapshot(target, pid.clone()),
+                                PanelAction::ParamChanged(target, pid, new_value),
+                            ],
                         );
-                        return (true, Vec::new());
                     }
                     if let Some((_, row_value)) = self
                         .object_value_cells
@@ -3549,9 +3995,13 @@ impl ScenePanel {
                 }
                 (self.owns_node(*node_id) || self.point_in_panel(*pos), Vec::new())
             }
-            UIEvent::DragBegin { .. } => {
-                (self.drag.is_active() || self.metallic_slider.is_dragging() || self.roughness_slider.is_dragging(), Vec::new())
-            }
+            UIEvent::DragBegin { .. } => (
+                self.drag.is_active()
+                    || self.metallic_slider.is_dragging()
+                    || self.roughness_slider.is_dragging()
+                    || self.world_card.drag_sliders.iter().any(|s| s.is_dragging()),
+                Vec::new(),
+            ),
             UIEvent::Drag { pos, .. } => {
                 // UX-P2 (D2): continue an active slider drag first (distinct
                 // machinery from the delta-drag `self.drag` below — see
@@ -3585,6 +4035,20 @@ impl ScenePanel {
                                 new_value,
                             )],
                         );
+                    }
+                    // C-P1a: continue an active Environment/Fog slider drag
+                    // — live `ParamChanged` only, no undo unit (the card
+                    // cadence: one `ParamCommit` fires on release, below).
+                    if let Some((pi, new_value)) = self
+                        .world_card
+                        .drag_sliders
+                        .iter()
+                        .enumerate()
+                        .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
+                    {
+                        let target = GraphParamTarget::Generator;
+                        let pid = self.world_card.pid_at(pi);
+                        return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
                     }
                 }
                 match (self.drag.payload().cloned(), self.drag_layer_id.clone()) {
@@ -3624,8 +4088,18 @@ impl ScenePanel {
                 self.drag.release();
                 self.metallic_slider.end_drag();
                 self.roughness_slider.end_drag();
+                // C-P1a (D4): release commits ONE undo unit for whichever
+                // Environment/Fog row was mid-drag, if any — the card
+                // protocol's Commit step.
+                let mut actions = Vec::new();
+                for pi in 0..self.world_card.drag_sliders.len() {
+                    if self.world_card.drag_sliders[pi].end_drag() {
+                        let pid = self.world_card.pid_at(pi);
+                        actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
+                    }
+                }
                 self.drag_layer_id = None;
-                (false, Vec::new())
+                (!actions.is_empty(), actions)
             }
             // BUG-199: mouse-wheel scroll over the docked body, routed here by
             // `window_input.rs`'s `primary_mouse_wheel` through the generic
@@ -3648,47 +4122,33 @@ impl ScenePanel {
         node_id == self.bg_id
     }
 
-    fn stepper_hit(&self, node_id: NodeId) -> Option<(u64, f32)> {
-        for (row, ids) in self.row_ids.iter().enumerate() {
-            if ids.minus == Some(node_id) {
-                return Some((row as u64, -0.05));
-            }
-            if ids.plus == Some(node_id) {
-                return Some((row as u64, 0.05));
-            }
-        }
-        None
-    }
-
-    fn value_label_row_at(&self, node_id: NodeId) -> Option<u64> {
-        self.row_ids
+    /// C-P1a: `world_card`'s per-row value-text cell, for the DoubleClick
+    /// type-in gesture — mirrors the metallic/roughness slider lookup just
+    /// above it (same `SliderNodeIds.value_text` contract), reading the
+    /// row's write address + current value back out of `id_map` (D2)
+    /// instead of a `RowIds`/`row_index` table (deleted with the bespoke
+    /// builder). `min`/`max`/`exposed` are unused by the DoubleClick action
+    /// and left at harmless defaults.
+    fn world_row_value_for_value_text(&self, node_id: NodeId) -> Option<RowValue> {
+        let pi = self
+            .world_card
+            .slider_ids
             .iter()
-            .position(|ids| ids.value == Some(node_id))
-            .map(|row| row as u64)
+            .position(|ids| ids.is_some_and(|ids| ids.value_text == node_id))?;
+        let pid = self.world_card.pid_at(pi);
+        let (addr, value) = self.world_card.id_map.get(&pid)?;
+        Some(RowValue { addr: addr.clone(), value: *value, min: 0.0, max: 0.0, driven: false, exposed: false })
     }
 
-    fn row_value_for(&self, vm: &SceneSetupVm, row: u64) -> Option<RowValue> {
-        match row {
-            ROW_ENV_INTENSITY => match &vm.environment {
-                EnvironmentRowVm::Importer { intensity, .. } | EnvironmentRowVm::Bare { intensity, .. } => {
-                    Some(intensity.clone())
-                }
-                _ => None,
-            },
-            ROW_ENV_FILL => match &vm.environment {
-                EnvironmentRowVm::Importer { fill, .. } | EnvironmentRowVm::Bare { fill, .. } => Some(fill.clone()),
-                _ => None,
-            },
-            ROW_FOG_DENSITY => match &vm.atmosphere {
-                AtmosphereRowVm::Wired { density, .. } => Some(density.clone()),
-                AtmosphereRowVm::None => None,
-            },
-            ROW_FOG_HEIGHT_FALLOFF => match &vm.atmosphere {
-                AtmosphereRowVm::Wired { height_falloff, .. } => Some(height_falloff.clone()),
-                AtmosphereRowVm::None => None,
-            },
-            _ => None,
-        }
+    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md D2: resolve a card-shaped
+    /// action's synthesized `ParamId` back to this frame's write address +
+    /// snapshot value. `dispatch_inspector`'s `ParamSnapshot`/`ParamChanged`/
+    /// `ParamCommit` arms check this FIRST — a hit means the id addresses a
+    /// converted scene row (routes through `SetGraphNodeParamCommand`); a
+    /// miss falls through to the existing `with_preset_graph_mut` exposed-
+    /// param path unchanged.
+    pub fn resolve_scene_param(&self, id: &manifold_foundation::ParamId) -> Option<(RowAddr, f32)> {
+        self.world_card.id_map.get(id).cloned()
     }
 
     /// The name label's rect for `group_node_id`, if a row for it was built
@@ -3888,6 +4348,13 @@ mod tests {
         RowValue { addr: RowAddr::root(3, "intensity"), value, min: 0.0, max: 4.0, driven: false, exposed: false }
     }
 
+    /// C-P1a: wrap a plain `RowValue` in an idle (no active modulation)
+    /// `ModulatedRow` — the shape `EnvironmentRowVm`/`AtmosphereRowVm` now
+    /// carry for every converted row.
+    fn mrow(value: RowValue) -> ModulatedRow {
+        ModulatedRow { value, modulation: Box::new(RowModulation::default()) }
+    }
+
     fn triplet(node_doc_id: u32, x: f32, y: f32, z: f32, min: f32, max: f32) -> (RowValue, RowValue, RowValue) {
         (
             RowValue { addr: RowAddr::root(node_doc_id, "x"), value: x, min, max, driven: false, exposed: false },
@@ -3928,6 +4395,8 @@ mod tests {
             scene_root_node_id: 0,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
@@ -3954,15 +4423,70 @@ mod tests {
             light_count: 0,
             shadow_caster_count: 0,
             scene_root_node_id: 0,
-            environment: EnvironmentRowVm::Bare { intensity, fill: env_row(0.0) },
+            environment: EnvironmentRowVm::Bare { intensity: mrow(intensity), fill: mrow(env_row(0.0)) },
             atmosphere: AtmosphereRowVm::None,
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
             objects: Vec::new(),
             lights: Vec::new(),
             camera: CameraRowVm::None,
         })));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.row_ids[ROW_ENV_INTENSITY as usize].minus.is_none());
+        // C-P1a: a driven row builds no `build_param_row` slider at all
+        // (the read-only dimmed render instead) — `world_card.slider_ids`
+        // stays `None` at that row's fixed slot.
+        assert!(panel.world_card.slider_ids[WORLD_ENV_INTENSITY].is_none());
+    }
+
+    /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md §3 "Panel id map is total":
+    /// every built row's synthesized id resolves through `resolve_scene_param`
+    /// back to its own `RowAddr` — all four Environment/Fog rows wired this
+    /// frame, none driven.
+    #[test]
+    fn world_id_map_is_total_over_every_built_row() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
+            layer_id: LayerId::new("layer-1"),
+            scene_name: "Scene".to_string(),
+            multiple_scenes: false,
+            object_count: 0,
+            light_count: 0,
+            shadow_caster_count: 0,
+            scene_root_node_id: 0,
+            environment: EnvironmentRowVm::Bare {
+                intensity: mrow(RowValue { addr: RowAddr::root(3, "intensity"), value: 1.0, min: 0.0, max: 4.0, driven: false, exposed: false }),
+                fill: mrow(RowValue { addr: RowAddr::root(3, "fill"), value: 0.5, min: 0.0, max: 2.0, driven: false, exposed: false }),
+            },
+            atmosphere: AtmosphereRowVm::Wired {
+                density: mrow(RowValue { addr: RowAddr::root(9, "density"), value: 0.2, min: 0.0, max: 1.0, driven: false, exposed: false }),
+                height_falloff: mrow(RowValue { addr: RowAddr::root(9, "height_falloff"), value: 0.7, min: 0.0, max: 2.0, driven: false, exposed: false }),
+            },
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
+            objects: Vec::new(),
+            lights: Vec::new(),
+            camera: CameraRowVm::None,
+        })));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        assert_eq!(panel.world_card.id_map.len(), WORLD_ROW_COUNT, "all four rows are wired and non-driven");
+        let expected = [
+            (WORLD_ENV_INTENSITY, 3u32, "intensity"),
+            (WORLD_ENV_FILL, 3u32, "fill"),
+            (WORLD_FOG_DENSITY, 9u32, "density"),
+            (WORLD_FOG_HEIGHT_FALLOFF, 9u32, "height_falloff"),
+        ];
+        for (slot, node_doc_id, param_key) in expected {
+            let pid = panel.world_card.pid_at(slot);
+            let (addr, _value) = panel
+                .resolve_scene_param(&pid)
+                .unwrap_or_else(|| panic!("slot {slot} id {pid:?} must resolve through the id map"));
+            assert_eq!(addr.node_doc_id, node_doc_id, "slot {slot} write address must target its own node");
+            assert_eq!(addr.param_id, param_key, "slot {slot} write address must target its own param");
+        }
     }
 
     /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
@@ -3982,6 +4506,8 @@ mod tests {
             scene_root_node_id: 99,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
                     index: 0,
@@ -5076,10 +5602,11 @@ mod tests {
     /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §4 invariant: every drag-armable
     /// value cell built by the dock is ALSO in the type-in registration set,
     /// and vice versa. PointerDown and DoubleClick resolve through the exact
-    /// same lookup in `handle_event` (`value_label_row_at`/`row_value_for` +
-    /// the `object`/`light`/`camera_value_cells` chain), so this drives both
-    /// gestures on every cell built by the azalea fixture and asserts both
-    /// are consumed.
+    /// same lookup in `handle_event` (the `object`/`light`/`camera_value_cells`
+    /// chain — World's rows are sliders since C-P1a, deliberately excluded
+    /// same as Metallic/Roughness, see `value_cell_at`'s doc), so this
+    /// drives both gestures on every cell built by the azalea fixture (which
+    /// carries no Environment/Fog) and asserts both are consumed.
     #[test]
     fn dock_numeric_cells_register_full_contract() {
         // Two passes — Object selected (default) then Light selected — so
@@ -5095,7 +5622,7 @@ mod tests {
             let mut tree = UITree::new();
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-            let mut cell_ids: Vec<NodeId> = panel.row_ids.iter().filter_map(|ids| ids.value).collect();
+            let mut cell_ids: Vec<NodeId> = Vec::new();
             cell_ids.extend(panel.object_value_cells.iter().map(|(id, _)| *id));
             cell_ids.extend(panel.light_value_cells.iter().map(|(id, _)| *id));
             cell_ids.extend(panel.camera_value_cells.iter().map(|(id, _)| *id));
