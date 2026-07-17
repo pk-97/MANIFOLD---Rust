@@ -100,6 +100,8 @@ impl PrimitiveSpec for TestCameraPointwise {
     const OUTPUTS: &'static [NodeOutput] = OUTPUTS;
     const PARAMS: &'static [ParamDef] = PARAMS;
     const FUSION_KIND: FusionKind = FusionKind::Pointwise;
+    const DEPTH_RULE: crate::node_graph::depth_rule::DepthRule =
+        crate::node_graph::depth_rule::DepthRule::Terminal;
     const WGSL_BODY: Option<&'static str> = Some(WGSL_BODY);
     const DERIVED_UNIFORMS: &'static [&'static str] = DERIVED_UNIFORMS;
 

@@ -165,6 +165,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input AND wire a `node.light` into the renderer's `light` input. `specular_power` is the Phong exponent — 1 is very soft (almost diffuse), 32 is the default highlight, 256 is pinpoint. `ambient` mixes via `lit = lambert * (1 - ambient) + ambient`; bump to 0.3+ for half-lit surfaces or zero for hard-lit shadow contrast. Optional renderer-side `normal_map` texture perturbs the per-fragment normal.",
     examples: [],
     picker: { label: "Phong Material", category: Atom },

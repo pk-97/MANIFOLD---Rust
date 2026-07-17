@@ -140,6 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "max_capacity is chain-build allocation ceiling — pre-allocates max_capacity × 32 bytes. active_count is a free slider. Rotation params apply to every instance uniformly — for per-instance varying rotation, write a downstream transform primitive that perturbs `rot_pad`.",
     examples: [],
     picker: { label: "Arrange Copies", category: Atom },

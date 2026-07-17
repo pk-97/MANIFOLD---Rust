@@ -75,6 +75,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire node.gltf_mesh_source's vertices (the base mesh), node.gltf_morph_deltas_source's deltas, and node.gltf_morph_weights' weights into this node's matching inputs. `target_count` must match node.gltf_morph_weights' own `target_count` param (gltf_import.rs sets both from the same GltfObjectMorph) — a short/mismatched deltas or weights buffer truncates the blend rather than reading out of bounds.",
     examples: [],
     picker: { label: "Morph Targets Blend", category: Atom },

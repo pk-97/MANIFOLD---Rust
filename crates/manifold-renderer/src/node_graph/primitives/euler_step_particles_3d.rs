@@ -61,6 +61,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — the dispatch mutates particles in place. `speed` is port-shadow so a control wire (LFO, audio band, manual slider) drives the advection energy. The `forces` input is the Array<[f32; 3]> buffer accumulated by the 3D force atoms (sample_texture_3d → simplex_noise_force_3d → diffuse_force_3d → container_repel_force_3d). Typical chain: those force atoms → euler_step_particles_3d → container_bounds_3d → flatten_to_camera_plane.",
     examples: ["FluidSim3D"],
     picker: { label: "Move Particles (3D, Euler step)", category: Atom },

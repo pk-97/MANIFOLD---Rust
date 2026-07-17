@@ -108,6 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Three instances + node.switch_texture is the canonical multi-shape preset (BasicShapes.json). `shape` is static per instance; everything else is port-shadows-param so cycling and rotation easing compose externally. `is_wireframe` reads as a scalar: > 0.5 draws the outline, otherwise solid fill. `line` only affects the wireframe path. `scale` is inverted internally so larger values zoom out (matches legacy BasicShapes behaviour). For mixed solid/wireframe presets, wire `is_wireframe` from a fill-mode mux driven by clip_trigger_count.",
     examples: [],
     picker: { label: "Basic Shape", category: Atom },

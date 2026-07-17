@@ -58,6 +58,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: Texture3D-domain gradient — outside the 2D depth channel
+    depth_rule: Terminal,
     composition_notes: "Output Texture3D dims follow vol_res / vol_depth (the default texture_3d_output_dims source). The output is the raw 6-tap gradient at integer voxel scale (×0.5) — feed it to node.swirl_force_3d to cross with a rotating reference axis (curl) and combine with slope, exactly as the legacy FluidSim3D force field did. Generic enough for any volumetric gradient need (normals from a heightfield volume, flow from a density field).",
     examples: ["FluidSim3D"],
     picker: { label: "Edge Slope (3D)", category: Atom },

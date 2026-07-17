@@ -50,6 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "out = vec4(in.rgb, alpha). Use at a generator's display terminus when the chain contains feedback/blend stages that zero the alpha channel. Effects should never need this — if an effect chain loses alpha, fix the blend, don't paint over it.",
     examples: ["Lightning"],
     picker: { label: "Set Alpha", category: Atom },

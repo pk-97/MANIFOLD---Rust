@@ -88,6 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). instance_count is clamped to the wired instance buffer's capacity. The instance Array dictates how many copies are drawn. Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model; pair with `node.light` (required for Phong/PBR/Cel) and `node.bake_environment` (required for PBR).",
     examples: [],
     picker: { label: "Render Copies", category: Atom },

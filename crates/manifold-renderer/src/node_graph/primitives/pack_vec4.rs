@@ -37,6 +37,7 @@ crate::primitive! {
         out: Array(Vec4Vertex),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the `x` input (mirrors node.combine_xy / node.array_math) so the pack auto-sizes to whatever the upstream channel length is. Processing truncates to min(x, y, z, w, out) so a shorter channel naturally clips the vertex count. No scale or projection constant is baked — the caller is responsible for any magnitude normalisation. For 4D wireframe surfaces using the existing rotate_4d / project_4d pipeline, multiply each channel by the legacy PROJ_SCALE-equivalent (0.176776695 for duocylinder, 0.125 for tesseract) via an array_math(ScaleOffset) node placed between the trig output and this pack — keeps the magnitude convention with the rest of the 4D family.",
     examples: [],
     picker: { label: "Combine XYZW", category: Atom },

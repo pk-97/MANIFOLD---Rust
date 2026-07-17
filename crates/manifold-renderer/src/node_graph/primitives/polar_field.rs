@@ -48,6 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Angle is normalized so a full sweep is 0..1 (handy for direct lut1d / sin compositions). Pair node.polar_field → node.sin_texture for sector patterns, → node.wrap(scale) for repeating wedges, → node.compose multiplicatively with a radius mask for circular sectors.",
     examples: [],
     picker: { label: "Polar Field", category: Atom },

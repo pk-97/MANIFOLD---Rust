@@ -72,6 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Warp,
     composition_notes: "1:1 building block for the legacy TransformFX effect. Rotation is in DEGREES, screen-CW (e.g. +90 rotates clockwise on screen) — the math conversion to radians + Y-down sign flip happens inside the primitive. Distinct from node.mirror (fold modes for Mirror); use this for affine, that for fold.",
     examples: ["preset.effect.transform"],
     picker: { label: "Transform", category: Atom },

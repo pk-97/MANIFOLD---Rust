@@ -87,6 +87,7 @@ crate::primitive! {
         world_normal: Texture2D,
     },
     params: [],
+    depth_rule: SourceHeight,
     composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model. Pair with `node.orbit_camera` for `camera`, `node.light` for `light`, and (PBR only) `node.bake_environment` for `envmap`. The G-buffer outputs (`world_pos`, `world_normal`) stay available for downstream deferred-shading-style work; they don't depend on material and won't compile their pipelines unless wired downstream. The `color` output is the primary path. Output formats are Rgba16Float.",
     examples: [],
     picker: { label: "Render Mesh", category: Atom },

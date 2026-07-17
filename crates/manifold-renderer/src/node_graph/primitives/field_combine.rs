@@ -65,6 +65,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Defaults (a=1, b=0, c=0) pass uv.x through unchanged. For Plasma-style rotated fields, wire `a` and `b` from node.math (Cos / Sin of time) and derive `c` to keep the field centered. Reads only R and G of the input — alpha and blue are ignored, alpha is forced to 1 on output.",
     examples: [],
     picker: { label: "Field Combine", category: Atom },

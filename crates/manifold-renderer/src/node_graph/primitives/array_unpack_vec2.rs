@@ -37,6 +37,7 @@ crate::primitive! {
         y: Array(f32),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Both outputs sized to the input capacity (chain build enforces). One dispatch per frame; per-element work is two scalar writes. Pair upstream with node.grid_uv_field (extract uv.y to drive a mirror_ramp on the height axis) or any other vec2-emitting producer.",
     examples: [],
     picker: { label: "Split XY", category: Atom },

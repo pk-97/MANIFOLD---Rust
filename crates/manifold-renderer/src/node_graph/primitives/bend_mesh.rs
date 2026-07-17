@@ -85,6 +85,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The classic 'bend a rod into an arc' deformer. Wire node.mesh_ramp's `weights` output to grow the bend progressively across the mesh (sweep `phase` to unfurl a bend over bars). `angle` is unbounded — wire a saw LFO doing full revolutions straight into it, sin/cos absorb the wrap with no seam (BUG-039 class, do not add a downstream clamp). Pair with node.facet_normals downstream only if a heavy compound bend+push chain needs a reset; bend's own normal transform is exact on its own.",
     examples: ["TwistColumn"],
     picker: { label: "Bend Mesh", category: Atom },

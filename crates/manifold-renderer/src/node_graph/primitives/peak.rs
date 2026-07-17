@@ -27,6 +27,7 @@ crate::primitive! {
         out: ScalarF32,
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Texture→Scalar bridge. Sparse-samples at 256 grid positions and emits the max; constant-time regardless of resolution but not pixel-exact. Pair with `node.luminance` (average) when you want both: peak for transients, average for sustained level.",
     examples: [],
     picker: { label: "Peak", category: Driver },
@@ -141,6 +142,7 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

@@ -116,6 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased Array<vec2> in/out (one buffer, in-place add). `amplitude` is port-shadow so a control wire (LFO / clip-trigger envelope / outer-card slider) drives noise energy live; `z` is port-shadow so a `time × scalar` math chain animates the noise field through Z. Wire any scalar Texture2D into `amplitude_modulator` to localize the noise (canonical FluidSim use wires the density texture); leave unwired for spatially-coherent noise at uniform amplitude everywhere. Replaces ~9 canvas-sized nodes in FluidSim2D's per-pixel noise advection.",
     examples: ["FluidSim2D"],
     picker: { label: "Turbulence (simplex)", category: Atom },

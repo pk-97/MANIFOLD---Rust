@@ -48,6 +48,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Port-shadowable amount input — wire a single outer-card Sharpen slider straight to this node's amount port via presetMetadata.bindings (convert: Float). amount = 0 fast-paths to a passthrough (no Laplacian taps). The tap spacing reads `textureDimensions` of the source, so the kernel scales with source resolution. For wider blurs prefer node.variable_blur — this primitive is for crisp edge enhancement, not arbitrary radius work.",
     examples: [],
     picker: { label: "Sharpen", category: Atom },

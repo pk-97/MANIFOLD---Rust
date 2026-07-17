@@ -78,6 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source/node.gltf_skinned_mesh_source. max_capacity is the pre-allocation ceiling in delta ELEMENTS (target_count * vertex_count, not just vertex_count) — gltf_import.rs sets it from the parsed target_count * the object's vertex_count. `skinned` (BUG-208): set true when this object also carries a glTF skin — the deltas are then loaded in the SAME untransformed bind-pose space as node.gltf_skinned_mesh_source's vertices (no node world-transform applied), so node.morph_targets_blend's output can feed node.skin_mesh's `in` directly. Leave false for a rigid (non-skinned) morphed object, where deltas ARE world-transformed to match node.gltf_mesh_source's base vertices.",
     examples: [],
     picker: { label: "glTF Morph Deltas", category: Atom },

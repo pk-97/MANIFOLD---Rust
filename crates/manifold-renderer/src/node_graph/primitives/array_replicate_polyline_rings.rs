@@ -60,6 +60,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity is `input.capacity * max_rings` for both `outline` and `edges`; runtime `ring_count = min(scales.capacity, max_rings)`. Ring i transform: outline points multiplied by the scalar `scales[i]`; edge pairs index-shifted by `i * input.outline.capacity` so each ring references its own vertex slice. `EdgePair::SENTINEL` in the input edges propagates as `SENTINEL` in every output ring (sentinels are slots downstream render_lines skips — the inactive tail of a variable-N polygon stays inactive in every replicated ring). The per-ring stride is the INPUT outline capacity, not the active vertex count — this matches consecutive_edges's index space, where active edges reference indices `[0..N)` and `SENTINEL` fills `[N..capacity)`.",
     examples: [],
     picker: { label: "Repeat Outline (rings)", category: Atom },

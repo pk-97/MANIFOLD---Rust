@@ -89,6 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Pair an H pass (axis=Horizontal) with a V pass (axis=Vertical) for a 2D edge-aware blur — same axis-pair convention as node.gaussian_blur / node.variable_blur. `depth_sigma` is in the SAME world units `linearize_depth` returns (view-space meters, following the Camera's near/far) — smaller values hug depth edges tighter (less cross-edge bleed, noisier flat regions); larger values approach a plain 9-tap gaussian (D8's I7 invariant: on a perfectly uniform depth plane this atom is byte-identical to the plain K9 gaussian, since every dz_j collapses to 0 and every weight reduces to its K9_j term). `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized), same contract as node.coc_from_depth / node.ssao_from_depth.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Bilateral Blur", category: Atom },

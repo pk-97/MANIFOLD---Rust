@@ -92,6 +92,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "offset is a signed displacement in UV units (~±0.15 in x, ±0.03 in y at amount=1), gated by step(1 - amount*0.6, block_hash) so it grows from sparse to dense as amount rises. Sum it with node.scanline_jitter_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp) to warp the source. hash carries the same block_hash the gate uses, so a `hash → node.exposure(amount) → node.smoothstep(0.91, 0.92)` chain reproduces the legacy per-block invert accent and stays aligned with the moved blocks. block_size is clamped to >= 4 in-shader.",
     examples: ["preset.effect.glitch"],
     picker: { label: "Block Displace Field", category: Atom },

@@ -47,6 +47,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: reads `pattern` as a fixed threshold texture, not a second content stream — depth follows `in` only, not a real CombineNearest peer
+    depth_rule: Inherit,
     composition_notes: "`pattern` and `in` must share dimensions (the shader reads both via textureLoad at the same pixel). `amount` drives both the quantization level count (8 at 0 -> 2 at 1) and the final crossfade, matching the legacy fused dither. Split out of the old monolithic dither so the pattern is a reusable atom.",
     examples: ["preset.effect.dither"],
     picker: { label: "Dither", category: Atom },

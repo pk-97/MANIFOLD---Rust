@@ -90,6 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Output range without scale: [0, ~1.414] (sqrt(2) at corners when center is opposite corner). Use scale to remap into a target range, or chain into node.scale_offset_image for affine remap. Pair with node.sin_texture for concentric rings, node.lut1d for radial gradients, node.compose with a threshold for circle masks.",
     examples: [],
     picker: { label: "Distance to Point", category: Atom },

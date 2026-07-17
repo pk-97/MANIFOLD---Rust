@@ -38,6 +38,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: name suggests a UV wrap but the body is `fract(input.rgb * scale)` — a per-pixel VALUE wrap, not a spatial UV remap
+    depth_rule: Inherit,
     composition_notes: "Output range is [0, 1). Chain with node.uv_field for stripes, with node.distance_to_point for concentric rings (different aesthetic than sin_texture: sharp ramps instead of smooth oscillation). With node.voronoi_2d this turns F1 distances into per-cell intensity ramps.",
     examples: [],
     picker: { label: "Wrap", category: Atom },

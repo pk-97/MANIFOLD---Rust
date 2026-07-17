@@ -89,6 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the input `uv` array (one noise sample per UV). `scale` is the same notion of frequency as in node.noise: ~1 = one cell across the UV range, ~32 = fine grain. Drive `z` from a time wire to animate the noise; drive `offset_*` from an LFO to pan. Bit-exact with `simplex3d(...)` from noise_common.wgsl — same source file is prepended at pipeline creation.",
     examples: [],
     picker: { label: "Simplex Noise (per copy)", category: Atom },

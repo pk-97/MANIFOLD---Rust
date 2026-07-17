@@ -64,6 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Defaults (low=0, high=1) are identity for inputs already in [0, 1]. For Plasma-style symmetric-around-zero curves wire `node.math(operation=Negate, in=high) → low` so a single `high` slider drives both edges. `low > high` produces an inverted curve (smoothstep flips signs internally).",
     examples: [],
     picker: { label: "Smoothstep", category: Atom },

@@ -78,6 +78,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "mask = smoothstep(-softness/2, +softness/2, dot(uv - center, (cos rotation, sin rotation))). softness ≈ 0 is a hard step at the center line; softness = 1 ≈ a half-canvas transition; softness ≥ 1.5 spans the canvas diagonal so the ramp never saturates. rotation=0 ramps left→right; rotation=π/2 ramps bottom→top. Cheap polarity flip: wire through node.invert (or just set rotation += π).",
     examples: [],
     picker: { label: "Linear Gradient", category: Atom },

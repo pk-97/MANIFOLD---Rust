@@ -84,6 +84,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: zero-input UV-coordinate producer (identical shape to a generator) but its output is a coordinate lookup table for a downstream node.remap/texture_advect, not visual content — no depth origin of its own, Terminal per the ambiguous-source default
+    depth_rule: Terminal,
     composition_notes: "Pairs naturally with node.field_combine to slice X / Y / X+Y projections out of the centered space (a=1 b=0 for X, a=0 b=1 for Y, a=1 b=1 for X+Y), and with node.distance_to_point (cx=0 cy=0) for the radial projection. For aspect-correct patterns, wire `scale_x` from a Math node that multiplies aspect by an inverse-scale. Override cx / cy to recenter procedurals on any point — e.g. a centered SDF that follows a face-tracker centroid.",
     examples: [],
     picker: { label: "Centered UV", category: Atom },

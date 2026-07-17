@@ -891,6 +891,9 @@ mod tests {
     }
 
     impl crate::node_graph::EffectNode for TestNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1105,6 +1108,9 @@ mod tests {
     }
 
     impl crate::node_graph::EffectNode for SkippableNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1253,6 +1259,9 @@ mod tests {
     }
 
     impl crate::node_graph::EffectNode for CarriesResourcesNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1324,6 +1333,9 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::node_graph::EffectNode for ExplicitDimNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
@@ -1425,6 +1437,9 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::node_graph::EffectNode for QuarterCanvasSource {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }
@@ -1507,6 +1522,9 @@ mod tests {
             type_id: EffectNodeType,
         }
         impl crate::node_graph::EffectNode for QuarterCanvasSource {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
             fn type_id(&self) -> &EffectNodeType { &self.type_id }
             fn inputs(&self) -> &[NodePort] { &[] }
             fn outputs(&self) -> &[NodePort] {

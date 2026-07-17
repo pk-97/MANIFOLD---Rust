@@ -58,6 +58,7 @@ crate::primitive! {
             enum_values: TEXTURE_ADVECT_BOUNDARIES,
         },
     ],
+    depth_rule: Warp,
     composition_notes: "Velocity is read from the RG channels of `velocity`; BA ignored. Output samples preserve all RGBA channels of `in`. Use Repeat for toroidal fluid sims (the oily-fluid family); Clamp when off-canvas samples should fade to edge color. For self-advection (advect velocity by itself), wire the same velocity to BOTH `in` and `velocity`. Negative `dt` runs the advection backwards (useful for trail-erase effects). The `dt` port shadows the param so an LFO can pulse the flow.",
     examples: [],
     picker: { label: "Texture Advect", category: Atom },

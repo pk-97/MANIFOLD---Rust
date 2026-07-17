@@ -25,6 +25,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
+    depth_rule: Inherit,
     composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.edge_slope → node.normalize → (sum two of these) → node.exposure → node.rotate_vector`.",
     examples: [],
     picker: { label: "Normalize", category: Atom },

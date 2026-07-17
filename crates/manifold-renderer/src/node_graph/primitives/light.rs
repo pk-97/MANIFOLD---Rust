@@ -196,6 +196,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Outer-card sliders typically expose pos/aim in world units, color as 0..1 RGB, intensity as a multiplier. `range` means different things per mode (Sun: shadow ortho half-extent, Point: attenuation half-distance) but both are 'how far does this light reach' — pick a value that matches your scene scale. `cast_shadows` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or trigger; toggle off to skip the shadow render pass entirely. `shadow_softness` picks the PCF kernel (3x3 / 5x5 / 7x7), or Contact for PCSS contact-hardening (shadows sharpen where the caster touches the receiver, soften with distance) — bigger fixed kernels and Contact both cost more than Hard. `light_size` only matters in Contact mode: it scales the blocker search and penumbra width, so it's the fader that turns noon (hard) into overcast (soft) on a self-shadowing hero mesh. `shadow_resolution` rarely needs perform-time control; bump it for sharper shadows on large scenes, drop it for performance. Wire `out` into a shadow-aware mesh renderer (renderer handles shadow map generation internally) or into a shading atom's `light` input (replaces scattered light_x/y/z scalars).",
     examples: [],
     picker: { label: "Light", category: Driver },

@@ -190,6 +190,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire `pos_x`..`scale_z` into a node.transform_3d's same-named input ports (its nine params are already port-shadowed — see docs/GLTF_ANIMATION_DESIGN.md A1). Tables are authored by gltf_import.rs at import time, one row per glTF keyframe; JSON shape matches node.cycle_table_row's Table convention. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop, or any 0..1 scrub source.",
     examples: [],
     picker: { label: "glTF Animation Source", category: Driver },
@@ -709,6 +710,9 @@ mod tests {
             seen: std::sync::Arc<Mutex<Option<ParamValue>>>,
         }
         impl EffectNode for Capture {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
             }

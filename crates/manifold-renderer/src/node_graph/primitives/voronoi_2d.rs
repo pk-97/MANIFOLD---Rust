@@ -96,6 +96,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "For star fields: chain into node.wrap → node.power (high exponent ~16) to spike F1 into points. Read A (cell_hash) to threshold which cells are stars (density slider via node.filter or node.smoothstep against A), and to derive per-star twinkle (math chain: A → frequency range → multiply by time → sin_term → multiply with the core). For cracked-glass / cell edges: read the B (F2-F1) channel via node.channel_mixer. For watercolor patches: read R, threshold via node.threshold. For per-cell colour variation (foam, pebbles, tiles): feed A into node.gradient_map or node.lut1d. Setting jitter to 0 gives a perfect grid; 1 gives full random cells. The cell_hash on A uses an independent hash mix from the jitter offsets, so each cell's hash is stable as jitter is animated (only the F1-winner can change at cell boundaries). The `cell_id` output (RG = F1-winner cell coordinate) is read via textureLoad downstream (node.hash_field_by_seed), so keep field and consumer at the same resolution; it carries integer cell coords (exact in fp16) for beat-reseeded per-cell offset/visibility (Voronoi Prism). Reading only `cell_id` (not `out`) is fine — the F1/F2 slot isn't allocated.",
     examples: [],
     picker: { label: "Voronoi 2D", category: Atom },

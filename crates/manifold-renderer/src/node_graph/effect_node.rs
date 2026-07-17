@@ -1037,6 +1037,19 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// How this node propagates the depth companion channel the "3D
+    /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
+    /// D1) — `Inherit`, `Warp`, `CombineNearest`, `SourceHeight`, or
+    /// `Terminal`; see [`DepthRule`](crate::node_graph::depth_rule::DepthRule)
+    /// for the full semantics of each. **No default** — unlike
+    /// [`fusion_kind`](Self::fusion_kind), every `EffectNode` impl must
+    /// declare this explicitly. `primitive!`-authored primitives set it via
+    /// the macro's REQUIRED `depth_rule:` field (forwarded from
+    /// `P::DEPTH_RULE`); hand-`impl EffectNode` primitives (including the
+    /// `system.source` / `system.final_output` / `system.generator_input`
+    /// boundary nodes) override this method directly.
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule;
+
     /// The [`RangeContract`](manifold_core::effects::RangeContract) on
     /// this node's `param_name` param, if any — the real physical/
     /// mathematical boundary the value must not cross

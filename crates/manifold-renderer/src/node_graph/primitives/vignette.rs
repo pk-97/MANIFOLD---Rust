@@ -67,6 +67,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "For cinematic vignettes use Circle (size≈0.5, softness≈0.5). For chain-cleanup edge fade (e.g. inside a feedback loop) use Rectangle (size≈0.98, softness≈0.04, strength=1.0). `size`/`softness`/`strength` are port-shadowed — wire any scalar producer to drive them live.",
     examples: ["preset.effect.stylized_feedback", "preset.effect.mandala"],
     picker: { label: "Vignette", category: Atom },

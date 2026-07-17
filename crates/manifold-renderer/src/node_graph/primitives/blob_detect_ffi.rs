@@ -147,6 +147,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "max_capacity is read by the chain build at allocation time (set once when authoring the preset). threshold sets the brightness cutoff in 0..1; sensitivity controls how aggressively bright regions merge into one blob. Until the first inference completes, the output buffer is all zeros — downstream consumers should skip zero-size entries.",
     examples: [],
     picker: { label: "Blob Tracker", category: Atom },

@@ -77,6 +77,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "End-inclusive (default): `out[0]=start`, `out[count-1]=end` — conventional for closed parametric curves where the start and end of the cycle are meant to land on the same point (Lissajous). End-exclusive: `out[0]=start`, `out[count-1]=end - (end-start)/count` — the right shape for regular N-gons sampled around a circle, where vertex 0 and vertex count-1 must be distinct points. `active_count` (input-only port-shadow) sets the runtime sample count when wired; when unwired the count is `max_capacity` so old graphs (Lissajous) work bit-identically. `max_capacity` is the pre-allocated buffer size; `active_count` cannot exceed it. Slots beyond `active_count` retain their previous-frame values, which is harmless when downstream topology (consecutive_edges / explicit EdgePair sentinels) refuses to reference them.",
     examples: [],
     picker: { label: "Range", category: Atom },

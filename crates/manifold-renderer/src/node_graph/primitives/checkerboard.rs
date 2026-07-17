@@ -53,6 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Scale = squares-per-UV-unit (so scale = 8 → an 8×8 grid). Use as a mask in node.compose to alternate between two upstream sources. Pair with node.lut1d to colorize the {0, 1} values.",
     examples: [],
     picker: { label: "Checkerboard", category: Atom },

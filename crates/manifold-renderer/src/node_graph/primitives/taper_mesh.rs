@@ -86,6 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "The 'pencil / spire / carrot' taper — a column extruded along `axis` narrows to a point over `length` starting at `center`. Wire node.mesh_ramp's `weights` output to grow the taper progressively instead of applying it uniformly. `taper=0` collapses the far end to a line on the axis (a cone tip); `taper=1` is pass-through. Composes with node.twist_mesh and node.bend_mesh on the same axis for a tapered twisted column in one fused chain (design decided #10).",
     examples: [],
     picker: { label: "Taper Mesh", category: Atom },

@@ -60,6 +60,7 @@ crate::primitive! {
             enum_values: FLASH_MODES,
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Strobe = node.beat_gate (rate, amount, duty) → node.flash (mode). beat_gate already multiplies by its own `amount`, so the effect's strobe depth lives on the gate and flash just applies the resulting scalar. amount=0 passes through unchanged in all modes. Wire wins over the inline param.",
     examples: ["preset.effect.strobe"],
     picker: { label: "Flash", category: Atom },

@@ -63,6 +63,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: zero-input fold-coordinate generator (same shape as centered_uv/mirror) consumed by a downstream node.remap — no depth origin of its own
+    depth_rule: Terminal,
     composition_notes: "Verbatim port of the legacy node.kaleidoscope fold (raw atan2 angle, floor-based wedge index, alternating-wedge mirror, polar→cartesian reconstruct). `segments` floors to >= 2 and is port-shadowed so a counter / clip-trigger can drive the wedge count per retrigger. Output UVs are unclamped — let node.remap's Clamp wrap handle bounds (matches the legacy clamp-before-sample). Pair: source → radial_fold_uv → remap(source, uv_field) → mix(source, remapped, Lerp, amount).",
     examples: ["preset.effect.kaleidoscope"],
     picker: { label: "Kaleidoscope", category: Atom },
