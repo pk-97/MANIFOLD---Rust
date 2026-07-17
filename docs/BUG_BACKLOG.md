@@ -172,6 +172,16 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-226 (golden-png-tests-overwrite-their-own-references-every-run) — the animated/skinned/morph gpu-proof "golden" tests regenerate their checked-in reference PNGs unconditionally instead of diff-gating against them — found 2026-07-17, lane/glb-triage (BUG-221 session), by reading the writer code after 16 goldens showed up modified in an unrelated run
+
+**Status:** OPEN — MED (verification infra; a "golden" that rewrites itself on every run gates nothing — a regression in skinned/morph rendering would silently update the reference instead of failing).
+
+**Symptom:** running the animated/skinned/morph gpu-proof tests leaves 16 modified files under `tests/fixtures/gltf/goldens/` (box_animated, cesiumman_skin, fox_skin, animatedmorphcube_morph, morphstresstest_morph) even when rendering is unchanged — and would do the same if rendering were BROKEN.
+
+**Root cause:** the tests' writer path unconditionally writes the rendered PNG to the golden path every run (confirmed by reading the writer code, 2026-07-17); no compare-then-fail branch exists.
+
+**Fix shape:** standard golden pattern — compare against the checked-in reference with a tolerance (the conformance suite's comparator is the precedent), fail on mismatch, regenerate only behind `MANIFOLD_UPDATE_GOLDENS=1`; add a meta-check that the goldens dir is clean after a suite run. One mechanical session.
+
 ### BUG-224 (scene-setup-close-button-bypasses-shared-toggle-action) — the Scene Setup dock's × button doesn't visibly close the panel — found 2026-07-17, Peter live-testing the dock ("The close button on the scene panel also doesn't work")
 
 **Status:** FIXED 2026-07-17 (`lane/panel-interaction-bugs`) — `ScenePanel::handle_event`'s `Click` arm for `close_id` now returns `(true, vec![PanelAction::OpenSceneSetup])` instead of calling `self.close()` directly, mirroring `AudioSetupPanel::handle_event`'s already-correct close arm (which has its own passing unit test, `close_toggles_audio_dock`, documenting the "one toggle path" pattern). Regression test added: `scene_setup_panel::tests::close_button_click_routes_through_the_shared_toggle_action`. L3 proof: new `scripts/ui-flows/scene-setup-close-button.json` (opens the dock, asserts "Outliner"/"×" exist, clicks "×", asserts both "Outliner" and "Scene Setup" are gone — green against the `gltfscene` fixture; the dispatch log shows `dispatched OpenSceneSetup (structural=true)` firing on the × click, confirming the correct action now flows).
