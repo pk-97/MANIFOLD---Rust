@@ -567,8 +567,18 @@ eval/scoreboard/bakeoff_b1_stage1.json.
 Results (liveshow slice): kick ADTOF **0.757** vs Stage-1 0.244 · snare 0.411
 vs 0.091 · hat 0.481 vs **0.603** (n=1). Two facts this settles: (1) ADTOF
 holds up on the real master — kick 0.76 dense on actual show audio is the
-first real-conditions confirmation of the keeper; (2) Stage-1's near-perfect
-clean-stem event detection does NOT survive demucs + real production density
-(kick recall 0.89 clean → 0.50 through demucs). Any future Stage-1/Stage-2
-work must be evaluated through demucs on real masters, not on clean stems —
-this corpus now does that by default.
+first real-conditions confirmation of the (stopgap — BUG-069 licensing still
+forces replacement) keeper; (2) — CORRECTED same day, next paragraph.
+
+CORRECTION (same day, Peter's challenge → events-vs-labels probe): the first
+write-up of this read blamed demucs robustness ("kick recall 0.89 → 0.50
+through demucs") — FALSE. That 0.50 was kick-LABELED recall. Measured
+directly on the demucs stems: the front-end finds the events near-perfectly
+(any-onset recall at kick truth: 0.97 / 0.98 / 1.00 per song; snare 0.75–1.00)
+— clean-stem event detection DOES survive demucs. The collapse is entirely
+the LABELER on real material: three of five songs have snare labeled-recall
+**0.00** with every snare event detected (labeled hat/perc instead), and
+liveshow_pattern labels only 30% of its found kicks as kicks. Stage-1's one
+wall is class labeling; event detection is strong on clean stems AND through
+demucs. Any future Stage-1/Stage-2 work is evaluated through demucs on real
+masters by default now — and its target is the labeler, not the front-end.
