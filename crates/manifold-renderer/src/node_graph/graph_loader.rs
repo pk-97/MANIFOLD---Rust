@@ -326,6 +326,30 @@ pub fn instantiate_def(
         None => def,
     };
 
+    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D5: migrate `node.render_scene`'s
+    // legacy per-object port wiring (`mesh_k`/`material_k`/17 maps/
+    // `transform_k`/`instances_k`) into `node.scene_object` nodes feeding
+    // `object_k`. Same single-choke-point placement as the type-id
+    // migration just above — every loader (project load, bundled/reference
+    // preset load, user-library preset load, `graph_tool migrate`, AND the
+    // live glTF importer's freshly-built output, which still emits the
+    // legacy shape until P3 repoints it) converges on `instantiate_def`, so
+    // landing the migration here covers all of them without a separate
+    // call site per producer. Structural, no version gate — idempotence is
+    // the gate (a def with no legacy wires is untouched, `false`, no
+    // clone). Must run AFTER type-id migration (a renamed old-shape
+    // render_scene, if one ever existed, is caught first) and BEFORE the
+    // group flatten below (the mint needs the def's still-nested group
+    // structure to place scene_object in the right scope).
+    let mut scene_object_migrated = def.clone();
+    let def = if manifold_core::scene_object_migration::migrate_scene_object_wires(
+        &mut scene_object_migrated,
+    ) {
+        &scene_object_migrated
+    } else {
+        def
+    };
+
     // Fold any node groups before anything else runs. After this the def
     // contains no `group` nodes, so every path below — the boundary scan,
     // per-node construction, wire translation — sees a flat document and is

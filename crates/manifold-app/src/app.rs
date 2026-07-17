@@ -1502,6 +1502,16 @@ impl Application {
             // resolves its own catalog default via `generator_catalog_default`
             // instead of `watched_graph_target`/`watched_catalog_default`.
             TextInputField::SceneObjectRename(group_node_id) => {
+                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6/P3: dispatches
+                // RenameSceneObjectCommand now, not RenameGroupCommand — it
+                // extends the same walk (group handle + card-section sweep)
+                // but ALSO keeps the object's own `node.scene_object` handle
+                // in sync (D6's single-writer-of-both posture) and degrades
+                // cleanly for an ungrouped hand-built object. `group_node_id`
+                // is unchanged from before: `SceneVm`'s
+                // `SceneObjectVm::Known::group_node_id` already resolves to
+                // the object_k wire's producer post-P1/P2 (D12), so this is
+                // exactly the id `RenameSceneObjectCommand` addresses by.
                 let new_handle = text.trim().to_string();
                 if !new_handle.is_empty()
                     && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
@@ -1510,7 +1520,7 @@ impl Application {
                         crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
                     {
                         let target = manifold_core::GraphTarget::Generator(layer_id);
-                        let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+                        let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
                             target,
                             Vec::new(),
                             group_node_id,

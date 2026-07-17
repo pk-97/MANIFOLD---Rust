@@ -1056,25 +1056,28 @@ pub(crate) struct GltfMaterialInfo {
     /// [`resolve_object_animation`]) whose ancestor chain carries a
     /// translation/rotation/scale keyframe track in that clip. A clip entry
     /// is `None` when this object isn't animated in that specific clip;
-    /// the whole vector is empty for a static object, the synthetic
-    /// default-material entry (never resolved), or when more than one node
-    /// contributes this material's geometry (the documented
+    /// the whole vector is empty for a static object, or when more than one
+    /// node contributes this material's geometry (the documented
     /// multi-node-per-material scope boundary — never partially or
-    /// incorrectly animated).
+    /// incorrectly animated). BUG-207: resolved for the synthetic
+    /// default-material entry too, from `nodes_by_material`'s `None`
+    /// bucket — the sentinel is a first-class key, not a special case.
     pub animations: Vec<Option<GltfObjectAnimation>>,
     /// GLTF_ANIMATION_DESIGN.md A2 (D2): this object's resolved skin
     /// topology, when its geometry is contributed by exactly one
     /// mesh-owning node (the SAME single-node scope boundary `animation`
     /// above uses) whose `node.skin()` is present. `None` for a static or
-    /// rigid-animated object, for the synthetic default-material entry,
-    /// or when more than one node contributes this material's geometry.
+    /// rigid-animated object, or when more than one node contributes this
+    /// material's geometry. BUG-207: resolved for the synthetic
+    /// default-material entry too (see `animations` above).
     pub skin: Option<GltfObjectSkin>,
     /// GLTF_ANIMATION_DESIGN.md A3: this object's resolved morph-target
     /// topology, when its geometry is contributed by exactly one
     /// mesh-owning node (the SAME single-node scope boundary `animation`/
     /// `skin` above use) whose mesh carries `targets` on the primitive(s)
-    /// contributing this material. `None` for an unmorphed object, the
-    /// synthetic default-material entry, or the multi-node case.
+    /// contributing this material. `None` for an unmorphed object or the
+    /// multi-node case. BUG-207: resolved for the synthetic
+    /// default-material entry too (see `animations` above).
     pub morph: Option<GltfObjectMorph>,
 }
 
@@ -1132,6 +1135,33 @@ pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
 /// `node.gltf_mesh_source` to select this geometry without looking up
 /// material index `u32::MAX` in the document.
 pub(crate) const DEFAULT_MATERIAL_SENTINEL: u32 = u32::MAX;
+
+/// Compare a primitive's `material().index()` against a `material_index`
+/// that may be [`DEFAULT_MATERIAL_SENTINEL`] — the single comparison every
+/// skin/morph resolution path in this file must use so a materialless
+/// primitive (glTF `None`) and the synthetic default-material entry mean
+/// the same thing on both sides. BUG-207: before this helper existed, every
+/// call site compared with a bare `Some(material_index as usize)`, which
+/// can never equal `None` — the sentinel entry's geometry could never be
+/// found, so its skin/morph/joints never resolved.
+fn primitive_material_matches(primitive_material_index: Option<usize>, material_index: u32) -> bool {
+    if material_index == DEFAULT_MATERIAL_SENTINEL {
+        primitive_material_index.is_none()
+    } else {
+        primitive_material_index == Some(material_index as usize)
+    }
+}
+
+/// Human-readable label for a `material_index` in an error/report message —
+/// the sentinel reads as "the default material" instead of printing
+/// `u32::MAX`.
+fn material_label(material_index: u32) -> String {
+    if material_index == DEFAULT_MATERIAL_SENTINEL {
+        "the default material".to_string()
+    } else {
+        format!("material {material_index}")
+    }
+}
 
 /// Fold glTF `KHR_texture_transform`'s `(offset, rotation, scale)` into the
 /// affine `[m00, m01, m10, m11, tx, ty]` `resolve_albedo` applies as
@@ -1710,7 +1740,7 @@ pub(crate) fn flatten_skinned_node(
     let mut joints = Vec::new();
     let mut weights = Vec::new();
     for primitive in mesh.primitives() {
-        if primitive.material().index() != Some(material_index as usize) {
+        if !primitive_material_matches(primitive.material().index(), material_index) {
             continue;
         }
         if primitive.mode() != gltf::mesh::Mode::Triangles {
@@ -1775,7 +1805,7 @@ fn find_skinned_node_for_material<'a>(
 ) -> Option<gltf::Node<'a>> {
     if node.skin().is_some()
         && let Some(mesh) = node.mesh()
-        && mesh.primitives().any(|p| p.material().index() == Some(material_index as usize))
+        && mesh.primitives().any(|p| primitive_material_matches(p.material().index(), material_index))
     {
         return Some(node.clone());
     }
@@ -1803,8 +1833,9 @@ pub(crate) fn load_gltf_skinned_mesh(
         }
     }
     Err(format!(
-        "{}: no skinned mesh-owning node found contributing material {material_index}",
-        path.display()
+        "{}: no skinned mesh-owning node found contributing {}",
+        path.display(),
+        material_label(material_index)
     ))
 }
 
@@ -1819,7 +1850,7 @@ fn find_mesh_node_for_material<'a>(
     material_index: u32,
 ) -> Option<gltf::Node<'a>> {
     if let Some(mesh) = node.mesh()
-        && mesh.primitives().any(|p| p.material().index() == Some(material_index as usize))
+        && mesh.primitives().any(|p| primitive_material_matches(p.material().index(), material_index))
     {
         return Some(node.clone());
     }
@@ -1918,9 +1949,25 @@ fn flatten_primitive_morph_deltas(
 /// only wires `node.gltf_morph_deltas_source` (which calls this) when
 /// `GltfMaterialInfo::morph` resolved. Returns `(deltas, target_count,
 /// vertex_count)`.
+///
+/// `skinned`: BUG-208 — a skin+morph combination on the same object chains
+/// `node.morph_targets_blend` between `node.gltf_skinned_mesh_source` and
+/// `node.skin_mesh` (glTF applies morph THEN skin, §3.7.2). Per A2/A3,
+/// `flatten_skinned_node`'s base vertices are emitted in UNTRANSFORMED
+/// bind-pose/local space — `node.gltf_skinned_mesh_source` never applies
+/// the mesh-owning node's world matrix, since a skinned object's
+/// positioning comes entirely from its joint palette. Morph deltas for
+/// that combination must land in the SAME untransformed space so
+/// `node.morph_targets_blend`'s additive sum stays index-1:1 with
+/// `node.skin_mesh`'s `in` — `skinned == true` skips the world-transform
+/// step entirely (identity matrices) instead of applying the node's world
+/// matrix. The non-skinned (rigid) path is unchanged: it still applies the
+/// node's world transform, matching `node.gltf_mesh_source`'s own
+/// world-transform of the base mesh.
 pub(crate) fn load_gltf_morph_deltas(
     path: &std::path::Path,
     material_index: u32,
+    skinned: bool,
 ) -> Result<(Vec<MeshVertex>, u32, u32), String> {
     let (document, buffers, _images) = import_glb(path)?;
     let parent_of = build_parent_map(&document);
@@ -1933,22 +1980,30 @@ pub(crate) fn load_gltf_morph_deltas(
         // Material selector flattens the base mesh (assuming no
         // EXT_mesh_gpu_instancing on this node; not exercised by the A3
         // gate fixtures, which each ship a single non-instanced morphed
-        // object — re-derive if a future asset needs it).
-        let world = static_world_matrix(&document, found.index(), &parent_of);
-        let world_linear = mat3_upper_row_major(&world);
-        let normal_mat = mat3_transpose(mat3_inverse(world_linear));
+        // object — re-derive if a future asset needs it). Skipped entirely
+        // (identity) for a skinned object — see the `skinned` doc comment
+        // above (BUG-208).
+        let (world_linear, normal_mat) = if skinned {
+            (MAT3_IDENTITY, MAT3_IDENTITY)
+        } else {
+            let world = static_world_matrix(&document, found.index(), &parent_of);
+            let world_linear = mat3_upper_row_major(&world);
+            let normal_mat = mat3_transpose(mat3_inverse(world_linear));
+            (world_linear, normal_mat)
+        };
         let mesh = found.mesh().ok_or_else(|| "matched node has no mesh".to_string())?;
         let mut per_target: Vec<Vec<MeshVertex>> = Vec::new();
         for primitive in mesh.primitives() {
-            if primitive.material().index() != Some(material_index as usize) {
+            if !primitive_material_matches(primitive.material().index(), material_index) {
                 continue;
             }
             flatten_primitive_morph_deltas(&primitive, &buffers, &world_linear, &normal_mat, &mut per_target)?;
         }
         if per_target.is_empty() || per_target[0].is_empty() {
             return Err(format!(
-                "{}: material {material_index} has no morph targets",
-                path.display()
+                "{}: {} has no morph targets",
+                path.display(),
+                material_label(material_index)
             ));
         }
         let target_count = per_target.len() as u32;
@@ -1957,8 +2012,9 @@ pub(crate) fn load_gltf_morph_deltas(
         return Ok((deltas, target_count, vertex_count));
     }
     Err(format!(
-        "{}: no mesh-owning node found contributing material {material_index}",
-        path.display()
+        "{}: no mesh-owning node found contributing {}",
+        path.display(),
+        material_label(material_index)
     ))
 }
 
@@ -1992,6 +2048,16 @@ fn summarize_node(
             Some(list) => list.iter().map(|it| mat4_mul(&world, it)).collect(),
             None => vec![world],
         };
+        // BUG-205: a SKINNED mesh's rendered position ignores the mesh
+        // node's own world transform (glTF 2.0 §3.7.3.3) — its static
+        // (bind-pose) world positions are `skin_matrix[j] * v` blended by
+        // the vertex weights, exactly what `node.skin_mesh` computes at
+        // runtime. Summarizing it through `world` instead put the bbox in
+        // a DIFFERENT space than the render (skeleton_animated.glb: bind
+        // bbox y 0.36..2.22 vs skinned y -0.57..1.20), so the synthesized
+        // camera framed and recentered a box the mesh never occupies.
+        let bind_skin_matrices: Option<Vec<Mat4>> =
+            node.skin().map(|skin| bind_pose_skin_matrices(&skin, document, buffers));
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let Some(positions) = reader.read_positions() else {
@@ -2005,6 +2071,32 @@ fn summarize_node(
                 None => positions.len() as u32,
             };
             *per_material.entry(prim.material().index()).or_insert(0) += vcount * instance_count as u32;
+            let joints: Option<Vec<[u16; 4]>> =
+                reader.read_joints(0).map(|it| it.into_u16().collect());
+            let weights: Option<Vec<[f32; 4]>> =
+                reader.read_weights(0).map(|it| it.into_f32().collect());
+            if let (Some(sm), Some(joints), Some(weights)) =
+                (bind_skin_matrices.as_ref(), joints.as_ref(), weights.as_ref())
+            {
+                for (i, p) in positions.iter().enumerate() {
+                    let mut wp = [0.0f32; 3];
+                    let wsum: f32 = weights[i].iter().sum::<f32>().max(1e-8);
+                    for k in 0..4 {
+                        let j = joints[i][k] as usize;
+                        let Some(m) = sm.get(j) else { continue };
+                        let tp = mat4_transform_point(m, *p);
+                        let w = weights[i][k] / wsum;
+                        for c in 0..3 {
+                            wp[c] += w * tp[c];
+                        }
+                    }
+                    for c in 0..3 {
+                        bbox_min[c] = bbox_min[c].min(wp[c]);
+                        bbox_max[c] = bbox_max[c].max(wp[c]);
+                    }
+                }
+                continue;
+            }
             for instance_world in &instance_worlds {
                 for p in &positions {
                     let wp = mat4_transform_point(instance_world, *p);
@@ -2021,6 +2113,161 @@ fn summarize_node(
         summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max)?;
     }
     Ok(())
+}
+
+/// BUG-205: per-joint bind-pose skin matrices (`static_world(joint) *
+/// inverse_bind_matrix`) — maps a skinned primitive's mesh-local vertices
+/// to their STATIC world positions, the space `node.skin_mesh` renders in.
+/// Mirrors `parse_skins`' fallback: a skin with no `inverseBindMatrices`
+/// accessor implies identity per joint.
+fn bind_pose_skin_matrices(
+    skin: &gltf::Skin,
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<Mat4> {
+    let parent_of = build_parent_map(document);
+    let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+    let ibms: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
+        Some(it) => it.collect(),
+        None => vec![MAT4_IDENTITY; skin.joints().count()],
+    };
+    skin.joints()
+        .enumerate()
+        .map(|(k, joint)| {
+            let world = static_world_matrix(document, joint.index(), &parent_of);
+            mat4_mul(&world, ibms.get(k).unwrap_or(&MAT4_IDENTITY))
+        })
+        .collect()
+}
+
+/// Resolve `key`'s skin — `Some(material_index)` for a real material,
+/// `None` for the synthetic default-material bucket (BUG-207) — the SAME
+/// way for both: exactly one contributing node, and that node carries a
+/// `skin()`. Sharing this function between the per-material loop and the
+/// default-material entry is the fix: before, the default entry was
+/// hardcoded `skin: None` and could never resolve one.
+fn resolve_skin_for_key(
+    nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
+    document: &gltf::Document,
+    skins: &[GltfSkinInfo],
+    key: Option<usize>,
+    label: &str,
+    animation_report_lines: &mut Vec<String>,
+) -> Option<GltfObjectSkin> {
+    match nodes_by_material.get(&key) {
+        Some(nodes) if nodes.len() == 1 => {
+            let node_index = *nodes.iter().next().unwrap();
+            document.nodes().nth(node_index).and_then(|node| {
+                node.skin().map(|s| GltfObjectSkin {
+                    skin_index: s.index() as u32,
+                    info: skins[s.index()].clone(),
+                })
+            })
+        }
+        Some(nodes) if nodes.len() > 1 => {
+            if nodes
+                .iter()
+                .any(|n| document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false))
+            {
+                animation_report_lines.push(format!(
+                    "{label}: geometry contributed by {} nodes, at \
+                     least one of which is skinned — multi-node-per-material skinning is \
+                     out of A2 scope, this object is left unskinned",
+                    nodes.len()
+                ));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Resolve `key`'s morph targets — same `Some`/`None` key convention as
+/// [`resolve_skin_for_key`] (BUG-207). `target_count` comes from the FIRST
+/// matching primitive with targets; see the call site's original comment
+/// for the multi-primitive-inconsistent-target-count caveat (unchanged).
+fn resolve_morph_for_key(
+    nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
+    document: &gltf::Document,
+    key: Option<usize>,
+    label: &str,
+    animation_report_lines: &mut Vec<String>,
+) -> Option<GltfObjectMorph> {
+    match nodes_by_material.get(&key) {
+        Some(nodes) if nodes.len() == 1 => {
+            let node_index = *nodes.iter().next().unwrap();
+            document.nodes().nth(node_index).and_then(|node| {
+                let mesh = node.mesh()?;
+                let target_count = mesh
+                    .primitives()
+                    .find(|p| p.material().index() == key && p.morph_targets().len() > 0)
+                    .map(|p| p.morph_targets().len())?;
+                let mesh_weights = mesh.weights().unwrap_or(&[]);
+                let static_weights: Vec<f32> = (0..target_count)
+                    .map(|i| mesh_weights.get(i).copied().unwrap_or(0.0))
+                    .collect();
+                Some(GltfObjectMorph {
+                    mesh_node_index: node_index,
+                    target_count: target_count as u32,
+                    static_weights,
+                })
+            })
+        }
+        Some(nodes) if nodes.len() > 1 => {
+            if nodes.iter().any(|n| {
+                document
+                    .nodes()
+                    .nth(*n)
+                    .and_then(|node| node.mesh())
+                    .map(|mesh| mesh.primitives().any(|p| p.morph_targets().len() > 0))
+                    .unwrap_or(false)
+            }) {
+                animation_report_lines.push(format!(
+                    "{label}: geometry contributed by {} nodes, at \
+                     least one of which carries morph targets — multi-node-per-material \
+                     morph targets are out of A3 scope, this object is left unmorphed",
+                    nodes.len()
+                ));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Resolve `key`'s animation clips — same `Some`/`None` key convention as
+/// [`resolve_skin_for_key`] (BUG-207): every clip resolved against the
+/// contributing node's full ancestor chain, once per clip (A4/D4).
+#[allow(clippy::too_many_arguments)]
+fn resolve_animations_for_key(
+    nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
+    chain_by_node: &std::collections::BTreeMap<usize, Vec<usize>>,
+    node_anims_by_clip: &[std::collections::BTreeMap<usize, GltfNodeAnimation>],
+    any_clip_animated_nodes: &std::collections::BTreeSet<usize>,
+    key: Option<usize>,
+    label: &str,
+    animation_report_lines: &mut Vec<String>,
+) -> Vec<Option<GltfObjectAnimation>> {
+    match nodes_by_material.get(&key) {
+        Some(nodes) if nodes.len() == 1 => {
+            let node_index = *nodes.iter().next().unwrap();
+            let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
+            node_anims_by_clip
+                .iter()
+                .map(|node_anims| resolve_object_animation(&chain, node_anims, animation_report_lines))
+                .collect()
+        }
+        Some(nodes) if nodes.len() > 1 && any_clip_animated_nodes.iter().any(|n| nodes.contains(n)) => {
+            animation_report_lines.push(format!(
+                "{label}: geometry contributed by {} nodes, at least \
+                 one of which is animated in some clip — multi-node-per-material \
+                 animation is out of scope, this object is left static",
+                nodes.len()
+            ));
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Parse a glb's structure for the importer: the distinct materials with
@@ -2112,56 +2359,29 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // one mesh-owning node contributes its geometry — the
             // documented multi-node-per-material scope boundary (never
             // partially or ambiguously animated) — once PER CLIP (A4/D4).
-            let animations: Vec<Option<GltfObjectAnimation>> =
-                match nodes_by_material.get(&Some(material_index as usize)) {
-                    Some(nodes) if nodes.len() == 1 => {
-                        let node_index = *nodes.iter().next().unwrap();
-                        let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
-                        node_anims_by_clip
-                            .iter()
-                            .map(|node_anims| {
-                                resolve_object_animation(&chain, node_anims, &mut animation_report_lines)
-                            })
-                            .collect()
-                    }
-                    Some(nodes) if nodes.len() > 1 && any_clip_animated_nodes.iter().any(|n| nodes.contains(n)) => {
-                        animation_report_lines.push(format!(
-                            "material {material_index}: geometry contributed by {} nodes, at least \
-                             one of which is animated in some clip — multi-node-per-material \
-                             animation is out of scope, this object is left static",
-                            nodes.len()
-                        ));
-                        Vec::new()
-                    }
-                    _ => Vec::new(),
-                };
+            // Same key convention `resolve_animations_for_key` shares with
+            // the default-material entry built below (BUG-207).
+            let material_key = Some(material_index as usize);
+            let label = material_label(material_index);
+            let animations: Vec<Option<GltfObjectAnimation>> = resolve_animations_for_key(
+                &nodes_by_material,
+                &chain_by_node,
+                &node_anims_by_clip,
+                &any_clip_animated_nodes,
+                material_key,
+                &label,
+                &mut animation_report_lines,
+            );
             // A2 (D2): resolve this material's skin the same way — exactly
             // one contributing node, and that node carries a `skin()`.
-            let skin = match nodes_by_material.get(&Some(material_index as usize)) {
-                Some(nodes) if nodes.len() == 1 => {
-                    let node_index = *nodes.iter().next().unwrap();
-                    document.nodes().nth(node_index).and_then(|node| {
-                        node.skin().map(|s| GltfObjectSkin {
-                            skin_index: s.index() as u32,
-                            info: skins[s.index()].clone(),
-                        })
-                    })
-                }
-                Some(nodes) if nodes.len() > 1 => {
-                    if nodes.iter().any(|n| {
-                        document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false)
-                    }) {
-                        animation_report_lines.push(format!(
-                            "material {material_index}: geometry contributed by {} nodes, at \
-                             least one of which is skinned — multi-node-per-material skinning is \
-                             out of A2 scope, this object is left unskinned",
-                            nodes.len()
-                        ));
-                    }
-                    None
-                }
-                _ => None,
-            };
+            let skin = resolve_skin_for_key(
+                &nodes_by_material,
+                &document,
+                &skins,
+                material_key,
+                &label,
+                &mut animation_report_lines,
+            );
             // A3: resolve this material's morph targets the same way —
             // exactly one contributing node, and that node's mesh carries
             // `targets` on the primitive(s) contributing this material.
@@ -2170,45 +2390,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // and an inconsistent target count across them is not
             // exercised by AnimatedMorphCube/MorphStressTest/
             // MorphPrimitivesTest (re-derive if a future asset needs it).
-            let morph = match nodes_by_material.get(&Some(material_index as usize)) {
-                Some(nodes) if nodes.len() == 1 => {
-                    let node_index = *nodes.iter().next().unwrap();
-                    document.nodes().nth(node_index).and_then(|node| {
-                        let mesh = node.mesh()?;
-                        let target_count = mesh
-                            .primitives()
-                            .find(|p| {
-                                p.material().index() == Some(material_index as usize)
-                                    && p.morph_targets().len() > 0
-                            })
-                            .map(|p| p.morph_targets().len())?;
-                        let mesh_weights = mesh.weights().unwrap_or(&[]);
-                        let static_weights: Vec<f32> = (0..target_count)
-                            .map(|i| mesh_weights.get(i).copied().unwrap_or(0.0))
-                            .collect();
-                        Some(GltfObjectMorph { mesh_node_index: node_index, target_count: target_count as u32, static_weights })
-                    })
-                }
-                Some(nodes) if nodes.len() > 1 => {
-                    if nodes.iter().any(|n| {
-                        document
-                            .nodes()
-                            .nth(*n)
-                            .and_then(|node| node.mesh())
-                            .map(|mesh| mesh.primitives().any(|p| p.morph_targets().len() > 0))
-                            .unwrap_or(false)
-                    }) {
-                        animation_report_lines.push(format!(
-                            "material {material_index}: geometry contributed by {} nodes, at \
-                             least one of which carries morph targets — multi-node-per-material \
-                             morph targets are out of A3 scope, this object is left unmorphed",
-                            nodes.len()
-                        ));
-                    }
-                    None
-                }
-                _ => None,
-            };
+            let morph = resolve_morph_for_key(
+                &nodes_by_material,
+                &document,
+                material_key,
+                &label,
+                &mut animation_report_lines,
+            );
             let pbr = m.pbr_metallic_roughness();
             // IMPORT_FIDELITY_DESIGN.md D8/F-P5: BLEND maps to a real
             // `Blend` material (see `gltf_import.rs`), never Mask cutout —
@@ -2555,6 +2743,36 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         // `material_index = DEFAULT_MATERIAL_SENTINEL` (u32::MAX) marks
         // this entry as synthetic — `gltf_import.rs` must never re-query
         // material index u32::MAX in the document for it.
+        //
+        // BUG-207: the default-material bucket (`nodes_by_material`'s
+        // `None` key) is a first-class key here too — a materialless
+        // skinned/morphed/animated node resolves exactly like a real
+        // material's `Some(idx)` bucket, via the SAME shared functions.
+        let default_label = material_label(DEFAULT_MATERIAL_SENTINEL);
+        let default_skin = resolve_skin_for_key(
+            &nodes_by_material,
+            &document,
+            &skins,
+            None,
+            &default_label,
+            &mut animation_report_lines,
+        );
+        let default_morph = resolve_morph_for_key(
+            &nodes_by_material,
+            &document,
+            None,
+            &default_label,
+            &mut animation_report_lines,
+        );
+        let default_animations = resolve_animations_for_key(
+            &nodes_by_material,
+            &chain_by_node,
+            &node_anims_by_clip,
+            &any_clip_animated_nodes,
+            None,
+            &default_label,
+            &mut animation_report_lines,
+        );
         materials.push(GltfMaterialInfo {
             material_index: DEFAULT_MATERIAL_SENTINEL,
             name: None,
@@ -2616,12 +2834,9 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             mr_sampler: GltfSamplerInfo::default(),
             occlusion_sampler: GltfSamplerInfo::default(),
             emissive_sampler: GltfSamplerInfo::default(),
-            // The synthetic default-material entry has no real glTF
-            // material index to resolve animation against — never
-            // animated.
-            animations: Vec::new(),
-            skin: None,
-            morph: None,
+            animations: default_animations,
+            skin: default_skin,
+            morph: default_morph,
         });
     }
 

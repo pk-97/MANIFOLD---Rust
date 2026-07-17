@@ -609,6 +609,7 @@ mod gpu_tests {
         let mut material_ws = Vec::new();
         let mut transform_ws = Vec::new();
         let mut atmosphere_ws = Vec::new();
+        let mut object_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
         let inputs = NodeInputs::new(input_scratch, backend_ref, generations);
         let outputs = NodeOutputs::new(
@@ -620,6 +621,7 @@ mod gpu_tests {
             &mut material_ws,
             &mut transform_ws,
             &mut atmosphere_ws,
+            &mut object_ws,
         );
         let mut native_enc = device.create_encoder("mux-texture-test");
         let unchanged;

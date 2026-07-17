@@ -90,240 +90,562 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "nodeId": "input", "handle": "input" },
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
     {
       "id": 1,
-      "typeId": "node.grid_mesh",
       "nodeId": "terrain_grid",
+      "typeId": "node.grid_mesh",
       "handle": "terrain_grid",
-      "title": "Terrain Grid",
       "params": {
-        "max_capacity": { "type": "Int", "value": 2500 },
-        "resolution_x": { "type": "Int", "value": 48 },
-        "resolution_y": { "type": "Int", "value": 48 },
-        "size_x": { "type": "Float", "value": 6.0 },
-        "size_y": { "type": "Float", "value": 6.0 }
-      }
+        "max_capacity": {
+          "type": "Int",
+          "value": 2500
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 48
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 48
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 6.0
+        }
+      },
+      "title": "Terrain Grid"
     },
     {
       "id": 2,
-      "typeId": "node.simplex_field_2d",
       "nodeId": "terrain_noise",
+      "typeId": "node.simplex_field_2d",
       "handle": "terrain_noise",
-      "title": "Terrain Noise",
       "params": {
-        "scale_x": { "type": "Float", "value": 2.5 },
-        "scale_y": { "type": "Float", "value": 2.5 },
-        "offset_x": { "type": "Float", "value": 0.0 },
-        "offset_y": { "type": "Float", "value": 0.0 },
-        "z": { "type": "Float", "value": 0.0 }
-      }
+        "offset_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "offset_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 2.5
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 2.5
+        },
+        "z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Terrain Noise"
     },
     {
       "id": 3,
-      "typeId": "node.push_mesh",
       "nodeId": "terrain_push",
+      "typeId": "node.push_mesh",
       "handle": "terrain_push",
-      "title": "Terrain Push",
       "params": {
-        "cols": { "type": "Int", "value": 48 },
-        "rows": { "type": "Int", "value": 48 },
-        "displacement": { "type": "Float", "value": 0.5 },
-        "height_bias": { "type": "Float", "value": 0.0 }
-      }
+        "cols": {
+          "type": "Int",
+          "value": 48
+        },
+        "displacement": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "height_bias": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rows": {
+          "type": "Int",
+          "value": 48
+        }
+      },
+      "title": "Terrain Push"
     },
     {
       "id": 4,
-      "typeId": "node.make_triangles",
       "nodeId": "terrain_tris",
+      "typeId": "node.make_triangles",
       "handle": "terrain_tris",
-      "title": "Terrain Triangulate",
       "params": {
-        "src_cols": { "type": "Int", "value": 48 },
-        "src_rows": { "type": "Int", "value": 48 }
-      }
+        "src_cols": {
+          "type": "Int",
+          "value": 48
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 48
+        }
+      },
+      "title": "Terrain Triangulate"
     },
     {
       "id": 5,
-      "typeId": "node.range",
       "nodeId": "flower_t",
+      "typeId": "node.range",
       "handle": "flower_t",
-      "title": "Flower T",
       "params": {
-        "start": { "type": "Float", "value": 0.0 },
-        "end": { "type": "Float", "value": 1.0 },
-        "max_capacity": { "type": "Int", "value": 8 },
-        "end_inclusive": { "type": "Bool", "value": true }
-      }
+        "end": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "end_inclusive": {
+          "type": "Bool",
+          "value": true
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 8
+        },
+        "start": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Flower T"
     },
     {
       "id": 6,
-      "typeId": "node.array_math",
       "nodeId": "flower_bud",
+      "typeId": "node.array_math",
       "handle": "flower_bud",
-      "title": "Flower Bud Shape",
-      "params": { "op": { "type": "Enum", "value": 8 } }
+      "params": {
+        "op": {
+          "type": "Enum",
+          "value": 8
+        }
+      },
+      "title": "Flower Bud Shape"
     },
     {
       "id": 7,
-      "typeId": "node.array_math",
       "nodeId": "flower_radius",
+      "typeId": "node.array_math",
       "handle": "flower_radius",
-      "title": "Flower Radius",
       "params": {
-        "op": { "type": "Enum", "value": 6 },
-        "scale": { "type": "Float", "value": 0.09 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 6
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.09
+        }
+      },
+      "title": "Flower Radius"
     },
     {
       "id": 8,
-      "typeId": "node.array_math",
       "nodeId": "flower_height",
+      "typeId": "node.array_math",
       "handle": "flower_height",
-      "title": "Flower Height",
       "params": {
-        "op": { "type": "Enum", "value": 6 },
-        "scale": { "type": "Float", "value": 0.3 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 6
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.3
+        }
+      },
+      "title": "Flower Height"
     },
     {
       "id": 9,
-      "typeId": "node.combine_xy",
       "nodeId": "flower_profile",
+      "typeId": "node.combine_xy",
       "handle": "flower_profile",
-      "title": "Flower Profile",
-      "params": { "scale": { "type": "Float", "value": 4.0 } }
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 4.0
+        }
+      },
+      "title": "Flower Profile"
     },
     {
       "id": 10,
-      "typeId": "node.revolve_curve",
       "nodeId": "flower_revolve",
+      "typeId": "node.revolve_curve",
       "handle": "flower_revolve",
-      "title": "Flower Revolve",
       "params": {
-        "segments": { "type": "Int", "value": 10 },
-        "sweep": { "type": "Float", "value": 6.2831855 }
-      }
+        "segments": {
+          "type": "Int",
+          "value": 10
+        },
+        "sweep": {
+          "type": "Float",
+          "value": 6.2831855
+        }
+      },
+      "title": "Flower Revolve"
     },
     {
       "id": 11,
-      "typeId": "node.make_triangles",
       "nodeId": "flower_tris",
+      "typeId": "node.make_triangles",
       "handle": "flower_tris",
-      "title": "Flower Triangulate",
       "params": {
-        "src_cols": { "type": "Int", "value": 11 },
-        "src_rows": { "type": "Int", "value": 8 }
-      }
+        "src_cols": {
+          "type": "Int",
+          "value": 11
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 8
+        }
+      },
+      "title": "Flower Triangulate"
     },
     {
       "id": 12,
-      "typeId": "node.scatter_on_mesh",
       "nodeId": "scatter",
+      "typeId": "node.scatter_on_mesh",
       "handle": "scatter",
-      "title": "Scatter",
       "params": {
-        "count": { "type": "Int", "value": 140 },
-        "seed": { "type": "Int", "value": 7 },
-        "scale_min": { "type": "Float", "value": 0.6 },
-        "scale_max": { "type": "Float", "value": 1.3 },
-        "align_to_normal": { "type": "Bool", "value": true }
-      }
+        "align_to_normal": {
+          "type": "Bool",
+          "value": true
+        },
+        "count": {
+          "type": "Int",
+          "value": 140
+        },
+        "scale_max": {
+          "type": "Float",
+          "value": 1.3
+        },
+        "scale_min": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "seed": {
+          "type": "Int",
+          "value": 7
+        }
+      },
+      "title": "Scatter"
     },
     {
       "id": 13,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": { "type": "Float", "value": 0.55 },
-        "tilt": { "type": "Float", "value": 0.45 },
-        "distance": { "type": "Float", "value": 8.0 },
-        "fov_y": { "type": "Float", "value": 0.8 }
-      }
+        "distance": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.45
+        }
+      },
+      "title": "Camera"
     },
     {
       "id": 14,
-      "typeId": "node.phong_material",
       "nodeId": "terrain_mat",
+      "typeId": "node.phong_material",
       "handle": "terrain_mat",
-      "title": "Terrain Material",
       "params": {
-        "color_r": { "type": "Float", "value": 0.25 },
-        "color_g": { "type": "Float", "value": 0.35 },
-        "color_b": { "type": "Float", "value": 0.15 },
-        "ambient": { "type": "Float", "value": 0.12 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.25
+        }
+      },
+      "title": "Terrain Material"
     },
     {
       "id": 15,
-      "typeId": "node.phong_material",
       "nodeId": "flower_mat",
+      "typeId": "node.phong_material",
       "handle": "flower_mat",
-      "title": "Flower Material",
       "params": {
-        "color_r": { "type": "Float", "value": 0.95 },
-        "color_g": { "type": "Float", "value": 0.35 },
-        "color_b": { "type": "Float", "value": 0.55 },
-        "ambient": { "type": "Float", "value": 0.15 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.95
+        }
+      },
+      "title": "Flower Material"
     },
     {
       "id": 16,
-      "typeId": "node.light",
       "nodeId": "key_light",
+      "typeId": "node.light",
       "handle": "key_light",
-      "title": "Key Light",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "pos_x": { "type": "Float", "value": 3.0 },
-        "pos_y": { "type": "Float", "value": 5.0 },
-        "pos_z": { "type": "Float", "value": 3.0 },
-        "aim_x": { "type": "Float", "value": 0.0 },
-        "aim_y": { "type": "Float", "value": 0.0 },
-        "aim_z": { "type": "Float", "value": 0.0 },
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 1.0 },
-        "color_b": { "type": "Float", "value": 1.0 },
-        "intensity": { "type": "Float", "value": 1.0 },
-        "cast_shadows": { "type": "Float", "value": 0.0 }
-      }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 3.0
+        }
+      },
+      "title": "Key Light"
     },
     {
       "id": 17,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": { "type": "Int", "value": 2 },
-        "lights": { "type": "Int", "value": 1 }
-      }
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 2
+        }
+      },
+      "title": "Render Scene"
     },
-    { "id": 99, "typeId": "system.final_output", "nodeId": "out", "handle": "final_output" }
+    {
+      "id": 99,
+      "nodeId": "out",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 100,
+      "nodeId": "1012bc0a",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
+    },
+    {
+      "id": 101,
+      "nodeId": "0c68d7de",
+      "typeId": "node.scene_object",
+      "handle": "Object 1"
+    }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "vertices", "toNode": 3, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "height" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "a" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "a" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "x" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 9, "toPort": "y" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "profile" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 12, "toPort": "vertices" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 17, "toPort": "camera" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 17, "toPort": "material_0" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "light_0" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 17, "toPort": "mesh_0" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 17, "toPort": "mesh_1" },
-    { "fromNode": 15, "fromPort": "out", "toNode": 17, "toPort": "material_1" },
-    { "fromNode": 12, "fromPort": "instances", "toNode": 17, "toPort": "instances_1" },
-    { "fromNode": 17, "fromPort": "color", "toNode": 99, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "x"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "y"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "profile"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 101,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 101,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "instances",
+      "toNode": 101,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "color",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 17,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "object",
+      "toNode": 17,
+      "toPort": "object_1"
+    }
   ]
 }

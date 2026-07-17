@@ -107,12 +107,13 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("trigger_count"),
             label: "Retrigger",
-            ty: ParamType::Int,
+            ty: ParamType::Trigger,
             // Port-shadowed by the same-named input (a graph trigger
             // source wins when wired); unwired, an outer-card `is_trigger`
             // button writes here directly (`ParamConvert::Trigger`'s
             // monotonic-counter convention) — no separate wire needed for
-            // the card path.
+            // the card path. Trigger-typed (not Int) or card validation
+            // rejects the import's Retrigger button.
             default: ParamValue::Float(0.0),
             range: Some((0.0, 1_000_000.0)),
             enum_values: &[],
@@ -445,6 +446,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             &out_slots,
@@ -455,6 +457,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
         Primitive::run(&mut prim, &mut ctx);
@@ -815,6 +818,7 @@ mod tests {
             let mut material_scratch = Vec::new();
             let mut transform_scratch = Vec::new();
             let mut atmosphere_scratch = Vec::new();
+            let mut object_scratch = Vec::new();
             let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
             let outputs = NodeOutputs::new(
                 &out_slots,
@@ -825,6 +829,7 @@ mod tests {
                 &mut material_scratch,
                 &mut transform_scratch,
                 &mut atmosphere_scratch,
+                &mut object_scratch,
             );
             let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
             Primitive::run(prim, &mut ctx);
@@ -899,6 +904,7 @@ mod tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let inputs = NodeInputs::new(&wire_slots, &backend, &[]);
         let outputs = NodeOutputs::new(
             &out_slots,
@@ -909,6 +915,7 @@ mod tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
         let mut prim = GltfAnimationSource::new();
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);

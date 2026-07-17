@@ -35,6 +35,7 @@ use crate::types::{
     AbletonMacroAddress, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
     PresetTypeId, TonemapCurve,
 };
+use crate::view::UiGraphTarget;
 use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
 pub use viewport::HitRegion;
 
@@ -270,6 +271,14 @@ pub enum PanelAction {
     /// forward or back), same "read the live count off the Vm" convention
     /// `SceneSetupAddObject`'s `next_index` already uses.
     SceneSetupMoveModifier(LayerId, u32, u32, u32),
+    /// BUG-193 per-row "✕" in the Objects section: `(layer_id,
+    /// render_scene_node_doc_id, object_index)`. Dispatches the new
+    /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
+    SceneSetupRemoveObject(LayerId, u32, u32),
+    /// BUG-193 per-row "✕" in the Lights section: `(layer_id,
+    /// render_scene_node_doc_id, light_index)`. Dispatches the new
+    /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
+    SceneSetupRemoveLight(LayerId, u32, u32),
 
     // Footer
     CycleQuantize,
@@ -919,6 +928,15 @@ pub enum PanelAction {
     ViewportHoverChanged(Option<ClipId>), // clip_id or None
     ClipRightClicked(String),       // clip_id (context menu)
     TrackRightClicked(f32, usize),  // beat, layer (context menu)
+    /// Right-click anywhere on an automation lane strip/segment/dot
+    /// (BUG-184) — opens the lane's context menu.
+    AutomationLaneRightClicked(UiGraphTarget, ParamId),
+    /// "Clear Automation" context-menu item: empties the lane's points,
+    /// keeping the (now-empty) lane — `ClearLaneCommand`.
+    ContextClearAutomationLane(UiGraphTarget, ParamId),
+    /// "Remove Lane" context-menu item: deletes the whole lane —
+    /// `RemoveLaneCommand`.
+    ContextRemoveAutomationLane(UiGraphTarget, ParamId),
 
     // Layer management
     AddLayerClicked,

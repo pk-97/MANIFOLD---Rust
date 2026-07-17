@@ -323,6 +323,7 @@ pub fn dispatch(
         | PanelAction::ClipRightClicked(_)
         | PanelAction::TrackRightClicked(..)
         | PanelAction::LayerHeaderRightClicked(_)
+        | PanelAction::AutomationLaneRightClicked(..)
         | PanelAction::DropdownSelected(_) => editing::dispatch_editing(
             action,
             project,
@@ -574,11 +575,15 @@ pub fn dispatch(
         | PanelAction::SceneSetupAddFog(..)
         | PanelAction::SceneSetupAddObject(..)
         | PanelAction::SceneSetupAddLight(..)
+        | PanelAction::SceneSetupRemoveObject(..)
+        | PanelAction::SceneSetupRemoveLight(..)
         | PanelAction::SceneSetupImportModelClicked(..)
         | PanelAction::SceneSetupAddModifier(..)
         | PanelAction::SceneSetupRemoveModifier(..)
         | PanelAction::SceneSetupMoveModifier(..)
-        | PanelAction::SceneSetupNewScene(..) => project::dispatch_project(
+        | PanelAction::SceneSetupNewScene(..)
+        | PanelAction::ContextClearAutomationLane(..)
+        | PanelAction::ContextRemoveAutomationLane(..) => project::dispatch_project(
             action,
             project,
             content_tx,

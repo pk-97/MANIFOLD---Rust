@@ -164,218 +164,430 @@
   "nodes": [
     {
       "id": 0,
-      "typeId": "system.generator_input",
       "nodeId": "input",
+      "typeId": "system.generator_input",
       "handle": "input"
     },
     {
       "id": 1,
-      "typeId": "node.grid_mesh",
       "nodeId": "grid",
+      "typeId": "node.grid_mesh",
       "handle": "grid",
-      "title": "Grid",
       "params": {
-        "max_capacity": { "type": "Int", "value": 2000 },
-        "resolution_x": { "type": "Int", "value": 40 },
-        "resolution_y": { "type": "Int", "value": 40 },
-        "size_x": { "type": "Float", "value": 2.0 },
-        "size_y": { "type": "Float", "value": 2.0 }
-      }
+        "max_capacity": {
+          "type": "Int",
+          "value": 2000
+        },
+        "resolution_x": {
+          "type": "Int",
+          "value": 40
+        },
+        "resolution_y": {
+          "type": "Int",
+          "value": 40
+        },
+        "size_x": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "size_y": {
+          "type": "Float",
+          "value": 2.0
+        }
+      },
+      "title": "Grid"
     },
     {
       "id": 2,
-      "typeId": "node.make_triangles",
       "nodeId": "tris",
+      "typeId": "node.make_triangles",
       "handle": "tris",
-      "title": "Triangulate",
       "params": {
-        "src_cols": { "type": "Int", "value": 40 },
-        "src_rows": { "type": "Int", "value": 40 }
-      }
+        "src_cols": {
+          "type": "Int",
+          "value": 40
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 40
+        }
+      },
+      "title": "Triangulate"
     },
     {
       "id": 3,
-      "typeId": "node.facet_normals",
       "nodeId": "facets",
+      "typeId": "node.facet_normals",
       "handle": "facets",
       "title": "Facet Normals"
     },
     {
       "id": 4,
-      "typeId": "node.orbit_camera",
       "nodeId": "cam",
+      "typeId": "node.orbit_camera",
       "handle": "cam",
-      "title": "Camera",
       "params": {
-        "orbit": { "type": "Float", "value": 0.6 },
-        "tilt": { "type": "Float", "value": 0.6 },
-        "distance": { "type": "Float", "value": 4.0 },
-        "fov_y": { "type": "Float", "value": 0.8 }
-      }
+        "distance": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.6
+        }
+      },
+      "title": "Camera"
     },
     {
       "id": 5,
-      "typeId": "node.camera_lens",
       "nodeId": "lens",
+      "typeId": "node.camera_lens",
       "handle": "lens",
-      "title": "Lens",
       "params": {
-        "focus_distance": { "type": "Float", "value": 4.0 },
-        "f_stop": { "type": "Float", "value": 2.8 },
-        "shutter_angle": { "type": "Float", "value": 0.0 },
-        "exposure_ev": { "type": "Float", "value": 0.0 }
-      }
+        "exposure_ev": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "f_stop": {
+          "type": "Float",
+          "value": 2.8
+        },
+        "focus_distance": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "shutter_angle": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Lens"
     },
     {
       "id": 6,
-      "typeId": "node.phong_material",
       "nodeId": "mat",
+      "typeId": "node.phong_material",
       "handle": "mat",
-      "title": "Material",
       "params": {
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 0.85 },
-        "color_b": { "type": "Float", "value": 0.6 },
-        "ambient": { "type": "Float", "value": 0.1 }
-      }
+        "ambient": {
+          "type": "Float",
+          "value": 0.1
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.85
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Material"
     },
     {
       "id": 7,
-      "typeId": "node.light",
       "nodeId": "key_light",
+      "typeId": "node.light",
       "handle": "key_light",
-      "title": "Key Light",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "pos_x": { "type": "Float", "value": 0.0 },
-        "pos_y": { "type": "Float", "value": 30.0 },
-        "pos_z": { "type": "Float", "value": 0.0 },
-        "aim_x": { "type": "Float", "value": 0.0 },
-        "aim_y": { "type": "Float", "value": 0.0 },
-        "aim_z": { "type": "Float", "value": 0.0 },
-        "color_r": { "type": "Float", "value": 1.0 },
-        "color_g": { "type": "Float", "value": 1.0 },
-        "color_b": { "type": "Float", "value": 1.0 },
-        "intensity": { "type": "Float", "value": 1.0 },
-        "cast_shadows": { "type": "Float", "value": 0.0 }
-      }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 30.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Key Light"
     },
     {
       "id": 8,
-      "typeId": "node.render_scene",
       "nodeId": "scene",
+      "typeId": "node.render_scene",
       "handle": "scene",
-      "title": "Render Scene",
       "params": {
-        "objects": { "type": "Int", "value": 1 },
-        "lights": { "type": "Int", "value": 1 }
-      }
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "title": "Render Scene"
     },
     {
       "id": 20,
-      "typeId": "group",
       "nodeId": "ao",
+      "typeId": "group",
       "handle": "ao",
       "title": "Ambient Occlusion",
       "group": {
         "interface": {
           "inputs": [
-            { "name": "depth", "portType": "Texture2D" },
-            { "name": "camera", "portType": "Camera" },
-            { "name": "color", "portType": "Texture2D" }
+            {
+              "name": "depth",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            }
           ],
           "outputs": [
-            { "name": "out", "portType": "Texture2D" }
-          ],
-          "params": []
+            {
+              "name": "out",
+              "portType": "Texture2D"
+            }
+          ]
         },
         "nodes": [
-          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
           {
             "id": 1,
             "typeId": "node.ssao_gtao",
             "handle": "ssao",
-            "title": "SSAO (GTAO)",
             "params": {
-              "radius": { "type": "Float", "value": 0.5 },
-              "intensity": { "type": "Float", "value": 1.0 }
-            }
+              "intensity": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 0.5
+              }
+            },
+            "title": "SSAO (GTAO)"
           },
           {
             "id": 2,
             "typeId": "node.mix",
             "handle": "ssao_mix",
-            "title": "SSAO Multiply",
             "params": {
-              "amount": { "type": "Float", "value": 1.0 },
-              "mode": { "type": "Enum", "value": 4 }
-            }
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 4
+              }
+            },
+            "title": "SSAO Multiply"
           },
-          { "id": 3, "typeId": "system.group_output" },
+          {
+            "id": 3,
+            "typeId": "system.group_output"
+          },
           {
             "id": 4,
             "typeId": "node.bilateral_blur",
             "handle": "bilat_h",
-            "title": "Bilateral Blur H",
             "params": {
-              "axis": { "type": "Enum", "value": 0 },
-              "depth_sigma": { "type": "Float", "value": 0.1 }
-            }
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "depth_sigma": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Bilateral Blur H"
           },
           {
             "id": 5,
             "typeId": "node.bilateral_blur",
             "handle": "bilat_v",
-            "title": "Bilateral Blur V",
             "params": {
-              "axis": { "type": "Enum", "value": 1 },
-              "depth_sigma": { "type": "Float", "value": 0.1 }
-            }
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "depth_sigma": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Bilateral Blur V"
           }
         ],
         "wires": [
-          { "fromNode": 0, "fromPort": "depth", "toNode": 1, "toPort": "depth" },
-          { "fromNode": 0, "fromPort": "camera", "toNode": 1, "toPort": "camera" },
-          { "fromNode": 0, "fromPort": "color", "toNode": 2, "toPort": "a" },
-          { "fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "in" },
-          { "fromNode": 0, "fromPort": "depth", "toNode": 4, "toPort": "depth" },
-          { "fromNode": 0, "fromPort": "camera", "toNode": 4, "toPort": "camera" },
-          { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
-          { "fromNode": 0, "fromPort": "depth", "toNode": 5, "toPort": "depth" },
-          { "fromNode": 0, "fromPort": "camera", "toNode": 5, "toPort": "camera" },
-          { "fromNode": 5, "fromPort": "out", "toNode": 2, "toPort": "b" },
-          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "out" }
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 1,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 1,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "color",
+            "toNode": 2,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 4,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 4,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 5,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 5,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "out"
+          }
         ]
       }
     },
     {
       "id": 21,
-      "typeId": "group",
       "nodeId": "dof",
+      "typeId": "group",
       "handle": "dof",
       "title": "Depth of Field",
       "group": {
         "interface": {
           "inputs": [
-            { "name": "depth", "portType": "Texture2D" },
-            { "name": "camera", "portType": "Camera" },
-            { "name": "color", "portType": "Texture2D" }
+            {
+              "name": "depth",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "camera",
+              "portType": "Camera"
+            },
+            {
+              "name": "color",
+              "portType": "Texture2D"
+            }
           ],
           "outputs": [
-            { "name": "out", "portType": "Texture2D" }
-          ],
-          "params": []
+            {
+              "name": "out",
+              "portType": "Texture2D"
+            }
+          ]
         },
         "nodes": [
-          { "id": 0, "typeId": "system.group_input" },
+          {
+            "id": 0,
+            "typeId": "system.group_input"
+          },
           {
             "id": 1,
             "typeId": "node.coc_from_depth",
             "handle": "coc",
-            "title": "CoC From Depth",
             "params": {
-              "max_radius": { "type": "Float", "value": 24.0 }
-            }
+              "max_radius": {
+                "type": "Float",
+                "value": 24.0
+              }
+            },
+            "title": "CoC From Depth"
           },
           {
             "id": 2,
@@ -387,57 +599,193 @@
             "id": 3,
             "typeId": "node.bokeh_gather",
             "handle": "bokeh",
-            "title": "Bokeh Gather",
             "params": {
-              "max_radius": { "type": "Float", "value": 24.0 }
-            }
+              "max_radius": {
+                "type": "Float",
+                "value": 24.0
+              }
+            },
+            "title": "Bokeh Gather"
           },
-          { "id": 4, "typeId": "system.group_output" }
+          {
+            "id": 4,
+            "typeId": "system.group_output"
+          }
         ],
         "wires": [
-          { "fromNode": 0, "fromPort": "depth", "toNode": 1, "toPort": "depth" },
-          { "fromNode": 0, "fromPort": "camera", "toNode": 1, "toPort": "camera" },
-          { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-          { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "width" },
-          { "fromNode": 0, "fromPort": "color", "toNode": 3, "toPort": "in" },
-          { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "out" }
+          {
+            "fromNode": 0,
+            "fromPort": "depth",
+            "toNode": 1,
+            "toPort": "depth"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "camera",
+            "toNode": 1,
+            "toPort": "camera"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "width"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "color",
+            "toNode": 3,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "out"
+          }
         ]
       }
     },
     {
       "id": 14,
-      "typeId": "node.motion_blur",
       "nodeId": "motion_blur",
+      "typeId": "node.motion_blur",
       "handle": "motion_blur",
-      "title": "Motion Blur",
       "params": {
-        "max_blur_px": { "type": "Float", "value": 32.0 }
-      }
+        "max_blur_px": {
+          "type": "Float",
+          "value": 32.0
+        }
+      },
+      "title": "Motion Blur"
     },
     {
       "id": 99,
-      "typeId": "system.final_output",
       "nodeId": "out",
+      "typeId": "system.final_output",
       "handle": "out"
+    },
+    {
+      "id": 100,
+      "nodeId": "0d678198",
+      "typeId": "node.scene_object",
+      "handle": "Object 0"
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "vertices", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 21, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 20, "toPort": "camera" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 14, "toPort": "camera" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "material_0" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "light_0" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 8, "toPort": "mesh_0" },
-    { "fromNode": 8, "fromPort": "depth", "toNode": 21, "toPort": "depth" },
-    { "fromNode": 8, "fromPort": "depth", "toNode": 20, "toPort": "depth" },
-    { "fromNode": 8, "fromPort": "color", "toNode": 20, "toPort": "color" },
-    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "color" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 14, "toPort": "in" },
-    { "fromNode": 8, "fromPort": "velocity", "toNode": 14, "toPort": "velocity" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 99, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "vertices",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "depth",
+      "toNode": 21,
+      "toPort": "depth"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "depth",
+      "toNode": 20,
+      "toPort": "depth"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "color",
+      "toNode": 20,
+      "toPort": "color"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "color"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "velocity",
+      "toNode": 14,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 99,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 100,
+      "fromPort": "object",
+      "toNode": 8,
+      "toPort": "object_0"
+    }
   ]
 }

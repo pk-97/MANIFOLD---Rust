@@ -1202,12 +1202,23 @@ pub(crate) fn classify_node(
     // `camera_ext_N` port (`freeze/install.rs`); the fused kernel recomputes the
     // member's derived fields every frame via
     // `derived_uniform_registry::recompute` (`primitives/wgsl_compute.rs`).
+    //
+    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P1: `Object` joins the `Camera`
+    // line above — same CPU-struct-wire reasoning (`is_texture_port`
+    // excludes `PortType::Object` too, so an Object port was never a
+    // texture/buffer binding). No fusable atom declares `derived_uniforms`
+    // for an Object input today (the single-hop invariant means the only
+    // legal `Object` consumer, `render_scene`, is a draw-call rasterizer —
+    // always `NodeClass::Boundary` by cut rule 4 already, never reaching
+    // this predicate); this keeps the exemption set structurally complete
+    // for the day a second Object consumer exists, which is itself an
+    // escalation trigger (design doc §8).
     let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
         AHashSet::default()
     } else {
         n.inputs()
             .iter()
-            .filter(|i| i.ty == PortType::Camera)
+            .filter(|i| matches!(i.ty, PortType::Camera | PortType::Object))
             .map(|i| i.name.as_ref())
             .collect()
     };
@@ -1481,7 +1492,7 @@ fn classify_buffer_node(
     } else {
         n.inputs()
             .iter()
-            .filter(|i| i.ty == PortType::Camera)
+            .filter(|i| matches!(i.ty, PortType::Camera | PortType::Object))
             .map(|i| i.name.as_ref())
             .collect()
     };
@@ -3691,7 +3702,7 @@ mod audit {
         } else {
             n.inputs()
                 .iter()
-                .filter(|i| i.ty == PortType::Camera)
+                .filter(|i| matches!(i.ty, PortType::Camera | PortType::Object))
                 .map(|i| i.name.as_ref())
                 .collect()
         };

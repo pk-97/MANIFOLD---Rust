@@ -69,7 +69,11 @@ use std::path::{Path, PathBuf};
 // that file's own not-yet-tokenized chrome/label/drag-value colours (10 raw
 // literals) — same inherited pattern the audio dock's own literals already
 // carry in this baseline, not new debt shape, folded into the same §15 ramp.
-const COLOR_BASELINE: usize = 209;
+// 209→210, 2026-07-17: SCENE_OBJECT_AND_PANEL_V2_DESIGN P1 added a 10th
+// port-pin-colour const (`PORT_OBJECT_COLOR`) in graph_canvas for the new
+// `PortType::Object` wire — same grandfathered defined-once-const pattern as
+// the nine pin colours beside it, folded into the same §15 ramp.
+const COLOR_BASELINE: usize = 210;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

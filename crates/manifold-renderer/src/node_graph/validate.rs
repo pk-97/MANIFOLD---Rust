@@ -392,7 +392,7 @@ fn resolve_target_param(
 /// `EffectGraphDef` alone. No bundled preset uses a Composite target
 /// today (verified 2026-07-13: zero `"kind": "composite"` hits under
 /// `assets/`), so this is a documented gap, not an observed miss.
-fn check_card_lints(
+pub(crate) fn check_card_lints(
     def: &EffectGraphDef,
     graph: Option<&crate::node_graph::Graph>,
 ) -> (Vec<ValidationIssue>, Vec<ValidationIssue>) {

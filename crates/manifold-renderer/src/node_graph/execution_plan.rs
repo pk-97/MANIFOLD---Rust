@@ -700,6 +700,55 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             continue;
         }
 
+        // `carries_resources` (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2): a
+        // node whose output forwards resource `Slot`s inside a CPU struct
+        // field (`node.scene_object`'s `SceneObject`) needs the same
+        // lifetime extension the mux branch above gives its aliased
+        // texture inputs — the struct-carried resource is invisible to the
+        // planner's normal wire walk, so without this every `Texture2D`/
+        // `Array` input wired into the node would free right after the
+        // node itself runs, even though the struct forwarding it is read
+        // much later (by `render_scene`, through the Object wire).
+        if inst.node.carries_resources() {
+            // This node's own output(s) determine how long its inputs must
+            // stay alive — take the latest last-reader across every output
+            // port the node declares (in practice `node.scene_object` has
+            // exactly one: `object`).
+            let mut out_last = step_idx;
+            for output_port in inst.node.outputs() {
+                if let Some(&r_out) =
+                    output_resources.get(&(node_id, output_port.name.clone()))
+                {
+                    let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
+                    if r_out_last > out_last {
+                        out_last = r_out_last;
+                    }
+                }
+            }
+            for input in inst.node.inputs() {
+                if !matches!(input.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
+                    && !matches!(input.ty, PortType::Array(_))
+                {
+                    continue;
+                }
+                let r_in = wire_by_target
+                    .get(&(node_id, input.name.clone()))
+                    .and_then(|w| {
+                        output_resources
+                            .get(&(w.from.0, std::borrow::Cow::Borrowed(w.from.1)))
+                            .copied()
+                    });
+                let Some(r_in) = r_in else {
+                    continue;
+                };
+                let entry = last_reader.entry(r_in).or_insert(step_idx);
+                if *entry < out_last {
+                    *entry = out_last;
+                }
+            }
+            continue;
+        }
+
         let Some((in_port, out_port)) = inst.node.skip_passthrough_ports() else {
             continue;
         };
@@ -1180,6 +1229,85 @@ mod tests {
         assert!(
             plan.steps()[2].free_after.contains(&r_a),
             "R_a must be freed at C's step (the alias's last reader)"
+        );
+    }
+
+    /// Test node mirroring `node.scene_object`'s shape for
+    /// `carries_resources_extends_lifetimes`: a texture-typed input
+    /// forwarded inside a struct-carried output rather than aliased
+    /// directly.
+    struct CarriesResourcesNode {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl CarriesResourcesNode {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("carries_resources"),
+                inputs: vec![input("in", PortType::Texture2D, false)],
+                outputs: vec![output("object", PortType::Object)],
+            }
+        }
+    }
+
+    impl crate::node_graph::EffectNode for CarriesResourcesNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn carries_resources(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn carries_resources_extends_lifetimes() {
+        // Topology: A → N(carries_resources) → C
+        // R(A.out) = R_a is forwarded inside the `SceneObject`-shaped
+        // struct N emits on `object`, not aliased directly onto a wire —
+        // so the planner's normal wire-walk sees only "N reads R_a", and
+        // without the extension would free R_a right after N's step, even
+        // though C reads N's `object` output (and, through it, the struct
+        // field carrying R_a) afterward. Mirrors
+        // `fan_out_from_skip_passthrough_node_extends_input_lifetime`.
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(TestNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+        )));
+        let n = g.add_node(Box::new(CarriesResourcesNode::new()));
+        let c = g.add_node(Box::new(TestNode::new(
+            "c",
+            vec![input("in", PortType::Object, true)],
+            vec![],
+        )));
+        g.connect((a, "out"), (n, "in")).unwrap();
+        g.connect((n, "object"), (c, "in")).unwrap();
+
+        let plan = compile(&g).unwrap();
+        assert_eq!(plan.steps().len(), 3);
+        let r_a = plan.steps()[0].outputs[0].1;
+
+        assert!(
+            !plan.steps()[1].free_after.contains(&r_a),
+            "R_a must NOT be freed at N's step — carries_resources forwards it \
+             inside the struct N emits, read later by C"
+        );
+        assert!(
+            plan.steps()[2].free_after.contains(&r_a),
+            "R_a must be freed at C's step (the last reader of N's own output)"
         );
     }
 

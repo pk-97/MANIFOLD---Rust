@@ -1,6 +1,13 @@
 # Scene Object & Panel v2 — objects become graph vocabulary; the panel becomes outliner + properties
 
-**Status: APPROVED design, not built · 2026-07-17 · Fable 5 (design session with Peter)**
+**Status: IN PROGRESS — P1+P2 SHIPPED @ `5c5dacfe`, P3 SHIPPED @ `da452351`
+(both 2026-07-17, landing reports
+`docs/landings/2026-07-17-scene-object-v2-p1-p2.md` and
+`docs/landings/2026-07-17-scene-object-v2-p3.md`); P4–P5 not implemented.
+BUG-210 (AddSceneObjectCommand pre-migration wires) FIXED by P3. BUG-212
+opened by P3 (DuplicateSceneObjectCommand's fresh NodeIds break imported
+objects' string bindings — real gap, not a regression, needs its own fix).**
+**(APPROVED design 2026-07-17 · Fable 5, design session with Peter)**
 **Prerequisites:** SCENE_SETUP_PANEL_DESIGN P1–P5 (SHIPPED 2026-07-17 — this design revises its
 object model and panel layout in place). BUG-199 (dock scroll) is explicitly OUT of this set —
 another session owns it (Peter, 2026-07-17: "another agent has BUG-199 planned for fixing so we

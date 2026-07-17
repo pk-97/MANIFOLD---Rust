@@ -1,5 +1,7 @@
 use crate::node_graph::{bundled_preset_json, bundled_preset_type_ids};
-use crate::node_graph::primitives::{GltfTextureSource, RenderScene, ScatterOnMesh};
+use crate::node_graph::primitives::{
+    GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
+};
 use crate::preset_runtime::PresetRuntime;
 use manifold_core::preset_def::PresetKind;
 use crate::node_graph::PrimitiveRegistry;
@@ -72,6 +74,14 @@ impl GeneratorRegistry {
         // below never reaches its three hand-written pipelines either. Same
         // asset-independent-fixed-source shape as the two lines above.
         ScatterOnMesh::prewarm_pipelines(device);
+        // BUG-191 (Lane 6 2026-07-17): `node.spawn_from_image` is the same
+        // barriered-multi-pass, exempt-from-codegen shape as
+        // `scatter_on_mesh` above, and no bundled preset happens to
+        // reference it either — its four hand-written pipelines were never
+        // reached by any prewarm mechanism, so a project's first live use
+        // (e.g. a clip becoming active for the first time after a
+        // mid-timeline seek) paid the full compile cost on that frame.
+        SeedParticlesFromTexture::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never

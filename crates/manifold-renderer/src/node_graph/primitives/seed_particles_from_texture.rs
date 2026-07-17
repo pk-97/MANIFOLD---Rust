@@ -336,6 +336,58 @@ impl Primitive for SeedParticlesFromTexture {
     }
 }
 
+impl SeedParticlesFromTexture {
+    /// BUG-191 (partial fix, Lane 6 2026-07-17): this primitive is a
+    /// barriered multi-pass hand-written-pipeline atom (same class as
+    /// `ScatterOnMesh`, exempt from the codegen path per CLAUDE.md), so
+    /// BUG-146's codegen-sweep prewarm never reached it, and no bundled
+    /// preset happens to exercise `node.spawn_from_image` — its four
+    /// pipelines stayed genuinely never-compiled until a project's own
+    /// first live `run()`, same shape as BUG-037's `scatter_on_mesh` gap.
+    /// Mirrors `ScatterOnMesh::prewarm_pipelines` exactly.
+    pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
+        const SHADER_SRC: &str = include_str!("shaders/seed_particles_from_texture.wgsl");
+        device.create_compute_pipeline(SHADER_SRC, "count_main", "node.spawn_from_image.count");
+        device.create_compute_pipeline(SHADER_SRC, "scan_main", "node.spawn_from_image.scan");
+        device.create_compute_pipeline(SHADER_SRC, "compact_main", "node.spawn_from_image.compact");
+        device.create_compute_pipeline(SHADER_SRC, "place_main", "node.spawn_from_image.place");
+    }
+}
+
+/// BUG-191/BUG-037 gate. Run deliberately: `cargo test -p manifold-renderer
+/// --features gpu-proofs node_graph::primitives::seed_particles_from_texture::gpu_tests`.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+
+    /// Mirrors `scatter_on_mesh`'s identical test (BUG-037 precedent):
+    /// order-independent by design (BUG-144's documented class) — `device`
+    /// is process-global across a `--features gpu-proofs --lib` run, so
+    /// another test's `GeneratorRegistry::prewarm_all` may already have
+    /// warmed these entry points. Asserting "cache hit after MY prewarm
+    /// call" is correct either way.
+    #[test]
+    fn prewarm_pipelines_populates_the_shared_compute_cache() {
+        let device = crate::test_device();
+        SeedParticlesFromTexture::prewarm_pipelines(&device);
+        const SHADER_SRC: &str = include_str!("shaders/seed_particles_from_texture.wgsl");
+        for (entry, label) in [
+            ("count_main", "node.spawn_from_image.count"),
+            ("scan_main", "node.spawn_from_image.scan"),
+            ("compact_main", "node.spawn_from_image.compact"),
+            ("place_main", "node.spawn_from_image.place"),
+        ] {
+            let cache_before_use = device.compute_pipeline_cache_len();
+            let _pipeline = device.create_compute_pipeline(SHADER_SRC, entry, label);
+            assert_eq!(
+                device.compute_pipeline_cache_len(),
+                cache_before_use,
+                "{entry}'s pipeline compile after prewarm must be a cache hit"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

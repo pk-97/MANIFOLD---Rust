@@ -26,7 +26,7 @@ use std::sync::mpsc;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_load::load_gltf_morph_deltas;
+use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -52,7 +52,13 @@ crate::primitive! {
             label: "Material Index",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            range: Some((0.0, 1024.0)),
+            // BUG-207: -2 is GLB_XFAIL_BURNDOWN_DESIGN.md D4's reserved
+            // sentinel (`gltf_load::DEFAULT_MATERIAL_MESH_PARAM`) selecting
+            // the sole mesh-owning node contributing the glTF default
+            // (materialless) material — real glTF material indices are
+            // always >= 0, so widening the range down to -2 costs nothing
+            // for every existing selection.
+            range: Some((-2.0, 1024.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -63,8 +69,16 @@ crate::primitive! {
             range: Some((1.0, 16000000.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("skinned"),
+            label: "Skinned",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
     ],
-    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source/node.gltf_skinned_mesh_source. max_capacity is the pre-allocation ceiling in delta ELEMENTS (target_count * vertex_count, not just vertex_count) — gltf_import.rs sets it from the parsed target_count * the object's vertex_count.",
+    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source/node.gltf_skinned_mesh_source. max_capacity is the pre-allocation ceiling in delta ELEMENTS (target_count * vertex_count, not just vertex_count) — gltf_import.rs sets it from the parsed target_count * the object's vertex_count. `skinned` (BUG-208): set true when this object also carries a glTF skin — the deltas are then loaded in the SAME untransformed bind-pose space as node.gltf_skinned_mesh_source's vertices (no node world-transform applied), so node.morph_targets_blend's output can feed node.skin_mesh's `in` directly. Leave false for a rigid (non-skinned) morphed object, where deltas ARE world-transformed to match node.gltf_mesh_source's base vertices.",
     examples: [],
     picker: { label: "glTF Morph Deltas", category: Atom },
     summary: "Loads an imported glTF asset's morph-target position/normal deltas, ready to be blended onto its base mesh by a Morph Targets Blend node.",
@@ -73,8 +87,8 @@ crate::primitive! {
     aliases: ["gltf morph deltas", "morph target source", "blend shape deltas"],
     boundary_reason: IoBridge,
     extra_fields: {
-        // (path, material_index) last parsed (or in flight).
-        last_key: (String, i32) = (String::new(), i32::MIN),
+        // (path, material_index, skinned) last parsed (or in flight).
+        last_key: (String, i32, bool) = (String::new(), i32::MIN, false),
         cached_deltas: Vec<MeshVertex> = Vec::new(),
         staging: Option<manifold_gpu::GpuBuffer> = None,
         staging_len_bytes: u64 = 0,
@@ -100,19 +114,32 @@ impl Primitive for GltfMorphDeltasSource {
             Some(ParamValue::Float(n)) => n.round() as i32,
             _ => 0,
         };
+        // BUG-208: threaded straight to `load_gltf_morph_deltas` — see its
+        // `skinned` doc comment for why the deltas' coordinate space
+        // depends on it.
+        let skinned = matches!(ctx.params.get("skinned"), Some(ParamValue::Bool(true)));
 
-        let key = (path.clone(), material_index);
+        let key = (path.clone(), material_index, skinned);
         if key != self.last_key && self.pending_load.is_none() {
             self.last_key = key;
             self.cached_deltas.clear();
             self.staging = None;
             self.staging_len_bytes = 0;
             self.uploaded = false;
-            if !path.is_empty() && material_index >= 0 {
+            if !path.is_empty() && (material_index >= 0 || material_index == DEFAULT_MATERIAL_MESH_PARAM) {
+                // BUG-207: translate the "-2" param sentinel back to the
+                // `gltf_load` sentinel `load_gltf_morph_deltas` expects —
+                // same two-sentinel-space split `gltf_mesh_source.rs` uses
+                // (`-1` stays the param's own "unset" default).
+                let load_material_index = if material_index == DEFAULT_MATERIAL_MESH_PARAM {
+                    DEFAULT_MATERIAL_SENTINEL
+                } else {
+                    material_index as u32
+                };
                 let path_buf = std::path::PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = load_gltf_morph_deltas(&path_buf, material_index as u32);
+                    let result = load_gltf_morph_deltas(&path_buf, load_material_index, skinned);
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -262,6 +289,7 @@ mod gpu_tests {
         let mut material_ws = Vec::new();
         let mut transform_ws = Vec::new();
         let mut atmosphere_ws = Vec::new();
+        let mut object_ws = Vec::new();
         let backend_ref: &dyn Backend = backend;
         let inputs = NodeInputs::new(&[], backend_ref, &[]);
         let outputs = NodeOutputs::new(
@@ -273,6 +301,7 @@ mod gpu_tests {
             &mut material_ws,
             &mut transform_ws,
             &mut atmosphere_ws,
+            &mut object_ws,
         );
         let mut native_enc = device.create_encoder("gltf-morph-deltas-source-test");
         let unchanged;

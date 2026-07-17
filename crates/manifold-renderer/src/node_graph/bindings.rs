@@ -21,6 +21,7 @@ use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::atmosphere::Atmosphere;
+use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::transform::Transform;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -160,6 +161,23 @@ impl<'a> NodeInputs<'a> {
         self.backend.atmosphere(self.slot(port)?)
     }
 
+    /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
+    /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
+    /// produced by `node.scene_object`, consumed by `render_scene`'s
+    /// `object_k` ports.
+    pub fn object(&self, port: &str) -> Option<SceneObject> {
+        self.backend.object(self.slot(port)?)
+    }
+
+    /// The port→[`Slot`] map already exists internally as [`Self::slot`];
+    /// this is the same accessor named for `node.scene_object`'s own
+    /// evaluate, which reads each of its wired resource inputs' slots (not
+    /// their resolved values — it forwards the `Slot` itself onto the
+    /// [`SceneObject`] it emits) — an accessor, not new state.
+    pub fn slot_of(&self, port: &str) -> Option<Slot> {
+        self.slot(port)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -220,6 +238,15 @@ impl<'a> NodeInputs<'a> {
     pub fn slot_generation_of(&self, slot: Slot) -> Option<u64> {
         self.generations.get(slot.0 as usize).copied()
     }
+
+    /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name
+    /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
+    /// resolves `object_k` through its per-frame `build_index()` map
+    /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4), same shape as
+    /// `material_slot`/`transform_slot` above.
+    pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
+        self.backend.object(slot)
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
@@ -251,6 +278,8 @@ pub struct NodeOutputs<'a> {
     pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
     /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+    /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
+    pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
 }
 
 impl<'a> NodeOutputs<'a> {
@@ -264,6 +293,7 @@ impl<'a> NodeOutputs<'a> {
         pending_material_writes: &'a mut Vec<(Slot, Material)>,
         pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
         pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+        pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
     ) -> Self {
         Self {
             bindings,
@@ -274,6 +304,7 @@ impl<'a> NodeOutputs<'a> {
             pending_material_writes,
             pending_transform_writes,
             pending_atmosphere_writes,
+            pending_object_writes,
         }
     }
 
@@ -370,6 +401,15 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
+    /// Queue a [`SceneObject`] write to the named output port. Drained by
+    /// the executor into the backend after `evaluate` returns; same
+    /// semantics as `set_atmosphere`.
+    pub fn set_object(&mut self, port: &str, value: SceneObject) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_object_writes.push((slot, value));
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
         self.bindings.iter().copied()
     }
@@ -427,6 +467,7 @@ mod array_accessor_tests {
         let mut material_scratch = Vec::new();
         let mut transform_scratch = Vec::new();
         let mut atmosphere_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
         let outputs = NodeOutputs::new(
             bindings,
             &backend,
@@ -436,6 +477,7 @@ mod array_accessor_tests {
             &mut material_scratch,
             &mut transform_scratch,
             &mut atmosphere_scratch,
+            &mut object_scratch,
         );
 
         let got = outputs.array("particles_out").expect("should resolve");

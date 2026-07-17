@@ -466,6 +466,13 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::carries_resources`](crate::node_graph::effect_node::EffectNode::carries_resources).
+    /// Default: `false`.
+    fn carries_resources(&self) -> bool {
+        false
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -723,6 +730,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
         Primitive::variadic_skip_passthrough_out(self)
+    }
+    fn carries_resources(&self) -> bool {
+        Primitive::carries_resources(self)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY
@@ -1168,6 +1178,9 @@ macro_rules! __primitive_port_type {
     };
     (Atmosphere) => {
         $crate::node_graph::ports::PortType::Atmosphere
+    };
+    (Object) => {
+        $crate::node_graph::ports::PortType::Object
     };
     // `Channels[permissive]` — a port that accepts any Channels signature.
     // Used by generic transform operators (rename_channel, reorder_channels,
