@@ -1164,6 +1164,22 @@ pub(crate) struct GltfMaterialInfo {
     /// multi-node case. BUG-207: resolved for the synthetic
     /// default-material entry too (see `animations` above).
     pub morph: Option<GltfObjectMorph>,
+    /// BUG-221: this object's OWN world-space bounding-box center — distinct
+    /// from `GltfImportSummary::bbox_min/max`'s SCENE-WIDE center, which is
+    /// the ONE value every object was previously recentered by (correct for
+    /// whole-scene framing/layout, but it leaves each object's own local
+    /// origin wherever the source glTF authored it, so rotating the
+    /// object's `node.transform_3d` — which always rotates about local
+    /// `(0,0,0)`, `render_scene.rs`'s `model_matrix` — swings it about a
+    /// point that can be far from its visual center). Computed by the same
+    /// per-material world-space bbox walk as `vertex_count`
+    /// (`summarize_node`'s `per_material_bbox` accumulator), so it is
+    /// world-combined/instance-aware exactly like the scene-wide bbox.
+    /// `gltf_import.rs` uses it to recenter this object's OWN mesh source
+    /// about its own center (so local `(0,0,0)` becomes the visual center)
+    /// and to reposition the outward-facing `node.transform_3d`'s pos so
+    /// net world placement is unchanged — see `build_object_group`.
+    pub own_center: [f32; 3],
 }
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
@@ -2226,6 +2242,11 @@ fn summarize_node(
     per_material: &mut std::collections::BTreeMap<Option<usize>, u32>,
     bbox_min: &mut [f32; 3],
     bbox_max: &mut [f32; 3],
+    // BUG-221: same key convention as `per_material` — accumulates each
+    // material's OWN world-space bbox (min, max) alongside the scene-wide
+    // one above, so `gltf_import_summary` can compute a per-object center
+    // distinct from the whole-scene center.
+    per_material_bbox: &mut std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])>,
 ) -> Result<(), String> {
     let local = node.transform().matrix();
     let world = mat4_mul(&parent_world, &local);
@@ -2260,6 +2281,9 @@ fn summarize_node(
                 None => positions.len() as u32,
             };
             *per_material.entry(prim.material().index()).or_insert(0) += vcount * instance_count as u32;
+            let own_bbox = per_material_bbox
+                .entry(prim.material().index())
+                .or_insert(([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]));
             let joints: Option<Vec<[u16; 4]>> =
                 reader.read_joints(0).map(|it| it.into_u16().collect());
             let weights: Option<Vec<[f32; 4]>> =
@@ -2282,6 +2306,8 @@ fn summarize_node(
                     for c in 0..3 {
                         bbox_min[c] = bbox_min[c].min(wp[c]);
                         bbox_max[c] = bbox_max[c].max(wp[c]);
+                        own_bbox.0[c] = own_bbox.0[c].min(wp[c]);
+                        own_bbox.1[c] = own_bbox.1[c].max(wp[c]);
                     }
                 }
                 continue;
@@ -2292,6 +2318,8 @@ fn summarize_node(
                     for i in 0..3 {
                         bbox_min[i] = bbox_min[i].min(wp[i]);
                         bbox_max[i] = bbox_max[i].max(wp[i]);
+                        own_bbox.0[i] = own_bbox.0[i].min(wp[i]);
+                        own_bbox.1[i] = own_bbox.1[i].max(wp[i]);
                     }
                 }
             }
@@ -2299,9 +2327,24 @@ fn summarize_node(
     }
 
     for child in node.children() {
-        summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max)?;
+        summarize_node(&child, world, document, buffers, per_material, bbox_min, bbox_max, per_material_bbox)?;
     }
     Ok(())
+}
+
+/// BUG-221: center of a `per_material_bbox` entry, `[0,0,0]` when absent
+/// (defensive only — every call site here first checks `vertex_count > 0`,
+/// which is set by the exact same accumulation pass that fills this map, so
+/// a lookup miss should never actually happen).
+fn own_bbox_center(bbox: Option<&([f32; 3], [f32; 3])>) -> [f32; 3] {
+    match bbox {
+        Some((min, max)) => [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ],
+        None => [0.0, 0.0, 0.0],
+    }
 }
 
 /// BUG-205: per-joint bind-pose skin matrices (`static_world(joint) *
@@ -2470,6 +2513,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         std::collections::BTreeMap::new();
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
+    // BUG-221: per-material own world-space bbox, alongside the scene-wide
+    // one above.
+    let mut per_material_bbox: std::collections::BTreeMap<Option<usize>, ([f32; 3], [f32; 3])> =
+        std::collections::BTreeMap::new();
     for node in &import_nodes {
         summarize_node(
             node,
@@ -2479,6 +2526,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             &mut per_material,
             &mut bbox_min,
             &mut bbox_max,
+            &mut per_material_bbox,
         )?;
     }
 
@@ -2544,6 +2592,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 // Declared but unused by any geometry — nothing to draw.
                 return None;
             }
+            let own_center = own_bbox_center(per_material_bbox.get(&Some(material_index as usize)));
             // A1/A4: resolve this material's animation only when exactly
             // one mesh-owning node contributes its geometry — the
             // documented multi-node-per-material scope boundary (never
@@ -2918,11 +2967,13 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 animations,
                 skin,
                 morph,
+                own_center,
             })
         })
         .collect();
 
     let default_material_vertex_count = per_material.get(&None).copied().unwrap_or(0);
+    let default_own_center = own_bbox_center(per_material_bbox.get(&None));
     let mut materials = materials;
     if default_material_vertex_count > 0 {
         // GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171): geometry with no
@@ -3026,6 +3077,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             animations: default_animations,
             skin: default_skin,
             morph: default_morph,
+            own_center: default_own_center,
         });
     }
 
@@ -3218,6 +3270,7 @@ mod animation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
     /// file-missing case (no fixture in a checkout without
