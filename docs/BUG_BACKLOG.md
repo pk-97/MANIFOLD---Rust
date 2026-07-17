@@ -50,7 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-226 | **ui-snap-script-harness-never-runs-a-content-thread-tick** | the `--script` flow harness's `Step` never invokes `evaluate_all_drivers`/`evaluate_all_envelopes`, so no L3 flow can show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param — LOW-MED, found 2026-07-17 during UX-P3a build |
+| BUG-227 | **ui-snap-script-harness-never-runs-a-content-thread-tick** | the `--script` flow harness's `Step` never invokes `evaluate_all_drivers`/`evaluate_all_envelopes`, so no L3 flow can show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param — LOW-MED, found 2026-07-17 during UX-P3a build |
 | ~~BUG-218~~ FIXED | **modifier-commands-splice-at-dead-group-output-vertices-port** | FIXED — `walk_mesh_modifier_chain`/`splice_modifier_into_chain` now resolve the group's `node.scene_object` via the group output's `object` producer and walk/splice against its own `vertices` port, not the dead `system.group_output` `vertices` port; verified via `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-modifier-stack.json`. |
 | BUG-216 | **feedback-loop-into-final-output-freezes-at-depth-one** | wiring a feedback loop's blend straight to `system.final_output` silently freezes the loop at one frame of history (swap refused on the borrowed boundary slot, no copy fallback) + per-frame stderr spam — MED |
 | BUG-217 | **non-lerp-mix-alpha-passthrough-kills-trails-on-transparent-sources** | Max/Add feedback trails over an alpha-0-background source accumulate RGB but inherit the source's alpha, so the display culls them; `set_alpha` before the blend is the idiom — LOW |
@@ -193,7 +193,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** make the harness honor the app's real invalidation gating (no free first-gesture rebuild; reset `needs_structural_sync` per frame exactly as the app does), then add a negative meta-flow that scrolls WITHOUT the fix's `needs_rebuild = true` and asserts the screen does NOT move — proving the harness can now see this bug class. Evidence and mechanism detail: BUG-223's Escaped note (same file), found by instrumented divergence-diffing, 2026-07-17.
 
-### BUG-226 (ui-snap-script-harness-never-runs-a-content-thread-tick-so-driver-envelope-modulation-is-headlessly-unobservable) — the `--script` flow harness cannot show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param, effect-card or scene-panel — found 2026-07-17, UX-P3a build (`wave/scene-panel-ux-p3-build`), while gating "assign an LFO → the row's value visibly modulates (transport running, two snapshots)"
+### BUG-227 (ui-snap-script-harness-never-runs-a-content-thread-tick-so-driver-envelope-modulation-is-headlessly-unobservable) — the `--script` flow harness cannot show a driver/envelope-modulated value changing across `Snapshot`s, for ANY param, effect-card or scene-panel — found 2026-07-17, UX-P3a build (`wave/scene-panel-ux-p3-build`), while gating "assign an LFO → the row's value visibly modulates (transport running, two snapshots)"
 
 **Status:** OPEN — LOW-MED (verification infra; blocks any future L3 flow gate phrased as "the value visibly modulates" — same family as BUG-225, different mechanism).
 
