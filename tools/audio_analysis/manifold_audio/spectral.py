@@ -73,6 +73,17 @@ def compute_frame_analysis(
         hop_time = hop_size / float(sample_rate)
         norm_half = max(1, int(round(norm_window_sec / hop_time)))
         norm_win = 2 * norm_half + 1
+        # np.convolve(a, v, mode="same") returns a length-max(len(a),len(v))
+        # array, NOT len(a), whenever the kernel is longer than the signal
+        # (undocumented-feeling but is numpy's actual behavior) -- clamp the
+        # kernel to at most rms.size so rms_smooth always matches band_onsets'
+        # own length. Only reachable when norm_window_sec covers most/all of
+        # a short clip (a whole-track/non-causal normalization window on a
+        # track a few seconds long); no existing caller hit this until
+        # manifold_audio.stage1_dsp_detection's detect_onsets started passing
+        # norm_window_sec = the FULL track duration on purpose (2026-07-18).
+        norm_win = min(norm_win, rms.size if rms.size % 2 == 1 else rms.size - 1)
+        norm_win = max(1, norm_win)
         norm_kernel = np.ones(norm_win, dtype=np.float32) / norm_win
         rms_smooth = np.convolve(rms, norm_kernel, mode="same").astype(np.float32)
         rms_floor = max(float(np.median(rms)) * 0.02, 1e-8)

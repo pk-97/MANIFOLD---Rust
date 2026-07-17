@@ -14,6 +14,13 @@ transcription involved):
     Chord/sustained-object precedent)
   - a simple 4-on-the-floor kick+hat pattern (drum-truth precedent, for
     ADTOF/onset scoring parity with the manifold_own kick-onset fixtures)
+  - an EDM kit pattern (added 2026-07-18, ADTOF bake-off B1) — kick, snare,
+    clap, closed hat, and tom, each with a distinct synthesized timbre
+    (see synthesize_edm_kit_midi's per-class bursts), used as the known-truth
+    fixture for manifold_audio.stage1_dsp_detection's clustering + centroid-
+    signature labeling unit tests (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md
+    §7.1: "clap/snare/hat/tom via per-onset features"). domain=electronic
+    per the bake-off brief's "self-rendered EDM kits" deliverable.
 
 Rendered via eval/midi_synth.py (pretty_midi's additive synth — same
 renderer used for the MAESTRO selection). Grows as gaps appear (future
@@ -100,10 +107,167 @@ def _make_kick_hat_pattern(bpm: float = 128.0, bars: int = 4) -> pretty_midi.Pre
     return pm
 
 
+def _make_edm_kit_pattern(bpm: float = 128.0, bars: int = 8) -> pretty_midi.PrettyMIDI:
+    """4-on-the-floor kick, snare/clap on 2 & 4 (layered, like a lot of real
+    EDM production), closed 16th-note hats, and a tom fill on the last beat
+    of every other bar -- GM pitches: kick=36, snare=38, clap=39, closed
+    hat=42, low-mid tom=45. Every onset's class is exact by construction
+    (the whole point of this fixture: known truth for clustering/labeling
+    unit tests, not audio realism).
+
+    Timing is deliberately arranged so DIFFERENT classes never share the
+    exact same onset instant: kick sits on integer beat positions; snare is
+    offset +50ms off the beat (a "kick under snare" house/EDM layering would
+    otherwise put a kick and a snare at the EXACT same instant on beats 1
+    and 3 -- physically superimposed in the rendered audio, and no per-onset
+    feature/cluster method could ever separate two hits that share one
+    onset time, which isn't a meaningful thing to ask this unit test to
+    solve); hats are shifted to the OFF sixteenth-grid (+0.5 sixteenth) so a
+    hat never lands on the same sample as a kick/snare/clap/tom either.
+    Clap is offset +40ms after its layered snare for the same reason --
+    close enough to read as "layered production", far enough that
+    extract_onset_features' own next-onset window cap gives each a
+    mostly-clean analysis window."""
+    pm = pretty_midi.PrettyMIDI(initial_tempo=bpm)
+    inst = pretty_midi.Instrument(program=0, is_drum=True)
+    beat_sec = 60.0 / bpm
+    eighth_sec = beat_sec / 2.0
+    sixteenth_sec = beat_sec / 4.0
+    snare_offset_sec = 0.05
+    clap_offset_sec = 0.04
+    notes: List[pretty_midi.Note] = []
+    for bar in range(bars):
+        bar_start = bar * beat_sec * 4
+        for beat in range(4):
+            kick_t = bar_start + beat * beat_sec
+            notes.append(pretty_midi.Note(velocity=110, pitch=36, start=kick_t, end=kick_t + 0.05))
+        for beat in (1, 3):  # backbeat: snare, clap layered ~40ms behind
+            snare_t = bar_start + beat * beat_sec + snare_offset_sec
+            notes.append(pretty_midi.Note(velocity=105, pitch=38, start=snare_t, end=snare_t + 0.05))
+            clap_t = snare_t + clap_offset_sec
+            notes.append(pretty_midi.Note(velocity=95, pitch=39, start=clap_t, end=clap_t + 0.03))
+        for step in range(16):  # off-grid (+0.5 sixteenth): never coincides with kick/snare/clap/tom
+            hat_t = bar_start + (step + 0.5) * sixteenth_sec
+            notes.append(pretty_midi.Note(velocity=65, pitch=42, start=hat_t, end=hat_t + 0.02))
+        if bar % 2 == 1:
+            tom_t = bar_start + 3 * beat_sec + eighth_sec
+            notes.append(pretty_midi.Note(velocity=100, pitch=45, start=tom_t, end=tom_t + 0.12))
+    inst.notes = notes
+    pm.instruments.append(inst)
+    return pm
+
+
+def _lowpass_ema(x: np.ndarray, sr: int, fc_hz: float) -> np.ndarray:
+    """Single-pole (exponential-moving-average) lowpass -- not remotely a
+    sharp filter, just enough to shape a noise burst's spectral center
+    without adding a scipy filter-design dependency."""
+    alpha = float(np.exp(-2.0 * np.pi * fc_hz / sr))
+    y = np.empty_like(x)
+    acc = 0.0
+    for i in range(len(x)):
+        acc = alpha * acc + (1.0 - alpha) * x[i]
+        y[i] = acc
+    return y
+
+
+def _snare_burst(sr: int, dur_sec: float = 0.10) -> np.ndarray:
+    """Mid-band-limited noise (lowpass(3kHz) - lowpass(200Hz), a crude
+    bandpass -- a real snare's "snap" sits in the low-mids, unlike a hat's
+    broadband/high noise) + a low tonal thump -- distinct from the hat
+    (high-frequency-dominant) and the clap (highpassed) in centroid AND
+    band-ratio, not just decay time. Discovered via the self_render EDM-kit
+    fixture's own feature diagnostic: an earlier full-broadband-noise
+    version of this burst was spectrally indistinguishable from the hat."""
+    rng = np.random.default_rng(20260718)
+    n = int(round(dur_sec * sr))
+    t = np.arange(n) / sr
+    noise = rng.standard_normal(n)
+    band = _lowpass_ema(noise, sr, 3000.0) - _lowpass_ema(noise, sr, 200.0)
+    band = band * np.exp(-t / 0.035)
+    tone = np.sin(2 * np.pi * 190.0 * t) * np.exp(-t / 0.02)
+    sig = 0.6 * band + 0.5 * tone
+    peak = float(np.max(np.abs(sig)))
+    if peak > 0:
+        sig = sig / peak
+    return sig.astype(np.float32)
+
+
+def _clap_burst(sr: int, dur_sec: float = 0.05) -> np.ndarray:
+    """Several fast noise micro-bursts (real claps are multi-transient),
+    strongly high-frequency-weighted (highpassed via differencing) and very
+    short overall -- distinct from both snare (longer/lower) and hat
+    (single clean burst, not multi-transient)."""
+    rng = np.random.default_rng(20260719)
+    n = int(round(dur_sec * sr))
+    audio = np.zeros(n, dtype=np.float64)
+    micro_offsets = [0.0, 0.006, 0.013]
+    for off in micro_offsets:
+        start = int(round(off * sr))
+        if start >= n:
+            continue
+        sub_n = n - start
+        t = np.arange(sub_n) / sr
+        burst = rng.standard_normal(sub_n) * np.exp(-t / 0.006)
+        audio[start:] += burst
+    # crude high-pass: first difference emphasizes high frequencies.
+    hp = np.diff(audio, prepend=audio[0])
+    return hp.astype(np.float32)
+
+
+def _hat_burst_edm(sr: int, dur_sec: float = 0.03) -> np.ndarray:
+    """Single clean noise burst, very fast decay, high-frequency-weighted --
+    matches _hat_burst's role but named separately since the EDM kit fixture
+    intentionally reuses the same shape as the kick_hat_128bpm fixture's own
+    hat (consistency across self-render fixtures)."""
+    return _hat_burst(sr, dur_sec=dur_sec)
+
+
+def _tom_burst(sr: int, dur_sec: float = 0.18) -> np.ndarray:
+    """Tonal, low-mid pitched (higher than the kick, still clearly tonal/
+    low-flatness), with a LONGER decay than kick/snare/clap/hat -- the decay-
+    rate feature is what should separate this from the kick cluster."""
+    n = int(round(dur_sec * sr))
+    t = np.arange(n) / sr
+    env = np.exp(-t / 0.07)
+    tone = np.sin(2 * np.pi * 145.0 * t) + 0.3 * np.sin(2 * np.pi * 290.0 * t)
+    return (tone * env).astype(np.float32)
+
+
+_EDM_KIT_BURSTS = {
+    36: lambda sr: _kick_burst(sr),
+    38: lambda sr: _snare_burst(sr),
+    39: lambda sr: _clap_burst(sr),
+    42: lambda sr: _hat_burst_edm(sr),
+    45: lambda sr: _tom_burst(sr),
+}
+
+
+def synthesize_edm_kit_midi(pm: pretty_midi.PrettyMIDI, sr: int = 44100) -> np.ndarray:
+    """Same additive-burst approach as synthesize_drum_midi, generalized to
+    the EDM kit's 5 distinct per-class timbres (_EDM_KIT_BURSTS)."""
+    end = pm.get_end_time() + 0.5
+    total = int(round(end * sr))
+    audio = np.zeros(total, dtype=np.float32)
+    for inst in pm.instruments:
+        for note in inst.notes:
+            burst_fn = _EDM_KIT_BURSTS.get(note.pitch)
+            if burst_fn is None:
+                continue
+            burst = burst_fn(sr)
+            start = int(round(note.start * sr))
+            endi = min(total, start + len(burst))
+            audio[start:endi] += burst[: endi - start]
+    peak = float(np.max(np.abs(audio)))
+    if peak > 0:
+        audio = audio / peak * 0.9
+    return audio
+
+
 GENERATORS = {
     "arp_16th_128bpm": lambda: _make_arp_16th(bpm=128.0),
     "sustained_pad_100bpm": lambda: _make_sustained_pad(bpm=100.0),
     "kick_hat_128bpm": lambda: _make_kick_hat_pattern(bpm=128.0),
+    "edm_kit_128bpm": lambda: _make_edm_kit_pattern(bpm=128.0),
 }
 
 # pretty_midi.Instrument.synthesize() explicitly zeroes drum-channel (is_drum
@@ -114,7 +278,7 @@ GENERATORS = {
 # eval/beat_tracker_alignment.py's _percussive_click — exp-decaying noise for
 # the hat; a short low-sine thump for the kick), keeping the MIDI file (and
 # its note list) as the exact ground truth either way.
-DRUM_FIXTURE_IDS = {"kick_hat_128bpm"}
+DRUM_FIXTURE_IDS = {"kick_hat_128bpm", "edm_kit_128bpm"}
 
 
 def _kick_burst(sr: int, dur_sec: float = 0.09) -> np.ndarray:
@@ -150,6 +314,19 @@ def synthesize_drum_midi(pm: pretty_midi.PrettyMIDI, sr: int = 44100) -> np.ndar
     return audio
 
 
+# Per-fixture synth dispatch (drum fixtures only) -- kick_hat_128bpm's 2-class
+# burst synth vs edm_kit_128bpm's 5-class one. A drum fixture missing from
+# this dict falls through to pretty_midi's own synth, which silently returns
+# ZERO audio for is_drum=True instruments (its own docstring: "For drum
+# instruments, returns zeros") -- caught 2026-07-18 when edm_kit_128bpm was
+# first added without an entry here and produced a silent wav (0 onsets
+# detected downstream, not an obviously-wrong-looking failure).
+DRUM_SYNTH_FN = {
+    "kick_hat_128bpm": synthesize_drum_midi,
+    "edm_kit_128bpm": synthesize_edm_kit_midi,
+}
+
+
 def _midi_ground_truth(pm: pretty_midi.PrettyMIDI) -> List[Dict]:
     events = []
     for inst in pm.instruments:
@@ -180,7 +357,7 @@ def main(argv=None) -> int:
         truth_path = args.out_dir / f"{name}_truth.json"
         pm.write(str(midi_path))
         if name in DRUM_FIXTURE_IDS:
-            audio = synthesize_drum_midi(pm)
+            audio = DRUM_SYNTH_FN[name](pm)
             _write_wav_mono(wav_path, audio, 44100)
             duration = pm.get_end_time()
         else:

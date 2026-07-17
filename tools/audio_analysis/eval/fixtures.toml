@@ -321,6 +321,60 @@ domain = "electronic"
 roles = ["notes", "duration", "drums"]
 license = "ours (agent-composed MIDI, synth-rendered) — no restriction"
 path = "eval/data/self_render"
-n_tracks = 3
+n_tracks = 4
 truth_kind = "exact_midi_ground_truth"
-notes = "P3 v1 seed (deliverable #4): a 16th-note arp (128bpm, D3's per-note granularity precedent), a sustained pad/chord progression (D4's duration-event precedent), and a kick+hat pattern (drum-truth precedent). Grows as gaps appear — see eval/fetch/self_render.py's GENERATORS dict for how to add more."
+notes = "P3 v1 seed (deliverable #4): a 16th-note arp (128bpm, D3's per-note granularity precedent), a sustained pad/chord progression (D4's duration-event precedent), and a kick+hat pattern (drum-truth precedent). Grows as gaps appear — see eval/fetch/self_render.py's GENERATORS dict for how to add more. 2026-07-18 (ADTOF bake-off B1): added edm_kit_128bpm (kick/snare/clap/hat/tom, 5 distinct synthesized timbres, deliberately timed so no two classes share an exact onset instant) — the known-truth fixture manifold_audio.stage1_dsp_detection's clustering + centroid-signature labeling unit tests are built against."
+
+# ---------------------------------------------------------------------------
+# 2026-07-18 additions (ADTOF bake-off phase B1) — E-GMD subset + Slakh2100
+# drum-stem truth. See docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md's 2026-07-18
+# addendum for the phasing (B1/B2/B3) this feeds.
+# ---------------------------------------------------------------------------
+
+[[fixture]]
+id = "egmd_dev"
+dataset = "egmd"
+split = "dev"
+domain = "other"  # real acoustic-kit-SAMPLE recordings across 43 kit patches (drummer1/3/4/7/9/10), not EDM-genre material
+roles = ["drums"]
+license = "CC BY 4.0 (Magenta E-GMD v1.0.0 — verified at fetch from the archive's own bundled LICENSE file, eval/fetch/egmd.py)"
+path = "eval/data/egmd"
+truth_kind = "aligned_midi_per_hit"
+n_tracks = 59
+notes = "Stratified sample (drummer x global-bpm-tertile, up to 6 performances/cell, kit_name diversity preferred, duration filtered to [3,20]s) fetched via HTTP-range selective ZIP reads — NOT the full 96.4GB archive (~38.7MB actually downloaded, well under the 8GB cap). See eval/fetch/egmd.py's module docstring for the exact sampling rule and eval/data/egmd/manifest.json for every selected row. dev/heldout inherits E-GMD's OWN `split` column (train/validation -> dev, test -> heldout) rather than a new random draw. drummer5/6/8 are ABSENT from this sample by construction, not a bug: their rows have no takes under 20s (measured 2026-07-18: minimum durations 20.25s-27.8s), so the [3,20]s duration filter excludes them entirely — a real dataset characteristic (those drummers only have full-song-length takes), disclosed rather than silently worked around."
+
+[[fixture]]
+id = "egmd_heldout"
+dataset = "egmd"
+split = "heldout"
+domain = "other"
+roles = ["drums"]
+license = "CC BY 4.0 (Magenta E-GMD v1.0.0 — verified at fetch)"
+path = "eval/data/egmd"
+truth_kind = "aligned_midi_per_hit"
+n_tracks = 4
+notes = "E-GMD's own test-split rows that happened to land in the stratified sample (thin — only 4 — because the sample is small and E-GMD's test split is itself a minority of rows). Untouched by B1/B2 iteration; the orchestrator reads this at verdict time only, per D9."
+
+[[fixture]]
+id = "slakh_drums_dev"
+dataset = "slakh2100"
+split = "dev"
+domain = "other"
+roles = ["drums"]
+license = "CC-BY 4.0 (Zenodo record 4599666 — same archive as slakh2100_test)"
+path = "eval/data/slakh2100_test"
+truth_kind = "aligned_midi_per_stem"
+n_tracks = 2
+notes = "Drum-stem-specific truth extraction (eval/slakh_drum_truth.py) from whatever tracks the STILL-STREAMING slakh2100_test background fetch (eval/fetch/slakh2100.py) has completed so far (only 2/151 tracks have a complete is_drum stem + MIDI as of 2026-07-18 — the fetch writes files as it encounters them and is a genuinely slow ~35h stream). Distinct fixture id from `slakh2100_test` (which covers general notes/duration/stems roles) because this one's dev/heldout split is assigned by a DETERMINISTIC HASH of each track+stem id (eval/slakh_drum_truth.py's _is_heldout, ~80/20), not the note-level fixture's own split value — a track's heldout membership won't get reshuffled as more of the stream lands later. Re-run eval.slakh_drum_truth to see the current count; it will grow unattended."
+
+[[fixture]]
+id = "slakh_drums_heldout"
+dataset = "slakh2100"
+split = "heldout"
+domain = "other"
+roles = ["drums"]
+license = "CC-BY 4.0 (Zenodo record 4599666)"
+path = "eval/data/slakh2100_test"
+truth_kind = "aligned_midi_per_stem"
+n_tracks = 0
+notes = "Empty as of 2026-07-18 (both currently-complete tracks hashed into dev) — will populate as the background fetch delivers more tracks and some hash into heldout. Untouched by B1/B2 iteration."
