@@ -228,6 +228,50 @@ fn mat4_row(joint: usize, m: &gltf_load::Mat4) -> Vec<f32> {
     row
 }
 
+/// Push one Vec3 track row in the widened schema
+/// `[..prefix, time, val_x,val_y,val_z, mode, in_x,in_y,in_z, out_x,out_y,out_z]`
+/// (IMPORT_ANYTHING_WAVE_DESIGN.md W2) — `prefix` is whatever leading key
+/// columns the caller groups rows by (`[clip]` for the A1 rigid path,
+/// `[clip, joint]` for the A2 skeleton path); `gltf_anim_shared`'s samplers
+/// read the mode/tangent columns relative to the value column, so every
+/// caller gets STEP/CUBICSPLINE support for free by routing through this.
+fn push_vec3_row(
+    rows: &mut Vec<Vec<f32>>,
+    prefix: &[f32],
+    time: f32,
+    value: [f32; 3],
+    mode: gltf_load::GltfInterp,
+    in_tangent: [f32; 3],
+    out_tangent: [f32; 3],
+) {
+    let mut row = prefix.to_vec();
+    row.push(time);
+    row.extend_from_slice(&value);
+    row.push(mode.to_f32());
+    row.extend_from_slice(&in_tangent);
+    row.extend_from_slice(&out_tangent);
+    rows.push(row);
+}
+
+/// Same as [`push_vec3_row`] for a `[x, y, z, w]` quaternion track.
+fn push_quat_row(
+    rows: &mut Vec<Vec<f32>>,
+    prefix: &[f32],
+    time: f32,
+    value: [f32; 4],
+    mode: gltf_load::GltfInterp,
+    in_tangent: [f32; 4],
+    out_tangent: [f32; 4],
+) {
+    let mut row = prefix.to_vec();
+    row.push(time);
+    row.extend_from_slice(&value);
+    row.push(mode.to_f32());
+    row.extend_from_slice(&in_tangent);
+    row.extend_from_slice(&out_tangent);
+    rows.push(row);
+}
+
 /// Build the six flat Tables `node.gltf_skeleton_pose` needs from one
 /// object's resolved skin topology (`GltfSkinInfo`) plus EVERY parsed
 /// clip's per-node animation map (A4/D4: one row-group per `(clip_index,
@@ -274,40 +318,68 @@ fn build_skeleton_pose_tables(
         let mut duration_s: f32 = 0.0;
         for j in 0..n {
             let anim = node_anims.get(&skin.joint_node_indices[j]);
+            let prefix = [c as f32, j as f32];
             match anim.and_then(|a| a.translation.as_ref()) {
                 Some(t) if !t.times.is_empty() => {
-                    for (time, v) in t.times.iter().zip(t.values.iter()) {
-                        translation_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
+                        let (in_t, out_t) = t.tangents_at(i);
+                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_translation[j];
-                    translation_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2]]);
+                    push_vec3_row(
+                        &mut translation_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 3],
+                        [0.0; 3],
+                    );
                 }
             }
             match anim.and_then(|a| a.rotation.as_ref()) {
                 Some(r) if !r.times.is_empty() => {
-                    for (time, v) in r.times.iter().zip(r.values.iter()) {
-                        rotation_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2], v[3]]);
+                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
+                        let (in_t, out_t) = r.tangents_at(i);
+                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_rotation[j];
-                    rotation_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2], b[3]]);
+                    push_quat_row(
+                        &mut rotation_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 4],
+                        [0.0; 4],
+                    );
                 }
             }
             match anim.and_then(|a| a.scale.as_ref()) {
                 Some(s) if !s.times.is_empty() => {
-                    for (time, v) in s.times.iter().zip(s.values.iter()) {
-                        scale_rows.push(vec![c as f32, j as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
+                        let (in_t, out_t) = s.tangents_at(i);
+                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
                         duration_s = duration_s.max(*time);
                     }
                 }
                 _ => {
                     let b = skin.joint_bind_scale[j];
-                    scale_rows.push(vec![c as f32, j as f32, 0.0, b[0], b[1], b[2]]);
+                    push_vec3_row(
+                        &mut scale_rows,
+                        &prefix,
+                        0.0,
+                        b,
+                        gltf_load::GltfInterp::Linear,
+                        [0.0; 3],
+                        [0.0; 3],
+                    );
                 }
             }
         }
@@ -1428,19 +1500,23 @@ fn build_object_group(
                     clip_durations_rows.push(vec![c as f32, 1e-6]);
                     continue;
                 };
+                let prefix = [c as f32];
                 if let Some(t) = &anim.translation {
-                    for (time, v) in t.times.iter().zip(t.values.iter()) {
-                        translation_rows.push(vec![c as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
+                        let (in_t, out_t) = t.tangents_at(i);
+                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
                     }
                 }
                 if let Some(r) = &anim.rotation {
-                    for (time, v) in r.times.iter().zip(r.values.iter()) {
-                        rotation_rows.push(vec![c as f32, *time, v[0], v[1], v[2], v[3]]);
+                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
+                        let (in_t, out_t) = r.tangents_at(i);
+                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
                     }
                 }
                 if let Some(s) = &anim.scale {
-                    for (time, v) in s.times.iter().zip(s.values.iter()) {
-                        scale_rows.push(vec![c as f32, *time, v[0], v[1], v[2]]);
+                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
+                        let (in_t, out_t) = s.tangents_at(i);
+                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
                     }
                 }
                 let duration_s = anim.duration_s.max(1e-6);
@@ -4859,6 +4935,7 @@ mod tests {
             translation: Some(Vec3Track {
                 times: vec![0.0, 1.0],
                 values: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],
+                ..Default::default()
             }),
             rotation: Some(QuatTrack {
                 times: vec![0.0, 1.0],
@@ -4866,6 +4943,7 @@ mod tests {
                     [0.0, 0.0, 0.0, 1.0],
                     [0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2],
                 ],
+                ..Default::default()
             }),
             scale: None,
         })];
@@ -5256,10 +5334,12 @@ mod tests {
             translation: Some(Vec3Track {
                 times: vec![0.0, 1.25, 2.5, 3.708_33],
                 values: vec![[0.0, 0.0, 0.0], [0.0, 2.52, 0.0], [0.0, 2.52, 0.0], [0.0, 0.0, 0.0]],
+                ..Default::default()
             }),
             rotation: Some(QuatTrack {
                 times: vec![1.25, 2.5],
                 values: vec![[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0]],
+                ..Default::default()
             }),
             scale: None,
         })];
