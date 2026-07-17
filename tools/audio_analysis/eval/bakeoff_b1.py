@@ -51,10 +51,14 @@ from eval import egmd_drum_truth, metrics, slakh_drum_truth  # noqa: E402
 from eval.baseline_scoreboard_p3 import BABYSLAKH_ROOT  # noqa: E402
 from manifold_audio.precision_postprocessing import PrecisionConfig  # noqa: E402
 from eval.sweep_p4 import (  # noqa: E402
+    DENSE_IN_WINDOW,
     TrackData,
     _build_babyslakh_tracks,
+    _build_liveshow_dev_tracks,
     _build_manifold_own_kick_tracks,
     _build_self_render_tracks,
+    derive_active_windows,
+    filter_to_windows,
     score_config_for_class,
 )
 from manifold_audio.adtof_detection import detect_drums_adtof_activations  # noqa: E402
@@ -166,7 +170,38 @@ def build_b1_corpus(max_babyslakh_tracks: int = 8) -> List[TrackData]:
     corpus.extend(_build_manifold_own_kick_tracks())
     corpus.extend(_build_egmd_tracks())
     corpus.extend(_build_slakh_drum_tracks())
+    # Liveshow dev songs (2026-07-18): DENSE_IN_WINDOW truth -- per-class
+    # dense P/R/F1 inside performed passages on the real show MASTER.
+    # 1,771 hand-placed labels, the only real-produced-music dense truth in
+    # the corpus. ADTOF arm sees the master slice (mix-level model); the
+    # Stage-1 arm REQUIRES the demucs drum stem (see the liveshow override
+    # below) and is excluded loudly when the stem is missing.
+    corpus.extend(_build_liveshow_dev_tracks())
     return corpus
+
+
+def _liveshow_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str, Any]:
+    """Third instance of the drum-stem override bug class (babyslakh,
+    manifold_own, now liveshow): the liveshow slice is the full show MASTER
+    -- correct for ADTOF, the wrong signal entirely for the drum-stem
+    Stage-1 detector. Production runs Stage-1 on the demucs drum stem, so
+    the eval does too: <id>_drums.wav next to each slice (built once by the
+    2026-07-18 session via `python -m demucs -n htdemucs --two-stems=drums`).
+    A missing stem EXCLUDES the track from the Stage-1 arm with a loud
+    stderr line -- never a silent fall-through to mix audio."""
+    from eval.paths import DATA_ROOT
+    override: Dict[str, Any] = {}
+    for track in corpus:
+        if track.source != "liveshow":
+            continue
+        stem = DATA_ROOT / "liveshow_song_slices" / f"{track.id}_drums.wav"
+        if not stem.exists():
+            print(f"[bakeoff_b1] liveshow drum stem MISSING, Stage-1 arm skips {track.id}: {stem}", file=sys.stderr)
+            override[track.id] = None
+            continue
+        audio, sr = load_audio_mono(stem, target_sr=44100, ffmpeg_bin=None)
+        override[track.id] = (audio, sr)
+    return override
 
 
 def _babyslakh_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str, Any]:
@@ -227,9 +262,13 @@ def _manifold_own_drum_stem_audio_override(corpus: List[TrackData]) -> Dict[str,
 def run_stage1_on_corpus(corpus: List[TrackData]) -> List[Stage1Result]:
     audio_override = _babyslakh_drum_stem_audio_override(corpus)
     audio_override.update(_manifold_own_drum_stem_audio_override(corpus))
+    audio_override.update(_liveshow_drum_stem_audio_override(corpus))
     out: List[Stage1Result] = []
     for track in corpus:
-        audio, sr = audio_override.get(track.id, (track.audio, track.sr))
+        entry = audio_override.get(track.id, (track.audio, track.sr))
+        if entry is None:  # liveshow track whose demucs stem is missing
+            continue
+        audio, sr = entry
         events, cluster_result = detect_drums_stage1(audio, sr)
         by_class: Dict[str, List[float]] = {c: [] for c in CLASSES}
         for e in events:
@@ -255,12 +294,24 @@ def score_stage1_for_class(corpus: List[TrackData], stage1_results: List[Stage1R
         if s1 is None:
             continue
         pred = s1.events_by_class.get(class_name, [])
-        prf = metrics.event_prf(pred, truth, tolerance_sec=metrics.EVENT_TOLERANCE_SEC)
-        rows.append({
+        row = {
             "id": track.id, "domain": track.domain, "source": track.source,
-            "n_pred": len(pred), "n_truth": len(truth), f"{class_name}_f1": prf.f1,
-            "precision": prf.precision, "recall": prf.recall,
-        })
+            "n_truth": len(truth),
+        }
+        if track.truth_type == DENSE_IN_WINDOW:
+            # Same windowed contract as score_config_for_class's
+            # DENSE_IN_WINDOW branch: predictions outside the class's own
+            # active truth windows are discarded before scoring.
+            bpm = track.grid.bpm if track.grid is not None else 0.0
+            windows = derive_active_windows(truth, bpm)
+            pred_w = filter_to_windows(pred, windows)
+            prf = metrics.event_prf(pred_w, truth, tolerance_sec=metrics.EVENT_TOLERANCE_SEC)
+            row.update({"n_pred": len(pred_w), "n_pred_unwindowed": len(pred), "n_windows": len(windows)})
+        else:
+            prf = metrics.event_prf(pred, truth, tolerance_sec=metrics.EVENT_TOLERANCE_SEC)
+            row.update({"n_pred": len(pred)})
+        row.update({f"{class_name}_f1": prf.f1, "precision": prf.precision, "recall": prf.recall})
+        rows.append(row)
     valid = [r for r in rows if r["n_truth"] > 0]
     mean_f1 = float(np.mean([r[f"{class_name}_f1"] for r in valid])) if valid else None
     by_domain = metrics.domain_aggregate(valid, f"{class_name}_f1") if valid else {}
