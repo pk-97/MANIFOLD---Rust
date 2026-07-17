@@ -13,13 +13,13 @@ in the path. Per docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §7.1's approach text
 
 Pipeline (per track)
 ----------------------
-1. `detect_onsets` -- non-causal onset detection: centered STFT frames
-   (librosa's own default), whole-TRACK normalization of the onset envelope
-   (an offline luxury a live/causal detector can't afford -- it only knows
-   the past), and librosa's `backtrack=True` for backward sample-accurate
-   attack refinement (each picked peak is walked back to the preceding local
-   minimum in the raw energy, landing on the true attack rather than the
-   ODF's smoothed peak, which lags it).
+1. `detect_onsets` -- non-causal onset detection: whole-TRACK normalization
+   of the onset envelope (an offline luxury a live/causal detector can't
+   afford -- it only knows the past), per-band peak picking, frame-CENTER
+   time conversion. NO backtracking (removed 2026-07-18, BUG-241): walking
+   peaks back to the preceding broadband-RMS minimum landed on the previous
+   hit's tail instead of this hit's attack on dense material, killing kick
+   recall track-dependently -- see the comment in detect_onsets.
 2. `extract_onset_features` -- per onset, over a short post-onset window
    (capped at the next onset so windows never bleed into the next hit):
    spectral centroid, spectral flatness, low/mid/high band-energy ratios,
@@ -60,7 +60,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import librosa
 import numpy as np
 import scipy.signal
 from sklearn.cluster import KMeans
@@ -98,7 +97,16 @@ ONSET_FRAME_SIZE = 2048
 ONSET_HOP_SIZE = 256
 ONSET_MIN_SEPARATION_SEC = 0.03  # within one band's own peak-picker
 ONSET_MERGE_WINDOW_SEC = 0.015  # collapse near-duplicate picks ACROSS bands
-ONSET_HEIGHT_FRACTION = 0.15  # peak must clear this fraction of the band's OWN whole-track max
+# Peak must clear this fraction of the band's OWN whole-track max. Was 0.15;
+# lowered to 0.075 (2026-07-18, BUG-241 follow-up tuning) after stage-wise
+# accounting showed the threshold as the second kick-killer behind the
+# removed backtrack: at 0.075 fixture kick recall (any onset, +-50ms) went
+# apricots 15/16 -> 16/16, inhale_exhale 11/14 -> 14/14, tears 6/10 -> 10/10
+# at ~30% more raw events (precision is the downstream refractory/threshold
+# knobs' job). 0.05 bought +1 kick on one track for another +30% events;
+# the live-detector median-adaptive picker was measured strictly worse
+# offline (causal lag). Sweepable in bake-off rounds.
+ONSET_HEIGHT_FRACTION = 0.075
 LOW_BAND_HZ = (20.0, 150.0)
 MID_BAND_HZ = (150.0, 2000.0)
 # Upper bound intentionally open (effectively Nyquist, not a fixed 12kHz cap):
@@ -192,15 +200,11 @@ def detect_onsets(
     luxury a live/causal detector can't afford). Each band is peak-picked
     independently (a kick's dedicated low-band channel is what actually
     catches it -- a single broadband envelope drowns a pure low-frequency
-    thump under busier mid/high content), then each band's peaks are
-    refined via `librosa.onset.onset_backtrack` against that band's OWN
-    energy curve (backward sample-accurate attack refinement: walk each
-    picked peak back to the preceding local energy minimum, landing nearer
-    the true attack than the flux curve's own smoothed peak). Onsets from
-    different bands within ONSET_MERGE_WINDOW_SEC of each other collapse to
-    one (the same physical transient usually lights up more than one band)."""
+    thump under busier mid/high content). Onsets from different bands within
+    ONSET_MERGE_WINDOW_SEC of each other collapse to one (the same physical
+    transient usually lights up more than one band)."""
     total_sec = len(audio) / float(sr) if sr > 0 else 0.0
-    band_onsets, raw_rms, hop = compute_band_onsets(
+    band_onsets, _raw_rms, hop = compute_band_onsets(
         audio, sr, frame_size, hop_size, ONSET_DETECTION_BANDS_HZ,
         norm_window_sec=total_sec,  # whole-track normalization (offline luxury)
     )
@@ -211,15 +215,22 @@ def detect_onsets(
         peaks = _pick_band_peaks(curve, min_distance_frames, ONSET_HEIGHT_FRACTION)
         if peaks.size == 0:
             continue
-        # Backtrack against the broadband RAW RMS envelope, not the flux
-        # curve itself -- onset_backtrack expects an ENERGY signal (walks to
-        # the preceding local minimum of LOUDNESS). A first version backtracked
-        # against `curve` (the flux/spectral-change curve) by mistake: flux
-        # has its own irregular local minima unrelated to loudness, which
-        # walked every peak back by tens of ms with no floor, producing a
-        # systematic ~50ms EARLY bias caught by the self_render fixtures'
-        # known onset truth (kick_hat_128bpm recall was 0.0 before this fix).
-        refined = librosa.onset.onset_backtrack(peaks, raw_rms)
+        # NO backtracking (removed 2026-07-18, BUG-241). History: a first
+        # version backtracked against the flux curve (~50ms early bias, fixed
+        # in B1 by switching to broadband RMS); the RMS version then turned
+        # out to be the BUG-241 root cause. On dense material the broadband
+        # RMS envelope's local minima belong to the PREVIOUS hit's tail, not
+        # this hit's attack, so backtracking dragged peaks 60-140ms early --
+        # track-dependently (sparse mixes have a clean pre-attack dip, dense
+        # ones don't). Minimal-pair evidence (kick recall vs fixture truth,
+        # +-50ms): feel_the_vibration 2/16 with RMS backtrack vs 8/16
+        # without; inhale_exhale 2/14 vs 11/14; tears 1/10 vs 6/10; apricots
+        # (sparse, the working case) 15/16 either way. Backtracking against
+        # each band's OWN energy curve was also measured and is strictly
+        # worse than no backtracking (4/16, 6/14, 2/10). The flux peak's
+        # frame-CENTER time (below) already carries the B1 timing correction
+        # and is the onset.
+        refined = peaks
         # Frame-index -> time uses the frame's CENTER, not its start.
         # manifold_audio.audio_io.frame_signal builds UNCENTERED frames
         # (frame F covers samples [F*hop, F*hop+frame_size)), and frame_size

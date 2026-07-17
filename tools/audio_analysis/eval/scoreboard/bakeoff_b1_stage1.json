@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-17T15:10:26.144356+00:00",
+  "generated_at": "2026-07-17T20:55:39.052330+00:00",
   "phase": "B1 -- first scoreboard, DEV ONLY, HELDOUT FORBIDDEN",
   "corpus_summary": [
     {
@@ -376,19 +376,9 @@
       "id": "egmd_drummer9_session1_27",
       "domain": "other",
       "source": "egmd"
-    },
-    {
-      "id": "slakh_Track02047_S07",
-      "domain": "other",
-      "source": "slakh2100_test"
-    },
-    {
-      "id": "slakh_Track02067_S08",
-      "domain": "other",
-      "source": "slakh2100_test"
     }
   ],
-  "n_tracks": 77,
+  "n_tracks": 75,
   "per_class": {
     "kick": {
       "stage1": {
@@ -397,81 +387,81 @@
             "id": "babyslakh_Track00001",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 171,
             "n_truth": 182,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.9291784702549575,
+            "precision": 0.9590643274853801,
+            "recall": 0.9010989010989011
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 422,
             "n_truth": 265,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7714701601164484,
+            "precision": 0.6279620853080569,
+            "recall": 1.0
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 377,
             "n_truth": 380,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.9801849405548219,
+            "precision": 0.9840848806366048,
+            "recall": 0.9763157894736842
           },
           {
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 261,
             "n_truth": 365,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.8051118210862621,
+            "precision": 0.9655172413793104,
+            "recall": 0.6904109589041096
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 314,
             "n_truth": 348,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6918429003021147,
+            "precision": 0.7292993630573248,
+            "recall": 0.6580459770114943
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 180,
             "n_truth": 140,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.8750000000000001,
+            "precision": 0.7777777777777778,
+            "recall": 1.0
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 567,
             "n_truth": 309,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6757990867579908,
+            "precision": 0.5220458553791887,
+            "recall": 0.9579288025889967
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 265,
             "n_truth": 205,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.8638297872340426,
+            "precision": 0.7660377358490567,
+            "recall": 0.9902439024390244
           },
           {
             "id": "self_render_kick_hat_128bpm",
@@ -497,207 +487,207 @@
             "id": "apricots_128bpm",
             "domain": "electronic",
             "source": "manifold_own",
-            "n_pred": 0,
+            "n_pred": 29,
             "n_truth": 16,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6666666666666667,
+            "precision": 0.5172413793103449,
+            "recall": 0.9375
           },
           {
             "id": "bad_guy_128bpm",
             "domain": "electronic",
             "source": "manifold_own",
-            "n_pred": 0,
+            "n_pred": 24,
             "n_truth": 17,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.19512195121951217,
+            "precision": 0.16666666666666666,
+            "recall": 0.23529411764705882
           },
           {
             "id": "feel_the_vibration_174bpm",
             "domain": "electronic",
             "source": "manifold_own",
-            "n_pred": 0,
+            "n_pred": 28,
             "n_truth": 16,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.36363636363636365,
+            "precision": 0.2857142857142857,
+            "recall": 0.5
           },
           {
             "id": "inhale_exhale_145bpm",
             "domain": "electronic",
             "source": "manifold_own",
-            "n_pred": 0,
+            "n_pred": 14,
             "n_truth": 14,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7142857142857143,
+            "precision": 0.7142857142857143,
+            "recall": 0.7142857142857143
           },
           {
             "id": "tears_140bpm",
             "domain": "electronic",
             "source": "manifold_own",
-            "n_pred": 0,
+            "n_pred": 24,
             "n_truth": 10,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5294117647058825,
+            "precision": 0.375,
+            "recall": 0.9
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 21,
             "n_truth": 1,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.0909090909090909,
+            "precision": 0.047619047619047616,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_266",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 9,
             "n_truth": 2,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.3636363636363636,
+            "precision": 0.2222222222222222,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_220",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 11,
             "n_truth": 3,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.42857142857142855,
+            "precision": 0.2727272727272727,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_230",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 10,
             "n_truth": 1,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.18181818181818182,
+            "precision": 0.1,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_132",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 25,
             "n_truth": 2,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.14814814814814814,
+            "precision": 0.08,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_15",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 40,
             "n_truth": 4,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.18181818181818182,
+            "precision": 0.1,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 5,
             "n_truth": 5,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.20000000000000004,
+            "precision": 0.2,
+            "recall": 0.2
           },
           {
             "id": "egmd_drummer1_session1_14",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 26,
             "n_truth": 1,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.07407407407407407,
+            "precision": 0.038461538461538464,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_106",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 24,
             "n_truth": 2,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.07692307692307693,
+            "precision": 0.041666666666666664,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 5,
             "n_truth": 3,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7499999999999999,
+            "precision": 0.6,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_192",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 1,
             "n_truth": 1,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_109",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 4,
             "n_truth": 2,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6666666666666666,
+            "precision": 0.5,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_195",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 8,
             "n_truth": 2,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.2,
+            "precision": 0.125,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 53,
             "n_truth": 30,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6987951807228916,
+            "precision": 0.5471698113207547,
+            "recall": 0.9666666666666667
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 56,
             "n_truth": 52,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7592592592592592,
+            "precision": 0.7321428571428571,
+            "recall": 0.7884615384615384
           },
           {
             "id": "egmd_drummer3_session1_21",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 1,
             "n_truth": 3,
             "kick_f1": 0.0,
             "precision": 0.0,
@@ -707,77 +697,77 @@
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 10,
             "n_truth": 18,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5,
+            "precision": 0.7,
+            "recall": 0.3888888888888889
           },
           {
             "id": "egmd_drummer3_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 10,
             "n_truth": 16,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.38461538461538464,
+            "precision": 0.5,
+            "recall": 0.3125
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 5,
             "n_truth": 10,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6666666666666666,
+            "precision": 1.0,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 22,
             "n_truth": 11,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6666666666666666,
+            "precision": 0.5,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_23",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 17,
             "n_truth": 12,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7586206896551724,
+            "precision": 0.6470588235294118,
+            "recall": 0.9166666666666666
           },
           {
             "id": "egmd_drummer3_session2_38",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 57,
             "n_truth": 14,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.3943661971830986,
+            "precision": 0.24561403508771928,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_34",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 13,
             "n_truth": 14,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.962962962962963,
+            "precision": 1.0,
+            "recall": 0.9285714285714286
           },
           {
             "id": "egmd_drummer3_session2_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 2,
             "n_truth": 1,
             "kick_f1": 0.0,
             "precision": 0.0,
@@ -787,11 +777,11 @@
             "id": "egmd_drummer3_session2_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 39,
             "n_truth": 17,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5,
+            "precision": 0.358974358974359,
+            "recall": 0.8235294117647058
           },
           {
             "id": "egmd_drummer3_session2_33",
@@ -807,71 +797,71 @@
             "id": "egmd_drummer4_session1_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 65,
             "n_truth": 48,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.14159292035398233,
+            "precision": 0.12307692307692308,
+            "recall": 0.16666666666666666
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 14,
             "n_truth": 18,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.31250000000000006,
+            "precision": 0.35714285714285715,
+            "recall": 0.2777777777777778
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 11,
             "n_truth": 11,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6363636363636364,
+            "precision": 0.6363636363636364,
+            "recall": 0.6363636363636364
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 24,
             "n_truth": 27,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5098039215686274,
+            "precision": 0.5416666666666666,
+            "recall": 0.48148148148148145
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 18,
             "n_truth": 13,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.7741935483870968,
+            "precision": 0.6666666666666666,
+            "recall": 0.9230769230769231
           },
           {
             "id": "egmd_drummer7_session2_62",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 16,
             "n_truth": 1,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.11764705882352941,
+            "precision": 0.0625,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_102",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 8,
             "n_truth": 27,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.34285714285714286,
+            "precision": 0.75,
+            "recall": 0.2222222222222222
           },
           {
             "id": "egmd_drummer7_session2_58",
@@ -887,11 +877,11 @@
             "id": "egmd_drummer7_session2_128",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 17,
             "n_truth": 7,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5833333333333334,
+            "precision": 0.4117647058823529,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_71",
@@ -907,7 +897,7 @@
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 29,
             "n_truth": 1,
             "kick_f1": 0.0,
             "precision": 0.0,
@@ -917,21 +907,21 @@
             "id": "egmd_drummer7_session2_78",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 8,
             "n_truth": 6,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.8571428571428571,
+            "precision": 0.75,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_43",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 11,
             "n_truth": 3,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.42857142857142855,
+            "precision": 0.2727272727272727,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_118",
@@ -947,177 +937,157 @@
             "id": "egmd_drummer7_session3_97",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 4,
             "n_truth": 4,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5,
+            "precision": 0.5,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer7_session3_121",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 18,
             "n_truth": 3,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.1904761904761905,
+            "precision": 0.1111111111111111,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer7_session2_89",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 23,
             "n_truth": 10,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5454545454545454,
+            "precision": 0.391304347826087,
+            "recall": 0.9
           },
           {
             "id": "egmd_drummer9_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 28,
             "n_truth": 5,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.30303030303030304,
+            "precision": 0.17857142857142858,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 65,
             "n_truth": 15,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.3,
+            "precision": 0.18461538461538463,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer9_session1_4",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 5,
             "n_truth": 15,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.5,
+            "precision": 1.0,
+            "recall": 0.3333333333333333
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 11,
             "n_truth": 21,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6875000000000001,
+            "precision": 1.0,
+            "recall": 0.5238095238095238
           },
           {
             "id": "egmd_drummer9_session1_15",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 26,
             "n_truth": 23,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.9387755102040816,
+            "precision": 0.8846153846153846,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_10",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 18,
             "n_truth": 9,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6666666666666666,
+            "precision": 0.5,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 87,
             "n_truth": 20,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.3364485981308411,
+            "precision": 0.20689655172413793,
+            "recall": 0.9
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 49,
             "n_truth": 48,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.6597938144329897,
+            "precision": 0.6530612244897959,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 21,
             "n_truth": 14,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 0,
-            "n_truth": 328,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 0,
-            "n_truth": 119,
-            "kick_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "kick_f1": 0.742857142857143,
+            "precision": 0.6190476190476191,
+            "recall": 0.9285714285714286
           }
         ],
-        "mean_f1": 0.014262709914883827,
+        "mean_f1": 0.474256618655216,
         "by_domain": {
           "other": {
-            "mean": 0.0,
-            "n": 62
+            "mean": 0.47203240008763914,
+            "n": 60
           },
           "electronic": {
-            "mean": 0.1405895691609977,
+            "mean": 0.4933213492344462,
             "n": 7
           },
           "overall": {
-            "mean": 0.014262709914883827,
-            "n": 69
+            "mean": 0.474256618655216,
+            "n": 67
           }
         },
-        "n_tracks_scored": 69
+        "n_tracks_scored": 67
       },
       "adtof_post_p4": {
-        "mean_f1": 0.803747847295983,
+        "mean_f1": 0.7978895740809377,
         "by_domain": {
           "other": {
-            "mean": 0.8152623921851722,
-            "n": 62
+            "mean": 0.8091044719246779,
+            "n": 60
           },
           "electronic": {
             "mean": 0.7017618782774512,
             "n": 7
           },
           "overall": {
-            "mean": 0.803747847295983,
-            "n": 69
+            "mean": 0.7978895740809377,
+            "n": 67
           }
         },
-        "n_tracks_scored": 69,
+        "n_tracks_scored": 67,
         "per_track": [
           {
             "id": "babyslakh_Track00001",
@@ -1788,26 +1758,6 @@
             "kick_f1": 0.962962962962963,
             "precision": 1.0,
             "recall": 0.9285714285714286
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 328,
-            "n_truth": 328,
-            "kick_f1": 1.0,
-            "precision": 1.0,
-            "recall": 1.0
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 119,
-            "n_truth": 119,
-            "kick_f1": 1.0,
-            "precision": 1.0,
-            "recall": 1.0
           }
         ]
       }
@@ -1819,124 +1769,204 @@
             "id": "babyslakh_Track00001",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 451,
+            "n_pred": 395,
             "n_truth": 130,
-            "snare_f1": 0.40963855421686746,
-            "precision": 0.2638580931263858,
-            "recall": 0.9153846153846154
+            "snare_f1": 0.4914285714285715,
+            "precision": 0.3265822784810127,
+            "recall": 0.9923076923076923
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 263,
+            "n_pred": 374,
             "n_truth": 184,
-            "snare_f1": 0.8008948545861297,
-            "precision": 0.6806083650190115,
-            "recall": 0.9728260869565217
+            "snare_f1": 0.6308243727598567,
+            "precision": 0.47058823529411764,
+            "recall": 0.9565217391304348
           },
           {
             "id": "babyslakh_Track00003",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 704,
+            "n_pred": 1247,
             "n_truth": 328,
-            "snare_f1": 0.6317829457364341,
-            "precision": 0.4630681818181818,
+            "snare_f1": 0.41396825396825393,
+            "precision": 0.26142742582197276,
             "recall": 0.9939024390243902
           },
           {
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 131,
+            "n_pred": 135,
             "n_truth": 290,
-            "snare_f1": 0.42280285035629456,
-            "precision": 0.6793893129770993,
-            "recall": 0.30689655172413793
+            "snare_f1": 0.3858823529411765,
+            "precision": 0.6074074074074074,
+            "recall": 0.2827586206896552
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 687,
+            "n_pred": 0,
             "n_truth": 242,
-            "snare_f1": 0.4779332615715824,
-            "precision": 0.3231441048034934,
-            "recall": 0.9173553719008265
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 120,
+            "n_pred": 322,
             "n_truth": 108,
-            "snare_f1": 0.9385964912280701,
-            "precision": 0.8916666666666667,
-            "recall": 0.9907407407407407
+            "snare_f1": 0.5023255813953489,
+            "precision": 0.33540372670807456,
+            "recall": 1.0
           },
           {
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 639,
+            "n_pred": 258,
             "n_truth": 240,
-            "snare_f1": 0.5187713310580204,
-            "precision": 0.3568075117370892,
-            "recall": 0.95
+            "snare_f1": 0.5060240963855422,
+            "precision": 0.4883720930232558,
+            "recall": 0.525
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 182,
+            "n_pred": 189,
             "n_truth": 452,
-            "snare_f1": 0.5646687697160884,
-            "precision": 0.9835164835164835,
-            "recall": 0.39601769911504425
+            "snare_f1": 0.5709828393135725,
+            "precision": 0.9682539682539683,
+            "recall": 0.40486725663716816
           },
           {
             "id": "self_render_edm_kit_128bpm",
             "domain": "electronic",
             "source": "self_render",
-            "n_pred": 32,
+            "n_pred": 144,
             "n_truth": 32,
-            "snare_f1": 1.0,
-            "precision": 1.0,
+            "snare_f1": 0.3636363636363636,
+            "precision": 0.2222222222222222,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 11,
+            "n_pred": 19,
             "n_truth": 8,
-            "snare_f1": 0.7368421052631579,
-            "precision": 0.6363636363636364,
-            "recall": 0.875
+            "snare_f1": 0.5925925925925926,
+            "precision": 0.42105263157894735,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_266",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 4,
             "n_truth": 10,
-            "snare_f1": 0.8235294117647058,
+            "snare_f1": 0.5714285714285715,
             "precision": 1.0,
-            "recall": 0.7
+            "recall": 0.4
           },
           {
             "id": "egmd_drummer1_session1_220",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 19,
             "n_truth": 7,
-            "snare_f1": 0.7142857142857143,
-            "precision": 0.7142857142857143,
-            "recall": 0.7142857142857143
+            "snare_f1": 0.5384615384615384,
+            "precision": 0.3684210526315789,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_230",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 6,
+            "n_truth": 7,
+            "snare_f1": 0.30769230769230765,
+            "precision": 0.3333333333333333,
+            "recall": 0.2857142857142857
+          },
+          {
+            "id": "egmd_drummer1_session1_132",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 19,
+            "n_truth": 5,
+            "snare_f1": 0.4166666666666667,
+            "precision": 0.2631578947368421,
+            "recall": 1.0
+          },
+          {
+            "id": "egmd_drummer1_session1_15",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 17,
+            "n_truth": 5,
+            "snare_f1": 0.45454545454545453,
+            "precision": 0.29411764705882354,
+            "recall": 1.0
+          },
+          {
+            "id": "egmd_drummer1_session1_6",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 11,
+            "n_truth": 7,
+            "snare_f1": 0.6666666666666665,
+            "precision": 0.5454545454545454,
+            "recall": 0.8571428571428571
+          },
+          {
+            "id": "egmd_drummer1_session1_17",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 7,
+            "n_truth": 17,
+            "snare_f1": 0.4166666666666667,
+            "precision": 0.7142857142857143,
+            "recall": 0.29411764705882354
+          },
+          {
+            "id": "egmd_drummer1_session1_16",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 0,
+            "n_truth": 8,
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          {
+            "id": "egmd_drummer1_session1_182",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 0,
+            "n_truth": 8,
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          {
+            "id": "egmd_drummer1_session1_14",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 0,
+            "n_truth": 13,
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          {
+            "id": "egmd_drummer1_session1_106",
             "domain": "other",
             "source": "egmd",
             "n_pred": 6,
@@ -1946,180 +1976,100 @@
             "recall": 0.5714285714285714
           },
           {
-            "id": "egmd_drummer1_session1_132",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 9,
-            "n_truth": 5,
-            "snare_f1": 0.5714285714285714,
-            "precision": 0.4444444444444444,
-            "recall": 0.8
-          },
-          {
-            "id": "egmd_drummer1_session1_15",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 10,
-            "n_truth": 5,
-            "snare_f1": 0.6666666666666666,
-            "precision": 0.5,
-            "recall": 1.0
-          },
-          {
-            "id": "egmd_drummer1_session1_6",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 7,
-            "n_truth": 7,
-            "snare_f1": 0.7142857142857143,
-            "precision": 0.7142857142857143,
-            "recall": 0.7142857142857143
-          },
-          {
-            "id": "egmd_drummer1_session1_17",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 8,
-            "n_truth": 17,
-            "snare_f1": 0.31999999999999995,
-            "precision": 0.5,
-            "recall": 0.23529411764705882
-          },
-          {
-            "id": "egmd_drummer1_session1_16",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 6,
-            "n_truth": 8,
-            "snare_f1": 0.5714285714285715,
-            "precision": 0.6666666666666666,
-            "recall": 0.5
-          },
-          {
-            "id": "egmd_drummer1_session1_182",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 2,
-            "n_truth": 8,
-            "snare_f1": 0.2,
-            "precision": 0.5,
-            "recall": 0.125
-          },
-          {
-            "id": "egmd_drummer1_session1_14",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 16,
-            "n_truth": 13,
-            "snare_f1": 0.8275862068965517,
-            "precision": 0.75,
-            "recall": 0.9230769230769231
-          },
-          {
-            "id": "egmd_drummer1_session1_106",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 10,
-            "n_truth": 7,
-            "snare_f1": 0.588235294117647,
-            "precision": 0.5,
-            "recall": 0.7142857142857143
-          },
-          {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 8,
+            "n_pred": 0,
             "n_truth": 6,
-            "snare_f1": 0.14285714285714288,
-            "precision": 0.125,
-            "recall": 0.16666666666666666
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_192",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 0,
             "n_truth": 2,
-            "snare_f1": 0.4,
-            "precision": 0.3333333333333333,
-            "recall": 0.5
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_109",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 17,
             "n_truth": 12,
-            "snare_f1": 0.4,
-            "precision": 1.0,
-            "recall": 0.25
+            "snare_f1": 0.27586206896551724,
+            "precision": 0.23529411764705882,
+            "recall": 0.3333333333333333
           },
           {
             "id": "egmd_drummer1_session1_195",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 2,
             "n_truth": 3,
-            "snare_f1": 0.6666666666666666,
-            "precision": 0.6666666666666666,
+            "snare_f1": 0.8,
+            "precision": 1.0,
             "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 22,
+            "n_pred": 54,
             "n_truth": 31,
-            "snare_f1": 0.7924528301886793,
-            "precision": 0.9545454545454546,
-            "recall": 0.6774193548387096
+            "snare_f1": 0.6352941176470588,
+            "precision": 0.5,
+            "recall": 0.8709677419354839
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 35,
+            "n_pred": 0,
             "n_truth": 44,
-            "snare_f1": 0.8860759493670886,
-            "precision": 1.0,
-            "recall": 0.7954545454545454
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 97,
             "n_truth": 37,
-            "snare_f1": 0.5660377358490566,
-            "precision": 0.9375,
-            "recall": 0.40540540540540543
+            "snare_f1": 0.5522388059701492,
+            "precision": 0.38144329896907214,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 34,
+            "n_pred": 7,
             "n_truth": 62,
-            "snare_f1": 0.6458333333333334,
-            "precision": 0.9117647058823529,
-            "recall": 0.5
+            "snare_f1": 0.2028985507246377,
+            "precision": 1.0,
+            "recall": 0.11290322580645161
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 9,
             "n_truth": 9,
-            "snare_f1": 0.72,
-            "precision": 0.5625,
-            "recall": 1.0
+            "snare_f1": 0.8888888888888888,
+            "precision": 0.8888888888888888,
+            "recall": 0.8888888888888888
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 0,
             "n_truth": 9,
             "snare_f1": 0.0,
             "precision": 0.0,
@@ -2129,181 +2079,181 @@
             "id": "egmd_drummer3_session2_23",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 5,
+            "n_pred": 4,
             "n_truth": 4,
-            "snare_f1": 0.888888888888889,
-            "precision": 0.8,
+            "snare_f1": 1.0,
+            "precision": 1.0,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_38",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 21,
+            "n_pred": 10,
             "n_truth": 8,
-            "snare_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "snare_f1": 0.6666666666666665,
+            "precision": 0.6,
+            "recall": 0.75
           },
           {
             "id": "egmd_drummer3_session2_34",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 21,
+            "n_pred": 48,
             "n_truth": 19,
-            "snare_f1": 0.9,
-            "precision": 0.8571428571428571,
-            "recall": 0.9473684210526315
+            "snare_f1": 0.5671641791044776,
+            "precision": 0.3958333333333333,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 1,
             "n_truth": 2,
-            "snare_f1": 1.0,
+            "snare_f1": 0.6666666666666666,
             "precision": 1.0,
-            "recall": 1.0
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer3_session2_33",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 8,
+            "n_pred": 4,
             "n_truth": 5,
-            "snare_f1": 0.7692307692307693,
-            "precision": 0.625,
-            "recall": 1.0
+            "snare_f1": 0.888888888888889,
+            "precision": 1.0,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer4_session1_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 91,
+            "n_pred": 159,
             "n_truth": 75,
-            "snare_f1": 0.7228915662650602,
-            "precision": 0.6593406593406593,
-            "recall": 0.8
+            "snare_f1": 0.6153846153846154,
+            "precision": 0.4528301886792453,
+            "recall": 0.96
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 32,
+            "n_pred": 0,
             "n_truth": 34,
-            "snare_f1": 0.48484848484848486,
-            "precision": 0.5,
-            "recall": 0.47058823529411764
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 13,
+            "n_pred": 4,
             "n_truth": 27,
-            "snare_f1": 0.45,
-            "precision": 0.6923076923076923,
-            "recall": 0.3333333333333333
+            "snare_f1": 0.25806451612903225,
+            "precision": 1.0,
+            "recall": 0.14814814814814814
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 42,
+            "n_pred": 3,
             "n_truth": 38,
-            "snare_f1": 0.625,
-            "precision": 0.5952380952380952,
-            "recall": 0.6578947368421053
+            "snare_f1": 0.14634146341463414,
+            "precision": 1.0,
+            "recall": 0.07894736842105263
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 10,
+            "n_pred": 7,
             "n_truth": 6,
-            "snare_f1": 0.7499999999999999,
-            "precision": 0.6,
-            "recall": 1.0
+            "snare_f1": 0.7692307692307692,
+            "precision": 0.7142857142857143,
+            "recall": 0.8333333333333334
           },
           {
             "id": "egmd_drummer7_session2_62",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 20,
+            "n_pred": 49,
             "n_truth": 15,
-            "snare_f1": 0.5142857142857143,
-            "precision": 0.45,
-            "recall": 0.6
+            "snare_f1": 0.43749999999999994,
+            "precision": 0.2857142857142857,
+            "recall": 0.9333333333333333
           },
           {
             "id": "egmd_drummer7_session2_102",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 12,
             "n_truth": 22,
-            "snare_f1": 0.7894736842105263,
-            "precision": 0.9375,
-            "recall": 0.6818181818181818
+            "snare_f1": 0.6470588235294118,
+            "precision": 0.9166666666666666,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer7_session2_58",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 23,
+            "n_pred": 14,
             "n_truth": 13,
-            "snare_f1": 0.6666666666666667,
-            "precision": 0.5217391304347826,
-            "recall": 0.9230769230769231
+            "snare_f1": 0.962962962962963,
+            "precision": 0.9285714285714286,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_128",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 19,
+            "n_pred": 17,
             "n_truth": 21,
-            "snare_f1": 0.7,
-            "precision": 0.7368421052631579,
-            "recall": 0.6666666666666666
+            "snare_f1": 0.31578947368421056,
+            "precision": 0.35294117647058826,
+            "recall": 0.2857142857142857
           },
           {
             "id": "egmd_drummer7_session2_71",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 26,
+            "n_pred": 40,
             "n_truth": 28,
-            "snare_f1": 0.7407407407407408,
-            "precision": 0.7692307692307693,
-            "recall": 0.7142857142857143
+            "snare_f1": 0.7941176470588236,
+            "precision": 0.675,
+            "recall": 0.9642857142857143
           },
           {
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 23,
+            "n_pred": 2,
             "n_truth": 14,
-            "snare_f1": 0.7567567567567568,
-            "precision": 0.6086956521739131,
-            "recall": 1.0
+            "snare_f1": 0.25,
+            "precision": 1.0,
+            "recall": 0.14285714285714285
           },
           {
             "id": "egmd_drummer7_session2_78",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 6,
+            "n_pred": 2,
             "n_truth": 11,
-            "snare_f1": 0.5882352941176471,
-            "precision": 0.8333333333333334,
-            "recall": 0.45454545454545453
+            "snare_f1": 0.3076923076923077,
+            "precision": 1.0,
+            "recall": 0.18181818181818182
           },
           {
             "id": "egmd_drummer7_session3_63",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 0,
             "n_truth": 36,
-            "snare_f1": 0.05405405405405406,
-            "precision": 1.0,
-            "recall": 0.027777777777777776
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer7_session2_43",
@@ -2319,51 +2269,51 @@
             "id": "egmd_drummer7_session2_118",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 1,
             "n_truth": 5,
-            "snare_f1": 0.4444444444444445,
-            "precision": 0.5,
-            "recall": 0.4
+            "snare_f1": 0.33333333333333337,
+            "precision": 1.0,
+            "recall": 0.2
           },
           {
             "id": "egmd_drummer7_session3_97",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 13,
+            "n_pred": 25,
             "n_truth": 13,
-            "snare_f1": 0.7692307692307693,
-            "precision": 0.7692307692307693,
-            "recall": 0.7692307692307693
+            "snare_f1": 0.6842105263157895,
+            "precision": 0.52,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session3_121",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 19,
+            "n_pred": 26,
             "n_truth": 8,
-            "snare_f1": 0.5185185185185185,
-            "precision": 0.3684210526315789,
+            "snare_f1": 0.411764705882353,
+            "precision": 0.2692307692307692,
             "recall": 0.875
           },
           {
             "id": "egmd_drummer7_session2_34",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 30,
             "n_truth": 9,
-            "snare_f1": 0.39999999999999997,
-            "precision": 0.3125,
-            "recall": 0.5555555555555556
+            "snare_f1": 0.41025641025641024,
+            "precision": 0.26666666666666666,
+            "recall": 0.8888888888888888
           },
           {
             "id": "egmd_drummer7_session2_89",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 10,
+            "n_pred": 25,
             "n_truth": 15,
-            "snare_f1": 0.7200000000000001,
-            "precision": 0.9,
-            "recall": 0.6
+            "snare_f1": 0.6,
+            "precision": 0.48,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer7_session3_18",
@@ -2379,157 +2329,137 @@
             "id": "egmd_drummer7_session3_28",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 18,
+            "n_pred": 12,
             "n_truth": 16,
-            "snare_f1": 0.823529411764706,
-            "precision": 0.7777777777777778,
-            "recall": 0.875
+            "snare_f1": 0.42857142857142855,
+            "precision": 0.5,
+            "recall": 0.375
           },
           {
             "id": "egmd_drummer9_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 31,
+            "n_pred": 3,
             "n_truth": 4,
-            "snare_f1": 0.2285714285714286,
-            "precision": 0.12903225806451613,
-            "recall": 1.0
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 22,
+            "n_pred": 0,
             "n_truth": 6,
-            "snare_f1": 0.14285714285714288,
-            "precision": 0.09090909090909091,
-            "recall": 0.3333333333333333
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_4",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 0,
             "n_truth": 9,
-            "snare_f1": 0.72,
-            "precision": 0.5625,
-            "recall": 1.0
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 18,
+            "n_pred": 43,
             "n_truth": 25,
-            "snare_f1": 0.7906976744186047,
-            "precision": 0.9444444444444444,
-            "recall": 0.68
+            "snare_f1": 0.5882352941176471,
+            "precision": 0.46511627906976744,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer9_session1_15",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 37,
+            "n_pred": 8,
             "n_truth": 42,
-            "snare_f1": 0.4050632911392405,
-            "precision": 0.43243243243243246,
-            "recall": 0.38095238095238093
+            "snare_f1": 0.27999999999999997,
+            "precision": 0.875,
+            "recall": 0.16666666666666666
           },
           {
             "id": "egmd_drummer9_session1_10",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 18,
+            "n_pred": 0,
             "n_truth": 11,
-            "snare_f1": 0.4827586206896552,
-            "precision": 0.3888888888888889,
-            "recall": 0.6363636363636364
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 46,
+            "n_pred": 0,
             "n_truth": 36,
-            "snare_f1": 0.3902439024390244,
-            "precision": 0.34782608695652173,
-            "recall": 0.4444444444444444
+            "snare_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 55,
+            "n_pred": 31,
             "n_truth": 34,
-            "snare_f1": 0.6516853932584269,
-            "precision": 0.5272727272727272,
-            "recall": 0.8529411764705882
+            "snare_f1": 0.36923076923076925,
+            "precision": 0.3870967741935484,
+            "recall": 0.35294117647058826
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 2,
             "n_truth": 13,
-            "snare_f1": 0.6896551724137931,
-            "precision": 0.625,
-            "recall": 0.7692307692307693
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 668,
-            "n_truth": 544,
-            "snare_f1": 0.5544554455445544,
-            "precision": 0.5029940119760479,
-            "recall": 0.6176470588235294
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 51,
-            "n_truth": 79,
-            "snare_f1": 0.4461538461538462,
-            "precision": 0.5686274509803921,
-            "recall": 0.3670886075949367
+            "snare_f1": 0.2666666666666667,
+            "precision": 1.0,
+            "recall": 0.15384615384615385
           }
         ],
-        "mean_f1": 0.583644364972793,
+        "mean_f1": 0.39758108495916633,
         "by_domain": {
           "other": {
-            "mean": 0.5774301017634318,
-            "n": 67
+            "mean": 0.39810331144105565,
+            "n": 65
           },
           "electronic": {
-            "mean": 1.0,
+            "mean": 0.3636363636363636,
             "n": 1
           },
           "overall": {
-            "mean": 0.5836443649727932,
-            "n": 68
+            "mean": 0.3975810849591664,
+            "n": 66
           }
         },
-        "n_tracks_scored": 68
+        "n_tracks_scored": 66
       },
       "adtof_post_p4": {
-        "mean_f1": 0.7720452273070741,
+        "mean_f1": 0.7741163299649211,
         "by_domain": {
           "other": {
-            "mean": 0.7738211079461381,
-            "n": 67
+            "mean": 0.7759787162030001,
+            "n": 65
           },
           "electronic": {
             "mean": 0.6530612244897959,
             "n": 1
           },
           "overall": {
-            "mean": 0.7720452273070743,
-            "n": 68
+            "mean": 0.7741163299649212,
+            "n": 66
           }
         },
-        "n_tracks_scored": 68,
+        "n_tracks_scored": 66,
         "per_track": [
           {
             "id": "babyslakh_Track00001",
@@ -3190,26 +3120,6 @@
             "snare_f1": 0.6666666666666667,
             "precision": 0.875,
             "recall": 0.5384615384615384
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 337,
-            "n_truth": 544,
-            "snare_f1": 0.7627695800227015,
-            "precision": 0.9970326409495549,
-            "recall": 0.6176470588235294
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 163,
-            "n_truth": 79,
-            "snare_f1": 0.6446280991735537,
-            "precision": 0.4785276073619632,
-            "recall": 0.9873417721518988
           }
         ]
       }
@@ -3221,11 +3131,11 @@
             "id": "babyslakh_Track00001",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 850,
             "n_truth": 598,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.42541436464088395,
+            "precision": 0.3623529411764706,
+            "recall": 0.5150501672240803
           },
           {
             "id": "babyslakh_Track00002",
@@ -3251,21 +3161,21 @@
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 25,
             "n_truth": 406,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.0046403712296983765,
+            "precision": 0.04,
+            "recall": 0.0024630541871921183
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 96,
             "n_truth": 767,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.06952491309385864,
+            "precision": 0.3125,
+            "recall": 0.03911342894393742
           },
           {
             "id": "babyslakh_Track00006",
@@ -3281,91 +3191,91 @@
             "id": "babyslakh_Track00007",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 65,
             "n_truth": 745,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.012345679012345678,
+            "precision": 0.07692307692307693,
+            "recall": 0.006711409395973154
           },
           {
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 493,
             "n_truth": 537,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.5689320388349514,
+            "precision": 0.5943204868154158,
+            "recall": 0.5456238361266295
           },
           {
             "id": "self_render_kick_hat_128bpm",
             "domain": "electronic",
             "source": "self_render",
-            "n_pred": 31,
+            "n_pred": 0,
             "n_truth": 32,
-            "hat_f1": 0.9841269841269841,
-            "precision": 1.0,
-            "recall": 0.96875
+            "hat_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "self_render_edm_kit_128bpm",
             "domain": "electronic",
             "source": "self_render",
-            "n_pred": 112,
+            "n_pred": 0,
             "n_truth": 128,
-            "hat_f1": 0.9333333333333333,
-            "precision": 1.0,
-            "recall": 0.875
+            "hat_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 5,
             "n_truth": 5,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.8000000000000002,
+            "precision": 0.8,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer1_session1_266",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 23,
             "n_truth": 3,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.23076923076923078,
+            "precision": 0.13043478260869565,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_230",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 10,
             "n_truth": 4,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.14285714285714288,
+            "precision": 0.1,
+            "recall": 0.25
           },
           {
             "id": "egmd_drummer1_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 13,
             "n_truth": 9,
-            "hat_f1": 0.30769230769230765,
-            "precision": 0.5,
-            "recall": 0.2222222222222222
+            "hat_f1": 0.4545454545454546,
+            "precision": 0.38461538461538464,
+            "recall": 0.5555555555555556
           },
           {
             "id": "egmd_drummer1_session1_16",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 25,
             "n_truth": 9,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.3529411764705882,
+            "precision": 0.24,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer1_session1_182",
@@ -3391,141 +3301,141 @@
             "id": "egmd_drummer1_session1_106",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 8,
             "n_truth": 1,
-            "hat_f1": 0.6666666666666666,
-            "precision": 0.5,
+            "hat_f1": 0.2222222222222222,
+            "precision": 0.125,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 25,
             "n_truth": 4,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.20689655172413793,
+            "precision": 0.12,
+            "recall": 0.75
           },
           {
             "id": "egmd_drummer1_session1_192",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 12,
             "n_truth": 2,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.14285714285714285,
+            "precision": 0.08333333333333333,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer1_session1_109",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 6,
             "n_truth": 1,
-            "hat_f1": 0.4,
-            "precision": 0.25,
+            "hat_f1": 0.2857142857142857,
+            "precision": 0.16666666666666666,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_195",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 22,
             "n_truth": 4,
-            "hat_f1": 0.28571428571428575,
-            "precision": 0.3333333333333333,
-            "recall": 0.25
+            "hat_f1": 0.15384615384615385,
+            "precision": 0.09090909090909091,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 12,
+            "n_pred": 53,
             "n_truth": 16,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.14492753623188406,
+            "precision": 0.09433962264150944,
+            "recall": 0.3125
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 64,
+            "n_pred": 321,
             "n_truth": 5,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.012269938650306749,
+            "precision": 0.006230529595015576,
+            "recall": 0.4
           },
           {
             "id": "egmd_drummer3_session1_21",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 47,
             "n_truth": 3,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.12,
+            "precision": 0.06382978723404255,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 36,
+            "n_pred": 76,
             "n_truth": 60,
-            "hat_f1": 0.6874999999999999,
-            "precision": 0.9166666666666666,
-            "recall": 0.55
+            "hat_f1": 0.7058823529411765,
+            "precision": 0.631578947368421,
+            "recall": 0.8
           },
           {
             "id": "egmd_drummer3_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 12,
+            "n_pred": 96,
             "n_truth": 2,
-            "hat_f1": 0.2857142857142857,
-            "precision": 0.16666666666666666,
+            "hat_f1": 0.04081632653061225,
+            "precision": 0.020833333333333332,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session1_45",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 35,
+            "n_pred": 120,
             "n_truth": 9,
-            "hat_f1": 0.0909090909090909,
-            "precision": 0.05714285714285714,
-            "recall": 0.2222222222222222
+            "hat_f1": 0.13953488372093023,
+            "precision": 0.075,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer3_session2_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 10,
+            "n_pred": 19,
             "n_truth": 34,
-            "hat_f1": 0.3636363636363636,
-            "precision": 0.8,
-            "recall": 0.23529411764705882
+            "hat_f1": 0.5283018867924528,
+            "precision": 0.7368421052631579,
+            "recall": 0.4117647058823529
           },
           {
             "id": "egmd_drummer3_session2_23",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 19,
             "n_truth": 23,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.3333333333333333,
+            "precision": 0.3684210526315789,
+            "recall": 0.30434782608695654
           },
           {
             "id": "egmd_drummer3_session2_38",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 23,
             "n_truth": 44,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.5074626865671641,
+            "precision": 0.7391304347826086,
+            "recall": 0.38636363636363635
           },
           {
             "id": "egmd_drummer3_session2_34",
@@ -3541,117 +3451,117 @@
             "id": "egmd_drummer3_session2_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 29,
             "n_truth": 26,
-            "hat_f1": 0.2666666666666667,
-            "precision": 1.0,
-            "recall": 0.15384615384615385
+            "hat_f1": 0.32727272727272727,
+            "precision": 0.3103448275862069,
+            "recall": 0.34615384615384615
           },
           {
             "id": "egmd_drummer3_session2_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 12,
+            "n_pred": 102,
             "n_truth": 27,
-            "hat_f1": 0.20512820512820512,
-            "precision": 0.3333333333333333,
-            "recall": 0.14814814814814814
+            "hat_f1": 0.2635658914728682,
+            "precision": 0.16666666666666666,
+            "recall": 0.6296296296296297
           },
           {
             "id": "egmd_drummer3_session2_33",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 10,
+            "n_pred": 35,
             "n_truth": 12,
-            "hat_f1": 0.2727272727272727,
-            "precision": 0.3,
-            "recall": 0.25
+            "hat_f1": 0.3829787234042553,
+            "precision": 0.2571428571428571,
+            "recall": 0.75
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 75,
             "n_truth": 19,
-            "hat_f1": 0.08695652173913043,
-            "precision": 0.25,
-            "recall": 0.05263157894736842
+            "hat_f1": 0.38297872340425526,
+            "precision": 0.24,
+            "recall": 0.9473684210526315
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 17,
             "n_truth": 13,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.33333333333333337,
+            "precision": 0.29411764705882354,
+            "recall": 0.38461538461538464
           },
           {
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 55,
             "n_truth": 22,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.5454545454545455,
+            "precision": 0.38181818181818183,
+            "recall": 0.9545454545454546
           },
           {
             "id": "egmd_drummer7_session2_131",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 26,
             "n_truth": 3,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.06896551724137931,
+            "precision": 0.038461538461538464,
+            "recall": 0.3333333333333333
           },
           {
             "id": "egmd_drummer7_session2_62",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 4,
             "n_truth": 6,
-            "hat_f1": 0.5,
+            "hat_f1": 0.8,
             "precision": 1.0,
-            "recall": 0.3333333333333333
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer7_session2_102",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 11,
+            "n_pred": 65,
             "n_truth": 12,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.025974025974025976,
+            "precision": 0.015384615384615385,
+            "recall": 0.08333333333333333
           },
           {
             "id": "egmd_drummer7_session2_58",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 5,
             "n_truth": 2,
-            "hat_f1": 1.0,
-            "precision": 1.0,
+            "hat_f1": 0.5714285714285715,
+            "precision": 0.4,
             "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_128",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 42,
             "n_truth": 6,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.08333333333333333,
+            "precision": 0.047619047619047616,
+            "recall": 0.3333333333333333
           },
           {
             "id": "egmd_drummer7_session2_71",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 3,
             "n_truth": 2,
             "hat_f1": 0.0,
             "precision": 0.0,
@@ -3661,17 +3571,17 @@
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 39,
             "n_truth": 3,
-            "hat_f1": 0.5,
-            "precision": 1.0,
-            "recall": 0.3333333333333333
+            "hat_f1": 0.14285714285714288,
+            "precision": 0.07692307692307693,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_78",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 9,
             "n_truth": 4,
             "hat_f1": 0.0,
             "precision": 0.0,
@@ -3681,31 +3591,31 @@
             "id": "egmd_drummer7_session2_43",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 5,
+            "n_pred": 11,
             "n_truth": 2,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.15384615384615385,
+            "precision": 0.09090909090909091,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer7_session2_118",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 6,
+            "n_pred": 19,
             "n_truth": 3,
-            "hat_f1": 0.4444444444444444,
-            "precision": 0.3333333333333333,
+            "hat_f1": 0.18181818181818182,
+            "precision": 0.10526315789473684,
             "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer7_session3_97",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 9,
+            "n_pred": 10,
             "n_truth": 8,
-            "hat_f1": 0.823529411764706,
-            "precision": 0.7777777777777778,
-            "recall": 0.875
+            "hat_f1": 0.888888888888889,
+            "precision": 0.8,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_89",
@@ -3721,17 +3631,17 @@
             "id": "egmd_drummer9_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 81,
             "n_truth": 29,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.38181818181818183,
+            "precision": 0.25925925925925924,
+            "recall": 0.7241379310344828
           },
           {
             "id": "egmd_drummer9_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 45,
             "n_truth": 1,
             "hat_f1": 0.0,
             "precision": 0.0,
@@ -3741,27 +3651,27 @@
             "id": "egmd_drummer9_session1_4",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 22,
+            "n_pred": 68,
             "n_truth": 2,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.05714285714285715,
+            "precision": 0.029411764705882353,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 19,
+            "n_pred": 50,
             "n_truth": 32,
-            "hat_f1": 0.6274509803921569,
-            "precision": 0.8421052631578947,
-            "recall": 0.5
+            "hat_f1": 0.5365853658536586,
+            "precision": 0.44,
+            "recall": 0.6875
           },
           {
             "id": "egmd_drummer9_session1_15",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 59,
             "n_truth": 13,
             "hat_f1": 0.0,
             "precision": 0.0,
@@ -3771,97 +3681,77 @@
             "id": "egmd_drummer9_session1_10",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 29,
             "n_truth": 4,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.18181818181818182,
+            "precision": 0.10344827586206896,
+            "recall": 0.75
           },
           {
             "id": "egmd_drummer9_session1_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 0,
+            "n_pred": 132,
             "n_truth": 47,
-            "hat_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "hat_f1": 0.3910614525139664,
+            "precision": 0.26515151515151514,
+            "recall": 0.7446808510638298
           },
           {
             "id": "egmd_drummer9_session1_30",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 9,
+            "n_pred": 181,
             "n_truth": 110,
-            "hat_f1": 0.08403361344537816,
-            "precision": 0.5555555555555556,
-            "recall": 0.045454545454545456
+            "hat_f1": 0.43986254295532645,
+            "precision": 0.35359116022099446,
+            "recall": 0.5818181818181818
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 33,
             "n_truth": 4,
-            "hat_f1": 0.3333333333333333,
-            "precision": 0.5,
-            "recall": 0.25
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 24,
-            "n_truth": 2691,
-            "hat_f1": 0.013996316758747697,
-            "precision": 0.7916666666666666,
-            "recall": 0.007060572277963582
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 122,
-            "n_truth": 333,
-            "hat_f1": 0.3208791208791209,
-            "precision": 0.5983606557377049,
-            "recall": 0.21921921921921922
+            "hat_f1": 0.21621621621621626,
+            "precision": 0.12121212121212122,
+            "recall": 1.0
           }
         ],
-        "mean_f1": 0.18663015090282759,
+        "mean_f1": 0.25191925814633914,
         "by_domain": {
           "other": {
-            "mean": 0.16045726928156206,
-            "n": 59
+            "mean": 0.26075853036200014,
+            "n": 57
           },
           "electronic": {
-            "mean": 0.9587301587301587,
+            "mean": 0.0,
             "n": 2
           },
           "overall": {
-            "mean": 0.18663015090282756,
-            "n": 61
+            "mean": 0.25191925814633914,
+            "n": 59
           }
         },
-        "n_tracks_scored": 61
+        "n_tracks_scored": 59
       },
       "adtof_post_p4": {
-        "mean_f1": 0.5260006576632336,
+        "mean_f1": 0.5107570811232647,
         "by_domain": {
           "other": {
-            "mean": 0.5293879522905403,
-            "n": 59
+            "mean": 0.513728365858899,
+            "n": 57
           },
           "electronic": {
             "mean": 0.4260754661576861,
             "n": 2
           },
           "overall": {
-            "mean": 0.5260006576632337,
-            "n": 61
+            "mean": 0.5107570811232647,
+            "n": 59
           }
         },
-        "n_tracks_scored": 61,
+        "n_tracks_scored": 59,
         "per_track": [
           {
             "id": "babyslakh_Track00001",
@@ -4452,26 +4342,6 @@
             "hat_f1": 0.8,
             "precision": 0.6666666666666666,
             "recall": 1.0
-          },
-          {
-            "id": "slakh_Track02047_S07",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 2696,
-            "n_truth": 2691,
-            "hat_f1": 0.9987005754594395,
-            "precision": 0.9977744807121661,
-            "recall": 0.9996283909327388
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 322,
-            "n_truth": 333,
-            "hat_f1": 0.9526717557251908,
-            "precision": 0.968944099378882,
-            "recall": 0.9369369369369369
           }
         ]
       }
@@ -4483,21 +4353,21 @@
             "id": "babyslakh_Track00001",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 151,
+            "n_pred": 0,
             "n_truth": 166,
-            "perc_f1": 0.050473186119873815,
-            "precision": 0.052980132450331126,
-            "recall": 0.04819277108433735
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "babyslakh_Track00002",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 267,
+            "n_pred": 186,
             "n_truth": 1070,
-            "perc_f1": 0.3919222139117427,
-            "precision": 0.9812734082397003,
-            "recall": 0.24485981308411214
+            "perc_f1": 0.28662420382165604,
+            "precision": 0.967741935483871,
+            "recall": 0.16822429906542055
           },
           {
             "id": "babyslakh_Track00003",
@@ -4513,31 +4383,31 @@
             "id": "babyslakh_Track00004",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 338,
+            "n_pred": 269,
             "n_truth": 848,
-            "perc_f1": 0.551433389544688,
-            "precision": 0.9674556213017751,
-            "recall": 0.3856132075471698
+            "perc_f1": 0.3025962399283796,
+            "precision": 0.6282527881040892,
+            "recall": 0.19929245283018868
           },
           {
             "id": "babyslakh_Track00005",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 0,
+            "n_pred": 903,
             "n_truth": 1098,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "perc_f1": 0.44477761119440284,
+            "precision": 0.49280177187153934,
+            "recall": 0.40528233151183973
           },
           {
             "id": "babyslakh_Track00006",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 144,
+            "n_pred": 0,
             "n_truth": 72,
-            "perc_f1": 0.0462962962962963,
-            "precision": 0.034722222222222224,
-            "recall": 0.06944444444444445
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "babyslakh_Track00007",
@@ -4553,11 +4423,11 @@
             "id": "babyslakh_Track00008",
             "domain": "other",
             "source": "babyslakh",
-            "n_pred": 205,
+            "n_pred": 0,
             "n_truth": 982,
-            "perc_f1": 0.33192923336141533,
-            "precision": 0.9609756097560975,
-            "recall": 0.20061099796334012
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "self_render_edm_kit_128bpm",
@@ -4573,37 +4443,37 @@
             "id": "egmd_drummer1_session1_226",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 12,
+            "n_pred": 0,
             "n_truth": 13,
-            "perc_f1": 0.32,
-            "precision": 0.3333333333333333,
-            "recall": 0.3076923076923077
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_266",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 0,
             "n_truth": 2,
-            "perc_f1": 0.4444444444444445,
-            "precision": 0.2857142857142857,
-            "recall": 1.0
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_220",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 5,
+            "n_pred": 0,
             "n_truth": 1,
-            "perc_f1": 0.33333333333333337,
-            "precision": 0.2,
-            "recall": 1.0
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_230",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 0,
             "n_truth": 4,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4613,31 +4483,31 @@
             "id": "egmd_drummer1_session1_132",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 15,
+            "n_pred": 0,
             "n_truth": 3,
-            "perc_f1": 0.1111111111111111,
-            "precision": 0.06666666666666667,
-            "recall": 0.3333333333333333
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer1_session1_15",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 22,
+            "n_pred": 2,
             "n_truth": 10,
-            "perc_f1": 0.25000000000000006,
-            "precision": 0.18181818181818182,
-            "recall": 0.4
+            "perc_f1": 0.33333333333333337,
+            "precision": 1.0,
+            "recall": 0.2
           },
           {
             "id": "egmd_drummer1_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 6,
+            "n_pred": 10,
             "n_truth": 8,
-            "perc_f1": 0.5714285714285715,
-            "precision": 0.6666666666666666,
-            "recall": 0.5
+            "perc_f1": 0.7777777777777777,
+            "precision": 0.7,
+            "recall": 0.875
           },
           {
             "id": "egmd_drummer1_session1_17",
@@ -4653,17 +4523,17 @@
             "id": "egmd_drummer1_session1_16",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 55,
+            "n_pred": 19,
             "n_truth": 21,
-            "perc_f1": 0.4210526315789473,
-            "precision": 0.2909090909090909,
-            "recall": 0.7619047619047619
+            "perc_f1": 0.7,
+            "precision": 0.7368421052631579,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer1_session1_182",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 0,
             "n_truth": 1,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4673,27 +4543,27 @@
             "id": "egmd_drummer1_session1_14",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 14,
+            "n_pred": 40,
             "n_truth": 10,
-            "perc_f1": 0.16666666666666666,
-            "precision": 0.14285714285714285,
-            "recall": 0.2
+            "perc_f1": 0.4,
+            "precision": 0.25,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_106",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 13,
+            "n_pred": 14,
             "n_truth": 5,
-            "perc_f1": 0.1111111111111111,
-            "precision": 0.07692307692307693,
-            "recall": 0.2
+            "perc_f1": 0.5263157894736842,
+            "precision": 0.35714285714285715,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer1_session1_110",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 0,
             "n_truth": 2,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4703,7 +4573,7 @@
             "id": "egmd_drummer1_session1_192",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 0,
             "n_truth": 7,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4713,51 +4583,51 @@
             "id": "egmd_drummer1_session1_195",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 2,
             "n_truth": 2,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
+            "perc_f1": 0.5,
+            "precision": 0.5,
+            "recall": 0.5
           },
           {
             "id": "egmd_drummer10_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 29,
+            "n_pred": 28,
             "n_truth": 5,
-            "perc_f1": 0.0588235294117647,
-            "precision": 0.034482758620689655,
-            "recall": 0.2
+            "perc_f1": 0.12121212121212122,
+            "precision": 0.07142857142857142,
+            "recall": 0.4
           },
           {
             "id": "egmd_drummer10_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 39,
+            "n_pred": 0,
             "n_truth": 9,
-            "perc_f1": 0.16666666666666666,
-            "precision": 0.10256410256410256,
-            "recall": 0.4444444444444444
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer3_session1_21",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 30,
+            "n_pred": 61,
             "n_truth": 31,
-            "perc_f1": 0.39344262295081966,
-            "precision": 0.4,
-            "recall": 0.3870967741935484
+            "perc_f1": 0.5652173913043479,
+            "precision": 0.4262295081967213,
+            "recall": 0.8387096774193549
           },
           {
             "id": "egmd_drummer3_session2_13",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 27,
+            "n_pred": 0,
             "n_truth": 3,
-            "perc_f1": 0.06666666666666667,
-            "precision": 0.037037037037037035,
-            "recall": 0.3333333333333333
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer3_session1_6",
@@ -4773,7 +4643,7 @@
             "id": "egmd_drummer3_session2_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 0,
             "n_truth": 19,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4783,27 +4653,27 @@
             "id": "egmd_drummer4_session1_9",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 20,
+            "n_pred": 55,
             "n_truth": 60,
-            "perc_f1": 0.05,
-            "precision": 0.1,
-            "recall": 0.03333333333333333
+            "perc_f1": 0.591304347826087,
+            "precision": 0.6181818181818182,
+            "recall": 0.5666666666666667
           },
           {
             "id": "egmd_drummer4_session1_6",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 5,
             "n_truth": 13,
-            "perc_f1": 0.23529411764705882,
-            "precision": 0.5,
-            "recall": 0.15384615384615385
+            "perc_f1": 0.4444444444444444,
+            "precision": 0.8,
+            "recall": 0.3076923076923077
           },
           {
             "id": "egmd_drummer4_session1_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 1,
+            "n_pred": 0,
             "n_truth": 1,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4813,97 +4683,97 @@
             "id": "egmd_drummer4_session1_8",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
-            "n_truth": 11,
-            "perc_f1": 0.14285714285714288,
-            "precision": 0.3333333333333333,
-            "recall": 0.09090909090909091
-          },
-          {
-            "id": "egmd_drummer7_session2_131",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 11,
-            "n_truth": 3,
-            "perc_f1": 0.28571428571428575,
-            "precision": 0.18181818181818182,
-            "recall": 0.6666666666666666
-          },
-          {
-            "id": "egmd_drummer7_session2_62",
-            "domain": "other",
-            "source": "egmd",
-            "n_pred": 8,
-            "n_truth": 11,
-            "perc_f1": 0.3157894736842105,
-            "precision": 0.375,
-            "recall": 0.2727272727272727
-          },
-          {
-            "id": "egmd_drummer7_session2_58",
-            "domain": "other",
-            "source": "egmd",
             "n_pred": 0,
-            "n_truth": 29,
+            "n_truth": 11,
             "perc_f1": 0.0,
             "precision": 0.0,
             "recall": 0.0
           },
           {
+            "id": "egmd_drummer7_session2_131",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 0,
+            "n_truth": 3,
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          {
+            "id": "egmd_drummer7_session2_62",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 0,
+            "n_truth": 11,
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
+          },
+          {
+            "id": "egmd_drummer7_session2_58",
+            "domain": "other",
+            "source": "egmd",
+            "n_pred": 24,
+            "n_truth": 29,
+            "perc_f1": 0.7547169811320755,
+            "precision": 0.8333333333333334,
+            "recall": 0.6896551724137931
+          },
+          {
             "id": "egmd_drummer7_session2_128",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 10,
+            "n_pred": 0,
             "n_truth": 6,
-            "perc_f1": 0.125,
-            "precision": 0.1,
-            "recall": 0.16666666666666666
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer7_session2_71",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 10,
             "n_truth": 19,
-            "perc_f1": 0.09090909090909091,
-            "precision": 0.3333333333333333,
-            "recall": 0.05263157894736842
+            "perc_f1": 0.41379310344827586,
+            "precision": 0.6,
+            "recall": 0.3157894736842105
           },
           {
             "id": "egmd_drummer7_session2_7",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 14,
+            "n_pred": 20,
             "n_truth": 21,
-            "perc_f1": 0.6285714285714286,
-            "precision": 0.7857142857142857,
-            "recall": 0.5238095238095238
+            "perc_f1": 0.4878048780487805,
+            "precision": 0.5,
+            "recall": 0.47619047619047616
           },
           {
             "id": "egmd_drummer7_session2_43",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 8,
+            "n_pred": 6,
             "n_truth": 7,
-            "perc_f1": 0.6666666666666666,
-            "precision": 0.625,
+            "perc_f1": 0.7692307692307692,
+            "precision": 0.8333333333333334,
             "recall": 0.7142857142857143
           },
           {
             "id": "egmd_drummer7_session2_118",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 2,
+            "n_pred": 0,
             "n_truth": 4,
-            "perc_f1": 0.3333333333333333,
-            "precision": 0.5,
-            "recall": 0.25
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer7_session3_97",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 3,
+            "n_pred": 1,
             "n_truth": 2,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4913,67 +4783,67 @@
             "id": "egmd_drummer7_session3_121",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 15,
+            "n_pred": 21,
             "n_truth": 8,
-            "perc_f1": 0.3478260869565218,
-            "precision": 0.26666666666666666,
-            "recall": 0.5
+            "perc_f1": 0.5517241379310345,
+            "precision": 0.38095238095238093,
+            "recall": 1.0
           },
           {
             "id": "egmd_drummer7_session2_34",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 14,
+            "n_pred": 42,
             "n_truth": 6,
-            "perc_f1": 0.2,
-            "precision": 0.14285714285714285,
-            "recall": 0.3333333333333333
+            "perc_f1": 0.16666666666666666,
+            "precision": 0.09523809523809523,
+            "recall": 0.6666666666666666
           },
           {
             "id": "egmd_drummer7_session2_89",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 11,
+            "n_pred": 0,
             "n_truth": 14,
-            "perc_f1": 0.56,
-            "precision": 0.6363636363636364,
-            "recall": 0.5
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer7_session3_18",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 7,
+            "n_pred": 18,
             "n_truth": 7,
-            "perc_f1": 0.42857142857142855,
-            "precision": 0.42857142857142855,
-            "recall": 0.42857142857142855
+            "perc_f1": 0.4,
+            "precision": 0.2777777777777778,
+            "recall": 0.7142857142857143
           },
           {
             "id": "egmd_drummer7_session3_28",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 4,
+            "n_pred": 0,
             "n_truth": 4,
-            "perc_f1": 0.5,
-            "precision": 0.5,
-            "recall": 0.5
+            "perc_f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0
           },
           {
             "id": "egmd_drummer9_session1_17",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 63,
+            "n_pred": 44,
             "n_truth": 23,
-            "perc_f1": 0.39534883720930236,
-            "precision": 0.2698412698412698,
-            "recall": 0.7391304347826086
+            "perc_f1": 0.5970149253731344,
+            "precision": 0.45454545454545453,
+            "recall": 0.8695652173913043
           },
           {
             "id": "egmd_drummer9_session1_11",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 13,
+            "n_pred": 0,
             "n_truth": 2,
             "perc_f1": 0.0,
             "precision": 0.0,
@@ -4983,67 +4853,57 @@
             "id": "egmd_drummer9_session1_29",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 16,
+            "n_pred": 28,
             "n_truth": 7,
-            "perc_f1": 0.34782608695652173,
-            "precision": 0.25,
-            "recall": 0.5714285714285714
+            "perc_f1": 0.34285714285714286,
+            "precision": 0.21428571428571427,
+            "recall": 0.8571428571428571
           },
           {
             "id": "egmd_drummer9_session1_27",
             "domain": "other",
             "source": "egmd",
-            "n_pred": 9,
+            "n_pred": 24,
             "n_truth": 20,
-            "perc_f1": 0.0,
-            "precision": 0.0,
-            "recall": 0.0
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 120,
-            "n_truth": 43,
-            "perc_f1": 0.024539877300613498,
-            "precision": 0.016666666666666666,
-            "recall": 0.046511627906976744
+            "perc_f1": 0.6363636363636365,
+            "precision": 0.5833333333333334,
+            "recall": 0.7
           }
         ],
-        "mean_f1": 0.21632168926380613,
+        "mean_f1": 0.23295722118014903,
         "by_domain": {
           "other": {
-            "mean": 0.2012509525188793,
-            "n": 52
+            "mean": 0.2179171666934853,
+            "n": 51
           },
           "electronic": {
             "mean": 1.0,
             "n": 1
           },
           "overall": {
-            "mean": 0.21632168926380613,
-            "n": 53
+            "mean": 0.23295722118014903,
+            "n": 52
           }
         },
-        "n_tracks_scored": 53
+        "n_tracks_scored": 52
       },
       "adtof_post_p4": {
-        "mean_f1": 0.5428296001710389,
+        "mean_f1": 0.546511874186802,
         "by_domain": {
           "other": {
-            "mean": 0.5532686309435587,
-            "n": 52
+            "mean": 0.5572277932885039,
+            "n": 51
           },
           "electronic": {
             "mean": 0.0,
             "n": 1
           },
           "overall": {
-            "mean": 0.5428296001710388,
-            "n": 53
+            "mean": 0.5465118741868019,
+            "n": 52
           }
         },
-        "n_tracks_scored": 53,
+        "n_tracks_scored": 52,
         "per_track": [
           {
             "id": "babyslakh_Track00001",
@@ -5564,16 +5424,6 @@
             "perc_f1": 0.5714285714285714,
             "precision": 0.4827586206896552,
             "recall": 0.7
-          },
-          {
-            "id": "slakh_Track02067_S08",
-            "domain": "other",
-            "source": "slakh2100_test",
-            "n_pred": 31,
-            "n_truth": 43,
-            "perc_f1": 0.3513513513513513,
-            "precision": 0.41935483870967744,
-            "recall": 0.3023255813953488
           }
         ]
       }

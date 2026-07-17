@@ -19,6 +19,8 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
+from eval.paths import DATA_ROOT
+
 ZENODO_RECORD = 4603870
 FILENAME = "babyslakh_16k.tar.gz"
 URL = f"https://zenodo.org/record/{ZENODO_RECORD}/files/{FILENAME}?download=1"
@@ -62,7 +64,7 @@ def extract(dest_tar: Path, out_dir: Path) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/babyslakh_16k"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "babyslakh_16k")
     parser.add_argument("--keep-archive", action="store_true", help="don't delete the .tar.gz after extraction")
     args = parser.parse_args(argv)
 

@@ -519,7 +519,7 @@ hat 0.270/0.529, perc 0.256/0.553. Kick electronic < the 0.5 round-3 bar → ver
 called without spending round 3; heldout not consumed (a dev shortfall is sufficient
 for a negative verdict; heldout spends only on ship candidates).
 
-**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; Stage-1's true kick ceiling is unknown until that's fixed and the kick line re-read. The verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug.) The per-class gap table above is the
+**Rulings:** ADTOF stays, per the gate. (Follow-up 2026-07-18: the Stage-1 electronic kick number is measured through **BUG-241** — a real onset-front-end bug that misses loud, present kicks track-dependently; the verdict itself stands — labeling was independently weak — but the kick gap is overstated by this bug. Same-day update: BUG-241 is FIXED — root cause was the RMS backtrack refinement, removed; fixture kick recall roughly 4x on the failing tracks — see the backlog entry for numbers. The scoreboard re-run to re-read the kick line is still owed.) The per-class gap table above is the
 documented shortfall Peter asked for. The hat lead (n=2) and the lever-2 finding that
 fitted profiles regress on out-of-profile timbres both point the same way: signature
 labeling needs learned representations and much more per-class data — i.e. §7.1
@@ -533,3 +533,22 @@ the commercialization trigger unchanged.
 Stage-1 assets are NOT discarded: the multi-band onset front-end (live-kick logic,
 three real bug fixes in `spectral.py` land with this), per-track clustering, and the
 E-GMD Range-fetch infrastructure all feed Stage 2 directly.
+
+### B3 kick-line re-read (2026-07-18, post-BUG-241 + threshold tuning, Fable)
+
+Scoreboard re-run (75-track dev corpus, eval/scoreboard/bakeoff_b1_stage1.json;
+same harness, ADTOF electronic kick unchanged at 0.702 = slices comparable; Slakh
+trickle tracks absent this run, babyslakh now complete). Electronic slice, Stage-1
+vs ADTOF: kick **0.493** vs 0.702 (was 0.311 — BUG-241 had overstated the gap by
+~0.18), snare 0.364 vs 0.653 (n=1, was 0.250), hat **0.000** vs 0.426 (n=2, was
+0.592 — the one class Stage 1 led REGRESSED to zero: the tuned front-end's extra
+quiet onsets shift per-track cluster composition and hats now label away; next
+tuning target if Stage-1 iteration continues), perc 1.000 vs 0.000 (n=1, degenerate
+small-n, don't read). Non-electronic ("other": E-GMD + babyslakh): kick 0.472 vs
+0.809, snare 0.398 vs 0.776, hat 0.261 vs 0.514, perc 0.218 vs 0.557.
+
+**Verdict unchanged:** kick electronic 0.493 still misses the 0.5 round-3 bar
+(barely) and every class still trails ADTOF on dense truth. The Stage-2 case
+tightens: required electronic closes are now kick +0.21, snare +0.29, hat +0.43.
+Eval data now lives in the shared main-checkout store (eval/paths.py) — re-runs
+need no re-download.

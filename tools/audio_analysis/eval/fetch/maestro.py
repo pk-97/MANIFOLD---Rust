@@ -49,6 +49,8 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+
+from eval.paths import DATA_ROOT
 from typing import Dict, List
 
 MIDI_ZIP_URL = "https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0-midi.zip"
@@ -126,7 +128,7 @@ def extract_selected(zip_path: Path, out_dir: Path, selected: List[Dict[str, str
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=Path("eval/data/maestro_v3"))
+    parser.add_argument("--out-dir", type=Path, default=DATA_ROOT / "maestro_v3")
     parser.add_argument("--n-tracks", type=int, default=20)
     parser.add_argument("--split", type=str, default="test")
     args = parser.parse_args(argv)

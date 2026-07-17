@@ -36,7 +36,9 @@ import yaml
 
 from eval.baseline_scoreboard_p3 import CLASSES, GM_TO_CLASS
 
-SLAKH_TEST_ROOT = Path(__file__).resolve().parent / "data" / "slakh2100_test"
+from eval.paths import DATA_ROOT
+
+SLAKH_TEST_ROOT = DATA_ROOT / "slakh2100_test"
 HELDOUT_HASH_MODULUS = 5  # 1-in-5 -> heldout (~20%), deterministic per track id
 
 

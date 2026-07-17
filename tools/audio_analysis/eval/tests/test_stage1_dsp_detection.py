@@ -45,7 +45,9 @@ from manifold_audio.stage1_dsp_detection import (
     extract_onset_features,
 )
 
-SELF_RENDER_DIR = Path(__file__).resolve().parents[2] / "eval" / "data" / "self_render"
+from eval.paths import DATA_ROOT
+
+SELF_RENDER_DIR = DATA_ROOT / "self_render"
 
 pytestmark = pytest.mark.skipif(
     not (SELF_RENDER_DIR / "edm_kit_128bpm.wav").exists(),
@@ -183,7 +185,16 @@ def test_edm_kit_label_accuracy_on_matched_onsets():
     clustering test above for why (thin clap/tom dev coverage, real-acoustic-
     dominated snare/hat/perc profiles). Floor lowered to reflect the measured
     trade-off honestly rather than hide the regression; kick's OWN accuracy
-    is asserted separately above and is what B2's lever 1 was scoped to."""
+    is asserted separately above and is what B2's lever 1 was scoped to.
+
+    UPDATED again 2026-07-18 (BUG-241 follow-up tuning): lowering
+    ONSET_HEIGHT_FRACTION 0.15 -> 0.075 admits more quiet onsets, which
+    shifts this synthetic fixture's clustering and drops matched-label
+    accuracy to ~26-29% while buying large REAL-fixture kick recall gains
+    (apricots 16/16, inhale_exhale 14/14, tears 10/10 -- see the constant's
+    comment). Floor 0.30 -> 0.25, same honesty rationale: real-music recall
+    outranks synthetic label accuracy (Peter's explicit call, 2026-07-18),
+    and edm_kit's kick recall (31/32) + kick F1 (test above) are unchanged."""
     audio, sr, truth = _load("edm_kit_128bpm")
     events, _result = detect_drums_stage1(audio, sr)
     pitch_to_class = {36: "kick", 38: "snare", 39: "clap", 42: "hat", 45: "tom"}
@@ -191,7 +202,7 @@ def test_edm_kit_label_accuracy_on_matched_onsets():
 
     matched, correct = _match_and_score(events, truth_by_time)
     assert matched >= 150
-    assert correct / matched >= 0.30
+    assert correct / matched >= 0.25
 
 
 # ---------------------------------------------------------------------------
