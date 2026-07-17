@@ -9,7 +9,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from manifold_audio.analyzer import analyze_percussion, build_output
 from manifold_audio.audio_io import load_audio_mono
@@ -211,43 +211,16 @@ def _run_bpm_only(args: argparse.Namespace, detection_config: Optional[AnalysisC
     """Lightweight BPM + beat grid detection — no stems, no onset classification."""
     from concurrent.futures import ProcessPoolExecutor
 
-    from manifold_audio.bpm import (
-        _build_beat_grid,
-        _detect_madmom_downbeat_phase,
-        _estimate_madmom_beats,
-        _refine_bpm_via_autocorrelation,
-        _score_octave_hypotheses,
-    )
+    from manifold_audio.beat_tracking import bpm_from_beat_times, estimate_beats_this
+    from manifold_audio.bpm import _build_beat_grid, _score_octave_hypotheses, estimate_bpm
 
-    emit_progress(0.10, "tracking beats (RNN)")
+    emit_progress(0.10, "tracking beats (Beat This)")
     audio_path = str(args.input)
 
-    try:
-        madmom_bpm, beat_times, tempo_hypotheses = _estimate_madmom_beats(
-            audio_path=audio_path,
-            min_bpm=args.min_bpm,
-            max_bpm=args.max_bpm,
-            ffmpeg_bin=args.ffmpeg_bin,
-        )
-    except Exception as exc:
-        print(f"ERROR: beat tracking failed: {exc}", file=sys.stderr)
-        return 1
-
-    if madmom_bpm is None or len(beat_times) < 2:
-        print("ERROR: could not detect BPM from audio", file=sys.stderr)
-        return 1
-
-    # Run downbeat detection and spectral analysis in parallel — they're independent
-    # after beat tracking completes. Downbeat needs beat_times; spectral needs only audio.
-    emit_progress(0.40, "analysing downbeats + spectral in parallel")
-    with ProcessPoolExecutor(max_workers=2) as pool:
-        downbeat_future = pool.submit(
-            _detect_madmom_downbeat_phase,
-            audio_path=audio_path,
-            beat_times=beat_times,
-            beats_per_bar=4,
-            ffmpeg_bin=args.ffmpeg_bin,
-        )
+    # Beat This inference and the spectral pass are independent — run them in
+    # parallel (spectral is only needed as a fallback input / for grid
+    # confidence, but computing it costs nothing extra to overlap).
+    with ProcessPoolExecutor(max_workers=1) as pool:
         spectral_future = pool.submit(
             _load_and_compute_spectral,
             input_path=args.input,
@@ -256,34 +229,42 @@ def _run_bpm_only(args: argparse.Namespace, detection_config: Optional[AnalysisC
             frame_size=args.frame_size,
             hop_size=args.hop_size,
         )
-        downbeat_phase = downbeat_future.result()
+        beat_this_result = estimate_beats_this(audio_path)
         global_onset, hop_time, duration_sec = spectral_future.result()
 
-    emit_progress(0.70, "refining BPM")
-    bpm = _score_octave_hypotheses(
-        base_bpm=madmom_bpm,
-        beat_times=beat_times,
-        kick_events=[],
-        snare_events=[],
-        global_onset=global_onset,
-        hop_time=hop_time,
-        duration_sec=duration_sec,
-        min_bpm=args.min_bpm,
-        max_bpm=args.max_bpm,
-        tempo_hypotheses=tempo_hypotheses,
-        detection_config=detection_config,
-    )
-    if isinstance(bpm, tuple):
-        bpm, beat_times = bpm
+    beat_source = "autocorr_fallback"
+    beat_times: List[float] = []
+    downbeat_times: List[float] = []
+    bpm: Optional[float] = None
 
-    cfg = detection_config
-    bpm = _refine_bpm_via_autocorrelation(
-        candidate_bpm=bpm,
-        global_onset=global_onset,
-        hop_time=hop_time,
-        search_half_range=cfg.autocorr_search_half_range if cfg and cfg.autocorr_search_half_range is not None else 4,
-        margin_threshold=cfg.autocorr_margin_threshold if cfg and cfg.autocorr_margin_threshold is not None else 0.01,
-    )
+    if beat_this_result is not None and len(beat_this_result.beat_times) >= 2:
+        beat_times = beat_this_result.beat_times
+        downbeat_times = beat_this_result.downbeat_times
+        beat_source = "beat_this"
+        bpm = bpm_from_beat_times(beat_times)
+    else:
+        # D1: pure-DSP autocorrelation fallback — never silent, stamped
+        # tracker="autocorr_fallback" in the output JSON below.
+        emit_progress(0.55, "Beat This unavailable — falling back to autocorrelation")
+        bpm = estimate_bpm(global_onset, hop_time, min_bpm=args.min_bpm, max_bpm=args.max_bpm)
+        if bpm is not None and bpm > 0:
+            cfg = detection_config
+            bpm, beat_times = _score_octave_hypotheses(
+                base_bpm=bpm,
+                beat_times=[],
+                kick_events=[],
+                snare_events=[],
+                global_onset=global_onset,
+                hop_time=hop_time,
+                duration_sec=duration_sec,
+                min_bpm=args.min_bpm,
+                max_bpm=args.max_bpm,
+                detection_config=detection_config,
+            )
+
+    if bpm is None:
+        print("ERROR: could not detect BPM from audio", file=sys.stderr)
+        return 1
 
     emit_progress(0.80, "building beat grid")
     beat_grid = _build_beat_grid(
@@ -294,10 +275,11 @@ def _run_bpm_only(args: argparse.Namespace, detection_config: Optional[AnalysisC
         kick_events=[],
         phase_offset_sec=0.0,
         tracker_beat_times=beat_times,
-        mode_override="madmom",
+        mode_override=beat_source if beat_source == "beat_this" else None,
         min_bpm=args.min_bpm,
         max_bpm=args.max_bpm,
-        madmom_downbeat_phase=downbeat_phase,
+        tracker_downbeat_times=downbeat_times,
+        tracker_name=beat_source,
         detection_config=detection_config,
     )
 
@@ -328,8 +310,8 @@ def _run_bpm_only(args: argparse.Namespace, detection_config: Optional[AnalysisC
     print(f"BPM-only analysis: {bpm_text} BPM (confidence {bpm_conf_text})")
     if beat_grid is not None:
         print(
-            f"Beat grid: mode={beat_grid.mode}, beats={len(beat_grid.beat_times)}, "
-            f"downbeats={len(beat_grid.downbeat_indices)}"
+            f"Beat grid: mode={beat_grid.mode}, tracker={beat_grid.tracker}, "
+            f"beats={len(beat_grid.beat_times)}, downbeats={len(beat_grid.downbeat_indices)}"
         )
     print(f"Wrote -> {output_path}")
     emit_progress(1.00, "BPM analysis finished")
@@ -779,7 +761,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if beat_grid is not None:
         print(
             "Beat grid: "
-            f"mode={beat_grid.mode}, beats={len(beat_grid.beat_times)}, "
+            f"mode={beat_grid.mode}, tracker={beat_grid.tracker}, "
+            f"beats={len(beat_grid.beat_times)}, "
             f"downbeats={len(beat_grid.downbeat_indices)}, "
             f"confidence={(100.0 * beat_grid.confidence):.1f}%"
         )
