@@ -1,0 +1,32 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": { "selector": { "Query": { "text": "Outliner" } }, "check": "Exists" }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "💡 sun" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.light.intensity_value" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.light.intensity_value" } },
+      "gesture": "DoubleClick"
+    }
+  },
+  "Snapshot"
+]

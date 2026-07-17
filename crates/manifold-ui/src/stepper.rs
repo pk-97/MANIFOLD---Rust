@@ -37,16 +37,26 @@ pub enum StepperIntent {
     /// one drag (D4) — the panel replays its `*DragBegin/*DragChanged(0.0)/
     /// *DragCommit` trio, mirroring `PanelAction::slider_reset`.
     ResetToDefault,
+    /// Open the type-in box (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8's
+    /// contract-table amendment: `(Value, DoubleClick) -> EditValue`, the
+    /// stepper's last dead stop falling — same shape as
+    /// UI_WIDGET_UNIFICATION_DESIGN P5d's canvas `EditValue` landing).
+    EditValue,
 }
 
 pub struct Stepper;
 
 impl Stepper {
-    /// The gesture contract. Pure, total, allocation-free.
-    pub fn intent_for(_zone: StepperZone, g: Gesture) -> Option<StepperIntent> {
-        match g {
-            Gesture::RightClick => Some(StepperIntent::ResetToDefault),
-            Gesture::Click | Gesture::DoubleClick => None,
+    /// The gesture contract. Pure, total, allocation-free. `RightClick`
+    /// resets from any zone (the whole control reads as "one control," BUG-
+    /// 070); `DoubleClick` only opens type-in from the `Value` zone — the
+    /// `Minus`/`Plus` buttons keep their discrete-step click behavior, never
+    /// text entry.
+    pub fn intent_for(zone: StepperZone, g: Gesture) -> Option<StepperIntent> {
+        match (zone, g) {
+            (_, Gesture::RightClick) => Some(StepperIntent::ResetToDefault),
+            (StepperZone::Value, Gesture::DoubleClick) => Some(StepperIntent::EditValue),
+            _ => None,
         }
     }
 }
@@ -60,7 +70,16 @@ mod tests {
         for zone in [StepperZone::Minus, StepperZone::Value, StepperZone::Plus] {
             assert_eq!(Stepper::intent_for(zone, Gesture::RightClick), Some(StepperIntent::ResetToDefault));
             assert_eq!(Stepper::intent_for(zone, Gesture::Click), None);
-            assert_eq!(Stepper::intent_for(zone, Gesture::DoubleClick), None);
         }
+    }
+
+    /// D8's amendment: only the `Value` zone opens type-in on double-click —
+    /// `Minus`/`Plus` stay dead stops for it (their double-click is just two
+    /// fast discrete-step clicks, never text entry).
+    #[test]
+    fn only_value_zone_double_click_opens_type_in() {
+        assert_eq!(Stepper::intent_for(StepperZone::Value, Gesture::DoubleClick), Some(StepperIntent::EditValue));
+        assert_eq!(Stepper::intent_for(StepperZone::Minus, Gesture::DoubleClick), None);
+        assert_eq!(Stepper::intent_for(StepperZone::Plus, Gesture::DoubleClick), None);
     }
 }

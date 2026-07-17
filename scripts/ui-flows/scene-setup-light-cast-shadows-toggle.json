@@ -18,6 +18,31 @@
     "Assert": {
       "selector": {
         "Query": {
+          "text": "Outliner"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "💡 sun"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
           "name": "scene_setup.light.cast_shadows_value",
           "text": "On"
         }
@@ -27,7 +52,7 @@
   },
   {
     "Pointer": {
-      "target": { "Point": { "x": 823.0, "y": 984.0 } },
+      "target": { "Point": { "x": 822.0, "y": 540.0 } },
       "gesture": {
         "Click": {
           "modifiers": {}

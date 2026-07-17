@@ -1,5 +1,6 @@
 //! `SceneVm` — the Scene Setup Panel's sole discovery mechanism
-//! (`docs/SCENE_SETUP_PANEL_DESIGN.md` D3).
+//! (`docs/SCENE_SETUP_PANEL_DESIGN.md` D3, object model per
+//! `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D12).
 //!
 //! Pure function of an [`EffectGraphDef`]: no GPU, no registry lookups
 //! beyond type_id string comparisons, no reads of the project model. Every editable
@@ -10,9 +11,19 @@
 //! surface" — card, node face, group face, and now the dock).
 //!
 //! Curated + tolerant, per D3: known shapes (the importer's environment
-//! chain, `node.light`, the three camera atoms, `node.atmosphere`) get
-//! editable rows; anything else degrades to an honest labeled "custom"
-//! row. Nothing is ever hidden and nothing errors.
+//! chain, `node.light`, the three camera atoms, `node.atmosphere`,
+//! `node.scene_object`) get editable rows; anything else degrades to an
+//! honest labeled "custom" row. Nothing is ever hidden and nothing errors.
+//!
+//! D12: object discovery anchors on `node.scene_object` — the sole producer
+//! of an `Object` wire (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop
+//! invariant) — found either directly wired to `render_scene`'s `object_k`
+//! port (a hand-built, ungrouped object) or through one `GROUP_TYPE_ID`
+//! wrapper whose body contains the `node.scene_object` feeding a
+//! `system.group_output`'s `object` port (the importer/`AddSceneObjectCommand`
+//! shape). The old "whatever named group happens to wrap `mesh_k`" trace is
+//! gone — `render_scene` v2 has no `mesh_k`/`transform_k`/… port families
+//! left to look at.
 //!
 //! Rebuilt from scratch on every `state_sync` pass — no cached/staged
 //! copy anywhere (Peter: "no rotting, no staleness"). See the D3 "plausible
@@ -21,12 +32,17 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+use manifold_core::effect_graph_def::{
+    EffectGraphDef, EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue,
+};
 
 use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
+/// `node.scene_object`'s own type_id string — the sole `Object`-wire
+/// producer (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D12).
+const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 const LIGHT_TYPE_ID: &str = "node.light";
 const ATMOSPHERE_TYPE_ID: &str = "node.atmosphere";
 const BAKE_ENVIRONMENT_TYPE_ID: &str = "node.bake_environment";
@@ -54,6 +70,29 @@ const MODIFIER_TYPE_IDS: &[&str] = &[
     "node.push_mesh",
     "node.morph_mesh",
     "node.rotate_3d",
+];
+/// `node.scene_object`'s 17 texture-map input ports (D2/D12's "map-presence
+/// flags" — mirrors the field list on `SceneObject`/`primitives/scene_object.rs`
+/// exactly; extend here alongside that struct if a future material
+/// extension adds another map).
+const MAP_PORT_NAMES: &[&str] = &[
+    "base_color_map",
+    "normal_map",
+    "mr_map",
+    "occlusion_map",
+    "emissive_map",
+    "sheen_color_map",
+    "sheen_roughness_map",
+    "iridescence_map",
+    "iridescence_thickness_map",
+    "anisotropy_map",
+    "clearcoat_map",
+    "clearcoat_roughness_map",
+    "clearcoat_normal_map",
+    "specular_map",
+    "specular_color_map",
+    "transmission_map",
+    "volume_thickness_map",
 ];
 
 /// A write address for one editable value: the exact addressing
@@ -107,34 +146,60 @@ pub struct SceneHeaderVm {
     pub vertex_count_exact: bool,
 }
 
+/// Payload for [`SceneObjectVm::Known`], boxed at the enum site for the same
+/// clippy `large_enum_variant` reason as [`LightRow`]/[`OrbitCameraRow`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneObjectKnownRow {
+    pub index: usize,
+    /// The `node.scene_object`'s own doc id — the address
+    /// `RenameSceneObjectCommand`/the eye-toggle write take, and the same
+    /// value `group_node_id` resolved to pre-D12 when an object happened to
+    /// be grouped.
+    pub object_node_id: u32,
+    /// `Some(group_id)` when the scene_object is wrapped in a
+    /// `GROUP_TYPE_ID` node (the importer/`AddSceneObjectCommand` shape) —
+    /// the rename sweep's group target. `None` for a bare scene_object
+    /// wired directly to `object_k` (D1's first-class "hand-built graph, no
+    /// group" case).
+    pub group_node_id: Option<u32>,
+    pub name: String,
+    pub tint: Option<[f32; 4]>,
+    pub visible_addr: ParamAddr,
+    pub visible_value: bool,
+    /// `true` when a wire feeds `visible` directly (the primitive's
+    /// port-shadow convention) — the panel renders the eye toggle read-only
+    /// with the "driven" styling, same as every other `_driven` field in
+    /// this module.
+    pub visible_driven: bool,
+    pub transform: Option<TransformVm>,
+    pub material: MaterialVm,
+    /// Chain of single-mesh-input/mesh-output nodes between the mesh source
+    /// and the scene_object's `vertices` input, in wire order (D6's
+    /// modifier stack, re-anchored per D12).
+    pub modifier_chain: Vec<ModifierVm>,
+    /// `false` when the scene_object's `vertices` chain couldn't be walked
+    /// at all (an unwired `vertices` port, a dangling wire, or a cycle) —
+    /// P5's "custom chain — edit in graph" case, DISTINCT from a
+    /// well-formed stack that's simply empty (a fresh object with zero
+    /// modifiers: `vertices` resolves straight to the mesh source,
+    /// `modifier_chain` is `[]` and this is `true`). The panel disables
+    /// "Add modifier" only when this is `false` — never a blind splice
+    /// into unrecognized topology (D6).
+    pub modifier_chain_parseable: bool,
+    /// Names of `node.scene_object`'s 17 texture-map input ports that are
+    /// currently wired (D12's "map-presence flags") — mechanical capture,
+    /// not curation; `state_sync` decides which become labeled rows.
+    pub maps_present: HashSet<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SceneObjectVm {
-    /// Producer resolved to a named group (SCENE_BUILD D9 shape).
-    Known {
-        index: usize,
-        /// The object's own group node doc id — the address `RenameGroupCommand`
-        /// and any future group-scoped composite (splice, remove) takes.
-        group_node_id: u32,
-        name: String,
-        tint: Option<[f32; 4]>,
-        transform: Option<TransformVm>,
-        material: MaterialVm,
-        /// Chain of single-mesh-input/mesh-output nodes between the mesh
-        /// source and the group output, in wire order (D6's modifier stack).
-        modifier_chain: Vec<ModifierVm>,
-        /// `false` when the group's `vertices` chain couldn't be walked at
-        /// all (no `GROUP_OUTPUT_TYPE_ID` boundary, an unwired `vertices`
-        /// port, a dangling wire, or a cycle) — P5's "custom chain — edit in
-        /// graph" case, DISTINCT from a well-formed stack that's simply
-        /// empty (a fresh object with zero modifiers: `vertices` resolves
-        /// straight to the mesh source, `modifier_chain` is `[]` and this is
-        /// `true`). The panel disables "Add modifier" only when this is
-        /// `false` — never a blind splice into unrecognized topology (D6).
-        modifier_chain_parseable: bool,
-    },
-    /// Producer did NOT resolve to a group output — "Object k — custom
-    /// (edit in graph)" per D3, degraded but never hidden.
-    Custom { index: usize, transform: Option<TransformVm> },
+    /// Producer resolved to a `node.scene_object` (D12), directly or through
+    /// one wrapping group.
+    Known(Box<SceneObjectKnownRow>),
+    /// Producer did NOT resolve to a `node.scene_object` — "Object k —
+    /// custom (edit in graph)" per D3, degraded but never hidden.
+    Custom { index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,10 +222,10 @@ pub struct ModifierVm {
 
 /// One `node.transform_3d`'s write addresses + current values — D4's "3
 /// compact triplets" (Position/Rotation/Scale), each X/Y/Z. Traced
-/// independently of the object's group (SCENE_BUILD D9 places it in the same
-/// group by convention, but the trace never assumes that — a hand-wired
-/// `transform_k` still resolves here as long as the producer IS a
-/// `node.transform_3d`).
+/// independently of the object's group (the importer/`AddSceneObjectCommand`
+/// shape places it in the same group by convention, but the trace never
+/// assumes that — a hand-wired `transform` input still resolves here as long
+/// as the producer IS a `node.transform_3d`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransformVm {
     pub node_doc_id: u32,
@@ -229,6 +294,10 @@ pub enum MaterialVm {
 pub struct LightRow {
     pub index: usize,
     pub node_doc_id: u32,
+    /// P5: the light's display name — its own `handle`, falling back to
+    /// `"Light {k}"` (same convention as an object's name, D6). NEW: lights
+    /// didn't have an editable display name before this design.
+    pub name: String,
     pub mode_addr: ParamAddr,
     pub mode_value: u32,
     pub mode_driven: bool,
@@ -424,8 +493,7 @@ pub enum AtmosphereVm {
 
 /// Minimal view of one node + its incoming wires, scoped to a single graph
 /// level (root or inside a group) — the trace never crosses a group
-/// boundary itself (SCENE_BUILD's named-group identity is the object's
-/// resolution unit).
+/// boundary itself.
 struct Level<'a> {
     nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
     wires: &'a [manifold_core::effect_graph_def::EffectGraphWire],
@@ -527,7 +595,56 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
     seen
 }
 
-/// BUG-194 (D4): alongside the objects themselves, returns the summed
+/// D12: find the `node.scene_object` bound inside `group`'s body — the
+/// producer of its `system.group_output`'s `object` port. Returns the node
+/// plus a [`Level`] scoped to the group's own nodes/wires (needed for every
+/// further trace INSIDE that scope). `None` when the group doesn't have this
+/// shape at all (an unparseable/hand-edited group — the caller degrades to
+/// `Custom`, never errors).
+fn find_scene_object_in_group<'a>(
+    group: &'a manifold_core::effect_graph_def::GroupDef,
+) -> Option<(&'a EffectGraphNode, Level<'a>)> {
+    let inner = Level { nodes: &group.nodes, wires: &group.wires };
+    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let (producer_id, _) = inner.producer(out_node.id, "object")?;
+    let node = inner.node(producer_id)?;
+    (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
+}
+
+/// Resolve `to_node`'s `to_port` producer, transparently crossing ONE level
+/// of `GROUP_TYPE_ID` boundary when the direct producer is a bare group
+/// re-exporting the same-named port from its own `system.group_output` —
+/// the shape `migrate_scene_object_wires` produces for every pre-existing
+/// (migrated) project: the minted `node.scene_object` stays a ROOT-level
+/// sibling of the mesh producer's group rather than nested inside it (D5's
+/// "same-scope re-point", confirmed against the shipped `SceneStarter.json`:
+/// `scene_object` id 32/33 at root, `vertices` wired straight from group
+/// node 10/20's own boundary port). Returns the [`Level`] the resolved node
+/// actually lives in (root, or the crossed group's own body — callers must
+/// use THIS level for any further tracing) plus the crossed group's node id
+/// (for `ParamAddr::scope_path`, `None` when no crossing happened). `None`
+/// when unwired, or when a bare group doesn't have the expected
+/// group-output/re-export shape — the caller degrades to `Custom`/absent,
+/// never errors (same tolerance doctrine as `find_scene_object_in_group`).
+fn resolve_producer_through_group<'a>(
+    level: &Level<'a>,
+    to_node: u32,
+    to_port: &str,
+) -> Option<(Level<'a>, Option<u32>, &'a EffectGraphNode, &'a str)> {
+    let (producer_id, producer_port) = level.producer(to_node, to_port)?;
+    let producer = level.node(producer_id)?;
+    if producer.type_id != GROUP_TYPE_ID {
+        return Some((Level { nodes: level.nodes, wires: level.wires }, None, producer, producer_port));
+    }
+    let group = producer.group.as_ref()?;
+    let inner = Level { nodes: &group.nodes, wires: &group.wires };
+    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let (inner_producer_id, inner_producer_port) = inner.producer(out_node.id, producer_port)?;
+    let inner_producer = inner.node(inner_producer_id)?;
+    Some((inner, Some(producer_id), inner_producer, inner_producer_port))
+}
+
+/// BUG-194 (D4) + D12: alongside the objects themselves, returns the summed
 /// vertex count and whether that sum is exact (`true`) or a lower bound
 /// (`false` — at least one object's mesh source didn't resolve to a known
 /// count, e.g. a hand-wired procedural generator outside the closed-form
@@ -538,198 +655,81 @@ fn trace_objects(level: &Level, scene_node: &EffectGraphNode) -> (Vec<SceneObjec
     let mut vertex_count_exact = true;
     let mut out = Vec::with_capacity(objects);
     for k in 0..objects {
-        let mesh_port = format!("mesh_{k}");
-
-        let object = match level.producer(scene_node.id, &mesh_port) {
-            Some((producer_id, _port)) if level.node(producer_id).is_none() => {
-                // No node at all for the mesh producer id (a malformed
-                // def) — the root-level `transform_k` is the only place
-                // left to look (D3's Custom case).
-                vertex_count_exact = false;
-                let transform = trace_root_transform(level, scene_node.id, k);
-                SceneObjectVm::Custom { index: k, transform }
-            }
-            Some((producer_id, _port))
-                if level.node(producer_id).is_some_and(|n| {
-                    n.type_id != manifold_core::effect_graph_def::GROUP_TYPE_ID
-                }) =>
-            {
-                let producer_node = level.node(producer_id).expect("checked above");
-                // Not wrapped in a group — may still be a bare source
-                // node feeding `mesh_k` directly (a hand-built Custom
-                // object), so give it the same vertex-count chance as a
-                // grouped object's terminal node before falling back.
-                match node_source_vertex_count(producer_node) {
-                    Some(v) => vertex_count += v as u64,
-                    None => vertex_count_exact = false,
+        let port = format!("object_{k}");
+        let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
+            Some((producer_id, _)) => match level.node(producer_id) {
+                Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
+                    trace_scene_object(level, Vec::new(), producer_node, None, None, k)
                 }
-                let transform = trace_root_transform(level, scene_node.id, k);
-                SceneObjectVm::Custom { index: k, transform }
-            }
-            Some((producer_id, _port)) => {
-                let producer_node = level.node(producer_id).expect("checked above");
-                let name = producer_node
-                    .handle
-                    .clone()
-                    .unwrap_or_else(|| format!("Object {k}"));
-                let tint = producer_node.group.as_ref().and_then(|g| g.tint);
-
-                // Modifier chain + material + transform: walk the
-                    // group's INNER wires (a nested `Level`) — the shipped
-                    // shape (`AddSceneObjectCommand`, the glTF importer) puts
-                    // `node.transform_3d` INSIDE the object's group, passing
-                    // its `transform` output through the group's own
-                    // `transform` interface port to the root `transform_k`
-                    // wire; the root-level wire's producer is the GROUP, not
-                    // the transform atom itself, so the transform can only
-                    // be found by looking inside (SCENE_BUILD D9). Best-
-                    // effort: an unparseable chain still shows the group as
-                    // Known with an empty modifier list (nothing errors,
-                    // per D3).
-                    let (modifier_chain, material, transform, modifier_chain_parseable, source_vertex_count) =
-                        producer_node
-                            .group
-                            .as_ref()
-                            .map(|g| trace_group_body(producer_id, g))
-                            .unwrap_or((Vec::new(), MaterialVm::None, None, false, None));
-
-                    match source_vertex_count {
-                        Some(v) => vertex_count += v as u64,
-                        None => vertex_count_exact = false,
+                Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
+                    match producer_node.group.as_deref().and_then(find_scene_object_in_group) {
+                        Some((inner_node, inner_level)) => {
+                            let tint = producer_node.group.as_ref().and_then(|g| g.tint);
+                            trace_scene_object(
+                                &inner_level,
+                                vec![producer_id],
+                                inner_node,
+                                Some(producer_id),
+                                tint,
+                                k,
+                            )
+                        }
+                        None => (SceneObjectVm::Custom { index: k }, None),
                     }
-
-                    SceneObjectVm::Known {
-                        index: k,
-                        group_node_id: producer_id,
-                        name,
-                        tint,
-                        transform,
-                        material,
-                        modifier_chain,
-                        modifier_chain_parseable,
-                    }
-            }
-            None => {
-                vertex_count_exact = false;
-                let transform = trace_root_transform(level, scene_node.id, k);
-                SceneObjectVm::Custom { index: k, transform }
-            }
+                }
+                _ => (SceneObjectVm::Custom { index: k }, None),
+            },
+            None => (SceneObjectVm::Custom { index: k }, None),
         };
-        out.push(object);
+        match source_vertex_count {
+            Some(v) => vertex_count += v as u64,
+            None => vertex_count_exact = false,
+        }
+        out.push(row);
     }
     (out, vertex_count, vertex_count_exact)
 }
 
-/// D3's Custom-row transform fallback: `transform_k` traced at the SAME
-/// level as `scene_node` (root), expecting a bare `node.transform_3d`
-/// directly — the shape a hand-built/custom object might use when it isn't
-/// wrapped in a group at all. Never consulted for a Known (group) object —
-/// see `trace_group_body`'s transform trace for that shape.
-fn trace_root_transform(level: &Level, scene_node_id: u32, k: usize) -> Option<TransformVm> {
-    level
-        .producer(scene_node_id, &format!("transform_{k}"))
-        .filter(|(n, _)| level.node(*n).is_some_and(|nn| nn.type_id == TRANSFORM_3D_TYPE_ID))
-        .map(|(n, _)| trace_transform(level, Vec::new(), n))
-}
+/// Traces one `node.scene_object`'s full editable surface (D12): name,
+/// visible, transform, material, modifier chain, map-presence — everything
+/// addressed at `scope_path` (empty for a bare/ungrouped scene_object,
+/// `[group_node_id]` when wrapped). Returns the `Known` row plus this
+/// object's resolved mesh-source vertex count (`None` = unknown, BUG-194).
+fn trace_scene_object(
+    level: &Level,
+    scope_path: Vec<u32>,
+    node: &EffectGraphNode,
+    group_node_id: Option<u32>,
+    tint: Option<[f32; 4]>,
+    k: usize,
+) -> (SceneObjectVm, Option<u32>) {
+    let object_node_id = node.id;
+    let name = node.handle.clone().unwrap_or_else(|| format!("Object {k}"));
+    let visible_addr =
+        ParamAddr { scope_path: scope_path.clone(), node_doc_id: object_node_id, param_id: "visible".to_string() };
+    let visible_value = param_f32(node, "visible", 1.0) > 0.5;
+    let visible_driven = level.producer(object_node_id, "visible").is_some();
 
-/// Traces one `node.transform_3d`'s nine params at `level` into a full
-/// [`TransformVm`], addressed with `scope_path` — empty for the D3 Custom
-/// root-level fallback, `[group_node_id]` when the atom lives inside an
-/// object's group (the shipped shape).
-fn trace_transform(level: &Level, scope_path: Vec<u32>, node_id: u32) -> TransformVm {
-    let node = level.node(node_id);
-    let pf = |name: &str, default: f32| node.map_or(default, |n| param_f32(n, name, default));
-    let driven = |name: &str| level.producer(node_id, name).is_some();
-    let addr = |s: &Vec<u32>, name: &str| ParamAddr { scope_path: s.clone(), node_doc_id: node_id, param_id: name.to_string() };
-    TransformVm {
-        node_doc_id: node_id,
-        pos_addr: (addr(&scope_path, "pos_x"), addr(&scope_path, "pos_y"), addr(&scope_path, "pos_z")),
-        pos_value: (pf("pos_x", 0.0), pf("pos_y", 0.0), pf("pos_z", 0.0)),
-        pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
-        rot_addr: (addr(&scope_path, "rot_x"), addr(&scope_path, "rot_y"), addr(&scope_path, "rot_z")),
-        rot_value: (pf("rot_x", 0.0), pf("rot_y", 0.0), pf("rot_z", 0.0)),
-        rot_driven: (driven("rot_x"), driven("rot_y"), driven("rot_z")),
-        scale_addr: (addr(&scope_path, "scale_x"), addr(&scope_path, "scale_y"), addr(&scope_path, "scale_z")),
-        scale_value: (pf("scale_x", 1.0), pf("scale_y", 1.0), pf("scale_z", 1.0)),
-        scale_driven: (driven("scale_x"), driven("scale_y"), driven("scale_z")),
-    }
-}
+    let transform = resolve_producer_through_group(level, object_node_id, "transform")
+        .filter(|(_, _, n, _)| n.type_id == TRANSFORM_3D_TYPE_ID)
+        .map(|(lvl, crossed_group, n, _)| {
+            let mut sp = scope_path.clone();
+            if let Some(g) = crossed_group {
+                sp.push(g);
+            }
+            trace_transform(&lvl, sp, n.id)
+        });
 
-/// Trace one object group's body: the modifier chain feeding the group
-/// output's `vertices` port, the material feeding `material`, and the
-/// transform feeding `transform` — all three atoms live INSIDE the group
-/// (SCENE_BUILD D9 / `AddSceneObjectCommand` / the glTF importer all wire it
-/// this way), so every write address here carries `scope_path =
-/// [group_node_id]`, the exact scope `SetGraphNodeParamCommand::with_scope`
-/// needs to reach a node nested one level down.
-fn trace_group_body(
-    group_node_id: u32,
-    group: &manifold_core::effect_graph_def::GroupDef,
-) -> (Vec<ModifierVm>, MaterialVm, Option<TransformVm>, bool, Option<u32>) {
-    use manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID;
-    let inner = Level { nodes: &group.nodes, wires: &group.wires };
-    let scope = vec![group_node_id];
-    let Some(out_node) = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID) else {
-        return (Vec::new(), MaterialVm::None, None, false, None);
-    };
-
-    let mut chain = Vec::new();
-    let mut cursor = inner.producer(out_node.id, "vertices");
-    // P5's "custom chain — edit in graph" flag: `false` the moment the walk
-    // can't resolve the chain at all (unwired `vertices`, a dangling wire, a
-    // cycle) — an empty-but-resolved chain (mesh source feeds the output
-    // directly, zero modifiers) stays `true`.
-    let mut parseable = cursor.is_some();
-    // BUG-194 (SCENE_SETUP_PANEL_DESIGN.md D4): the terminal node of this
-    // walk — the one the loop below stops on because it isn't a modifier —
-    // is the object's mesh SOURCE. Its vertex count (declared param on the
-    // glTF source primitives, or a closed-form procedural table) is what the
-    // header's vertex-count row sums; `None` here means this object's
-    // contribution is unknown and the header degrades to "≥ N".
-    let mut source_vertex_count: Option<u32> = None;
-    let mut guard = 0;
-    while let Some((node_id, _port)) = cursor {
-        guard += 1;
-        if guard > 64 {
-            parseable = false; // cycle guard — never hang the panel on malformed JSON.
-            break;
-        }
-        let Some(node) = inner.node(node_id) else {
-            parseable = false; // dangling wire — genuinely malformed.
-            break;
-        };
-        if !MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
-            source_vertex_count = node_source_vertex_count(node);
-            break; // reached the mesh source (or something un-curated) — stop, still parseable.
-        }
-        let driven: HashSet<String> = inner
-            .wires
-            .iter()
-            .filter(|w| w.to_node == node.id)
-            .map(|w| w.to_port.clone())
-            .collect();
-        let params: BTreeMap<String, f32> = node
-            .params
-            .iter()
-            .filter_map(|(k, v)| match v {
-                SerializedParamValue::Float { value } => Some((k.clone(), *value)),
-                SerializedParamValue::Int { value } => Some((k.clone(), *value as f32)),
-                SerializedParamValue::Enum { value } => Some((k.clone(), *value as f32)),
-                _ => None,
-            })
-            .collect();
-        chain.push(ModifierVm { node_doc_id: node.id, type_id: node.type_id.clone(), params, driven });
-        cursor = inner.producer(node.id, "in");
-    }
-    chain.reverse(); // wire order: source → … → output.
-
-    let material = inner
-        .producer(out_node.id, "material")
-        .and_then(|(n, _)| inner.node(n))
-        .filter(|n| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
-        .map(|n| {
-            let driven = |name: &str| inner.producer(n.id, name).is_some();
-            let addr = |name: &str| ParamAddr { scope_path: scope.clone(), node_doc_id: n.id, param_id: name.to_string() };
+    let material = resolve_producer_through_group(level, object_node_id, "material")
+        .filter(|(_, _, n, _)| MATERIAL_TYPE_IDS.contains(&n.type_id.as_str()))
+        .map(|(lvl, crossed_group, n, _)| {
+            let mut scope_path = scope_path.clone();
+            if let Some(g) = crossed_group {
+                scope_path.push(g);
+            }
+            let driven = |name: &str| lvl.producer(n.id, name).is_some();
+            let addr =
+                |name: &str| ParamAddr { scope_path: scope_path.clone(), node_doc_id: n.id, param_id: name.to_string() };
             let metallic_roughness = (n.type_id == "node.pbr_material").then(|| MetallicRoughnessRow {
                 metallic_addr: addr("metallic"),
                 metallic_value: param_f32(n, "metallic", 0.0),
@@ -753,12 +753,117 @@ fn trace_group_body(
         })
         .unwrap_or(MaterialVm::None);
 
-    let transform = inner
-        .producer(out_node.id, "transform")
-        .filter(|(n, _)| inner.node(*n).is_some_and(|nn| nn.type_id == TRANSFORM_3D_TYPE_ID))
-        .map(|(n, _)| trace_transform(&inner, scope.clone(), n));
+    // Modifier chain (D6, re-anchored per D12): walk backward from the
+    // scene_object's OWN `vertices` input instead of a group output's
+    // `vertices` port. `current_level` can switch mid-walk when the chain
+    // crosses a bare-group boundary (the migrated-project shape,
+    // `resolve_producer_through_group`'s doc comment) — a group is always
+    // treated as a transparent re-export, never a modifier itself.
+    let mut chain = Vec::new();
+    let mut current_level = Level { nodes: level.nodes, wires: level.wires };
+    let mut cursor = current_level.producer(object_node_id, "vertices");
+    let mut parseable = cursor.is_some();
+    let mut source_vertex_count: Option<u32> = None;
+    let mut guard = 0;
+    while let Some((node_id, _port)) = cursor {
+        guard += 1;
+        if guard > 64 {
+            parseable = false; // cycle guard — never hang the panel on malformed JSON.
+            break;
+        }
+        let Some(n) = current_level.node(node_id) else {
+            parseable = false; // dangling wire — genuinely malformed.
+            break;
+        };
+        if n.type_id == GROUP_TYPE_ID {
+            let Some(group) = n.group.as_ref() else {
+                parseable = false;
+                break;
+            };
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            let Some(out_node) = inner.nodes.iter().find(|gn| gn.type_id == GROUP_OUTPUT_TYPE_ID)
+            else {
+                parseable = false;
+                break;
+            };
+            let Some((inner_id, inner_port)) = inner.producer(out_node.id, "vertices") else {
+                parseable = false;
+                break;
+            };
+            current_level = inner;
+            cursor = Some((inner_id, inner_port));
+            continue;
+        }
+        if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
+            source_vertex_count = node_source_vertex_count(n);
+            break; // reached the mesh source (or something un-curated) — stop, still parseable.
+        }
+        let driven: HashSet<String> = current_level
+            .wires
+            .iter()
+            .filter(|w| w.to_node == n.id)
+            .map(|w| w.to_port.clone())
+            .collect();
+        let params: BTreeMap<String, f32> = n
+            .params
+            .iter()
+            .filter_map(|(key, v)| match v {
+                SerializedParamValue::Float { value } => Some((key.clone(), *value)),
+                SerializedParamValue::Int { value } => Some((key.clone(), *value as f32)),
+                SerializedParamValue::Enum { value } => Some((key.clone(), *value as f32)),
+                _ => None,
+            })
+            .collect();
+        chain.push(ModifierVm { node_doc_id: n.id, type_id: n.type_id.clone(), params, driven });
+        cursor = current_level.producer(n.id, "in");
+    }
+    chain.reverse(); // wire order: source → … → scene_object.
 
-    (chain, material, transform, parseable, source_vertex_count)
+    let maps_present: HashSet<String> = MAP_PORT_NAMES
+        .iter()
+        .filter(|port| level.producer(object_node_id, port).is_some())
+        .map(|s| s.to_string())
+        .collect();
+
+    let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
+        index: k,
+        object_node_id,
+        group_node_id,
+        name,
+        tint,
+        visible_addr,
+        visible_value,
+        visible_driven,
+        transform,
+        material,
+        modifier_chain: chain,
+        modifier_chain_parseable: parseable,
+        maps_present,
+    }));
+    (row, source_vertex_count)
+}
+
+/// Traces one `node.transform_3d`'s nine params at `level` into a full
+/// [`TransformVm`], addressed with `scope_path` — empty when the atom lives
+/// at root scope (a bare/ungrouped object), `[group_node_id]` when it lives
+/// inside an object's group (the importer's shape).
+fn trace_transform(level: &Level, scope_path: Vec<u32>, node_id: u32) -> TransformVm {
+    let node = level.node(node_id);
+    let pf = |name: &str, default: f32| node.map_or(default, |n| param_f32(n, name, default));
+    let driven = |name: &str| level.producer(node_id, name).is_some();
+    let addr = |s: &Vec<u32>, name: &str| ParamAddr { scope_path: s.clone(), node_doc_id: node_id, param_id: name.to_string() };
+    TransformVm {
+        node_doc_id: node_id,
+        pos_addr: (addr(&scope_path, "pos_x"), addr(&scope_path, "pos_y"), addr(&scope_path, "pos_z")),
+        pos_value: (pf("pos_x", 0.0), pf("pos_y", 0.0), pf("pos_z", 0.0)),
+        pos_driven: (driven("pos_x"), driven("pos_y"), driven("pos_z")),
+        rot_addr: (addr(&scope_path, "rot_x"), addr(&scope_path, "rot_y"), addr(&scope_path, "rot_z")),
+        rot_value: (pf("rot_x", 0.0), pf("rot_y", 0.0), pf("rot_z", 0.0)),
+        rot_driven: (driven("rot_x"), driven("rot_y"), driven("rot_z")),
+        scale_addr: (addr(&scope_path, "scale_x"), addr(&scope_path, "scale_y"), addr(&scope_path, "scale_z")),
+        scale_value: (pf("scale_x", 1.0), pf("scale_y", 1.0), pf("scale_z", 1.0)),
+        scale_driven: (driven("scale_x"), driven("scale_y"), driven("scale_z")),
+    }
 }
 
 /// BUG-194 (SCENE_SETUP_PANEL_DESIGN.md D4): read a mesh-source (or
@@ -814,6 +919,7 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
                     SceneLightVm::Known(Box::new(LightRow {
                         index: k,
                         node_doc_id: node_id,
+                        name: node.handle.clone().unwrap_or_else(|| format!("Light {k}")),
                         mode_addr: ParamAddr::root(node_id, "mode"),
                         mode_value: param_f32(node, "mode", 0.0) as u32,
                         mode_driven: driven("mode"),
@@ -1287,112 +1393,188 @@ mod tests {
     }
 
     #[test]
-    fn hand_built_object_group_degrades_to_custom_row_when_unparseable() {
-        // A render_scene wired directly to a bare mesh source (no group) —
-        // the D3 "Object k — custom (edit in graph)" case.
+    fn hand_built_object_wired_directly_to_a_mesh_source_degrades_to_custom() {
+        // A render_scene wired directly to a bare mesh source (no
+        // scene_object at all) — the D3/D12 "Object k — custom (edit in
+        // graph)" case.
         let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
         let out = node(20, "system.final_output", None);
         let d = def(
             vec![mesh, scene, out],
-            vec![wire(1, "vertices", 10, "mesh_0"), wire(10, "color", 20, "in")],
+            vec![wire(1, "vertices", 10, "object_0"), wire(10, "color", 20, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.objects.len(), 1);
-        assert!(matches!(vm.objects[0], SceneObjectVm::Custom { index: 0, .. }));
+        assert!(matches!(vm.objects[0], SceneObjectVm::Custom { index: 0 }));
     }
 
+    /// D1/D12: a bare `node.scene_object` wired DIRECTLY to `object_0` — no
+    /// wrapping group at all — must still resolve as a first-class `Known`
+    /// row, scoped at root (empty `scope_path`, `group_node_id: None`).
     #[test]
-    fn custom_object_with_root_level_transform_resolves_it() {
-        // The D3 Custom-row transform fallback: no group at all, but
-        // `transform_0` traces to a bare `node.transform_3d` sibling at
-        // root — still shows a transform row, per D3's "transform row if
-        // transform_k traces to a transform_3d".
-        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+    fn ungrouped_scene_object_resolves_known_at_root_scope() {
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
-        let transform = with_param(node(2, TRANSFORM_3D_TYPE_ID, Some("t")), "pos_x", SerializedParamValue::Float { value: 4.0 });
+        let mat = with_param(node(2, "node.phong_material", Some("mat")), "color_r", SerializedParamValue::Float { value: 0.4 });
+        let transform = with_param(node(3, TRANSFORM_3D_TYPE_ID, Some("t")), "pos_x", SerializedParamValue::Float { value: 4.0 });
+        let obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Bare Hero"));
+        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(20, "system.final_output", None);
         let d = def(
-            vec![mesh, transform, scene, out],
+            vec![mesh, mat, transform, obj, scene, out],
             vec![
-                wire(1, "vertices", 10, "mesh_0"),
-                wire(2, "transform", 10, "transform_0"),
+                wire(1, "vertices", 4, "vertices"),
+                wire(2, "out", 4, "material"),
+                wire(3, "transform", 4, "transform"),
+                wire(4, "object", 10, "object_0"),
                 wire(10, "color", 20, "in"),
             ],
         );
         let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.objects.len(), 1);
         match &vm.objects[0] {
-            SceneObjectVm::Custom { transform, .. } => {
-                let t = transform.as_ref().expect("root-level transform_3d resolves for a Custom row");
-                assert_eq!(t.node_doc_id, 2);
+            SceneObjectVm::Known(row) => {
+                assert_eq!(row.object_node_id, 4);
+                assert_eq!(row.group_node_id, None, "no wrapping group — root scope");
+                assert_eq!(row.name, "Bare Hero");
+                assert!(row.visible_value, "visible param defaults on");
+                assert!(row.modifier_chain.is_empty());
+                assert!(row.modifier_chain_parseable);
+                let t = row.transform.as_ref().expect("transform input resolves");
+                assert_eq!(t.node_doc_id, 3);
                 assert_eq!(t.pos_value.0, 4.0);
                 assert!(t.pos_addr.0.scope_path.is_empty(), "root-level transform has an empty scope");
+                match &row.material {
+                    MaterialVm::Known(m) => assert_eq!(m.type_id, "node.phong_material"),
+                    MaterialVm::None => panic!("expected a resolved material"),
+                }
             }
-            other => panic!("expected Custom object, got {other:?}"),
+            other => panic!("expected Known object, got {other:?}"),
         }
     }
 
-    #[test]
-    fn named_group_object_resolves_with_modifier_chain_material_and_transform() {
-        // Matches the SHIPPED shape (`AddSceneObjectCommand`, the glTF
-        // importer): mesh/material/transform all live INSIDE the group; the
-        // group's own `transform`/`material` INTERFACE OUTPUTS pass through
-        // to the root wire render_scene reads — the root-level producer of
-        // `transform_0` is the GROUP, never a bare `node.transform_3d`
-        // sibling (that shape is the D3 Custom fallback only).
+    /// The importer/`AddSceneObjectCommand` shape: mesh/material/transform +
+    /// `node.scene_object` all live INSIDE a group; the group's own `object`
+    /// interface output re-exports the scene_object's `object` port to the
+    /// root `object_k` wire.
+    fn grouped_scene_object_def(object_id: u32, group_id: u32, port_index: usize, name: &str) -> (EffectGraphNode, Vec<EffectGraphWire>) {
         let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
-        let mesh = node(101, "node.cube_mesh", Some("mesh"));
-        let bend = node(102, "node.bend_mesh", Some("bend"));
-        let mat = with_param(node(103, "node.phong_material", Some("mat")), "color_r", SerializedParamValue::Float { value: 0.4 });
-        let transform = with_param(node(105, TRANSFORM_3D_TYPE_ID, Some("transform")), "pos_y", SerializedParamValue::Float { value: 2.5 });
-        let gout = node(104, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(1, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Hero"));
+        let mesh = node(object_id + 100, "node.cube_mesh", Some("mesh"));
+        let bend = node(object_id + 101, "node.bend_mesh", Some("bend"));
+        let mat = with_param(
+            node(object_id + 102, "node.phong_material", Some("mat")),
+            "color_r",
+            SerializedParamValue::Float { value: 0.4 },
+        );
+        let transform = with_param(
+            node(object_id + 103, TRANSFORM_3D_TYPE_ID, Some("transform")),
+            "pos_y",
+            SerializedParamValue::Float { value: 2.5 },
+        );
+        let scene_obj = node(object_id, SCENE_OBJECT_TYPE_ID, Some(name));
+        let gout = node(object_id + 104, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(group_id, GROUP_TYPE_ID, Some(name));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, bend, mat, transform, gout],
+            nodes: vec![mesh, bend, mat, transform, scene_obj, gout],
             wires: vec![
-                wire(101, "vertices", 102, "in"),
-                wire(102, "out", 104, "vertices"),
-                wire(103, "out", 104, "material"),
-                wire(105, "transform", 104, "transform"),
+                wire(object_id + 100, "vertices", object_id + 101, "in"),
+                wire(object_id + 101, "out", object_id, "vertices"),
+                wire(object_id + 102, "out", object_id, "material"),
+                wire(object_id + 103, "transform", object_id, "transform"),
+                wire(object_id, "object", object_id + 104, "object"),
             ],
             tint: Some([0.1, 0.2, 0.3, 1.0]),
         }));
+        (group_node, vec![wire(group_id, "object", 10, &format!("object_{port_index}"))])
+    }
 
+    #[test]
+    fn grouped_scene_object_resolves_with_modifier_chain_material_and_transform() {
+        let (group_node, top_wires) = grouped_scene_object_def(1, 2, 0, "Hero");
+        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(20, "system.final_output", None);
+        let mut wires = top_wires;
+        wires.push(wire(10, "color", 20, "in"));
+        let d = def(vec![group_node, scene, out], wires);
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.objects.len(), 1);
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                assert_eq!(row.object_node_id, 1);
+                assert_eq!(row.group_node_id, Some(2));
+                assert_eq!(row.name, "Hero");
+                assert_eq!(row.tint, Some([0.1, 0.2, 0.3, 1.0]));
+                assert_eq!(row.modifier_chain.len(), 1);
+                assert_eq!(row.modifier_chain[0].type_id, "node.bend_mesh");
+                assert!(row.modifier_chain_parseable, "a well-formed one-modifier chain parses");
+                match &row.material {
+                    MaterialVm::Known(m) => {
+                        assert_eq!(m.type_id, "node.phong_material");
+                        assert_eq!(m.base_color_addr.0.scope_path, vec![2], "material lives inside the group — scoped address");
+                    }
+                    MaterialVm::None => panic!("expected a resolved material"),
+                }
+                let t = row.transform.as_ref().expect("transform resolves through the scene_object's transform input");
+                assert_eq!(t.node_doc_id, 104);
+                assert_eq!(t.pos_value.1, 2.5);
+                assert_eq!(t.pos_addr.1.scope_path, vec![2], "transform lives inside the group — scoped address");
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    /// Mixed scene: one grouped object (the importer shape) and one bare
+    /// ungrouped `node.scene_object`, in the same def — both resolve `Known`.
+    #[test]
+    fn mixed_grouped_and_ungrouped_objects_both_resolve_known() {
+        let (group_node, group_wires) = grouped_scene_object_def(1, 2, 0, "Grouped");
+        let bare_mesh = node(50, "node.cube_mesh", Some("mesh"));
+        let bare_obj = node(51, SCENE_OBJECT_TYPE_ID, Some("Bare"));
+        let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 2.0 });
+        let out = node(20, "system.final_output", None);
+        let mut wires = group_wires;
+        wires.push(wire(50, "vertices", 51, "vertices"));
+        wires.push(wire(51, "object", 10, "object_1"));
+        wires.push(wire(10, "color", 20, "in"));
+        let d = def(vec![group_node, bare_mesh, bare_obj, scene, out], wires);
+        let vm = SceneVm::from_def(&d).unwrap();
+        assert_eq!(vm.objects.len(), 2);
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) if row.group_node_id == Some(2) => assert_eq!(row.name, "Grouped"),
+            other => panic!("expected grouped Known object at index 0, got {other:?}"),
+        }
+        match &vm.objects[1] {
+            SceneObjectVm::Known(row) if row.group_node_id.is_none() => assert_eq!(row.name, "Bare"),
+            other => panic!("expected ungrouped Known object at index 1, got {other:?}"),
+        }
+    }
+
+    /// D12: something other than `node.scene_object` (directly, or through a
+    /// group) feeding `object_k` degrades to `Custom` — never hidden, never
+    /// an error.
+    #[test]
+    fn custom_producer_that_isnt_scene_object_shaped_degrades_to_custom() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        // A group whose output doesn't come from a scene_object at all.
+        let value_node = node(1, "node.value", Some("weird"));
+        let gout = node(2, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(3, GROUP_TYPE_ID, Some("NotAnObject"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![value_node, gout],
+            wires: vec![wire(1, "out", 2, "object")],
+            tint: None,
+        }));
         let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(20, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![
-                wire(1, "vertices", 10, "mesh_0"),
-                wire(1, "transform", 10, "transform_0"),
-                wire(10, "color", 20, "in"),
-            ],
+            vec![wire(3, "object", 10, "object_0"), wire(10, "color", 20, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.objects.len(), 1);
-        match &vm.objects[0] {
-            SceneObjectVm::Known { group_node_id, name, tint, modifier_chain, modifier_chain_parseable, material, transform, .. } => {
-                assert_eq!(*group_node_id, 1);
-                assert_eq!(name, "Hero");
-                assert_eq!(*tint, Some([0.1, 0.2, 0.3, 1.0]));
-                assert_eq!(modifier_chain.len(), 1);
-                assert_eq!(modifier_chain[0].type_id, "node.bend_mesh");
-                assert!(*modifier_chain_parseable, "a well-formed one-modifier chain parses");
-                match material {
-                    MaterialVm::Known(row) => {
-                        assert_eq!(row.type_id, "node.phong_material");
-                        assert_eq!(row.base_color_addr.0.scope_path, vec![1], "material lives inside the group — scoped address");
-                    }
-                    MaterialVm::None => panic!("expected a resolved material"),
-                }
-                let t = transform.as_ref().expect("transform_0 traces through the group to node 105");
-                assert_eq!(t.node_doc_id, 105);
-                assert_eq!(t.pos_value.1, 2.5);
-                assert_eq!(t.pos_addr.1.scope_path, vec![1], "transform lives inside the group — scoped address");
-            }
-            other => panic!("expected Known object, got {other:?}"),
-        }
+        assert!(matches!(vm.objects[0], SceneObjectVm::Custom { index: 0 }));
     }
 
     #[test]
@@ -1408,15 +1590,17 @@ mod tests {
             "center",
             SerializedParamValue::Float { value: 1.5 },
         );
-        let gout = node(4, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        let scene_obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(5, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, angle_driver, bend, gout],
+            nodes: vec![mesh, angle_driver, bend, scene_obj, gout],
             wires: vec![
                 wire(1, "vertices", 3, "in"),
                 wire(2, "out", 3, "angle"), // port-shadow: angle is wired, driven
                 wire(3, "out", 4, "vertices"),
+                wire(4, "object", 5, "object"),
             ],
             tint: None,
         }));
@@ -1424,14 +1608,14 @@ mod tests {
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         match &vm.objects[0] {
-            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
-                assert!(*modifier_chain_parseable);
-                assert_eq!(modifier_chain.len(), 1);
-                let m = &modifier_chain[0];
+            SceneObjectVm::Known(row) => {
+                assert!(row.modifier_chain_parseable);
+                assert_eq!(row.modifier_chain.len(), 1);
+                let m = &row.modifier_chain[0];
                 assert_eq!(m.params.get("axis"), Some(&2.0));
                 assert_eq!(m.params.get("center"), Some(&1.5));
                 assert!(!m.params.contains_key("angle"), "angle has no stored params entry — it's port-shadowed");
@@ -1443,31 +1627,32 @@ mod tests {
     }
 
     #[test]
-    fn zero_modifiers_with_mesh_source_feeding_output_directly_is_still_parseable() {
+    fn zero_modifiers_with_mesh_source_feeding_scene_object_directly_is_still_parseable() {
         // A fresh object (no modifiers yet): `vertices` resolves straight to
         // the mesh source. `modifier_chain` is empty but `parseable` is
         // still `true` — distinct from the genuinely-unparseable case below.
         let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
-        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        let scene_obj = node(2, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(3, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, gout],
-            wires: vec![wire(1, "vertices", 2, "vertices")],
+            nodes: vec![mesh, scene_obj, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices"), wire(2, "object", 3, "object")],
             tint: None,
         }));
         let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         match &vm.objects[0] {
-            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
-                assert!(modifier_chain.is_empty());
-                assert!(*modifier_chain_parseable, "zero modifiers is a valid, addable stack");
+            SceneObjectVm::Known(row) => {
+                assert!(row.modifier_chain.is_empty());
+                assert!(row.modifier_chain_parseable, "zero modifiers is a valid, addable stack");
             }
             other => panic!("expected Known object, got {other:?}"),
         }
@@ -1475,29 +1660,30 @@ mod tests {
 
     #[test]
     fn unwired_vertices_port_is_unparseable_custom_chain() {
-        // D6: a group whose `vertices` boundary port is unwired entirely —
-        // the panel must show "custom chain — edit in graph" and disable
-        // Add, never guess at a splice point.
+        // D6: a scene_object whose `vertices` port is unwired entirely — the
+        // panel must show "custom chain — edit in graph" and disable Add,
+        // never guess at a splice point.
         let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
-        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        let scene_obj = node(1, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(2, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![gout],
-            wires: vec![],
+            nodes: vec![scene_obj, gout],
+            wires: vec![wire(1, "object", 2, "object")],
             tint: None,
         }));
         let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         match &vm.objects[0] {
-            SceneObjectVm::Known { modifier_chain, modifier_chain_parseable, .. } => {
-                assert!(modifier_chain.is_empty());
-                assert!(!*modifier_chain_parseable, "unwired vertices port is unparseable");
+            SceneObjectVm::Known(row) => {
+                assert!(row.modifier_chain.is_empty());
+                assert!(!row.modifier_chain_parseable, "unwired vertices port is unparseable");
             }
             other => panic!("expected Known object, got {other:?}"),
         }
@@ -1512,28 +1698,108 @@ mod tests {
             "roughness",
             SerializedParamValue::Float { value: 0.3 },
         );
-        let gout = node(3, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Pbr"));
+        let scene_obj = node(3, SCENE_OBJECT_TYPE_ID, Some("Pbr"));
+        let gout = node(4, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Pbr"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, mat, gout],
-            wires: vec![wire(1, "vertices", 3, "vertices"), wire(2, "out", 3, "material")],
+            nodes: vec![mesh, mat, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 3, "vertices"),
+                wire(2, "out", 3, "material"),
+                wire(3, "object", 4, "object"),
+            ],
             tint: None,
         }));
         let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         match &vm.objects[0] {
-            SceneObjectVm::Known { material: MaterialVm::Known(row), .. } => {
-                let mr = row.metallic_roughness.as_ref().expect("pbr gets metallic/roughness");
+            SceneObjectVm::Known(row) if matches!(row.material, MaterialVm::Known(_)) => {
+                let MaterialVm::Known(m) = &row.material else { unreachable!() };
+                let mr = m.metallic_roughness.as_ref().expect("pbr gets metallic/roughness");
                 assert_eq!(mr.metallic_value, 0.7);
                 assert_eq!(mr.roughness_value, 0.3);
             }
             other => panic!("expected Known pbr object, got {other:?}"),
+        }
+    }
+
+    /// D12's new map-presence flags: only ports actually wired show up.
+    #[test]
+    fn maps_present_reports_only_wired_map_ports() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let tex = node(2, "node.gltf_texture_source", Some("basecolor_tex"));
+        let scene_obj = node(3, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(4, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, tex, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 3, "vertices"),
+                wire(2, "out", 3, "base_color_map"),
+                wire(3, "object", 4, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                assert_eq!(row.maps_present.len(), 1);
+                assert!(row.maps_present.contains("base_color_map"));
+                assert!(!row.maps_present.contains("normal_map"));
+            }
+            other => panic!("expected Known object, got {other:?}"),
+        }
+    }
+
+    /// D12's `visible` port-shadow: a wire into `visible` reads as driven,
+    /// with the current threshold value still resolved.
+    #[test]
+    fn visible_port_shadow_reads_value_and_driven_flag() {
+        let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
+        let mesh = node(1, "node.cube_mesh", Some("mesh"));
+        let lfo = node(2, "node.value", Some("mute_lfo"));
+        let scene_obj = with_param(node(3, SCENE_OBJECT_TYPE_ID, Some("Obj")), "visible", SerializedParamValue::Float { value: 0.0 });
+        let gout = node(4, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
+        group_node.group = Some(Box::new(GroupDef {
+            interface: group_iface,
+            nodes: vec![mesh, lfo, scene_obj, gout],
+            wires: vec![
+                wire(1, "vertices", 3, "vertices"),
+                wire(2, "out", 3, "visible"),
+                wire(3, "object", 4, "object"),
+            ],
+            tint: None,
+        }));
+        let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
+        let out = node(30, "system.final_output", None);
+        let d = def(
+            vec![group_node, scene, out],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
+        );
+        let vm = SceneVm::from_def(&d).unwrap();
+        match &vm.objects[0] {
+            SceneObjectVm::Known(row) => {
+                assert!(!row.visible_value, "the stored param value reads 0.0 = off");
+                assert!(row.visible_driven, "a wire feeds visible — driven");
+                assert_eq!(row.visible_addr.param_id, "visible");
+                assert_eq!(row.visible_addr.scope_path, vec![10]);
+            }
+            other => panic!("expected Known object, got {other:?}"),
         }
     }
 
@@ -1680,19 +1946,20 @@ mod tests {
             "source_vertex_count",
             SerializedParamValue::Int { value: 1234 },
         );
-        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        let scene_obj = node(2, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(3, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, gout],
-            wires: vec![wire(1, "vertices", 2, "vertices")],
+            nodes: vec![mesh, scene_obj, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices"), wire(2, "object", 3, "object")],
             tint: None,
         }));
         let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.header.vertex_count, 1234);
@@ -1710,19 +1977,20 @@ mod tests {
         // "unknown" default (never read, so absent-from-map behaves the
         // same as an explicit -1).
         let mesh = node(1, "node.gltf_mesh_source", Some("mesh"));
-        let gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut group_node = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Obj"));
+        let scene_obj = node(2, SCENE_OBJECT_TYPE_ID, Some("Obj"));
+        let gout = node(3, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut group_node = node(10, GROUP_TYPE_ID, Some("Obj"));
         group_node.group = Some(Box::new(GroupDef {
             interface: group_iface,
-            nodes: vec![mesh, gout],
-            wires: vec![wire(1, "vertices", 2, "vertices")],
+            nodes: vec![mesh, scene_obj, gout],
+            wires: vec![wire(1, "vertices", 2, "vertices"), wire(2, "object", 3, "object")],
             tint: None,
         }));
         let scene = with_param(node(20, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
         let out = node(30, "system.final_output", None);
         let d = def(
             vec![group_node, scene, out],
-            vec![wire(10, "vertices", 20, "mesh_0"), wire(20, "color", 30, "in")],
+            vec![wire(10, "object", 20, "object_0"), wire(20, "color", 30, "in")],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.header.vertex_count, 0, "no known contribution — sum stays 0, never fabricated");
@@ -1736,30 +2004,32 @@ mod tests {
     fn header_vertex_count_covers_procedural_closed_form_generators() {
         let group_iface = || GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
 
-        let cube_gout = node(2, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut cube_group = node(10, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Cube"));
+        let cube_scene_obj = node(2, SCENE_OBJECT_TYPE_ID, Some("Cube"));
+        let cube_gout = node(3, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut cube_group = node(10, GROUP_TYPE_ID, Some("Cube"));
         cube_group.group = Some(Box::new(GroupDef {
             interface: group_iface(),
-            nodes: vec![node(1, "node.cube_mesh", Some("mesh")), cube_gout],
-            wires: vec![wire(1, "vertices", 2, "vertices")],
+            nodes: vec![node(1, "node.cube_mesh", Some("mesh")), cube_scene_obj, cube_gout],
+            wires: vec![wire(1, "vertices", 2, "vertices"), wire(2, "object", 3, "object")],
             tint: None,
         }));
 
         let grid = with_param(
             with_param(
-                node(3, "node.grid_mesh", Some("mesh")),
+                node(4, "node.grid_mesh", Some("mesh")),
                 "resolution_x",
                 SerializedParamValue::Int { value: 8 },
             ),
             "resolution_y",
             SerializedParamValue::Int { value: 4 },
         );
-        let grid_gout = node(4, manifold_core::effect_graph_def::GROUP_OUTPUT_TYPE_ID, Some("output"));
-        let mut grid_group = node(11, manifold_core::effect_graph_def::GROUP_TYPE_ID, Some("Grid"));
+        let grid_scene_obj = node(5, SCENE_OBJECT_TYPE_ID, Some("Grid"));
+        let grid_gout = node(6, GROUP_OUTPUT_TYPE_ID, Some("output"));
+        let mut grid_group = node(11, GROUP_TYPE_ID, Some("Grid"));
         grid_group.group = Some(Box::new(GroupDef {
             interface: group_iface(),
-            nodes: vec![grid, grid_gout],
-            wires: vec![wire(3, "vertices", 4, "vertices")],
+            nodes: vec![grid, grid_scene_obj, grid_gout],
+            wires: vec![wire(4, "vertices", 5, "vertices"), wire(5, "object", 6, "object")],
             tint: None,
         }));
 
@@ -1768,13 +2038,47 @@ mod tests {
         let d = def(
             vec![cube_group, grid_group, scene, out],
             vec![
-                wire(10, "vertices", 20, "mesh_0"),
-                wire(11, "vertices", 20, "mesh_1"),
+                wire(10, "object", 20, "object_0"),
+                wire(11, "object", 20, "object_1"),
                 wire(20, "color", 30, "in"),
             ],
         );
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.header.vertex_count, 36 + 8 * 4);
         assert!(vm.header.vertex_count_exact);
+    }
+
+    /// Regression gate for the migrated-project shape `migrate_scene_object_wires`
+    /// actually produces (D5's "same-scope re-point"): a minted `node.scene_object`
+    /// stays a ROOT-level sibling of the mesh producer's group, `vertices`/
+    /// `material`/`transform` wired straight from the GROUP's own boundary port —
+    /// not nested inside it (the shape a fresh glTF import produces instead,
+    /// already covered by this file's `grouped_scene_object_def`-style tests).
+    /// Found 2026-07-17 during P5 landing: without `resolve_producer_through_group`,
+    /// every already-shipped, already-migrated bundled preset (SceneStarter and
+    /// the ~9 others P2 regenerated) silently showed no transform/material
+    /// controls and a wrong vertex count in the panel, despite rendering
+    /// correctly (the render path reads through `SceneObject`'s resolved Slots,
+    /// never through this trace).
+    #[test]
+    fn bundled_scene_starter_preset_resolves_transform_material_and_vertex_count() {
+        let preset_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
+        let d = crate::node_graph::bundled_presets::bundled_preset_def(&preset_type)
+            .expect("SceneStarter is a bundled preset");
+        let vm = SceneVm::from_def(d).expect("SceneStarter resolves");
+        assert_eq!(vm.objects.len(), 2, "Floor + Cube");
+        for obj in &vm.objects {
+            let SceneObjectVm::Known(row) = obj else {
+                panic!("SceneStarter's objects must resolve Known, not Custom — migration shape unparsed");
+            };
+            assert!(row.transform.is_some(), "{}: transform must resolve through the group boundary", row.name);
+            assert!(
+                !matches!(row.material, MaterialVm::None),
+                "{}: material must resolve through the group boundary",
+                row.name
+            );
+        }
+        assert!(vm.header.vertex_count > 0, "vertex count must resolve through the group boundary, not silently 0");
+        assert!(vm.header.vertex_count_exact, "SceneStarter's mesh sources have known vertex counts");
     }
 }

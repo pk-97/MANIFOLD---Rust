@@ -384,6 +384,25 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        // P5 properties-header "Duplicate" (Object selection, D11): the same
+        // `DuplicateSceneObjectCommand` construction shape as
+        // `SceneSetupRemoveObject` above.
+        PanelAction::SceneSetupDuplicateObject(layer_id, render_scene_node_id, source_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::DuplicateSceneObjectCommand::new(
+                    target,
+                    Vec::new(),
+                    *render_scene_node_id,
+                    *source_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
+            DispatchResult::structural()
+        }
 
         // P4 "Import Model…" button (D5): a native file dialog picks a
         // second `.glb`/`.gltf`, `merge_import_into_graph` (via the public

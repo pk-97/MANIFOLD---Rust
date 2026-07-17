@@ -45,6 +45,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "audiosends" => Some(audio_sends_scene()),
         "gltfscene" => Some(gltf_scene()),
         "gltfanimscene" => Some(gltf_anim_scene()),
+        "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
         _ => None,
     }
@@ -125,6 +126,66 @@ pub(super) fn gltf_scene() -> SceneData {
     // Same post-install step the real loader/import path runs after
     // registering an embedded preset: resolve the tracking layer's manifest
     // against it (PARAM_STORAGE_BOUNDARIES_DESIGN.md D1).
+    project.reconcile_param_manifests();
+
+    let lid = cmd.inserted_layer_id().expect("layer inserted");
+    let mut selection = UIState::default();
+    selection.select_layer(lid);
+
+    SceneData { project, content: ContentState::default(), active: Some(0), selection }
+}
+
+/// `heldoutmerge`: SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P5's held-out
+/// gate — the same real, gitignored assets and real production merge path
+/// `scene_setup_p4_heldout_merge.rs`'s
+/// `merges_skull_into_warehouse_held_out_real_assets` proves (skull merged
+/// into the warehouse scene), wrapped as a live layer so the P5 outliner +
+/// properties can be screenshotted against it — both objects, both lights,
+/// and the eye/Duplicate/Remove affordances all have to read as real,
+/// clickable chrome on a scene neither this wave's synthetic-def unit tests
+/// nor the `gltfscene` two-object fixture exercise.
+pub(super) fn heldout_merge_scene() -> SceneData {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::layer::ImportModelLayerCommand;
+    use manifold_renderer::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
+
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf");
+    let warehouse = fixtures.join("abandoned_warehouse_-_interior_scene.glb");
+    let skull = fixtures.join("skull_salazar_downloadable.glb");
+
+    let (mut merged_def, report) = assemble_import_graph(&warehouse)
+        .unwrap_or_else(|e| panic!("ui-snap heldoutmerge: warehouse import failed: {e}"));
+    eprintln!("ui-snap heldoutmerge: warehouse import report: {report:?}");
+
+    let plan = assemble_merge_plan(&merged_def, &skull)
+        .unwrap_or_else(|e| panic!("ui-snap heldoutmerge: merge plan failed: {e}"));
+    eprintln!(
+        "ui-snap heldoutmerge: merge plan: {} new nodes, {} new wires, new_objects_count={}, report_lines={:?}",
+        plan.new_nodes.len(),
+        plan.new_wires.len(),
+        plan.new_objects_count,
+        plan.report_lines
+    );
+    merged_def.nodes.extend(plan.new_nodes.clone());
+    merged_def.wires.extend(plan.new_wires.clone());
+    if let Some(render_scene_node) = merged_def.nodes.iter_mut().find(|n| n.id == plan.render_scene_node_id) {
+        render_scene_node
+            .params
+            .insert("objects".to_string(), SerializedParamValue::Int { value: plan.new_objects_count as i32 });
+    }
+
+    let embedded = EmbeddedPreset {
+        kind: manifold_core::preset_def::PresetKind::Generator,
+        def: merged_def,
+        origin: EmbeddedOrigin::Saved,
+    };
+    crate::project_io::install_embedded_presets(std::slice::from_ref(&embedded));
+
+    let mut project = Project::default();
+    let mut cmd = ImportModelLayerCommand::new("Warehouse + Skull".to_string(), embedded, 0, None);
+    cmd.execute(&mut project);
     project.reconcile_param_manifests();
 
     let lid = cmd.inserted_layer_id().expect("layer inserted");
