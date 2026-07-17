@@ -299,6 +299,19 @@ pub fn dispatch(
         // Same: the driver Free-period type-in is opened in app_render before
         // dispatch; this arm only keeps the match exhaustive.
         PanelAction::BeginDriverPeriodTextInput { .. } => DispatchResult::handled(),
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4: the Scene Setup dock's
+        // numeric type-in is opened in app_render before dispatch (same
+        // early-intercept as `BeginParamTextInput` above); this arm only
+        // keeps the match exhaustive.
+        PanelAction::SceneSetupBeginNumericTextInput { .. } => DispatchResult::handled(),
+        // D9: the enum dropdown is intercepted by `UIRoot::try_open_dropdown`
+        // before it ever reaches this dispatcher; this arm only keeps the
+        // match exhaustive.
+        PanelAction::SceneSetupEnumClicked { .. } => DispatchResult::handled(),
+        // P4 audio-dock sibling: same early-intercept as
+        // `SceneSetupBeginNumericTextInput` above; this arm only keeps the
+        // match exhaustive.
+        PanelAction::AudioSendGainBeginTextInput(..) => DispatchResult::handled(),
 
         // ── Viewport clip interaction + context menus ──────────────
         PanelAction::ClipClicked(..)
@@ -413,6 +426,7 @@ pub fn dispatch(
         | PanelAction::AudioSendGainDragBegin(..)
         | PanelAction::AudioSendGainDragChanged(..)
         | PanelAction::AudioSendGainDragCommit(..)
+        | PanelAction::AudioSendGainSetTyped(..)
         | PanelAction::AudioSendFloorStep(..)
         | PanelAction::AudioCrossoverDragBegin
         | PanelAction::AudioCrossoverChanged(..)

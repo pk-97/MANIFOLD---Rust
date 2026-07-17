@@ -279,6 +279,41 @@ pub enum PanelAction {
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
     SceneSetupRemoveLight(LayerId, u32, u32),
+    /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8): double-click on a dock
+    /// numeric value cell opens its type-in box. Carries the row's write
+    /// address (mirroring `SceneSetupParamChanged`'s tuple shape), the
+    /// cell's own node id (the app resolves its screen rect at open time,
+    /// same convention as `SceneSetupRenameObjectClicked`'s
+    /// `object_name_rect` lookup — the panel has no `&UITree` in
+    /// `handle_event` to resolve bounds itself), the base value to prefill,
+    /// and D10's `degrees` flag (the box prefills/parses degrees for the
+    /// committed row table, radians everywhere else — conversion lives only
+    /// at this boundary). Handled by the app directly (`text_input.begin` +
+    /// `SceneNumericParamCtx`), same shape as `BeginParamTextInput`.
+    SceneSetupBeginNumericTextInput {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        node_doc_id: u32,
+        param_id: String,
+        value: f32,
+        cell_node_id: crate::node::NodeId,
+        degrees: bool,
+    },
+    /// P4 D9: click on a 3+-label enum value cell opens the shared
+    /// `panels::dropdown` overlay, items = the row's label set anchored
+    /// under the cell (`cell_node_id`, same resolve-at-open convention as
+    /// `SceneSetupBeginNumericTextInput`). Selection routes back through
+    /// `SceneSetupParamChanged` (the label's index as the new value) — no
+    /// new mutation path.
+    SceneSetupEnumClicked {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        node_doc_id: u32,
+        param_id: String,
+        labels: Vec<&'static str>,
+        current_index: u32,
+        cell_node_id: crate::node::NodeId,
+    },
 
     // Footer
     CycleQuantize,
@@ -631,6 +666,16 @@ pub enum PanelAction {
     AudioSendGainDragChanged(AudioSendId, f32),
     /// Commit the gain drag as one undo step (`SetAudioSendGainCommand`).
     AudioSendGainDragCommit(AudioSendId),
+    /// P4 (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` D8, audio-dock sibling):
+    /// double-click on the gain value cell opens its type-in box. Carries
+    /// the send id, the current gain (dB) to prefill, and the cell's own
+    /// node id (the app resolves its screen rect at open time — same
+    /// convention as `SceneSetupBeginNumericTextInput`).
+    AudioSendGainBeginTextInput(AudioSendId, f32, crate::node::NodeId),
+    /// P4 type-in commit: set a send's gain to an EXACT typed value, ONE
+    /// undo step, NO clamp (`PARAM_RANGE_CONTRACT` P1 — unlike
+    /// `AudioSendGainDragChanged`'s live-drag clamp to the trim range).
+    AudioSendGainSetTyped(AudioSendId, f32),
     /// Step the selected send's pre-analysis noise floor by a dB delta (the
     /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
     AudioSendFloorStep(AudioSendId, f32),

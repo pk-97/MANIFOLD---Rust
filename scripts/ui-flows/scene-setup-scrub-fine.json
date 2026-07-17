@@ -1,0 +1,118 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Scene" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Environment" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "+ Add Fog" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Fog" } },
+      "gesture": { "Scroll": { "delta": { "x": 0.0, "y": 300.0 } } }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Fog" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.00" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.fog.density_value" } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 902.75, "y": 728.0 } }, "steps": 8 } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.30" } },
+      "check": "Exists"
+    }
+  },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.00" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.fog.density_value" } },
+      "gesture": { "Click": { "modifiers": { "shift": true } } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.fog.density_value" } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 902.75, "y": 728.0 } }, "steps": 8 } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.03" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "scene_setup.fog.density_value" } },
+      "gesture": { "Drag": { "to": { "Point": { "x": 1307.75, "y": 728.0 } }, "steps": 8 } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.42" } },
+      "check": "Exists"
+    }
+  },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "scene_setup.fog.density_value", "text": "0.00" } },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

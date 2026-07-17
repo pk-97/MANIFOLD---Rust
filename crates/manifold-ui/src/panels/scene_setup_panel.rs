@@ -572,6 +572,11 @@ struct ValueDrag {
     start_value: f32,
     min: f32,
     max: f32,
+    /// Shift held at drag-start (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4,
+    /// D8): the applied per-pixel delta is multiplied by 0.1 for the life of
+    /// the drag — the performer's precision-landing gesture (e.g. Fog
+    /// density to exactly 0.42, mid-set, one hand).
+    fine: bool,
 }
 
 /// One numeric row's interactive node ids, set by `build_numeric_row` when
@@ -645,6 +650,13 @@ pub struct ScenePanel {
     /// P5: `(node_id, group_node_id, type_id)` for every "Add modifier" chip
     /// built this frame.
     modifier_add_ids: Vec<(NodeId, u32, String)>,
+    /// P4 (D9): every Objects-scoped enum value cell built this frame
+    /// (modifier Axis rows) — `(cell_node_id, row, labels)`. A cell here
+    /// with `labels.len() >= 3` opens the dropdown on click; a 2-label cell
+    /// stays a stepper (its `[-]/[+]` cycle lives in `object_steppers`, same
+    /// as every other enum row — this vector only exists to route the
+    /// VALUE cell's own click, which the `[-]/[+]` steppers don't cover).
+    object_enum_cells: Vec<(NodeId, RowValue, Vec<&'static str>)>,
     /// P3 Lights section fold state — same convention as `object_expanded`.
     light_expanded: std::collections::HashMap<usize, bool>,
     /// P3 Lights-row drag-armable value cells (color/pos/aim triplets) —
@@ -661,6 +673,10 @@ pub struct ScenePanel {
     /// built this frame — resolves a remove-button click to
     /// `PanelAction::SceneSetupRemoveLight`.
     light_remove_ids: Vec<(NodeId, usize)>,
+    /// P4 (D9): every Lights-scoped enum value cell built this frame (mode /
+    /// cast_shadows / shadow_softness) — same convention as
+    /// `object_enum_cells`.
+    light_enum_cells: Vec<(NodeId, RowValue, Vec<&'static str>)>,
     /// P3 Camera-row drag-armable value cells — same convention as
     /// `object_value_cells`, but the Camera section holds exactly one row
     /// set (no per-index list).
@@ -704,11 +720,13 @@ impl Default for ScenePanel {
             modifier_remove_ids: Vec::new(),
             modifier_move_ids: Vec::new(),
             modifier_add_ids: Vec::new(),
+            object_enum_cells: Vec::new(),
             light_expanded: std::collections::HashMap::new(),
             light_value_cells: Vec::new(),
             light_steppers: Vec::new(),
             light_expand_ids: Vec::new(),
             light_remove_ids: Vec::new(),
+            light_enum_cells: Vec::new(),
             camera_value_cells: Vec::new(),
             camera_steppers: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -819,10 +837,12 @@ impl ScenePanel {
         self.modifier_remove_ids.clear();
         self.modifier_move_ids.clear();
         self.modifier_add_ids.clear();
+        self.object_enum_cells.clear();
         self.light_value_cells.clear();
         self.light_steppers.clear();
         self.light_expand_ids.clear();
         self.light_remove_ids.clear();
+        self.light_enum_cells.clear();
         self.camera_value_cells.clear();
         self.camera_steppers.clear();
 
@@ -1408,7 +1428,10 @@ impl ScenePanel {
     /// stepper delta is always `1.0` (round to the next label). Not
     /// drag-armable — a label index isn't a continuous quantity to scrub,
     /// so unlike numeric/triplet cells this value cell isn't pushed into
-    /// `light_value_cells`.
+    /// `light_value_cells`. It IS pushed into `light_enum_cells` (P4, D9):
+    /// a click on a 3+-label row (e.g. `shadow_softness`) opens the
+    /// dropdown; a 2-label row (`mode`, `cast_shadows`) stays a stepper —
+    /// the `[-]/[+]` buttons above already cycle it either way.
     fn build_light_enum_row(
         &mut self,
         tree: &mut UITree,
@@ -1467,6 +1490,7 @@ impl ScenePanel {
             light_key(index, base_offset + 2),
         );
         self.light_steppers.push((minus_id, row.clone(), -1.0));
+        self.light_enum_cells.push((value_id, row.clone(), enum_row.labels.clone()));
         self.light_steppers.push((plus_id, row.clone(), 1.0));
         cy + ROW_H
     }
@@ -1547,14 +1571,20 @@ impl ScenePanel {
         base_offset: u64,
     ) -> f32 {
         tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
+        let degrees = is_degrees_param(&row.addr.param_id);
         if row.driven {
+            let text = if degrees {
+                format!("{:.1}\u{00b0} (driven)", row.value.to_degrees())
+            } else {
+                format!("{:.2} (driven)", row.value)
+            };
             tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 inner_w - LABEL_W,
                 ROW_H,
-                &format!("{:.2} (driven)", row.value),
+                &text,
                 driven_label_style(),
             );
             return cy + ROW_H;
@@ -1563,6 +1593,10 @@ impl ScenePanel {
         let minus_id = tree.add_button_keyed(
             Some(self.content_parent), step_x, cy, STEP_W, ROW_H, btn_style(), "\u{2212}", CAMERA_KEY_BASE + base_offset,
         );
+        // D10: the committed degrees rows (orbit/tilt/yaw/pitch/roll/fov_y)
+        // display `%.1f°`; storage/commit still speak radians (`row.value`).
+        let display_text =
+            if degrees { format!("{:.1}\u{00b0}", row.value.to_degrees()) } else { format!("{:.2}", row.value) };
         let value_id = tree.add_button_keyed(
             Some(self.content_parent),
             step_x + STEP_W,
@@ -1570,7 +1604,7 @@ impl ScenePanel {
             VALUE_W,
             ROW_H,
             drag_value_style(),
-            &format!("{:.2}", row.value),
+            &display_text,
             CAMERA_KEY_BASE + base_offset + 1,
         );
         if let Some(name) = camera_numeric_row_automation_name(base_offset) {
@@ -1989,6 +2023,7 @@ impl ScenePanel {
             modifier_row_key(object_index, modifier_index, base + 2),
         );
         self.object_steppers.push((minus_id, row.clone(), -1.0));
+        self.object_enum_cells.push((value_id, row.clone(), enum_row.labels.clone()));
         self.object_steppers.push((plus_id, row.clone(), 1.0));
         cy + ROW_H
     }
@@ -2050,18 +2085,31 @@ impl ScenePanel {
         let cell_w = ((inner_w - LABEL_W) / 3.0 - 2.0).max(20.0);
         for (i, row) in [&triplet.0, &triplet.1, &triplet.2].into_iter().enumerate() {
             let x = cell_x + i as f32 * (cell_w + 2.0);
+            let degrees = is_degrees_param(&row.addr.param_id);
             if row.driven {
+                let text = if degrees {
+                    format!("{:.1}\u{00b0}\u{2022}", row.value.to_degrees())
+                } else {
+                    format!("{:.2}\u{2022}", row.value)
+                };
                 tree.add_label(
                     Some(self.content_parent),
                     x,
                     cy,
                     cell_w,
                     ROW_H,
-                    &format!("{:.2}\u{2022}", row.value),
+                    &text,
                     driven_label_style(),
                 );
                 continue;
             }
+            // D10: the committed degrees rows (`transform_3d.rot_*`) display
+            // `%.1f°`; storage/commit still speak radians (`row.value`).
+            let text = if degrees {
+                format!("{:.1}\u{00b0}", row.value.to_degrees())
+            } else {
+                format!("{:.2}", row.value)
+            };
             let cell_id = tree.add_button_keyed(
                 Some(self.content_parent),
                 x,
@@ -2069,7 +2117,7 @@ impl ScenePanel {
                 cell_w,
                 ROW_H,
                 drag_value_style(),
-                &format!("{:.2}", row.value),
+                &text,
                 obj_key(index, base_offset + i as u64),
             );
             // Stable automation name (same fix as `build_numeric_row`'s
@@ -2283,6 +2331,27 @@ impl ScenePanel {
                             row_value.addr.param_id.clone(),
                             new_value,
                         ));
+                    } else if let Some((cell_id, row_value, labels)) = self
+                        .object_enum_cells
+                        .iter()
+                        .chain(self.light_enum_cells.iter())
+                        .find(|(id, _, _)| *id == *node_id)
+                    {
+                        // D9: 3+-label enum cells open the dropdown; 2-label
+                        // cells stay a stepper (the `[-]/[+]` cycle above
+                        // already covers them — this arm never fires for a
+                        // 2-label row, so there's nothing to leave dead).
+                        if labels.len() >= 3 && !row_value.driven {
+                            actions.push(PanelAction::SceneSetupEnumClicked {
+                                layer_id: vm.layer_id.clone(),
+                                scope_path: row_value.addr.scope_path.clone(),
+                                node_doc_id: row_value.addr.node_doc_id,
+                                param_id: row_value.addr.param_id.clone(),
+                                labels: labels.clone(),
+                                current_index: row_value.value.round().max(0.0) as u32,
+                                cell_node_id: *cell_id,
+                            });
+                        }
                     }
                 }
                 match &self.state {
@@ -2296,7 +2365,56 @@ impl ScenePanel {
                 }
                 (!actions.is_empty() || *node_id == self.close_id, actions)
             }
-            UIEvent::PointerDown { node_id, pos, .. } => {
+            // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8): double-click on a
+            // drag-armable value cell opens its type-in box. Reuses the
+            // EXACT lookup PointerDown uses below (row_ids fixed rows +
+            // object/light/camera_value_cells) — the same set arms both
+            // gestures by construction, which is the drag/type-in
+            // registration parity `dock_numeric_cells_register_full_contract`
+            // checks.
+            UIEvent::DoubleClick { node_id, .. } => {
+                if let SceneSetupState::Live(vm) = &self.state {
+                    let intent = crate::value_cell::ValueCell::intent_for(
+                        crate::value_cell::ValueCellZone::Cell,
+                        crate::value_cell::ValueCellGesture::DoubleClick,
+                    );
+                    debug_assert_eq!(
+                        intent,
+                        Some(crate::value_cell::ValueCellIntent::EditValue),
+                        "DoubleClick on a value cell must resolve to EditValue (D8's contract)"
+                    );
+                    let row_value = self
+                        .value_label_row_at(*node_id)
+                        .and_then(|row| self.row_value_for(vm, row))
+                        .or_else(|| {
+                            self.object_value_cells
+                                .iter()
+                                .chain(self.light_value_cells.iter())
+                                .chain(self.camera_value_cells.iter())
+                                .find(|(id, _)| *id == *node_id)
+                                .map(|(_, rv)| rv.clone())
+                        });
+                    if let Some(row_value) = row_value
+                        && !row_value.driven
+                        && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
+                    {
+                        return (
+                            true,
+                            vec![PanelAction::SceneSetupBeginNumericTextInput {
+                                layer_id: vm.layer_id.clone(),
+                                scope_path: row_value.addr.scope_path.clone(),
+                                node_doc_id: row_value.addr.node_doc_id,
+                                param_id: row_value.addr.param_id.clone(),
+                                value: row_value.value,
+                                cell_node_id: *node_id,
+                                degrees: is_degrees_param(&row_value.addr.param_id),
+                            }],
+                        );
+                    }
+                }
+                (false, Vec::new())
+            }
+            UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if let SceneSetupState::Live(vm) = &self.state {
                     if let Some(row) = self.value_label_row_at(*node_id)
                         && let Some(row_value) = self.row_value_for(vm, row)
@@ -2310,6 +2428,7 @@ impl ScenePanel {
                                 start_value: row_value.value,
                                 min: row_value.min,
                                 max: row_value.max,
+                                fine: modifiers.shift,
                             },
                             *pos,
                         );
@@ -2331,6 +2450,7 @@ impl ScenePanel {
                                 start_value: row_value.value,
                                 min: row_value.min,
                                 max: row_value.max,
+                                fine: modifiers.shift,
                             },
                             *pos,
                         );
@@ -2342,10 +2462,23 @@ impl ScenePanel {
             UIEvent::DragBegin { .. } => (self.drag.is_active(), Vec::new()),
             UIEvent::Drag { pos, .. } => match (self.drag.payload().cloned(), self.drag_layer_id.clone()) {
                 (Some(drag), Some(layer_id)) => {
-                    // 1 px = 0.01 units — the same order-of-magnitude scrub
-                    // rate the audio dock's gain drag uses (0.1 dB/px),
-                    // scaled for these params' typical [0, ~2] ranges.
-                    let new_value = (drag.start_value + (pos.x - drag.start_x) * 0.01).clamp(drag.min, drag.max);
+                    // D8: Shift held at drag-start ("fine") multiplies the
+                    // applied per-pixel delta by 0.1. D10: the committed
+                    // degrees-display rows scrub in degrees (0.5°/px, fine
+                    // 0.05°/px) converted to the radians the graph stores —
+                    // the ONLY place that conversion happens; everywhere
+                    // else keeps the existing 1 px = 0.01 units rate (the
+                    // audio dock's 0.1 dB/px order of magnitude, scaled for
+                    // these params' typical [0, ~2] ranges).
+                    let dx = pos.x - drag.start_x;
+                    let delta = if is_degrees_param(&drag.addr.param_id) {
+                        let deg_per_px = if drag.fine { 0.05 } else { 0.5 };
+                        (dx * deg_per_px).to_radians()
+                    } else {
+                        let unit_per_px = if drag.fine { 0.001 } else { 0.01 };
+                        dx * unit_per_px
+                    };
+                    let new_value = (drag.start_value + delta).clamp(drag.min, drag.max);
                     (
                         true,
                         vec![PanelAction::SceneSetupParamChanged(
@@ -2432,6 +2565,18 @@ impl ScenePanel {
         let (_, node_id, _) = self.object_name_ids.iter().find(|(gid, _, _)| *gid == group_node_id)?;
         Some(tree.get_bounds(*node_id))
     }
+}
+
+/// D10's committed degrees-display row table, checked by `param_id` alone:
+/// `transform_3d.rot_x/y/z`, `orbit_camera.orbit`/`tilt`, `free_camera`'s
+/// `yaw`/`pitch`/`roll`, and `fov_y` (shared by all three camera atoms).
+/// These names are otherwise unambiguous within the dock's curated
+/// vocabulary, so a bare string match is the whole boundary — conversion
+/// lives ONLY here + the triplet/camera-row formatters and the drag/type-in
+/// commit paths that consult this fn; graph defs, commands, cards, and node
+/// faces stay in radians, untouched.
+fn is_degrees_param(param_id: &str) -> bool {
+    matches!(param_id, "rot_x" | "rot_y" | "rot_z" | "orbit" | "tilt" | "yaw" | "pitch" | "roll" | "fov_y")
 }
 
 /// Generic stepper hit test over a variable-length list built this frame —
@@ -3199,5 +3344,189 @@ mod tests {
         panel2.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
         // Position triplet (3) + Target triplet (3) + fov = 7 value cells.
         assert_eq!(panel2.camera_value_cells.len(), 7);
+    }
+
+    /// SCENE_OBJECT_AND_PANEL_V2_DESIGN.md §4 invariant: every drag-armable
+    /// value cell built by the dock is ALSO in the type-in registration set,
+    /// and vice versa. PointerDown and DoubleClick resolve through the exact
+    /// same lookup in `handle_event` (`value_label_row_at`/`row_value_for` +
+    /// the `object`/`light`/`camera_value_cells` chain), so this drives both
+    /// gestures on every cell built by the azalea fixture and asserts both
+    /// are consumed.
+    #[test]
+    fn dock_numeric_cells_register_full_contract() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let mut cell_ids: Vec<NodeId> = panel.row_ids.iter().filter_map(|ids| ids.value).collect();
+        cell_ids.extend(panel.object_value_cells.iter().map(|(id, _)| *id));
+        cell_ids.extend(panel.light_value_cells.iter().map(|(id, _)| *id));
+        cell_ids.extend(panel.camera_value_cells.iter().map(|(id, _)| *id));
+        assert!(!cell_ids.is_empty(), "azalea fixture must exercise at least one drag-armable cell");
+
+        for id in cell_ids {
+            let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
+                node_id: id,
+                pos: Vec2::ZERO,
+                modifiers: crate::input::Modifiers::default(),
+            });
+            assert!(drag_consumed, "cell {id:?} must be drag-armable");
+            panel.handle_event(&UIEvent::PointerUp { node_id: Some(id), pos: Vec2::ZERO });
+
+            let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                node_id: id,
+                pos: Vec2::ZERO,
+                modifiers: crate::input::Modifiers::default(),
+            });
+            assert!(typein_consumed, "cell {id:?} must also open type-in (registration parity)");
+            assert!(
+                matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
+            );
+        }
+    }
+
+    /// P4, D8: Shift held at drag-start makes the applied delta 0.1× the
+    /// unmodified rate — the performer's precision-landing gesture. Drives
+    /// the SAME pixel travel with and without Shift and asserts the ratio.
+    #[test]
+    fn shift_drag_applies_a_tenth_the_delta() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (light_id, light_row) = panel
+            .light_value_cells
+            .iter()
+            .find(|(_, row)| row.addr.param_id == "intensity")
+            .cloned()
+            .expect("azalea fixture has a light intensity cell");
+
+        // Coarse: no Shift.
+        panel.handle_event(&UIEvent::PointerDown {
+            node_id: light_id,
+            pos: Vec2::new(0.0, 0.0),
+            modifiers: crate::input::Modifiers::default(),
+        });
+        let (_, coarse_actions) =
+            panel.handle_event(&UIEvent::Drag { node_id: Some(light_id), pos: Vec2::new(20.0, 0.0), delta: Vec2::ZERO });
+        panel.handle_event(&UIEvent::PointerUp { node_id: Some(light_id), pos: Vec2::new(20.0, 0.0) });
+        let PanelAction::SceneSetupParamChanged(.., coarse_value) = &coarse_actions[0] else {
+            panic!("expected SceneSetupParamChanged");
+        };
+        let coarse_delta = coarse_value - light_row.value;
+
+        // Fine: Shift held at PointerDown.
+        panel.handle_event(&UIEvent::PointerDown {
+            node_id: light_id,
+            pos: Vec2::new(0.0, 0.0),
+            modifiers: crate::input::Modifiers { shift: true, ..Default::default() },
+        });
+        let (_, fine_actions) =
+            panel.handle_event(&UIEvent::Drag { node_id: Some(light_id), pos: Vec2::new(20.0, 0.0), delta: Vec2::ZERO });
+        panel.handle_event(&UIEvent::PointerUp { node_id: Some(light_id), pos: Vec2::new(20.0, 0.0) });
+        let PanelAction::SceneSetupParamChanged(.., fine_value) = &fine_actions[0] else {
+            panic!("expected SceneSetupParamChanged");
+        };
+        let fine_delta = fine_value - light_row.value;
+
+        assert!(
+            (fine_delta - coarse_delta * 0.1).abs() < 1e-4,
+            "fine delta ({fine_delta}) must be 0.1x the coarse delta ({coarse_delta})"
+        );
+    }
+
+    /// P4, D9: clicking a 3+-label enum value cell (shadow_softness, 4
+    /// labels) emits `SceneSetupEnumClicked` with the full label set; a
+    /// 2-label row (`mode`) stays a dead click on the VALUE cell (its
+    /// `[-]/[+]` steppers already cycle it — `light_steppers` covers that,
+    /// unchanged by this phase).
+    #[test]
+    fn shadow_softness_value_cell_click_opens_dropdown_mode_does_not() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let (softness_id, _, softness_labels) = panel
+            .light_enum_cells
+            .iter()
+            .find(|(_, row, _)| row.addr.param_id == "shadow_softness")
+            .cloned()
+            .expect("azalea fixture has a shadow_softness enum cell");
+        assert_eq!(softness_labels.len(), 4);
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: softness_id,
+            pos: Vec2::ZERO,
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(consumed);
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::SceneSetupEnumClicked { labels, .. }] if labels.len() == 4),
+            "shadow_softness click must open the dropdown with all 4 labels, got {actions:?}"
+        );
+
+        let (mode_id, _, mode_labels) = panel
+            .light_enum_cells
+            .iter()
+            .find(|(_, row, _)| row.addr.param_id == "mode")
+            .cloned()
+            .expect("azalea fixture has a mode enum cell");
+        assert_eq!(mode_labels.len(), 2);
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: mode_id,
+            pos: Vec2::ZERO,
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(actions.is_empty(), "a 2-label enum cell's VALUE click stays a dead stop (steppers cycle it)");
+    }
+
+    /// P4, D10: the rotation triplet displays degrees (`%.1f°`), not the
+    /// stored radians — the conversion happens ONLY at this display
+    /// boundary (the underlying `RowValue.value` stays radians).
+    #[test]
+    fn rotation_triplet_displays_degrees_not_radians() {
+        let mut vm = azalea_shaped_vm();
+        if let ObjectRowVm::Known(row) = &mut vm.objects[0]
+            && let Some(t) = &mut row.transform
+        {
+            // The shared `triplet()` fixture helper stamps a generic "x"/"y"/"z"
+            // param_id for every triplet (pos/rot/scale alike) — production
+            // (`scene_vm.rs`) distinguishes `rot_x`/`rot_y`/`rot_z`; fix the
+            // addr up so this test exercises the real degrees-row name.
+            t.rot.0.addr.param_id = "rot_x".to_string();
+            t.rot.0.value = std::f32::consts::FRAC_PI_2; // 90°
+        }
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (rot_x_id, rot_x_row) = panel
+            .object_value_cells
+            .iter()
+            .find(|(_, row)| row.addr.param_id == "rot_x")
+            .cloned()
+            .expect("azalea fixture has a rot_x cell");
+        assert!((rot_x_row.value - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "stored value stays radians");
+        let text = tree.get_node(rot_x_id).unwrap().text.clone().unwrap();
+        assert_eq!(text, "90.0\u{00b0}", "display converts to degrees at the panel boundary");
+    }
+
+    /// P4, D10: typing "45" into a rot cell must land 0.7853981 rad (π/4) —
+    /// the commit-side half of the degrees boundary. Exercised directly
+    /// against `is_degrees_param` + the conversion the commit path applies,
+    /// since the actual text-input session lives in `manifold-app`.
+    #[test]
+    fn degrees_row_type_in_parses_to_radians() {
+        assert!(is_degrees_param("rot_x"));
+        let typed: f32 = "45".parse().unwrap();
+        let radians = typed.to_radians();
+        assert!((radians - 0.7853981).abs() < 1e-5);
     }
 }

@@ -42,6 +42,7 @@ pub mod transform2d;
 pub mod tree;
 pub mod types;
 pub mod ui_state;
+pub mod value_cell;
 pub mod view;
 pub mod waveform_painter;
 pub mod waveform_renderer;

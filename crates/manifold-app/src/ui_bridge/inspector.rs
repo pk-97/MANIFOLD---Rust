@@ -1896,6 +1896,22 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
+        // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8, audio-dock sibling):
+        // the type-in commit — ONE undo step, no clamp. Unlike
+        // `AudioSendGainDragChanged`'s live-drag path, a typed value is free
+        // to exceed `AUDIO_SEND_GAIN_MIN_DB`/`MAX_DB` (PARAM_RANGE_CONTRACT
+        // P1: those are the stepper's display travel, not a hard limit).
+        PanelAction::AudioSendGainSetTyped(id, new_db) => {
+            let old = project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(0.0);
+            if (new_db - old).abs() < f32::EPSILON {
+                return DispatchResult::structural();
+            }
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendGainCommand::new(id.clone(), old, *new_db)),
+            )
+        }
         PanelAction::AudioSendFloorStep(id, delta_db) => {
             // Pre-analysis squelch (dB). Off is a sentinel below the usable range:
             // stepping up from off engages the gate at its bottom; stepping below

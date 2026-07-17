@@ -1070,6 +1070,86 @@ impl Application {
                     }
                 }
             }
+            TextInputField::SceneNumericParam(node_doc_id) => {
+                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10. Lenient
+                // parse (same convention as InspectorParam): keep only the
+                // numeric head so a value typed with a trailing unit (e.g.
+                // "45°") still commits. NO clamp — PARAM_RANGE_CONTRACT P1.
+                if let Some(ctx) = self.text_input.scene_numeric_param.take()
+                    && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
+                {
+                    // D10: the panel boundary is the ONLY place a
+                    // degrees-typed value converts to the radians the
+                    // graph stores.
+                    let value = crate::text_input::scene_numeric_commit_value(parsed, ctx.degrees);
+                    let content_tx = self.content_tx.as_ref().unwrap().clone();
+                    use manifold_ui::panels::PanelAction;
+                    // ONE dispatch = ONE undo unit — the exact write the
+                    // dock's own drag/steppers already use
+                    // (`SceneSetupParamChanged`), so type-in is not a
+                    // second mutation path.
+                    let act = PanelAction::SceneSetupParamChanged(
+                        ctx.layer_id,
+                        ctx.scope_path,
+                        node_doc_id,
+                        ctx.param_id,
+                        value,
+                    );
+                    let _ = crate::ui_bridge::dispatch(
+                        &act,
+                        &mut self.local_project,
+                        &content_tx,
+                        &self.content_state,
+                        &mut self.ws.ui_root,
+                        &mut self.selection,
+                        &mut self.active_layer_id,
+                        &mut self.slider_snapshot,
+                        &mut self.trim_snapshot,
+                        &mut self.target_snapshot,
+                        &mut self.decay_snapshot,
+                        &mut self.audio_shape_snapshot,
+                        &mut self.audio_action_snapshot,
+                        &mut self.audio_crossover_snapshot,
+                        &mut self.audio_send_gain_drag_snapshot,
+                        &mut self.user_prefs,
+                        &mut self.active_inspector_drag,
+                        None,
+                    );
+                    self.needs_rebuild = true;
+                }
+            }
+            TextInputField::AudioSendGainParam => {
+                // P4 audio-dock sibling — same lenient-parse, no-clamp,
+                // one-dispatch shape as `SceneNumericParam` above.
+                if let Some(ctx) = self.text_input.audio_send_gain_param.take()
+                    && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
+                {
+                    let content_tx = self.content_tx.as_ref().unwrap().clone();
+                    use manifold_ui::panels::PanelAction;
+                    let act = PanelAction::AudioSendGainSetTyped(ctx.send_id, parsed);
+                    let _ = crate::ui_bridge::dispatch(
+                        &act,
+                        &mut self.local_project,
+                        &content_tx,
+                        &self.content_state,
+                        &mut self.ws.ui_root,
+                        &mut self.selection,
+                        &mut self.active_layer_id,
+                        &mut self.slider_snapshot,
+                        &mut self.trim_snapshot,
+                        &mut self.target_snapshot,
+                        &mut self.decay_snapshot,
+                        &mut self.audio_shape_snapshot,
+                        &mut self.audio_action_snapshot,
+                        &mut self.audio_crossover_snapshot,
+                        &mut self.audio_send_gain_drag_snapshot,
+                        &mut self.user_prefs,
+                        &mut self.active_inspector_drag,
+                        None,
+                    );
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::DriverFreePeriod => {
                 if let Some(ctx) = self.text_input.driver_free_period.take() {
                     // Lenient parse: keep the numeric head (so "3 b" still works).

@@ -1958,6 +1958,54 @@ impl Application {
                     });
                     continue;
                 }
+                PanelAction::SceneSetupBeginNumericTextInput {
+                    layer_id,
+                    scope_path,
+                    node_doc_id,
+                    param_id,
+                    value,
+                    cell_node_id,
+                    degrees,
+                } => {
+                    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10: same
+                    // early-intercept shape as `BeginParamTextInput` above.
+                    // The panel has no `&UITree` in `handle_event`, so the
+                    // cell's anchor rect is resolved here from its own node
+                    // id. D10: degrees rows prefill in degrees (the panel
+                    // boundary is the ONLY place this conversion happens —
+                    // the stored `value` stays radians).
+                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
+                    let display = if *degrees { value.to_degrees() } else { *value };
+                    let initial = format!("{display:.3}");
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::SceneNumericParam(*node_doc_id),
+                        &initial,
+                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                        11.0,
+                    );
+                    self.text_input.scene_numeric_param =
+                        Some(crate::text_input::SceneNumericParamCtx {
+                            layer_id: layer_id.clone(),
+                            scope_path: scope_path.clone(),
+                            param_id: param_id.clone(),
+                            degrees: *degrees,
+                        });
+                    continue;
+                }
+                PanelAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id) => {
+                    // P4 audio-dock sibling of `SceneSetupBeginNumericTextInput`.
+                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
+                    let initial = format!("{value:.1}");
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::AudioSendGainParam,
+                        &initial,
+                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                        11.0,
+                    );
+                    self.text_input.audio_send_gain_param =
+                        Some(crate::text_input::AudioSendGainParamCtx { send_id: send_id.clone() });
+                    continue;
+                }
                 PanelAction::BeginDriverPeriodTextInput {
                     target,
                     param_id,
