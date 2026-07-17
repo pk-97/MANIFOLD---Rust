@@ -736,8 +736,27 @@ impl InteractionOverlay {
         // P4 Unit A (`docs/AUTOMATION_LANES_DESIGN.md` §7): a click inside an
         // automation lane strip is handled entirely here — click-on-line adds
         // a breakpoint, click-on-dot selects it, double-click-on-dot deletes
-        // it — and never falls through to clip/region logic below. Right-
-        // clicks are left alone (no automation context menu in Unit A).
+        // it — and never falls through to clip/region logic below.
+        //
+        // BUG-184: a right-click on a lane (strip, segment, or dot) opens the
+        // lane's context menu (Clear Automation / Remove Lane) instead of
+        // falling through to clip/track right-click handling — resolved
+        // BEFORE the left-click automation handler below so a right-click
+        // never mutates a point.
+        if is_right_button {
+            let lanes = viewport.automation_lane_screens(&[]);
+            if let Some(hit) = automation_hit_tester::hit_test_automation(pos, &lanes) {
+                let lane_index = match hit {
+                    AutomationHit::Dot { lane_index, .. }
+                    | AutomationHit::Segment { lane_index, .. }
+                    | AutomationHit::Strip { lane_index } => lane_index,
+                };
+                let lane = &lanes[lane_index];
+                host.on_automation_lane_right_click(&lane.target, &lane.param_id, pos);
+                return;
+            }
+        }
+
         if !is_right_button
             && self.handle_automation_click(pos, click_count, host, ui_state, viewport)
         {
@@ -2621,6 +2640,13 @@ mod b4_group_move_tests {
         fn on_clip_selected(&mut self, _clip_id: &str) {}
         fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {}
         fn on_track_right_click(&mut self, _beat: Beats, _layer_index: usize, _screen_pos: Vec2) {}
+        fn on_automation_lane_right_click(
+            &mut self,
+            _target: &UiGraphTarget,
+            _param_id: &ParamId,
+            _screen_pos: Vec2,
+        ) {
+        }
         fn inspect_layer(&mut self, _layer_index: usize) {}
         fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
         fn invalidate_all_layer_bitmaps(&mut self) {}
@@ -2930,6 +2956,8 @@ mod p1_4_gesture_integrity_tests {
             Vec<(Beats, f32, UiSegmentShape)>,
             Option<Vec<(Beats, f32, UiSegmentShape)>>,
         )>,
+        // BUG-184: records every `on_automation_lane_right_click` call.
+        automation_lane_right_clicks: Vec<(UiGraphTarget, ParamId)>,
     }
 
     impl GestureTestHost {
@@ -2955,6 +2983,7 @@ mod p1_4_gesture_integrity_tests {
                 automation_segment_drag_commits: Vec::new(),
                 automation_group_move_commits: Vec::new(),
                 automation_draw_commits: Vec::new(),
+                automation_lane_right_clicks: Vec::new(),
             }
         }
 
@@ -3076,6 +3105,14 @@ mod p1_4_gesture_integrity_tests {
         fn on_clip_selected(&mut self, _clip_id: &str) {}
         fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {}
         fn on_track_right_click(&mut self, _beat: Beats, _layer_index: usize, _screen_pos: Vec2) {}
+        fn on_automation_lane_right_click(
+            &mut self,
+            target: &UiGraphTarget,
+            param_id: &ParamId,
+            _screen_pos: Vec2,
+        ) {
+            self.automation_lane_right_clicks.push((target.clone(), param_id.clone()));
+        }
         fn inspect_layer(&mut self, _layer_index: usize) {}
         fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {}
         fn invalidate_all_layer_bitmaps(&mut self) {}
@@ -3361,6 +3398,28 @@ mod p1_4_gesture_integrity_tests {
         let (_, _, old, new) = &host.automation_point_moves[0];
         assert_eq!(old.0, Beats::from_f32(4.0), "old beat must be the grabbed point's original beat");
         assert!(new.1 > old.1, "dragging up must raise the value");
+    }
+
+    /// BUG-184: a right-click on an automation lane's dot opens the lane's
+    /// context menu (via `on_automation_lane_right_click`) instead of falling
+    /// through to `handle_automation_click`'s point-delete/select logic —
+    /// the panel/dispatch layer (BUG_BACKLOG.md's fix note) is only reachable
+    /// if this routing decision is made correctly first.
+    #[test]
+    fn right_click_on_automation_dot_opens_lane_context_menu_not_point_logic() {
+        let panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut ui_state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+
+        let pos = dot_pos(&panel, 0);
+        overlay.on_pointer_click(pos, false, false, 1, true, &mut host, &mut ui_state, &panel);
+
+        assert_eq!(host.automation_lane_right_clicks.len(), 1, "exactly one lane right-click recorded");
+        assert!(
+            ui_state.selected_automation_point.is_none(),
+            "a right-click must never select/mutate a point — only the left-click path does"
+        );
     }
 
     #[test]

@@ -2442,6 +2442,223 @@ impl Command for AddSceneLightCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Remove Scene Object / Remove Scene Light (BUG-193)
+// ---------------------------------------------------------------------------
+
+/// Shift every wire into `to_node` whose `to_port` is `{prefix}_{j}` for
+/// `j > removed_index` down by one (`{prefix}_{j-1}`) — the renumbering half
+/// of a scene-object/light removal, so the surviving slots stay a dense
+/// `0..objects`/`0..lights` run with no gap left by the removed index.
+fn shift_indexed_ports_down(wires: &mut [EffectGraphWire], to_node: u32, prefix: &str, removed_index: u32) {
+    let needle = format!("{prefix}_");
+    for w in wires.iter_mut() {
+        if w.to_node != to_node {
+            continue;
+        }
+        if let Some(idx_str) = w.to_port.strip_prefix(&needle)
+            && let Ok(idx) = idx_str.parse::<u32>()
+            && idx > removed_index
+        {
+            w.to_port = format!("{prefix}_{}", idx - 1);
+        }
+    }
+}
+
+/// The remove-object gesture (BUG-193): the inverse of
+/// [`AddSceneObjectCommand`] — one undoable composite edit that (1) deletes
+/// the object's group node and its three root wires (`mesh_k`/`transform_k`/
+/// `material_k` → `render_scene`), (2) decrements `objects`, (3) renumbers
+/// every wire whose object-port index exceeds `k` down by one so the slots
+/// stay dense. Same whole-level snapshot/restore undo shape as
+/// `AddSceneObjectCommand` — a structural composite edit, not a hand-reversed
+/// sequence of sub-steps.
+///
+/// `object_index` (`k`, the 0-based slot in `mesh_k`/`material_k`/
+/// `transform_k`) is resolved by the caller from the live Vm's own
+/// `ObjectKnownRow::index` — not re-derived here, same "UI's already-resolved
+/// index is the one source of truth" posture `AddSceneObjectCommand::next_index`
+/// documents.
+#[derive(Debug)]
+pub struct RemoveSceneObjectCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    object_index: u32,
+    catalog_default: EffectGraphDef,
+    /// The level's `(nodes, wires)` before this edit. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl RemoveSceneObjectCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        object_index: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            object_index,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for RemoveSceneObjectCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.object_index;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let mesh_port = format!("mesh_{k}");
+            let group_id = wires
+                .iter()
+                .find(|w| w.to_node == render_id && w.to_port == mesh_port)
+                .map(|w| w.from_node)?;
+
+            let current_objects = match nodes.iter().find(|n| n.id == render_id)?.params.get("objects") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                _ => return None,
+            };
+
+            nodes.retain(|n| n.id != group_id);
+            wires.retain(|w| {
+                !(w.to_node == render_id
+                    && (w.to_port == format!("mesh_{k}")
+                        || w.to_port == format!("material_{k}")
+                        || w.to_port == format!("transform_{k}")))
+            });
+            for prefix in ["mesh", "material", "transform"] {
+                shift_indexed_ports_down(wires, render_id, prefix, k);
+            }
+
+            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                "objects".to_string(),
+                SerializedParamValue::Float {
+                    value: (current_objects - 1.0).max(0.0),
+                },
+            );
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Remove Object"
+    }
+}
+
+/// The remove-light gesture (BUG-193): the inverse of
+/// [`AddSceneLightCommand`] — one undoable composite edit that (1) deletes
+/// the bare light node and its single `light_k` wire, (2) decrements
+/// `lights`, (3) renumbers every `light_j` (`j > k`) wire down by one. Same
+/// whole-level snapshot/restore undo shape as `RemoveSceneObjectCommand`, but
+/// single-port (no triplet) since a light is a bare node, not a group.
+#[derive(Debug)]
+pub struct RemoveSceneLightCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    render_scene_node_id: u32,
+    light_index: u32,
+    catalog_default: EffectGraphDef,
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+}
+
+impl RemoveSceneLightCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        render_scene_node_id: u32,
+        light_index: u32,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            light_index,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for RemoveSceneLightCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let render_id = self.render_scene_node_id;
+        let k = self.light_index;
+        let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+            let prev = (nodes.clone(), wires.clone());
+
+            let light_port = format!("light_{k}");
+            let light_id = wires
+                .iter()
+                .find(|w| w.to_node == render_id && w.to_port == light_port)
+                .map(|w| w.from_node)?;
+
+            let current_lights = match nodes.iter().find(|n| n.id == render_id)?.params.get("lights") {
+                Some(SerializedParamValue::Float { value }) => *value,
+                _ => return None,
+            };
+
+            nodes.retain(|n| n.id != light_id);
+            wires.retain(|w| !(w.to_node == render_id && w.to_port == format!("light_{k}")));
+            shift_indexed_ports_down(wires, render_id, "light", k);
+
+            nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                "lights".to_string(),
+                SerializedParamValue::Float {
+                    value: (current_lights - 1.0).max(0.0),
+                },
+            );
+
+            Some(prev)
+        });
+        self.prev = result.flatten();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some((pn, pw)) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                *nodes = pn;
+                *wires = pw;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Remove Light"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Add Scene Environment / Add Scene Fog
 // (SCENE_SETUP_PANEL_DESIGN.md D3/D4, P1) — shaped exactly like
 // AddSceneLightCommand above: spawn one new node at the scene's graph level
@@ -6342,6 +6559,145 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    // ── BUG-193: Remove Scene Object / Remove Scene Light ──
+
+    /// A fixture with 3 objects wired as `AddSceneObjectCommand` builds them
+    /// (group + mesh_k/material_k/transform_k wires), so removal tests can
+    /// exercise the middle-object renumbering case (BUG-193's core claim).
+    fn render_scene_with_objects(count: u32) -> (EffectGraphDef, Vec<u32>) {
+        let mut def = render_scene_graph(0, 0);
+        let mut group_ids = Vec::new();
+        for k in 0..count {
+            let (mut project, fx) = project_with_graph(def.clone());
+            let mut cmd = AddSceneObjectCommand::new(
+                GraphTarget::Effect(fx.clone()),
+                vec![],
+                0,
+                k,
+                (0.0, 0.0),
+                mirror_catalog_default(),
+            );
+            cmd.execute(&mut project);
+            def = graph_of(&project, &fx).clone();
+            let group = def
+                .nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some(format!("Object {}", k + 1).as_str()))
+                .expect("group created")
+                .id;
+            group_ids.push(group);
+        }
+        (def, group_ids)
+    }
+
+    #[test]
+    fn remove_scene_object_middle_deletes_group_and_renumbers_survivors() {
+        let (fixture, group_ids) = render_scene_with_objects(3);
+        let (mut project, fx) = project_with_graph(fixture);
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = RemoveSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            1, // remove the MIDDLE object (index 1 of 0,1,2)
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("objects"),
+            Some(&SerializedParamValue::Float { value: 2.0 }),
+            "objects decremented by one"
+        );
+        assert!(
+            !def.nodes.iter().any(|n| n.id == group_ids[1]),
+            "the removed object's group node is gone"
+        );
+        assert!(
+            def.nodes.iter().any(|n| n.id == group_ids[0]),
+            "object 0 survives untouched"
+        );
+        assert!(
+            def.nodes.iter().any(|n| n.id == group_ids[2]),
+            "object 2 survives (renumbered)"
+        );
+        // Object 0 stays at slot 0.
+        assert!(def.wires.iter().any(|w| w.from_node == group_ids[0]
+            && w.from_port == "vertices"
+            && w.to_node == 0
+            && w.to_port == "mesh_0"));
+        // Object 2 (formerly slot 2) is renumbered down to slot 1.
+        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
+            && w.from_port == "vertices"
+            && w.to_node == 0
+            && w.to_port == "mesh_1"));
+        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
+            && w.from_port == "material"
+            && w.to_node == 0
+            && w.to_port == "material_1"));
+        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
+            && w.from_port == "transform"
+            && w.to_node == 0
+            && w.to_port == "transform_1"));
+        // No dangling slot-2 wires left behind.
+        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "mesh_2"));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
+    }
+
+    #[test]
+    fn remove_scene_light_only_light_removes_node_and_zeroes_count() {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 1));
+        // Wire the fixture's declared single light exactly like
+        // AddSceneLightCommand would (bare node, no group).
+        {
+            let mut cmd = AddSceneLightCommand::new(
+                GraphTarget::Effect(fx.clone()),
+                vec![],
+                0,
+                0,
+                (-260.0, 50.0),
+                mirror_catalog_default(),
+            );
+            cmd.execute(&mut project);
+        }
+        let before = graph_of(&project, &fx).clone();
+        let light_id = before
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.light")
+            .expect("light node present")
+            .id;
+
+        let mut cmd = RemoveSceneLightCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let render = def.nodes.iter().find(|n| n.id == 0).unwrap();
+        assert_eq!(
+            render.params.get("lights"),
+            Some(&SerializedParamValue::Float { value: 0.0 }),
+            "lights decremented to zero"
+        );
+        assert!(!def.nodes.iter().any(|n| n.id == light_id), "light node removed");
+        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "light_0"), "wire removed");
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-remove graph exactly (inverse-pair)");
     }
 
     // ── SCENE_SETUP_PANEL_DESIGN P1: Add Environment / Add Fog ──

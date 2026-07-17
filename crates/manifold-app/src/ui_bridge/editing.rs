@@ -482,9 +482,9 @@ pub(super) fn dispatch_editing(
         }
 
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)
-        PanelAction::ClipRightClicked(_) | PanelAction::TrackRightClicked(_, _) => {
-            DispatchResult::handled()
-        }
+        PanelAction::ClipRightClicked(_)
+        | PanelAction::TrackRightClicked(_, _)
+        | PanelAction::AutomationLaneRightClicked(..) => DispatchResult::handled(),
 
         // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
