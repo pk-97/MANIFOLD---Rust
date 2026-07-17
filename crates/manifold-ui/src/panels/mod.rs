@@ -343,6 +343,29 @@ pub enum PanelAction {
         current_index: u32,
         cell_node_id: crate::node::NodeId,
     },
+    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): click on a
+    /// scene row's mod button — expose this inner param on the layer's
+    /// generator card via the SAME `ToggleNodeParamExposeCommand` the graph
+    /// editor's expose glyph uses, one undo unit, named `<object_label> ·
+    /// <param_label>`. One-way in P3a: the panel emits this on every click
+    /// of a live (non-driven) mod button regardless of its current lit
+    /// state — the app dispatch handler is the one that no-ops when the
+    /// param is ALREADY exposed, so a second click never un-exposes and
+    /// never mints a duplicate binding. Un-exposing a param that may
+    /// already carry drivers/envelopes is a footgun from this panel (D8's
+    /// own text) — that stays a graph-editor-only affordance.
+    SceneSetupExposeParam {
+        layer_id: LayerId,
+        scope_path: Vec<u32>,
+        node_doc_id: u32,
+        param_id: String,
+        object_label: String,
+        param_label: String,
+        min: f32,
+        max: f32,
+        default_value: f32,
+        is_angle: bool,
+    },
 
     // Footer
     CycleQuantize,

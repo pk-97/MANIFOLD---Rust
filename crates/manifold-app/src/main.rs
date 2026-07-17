@@ -45,6 +45,9 @@ mod graph_dump;
 // `bug035_verify.rs`, `bug037_verify.rs`) actually live.
 #[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
 mod headless_harness;
+mod import_responsiveness_verify;
+mod import_worker;
+mod import_worker_drain_verify;
 mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]

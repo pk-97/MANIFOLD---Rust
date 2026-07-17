@@ -923,6 +923,9 @@ impl Application {
         // 1a0b. Video-import probe-failure surfacing (BUG-133) — same
         // drain-site cadence as autosave; see `tick_import_failures`.
         self.tick_import_failures();
+        // IMPORT_RESPONSIVENESS_DESIGN.md D3: drain the background
+        // model-import worker's progress channel at the same per-frame site.
+        self.drain_import_progress();
 
         // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching

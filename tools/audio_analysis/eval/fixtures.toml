@@ -1,0 +1,267 @@
+# The fixture manifest (§3): id, dataset, split (dev|heldout|full), roles,
+# license note. Audio paths point outside this repo (gitignored / external
+# dirs) — never committed. D9: dev = tuning loop; heldout = acceptance-only,
+# never read by sweep.py; full = rare regression sweeps (not populated yet,
+# P3's job).
+#
+# THIS FILE'S DEV/HELDOUT SPLIT IS A PROPOSAL — Peter vetoes/confirms in the
+# morning (per the 2026-07-17 addendum: "Peter owes the split call, or the
+# first ingest session proposes one"). Marked provisional throughout.
+#
+# DOMAIN (added 2026-07-17, Peter's second scope note): the target is
+# electronic/EDM; the public MIR packs skew rock/pop/acoustic and must not
+# dominate scoring. Every fixture below carries `domain = "electronic" |
+# "other" | "mixed"` ("mixed" only for harmonixset, whose 912 tracks are
+# tagged per-track via Genre in metadata.csv, not as one static value here).
+# This file does NOT decide tuning policy (that's the orchestrator's
+# choice) — it only exposes the split so run.py's scoreboard can report
+# per-domain aggregates alongside the overall number.
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Public datasets
+# ---------------------------------------------------------------------------
+
+[[fixture]]
+id = "babyslakh_16k"
+dataset = "slakh2100"
+split = "dev"
+domain = "other"  # Slakh derives from Lakh MIDI (broad multi-genre); the 20 babyslakh tracks sampled 2026-07-17 are guitar/piano/strings/brass-heavy, not electronic-genre — kept as "other" per "when in doubt, other"
+roles = ["notes", "duration", "stems", "bring_up"]
+license = "CC-BY 4.0 (Zenodo record 4603870)"
+path = "eval/data/babyslakh_16k/babyslakh_16k"
+n_tracks = 20
+truth_kind = "aligned_midi_per_stem"
+notes = "P1 bring-up subset. Full Slakh2100 test split (225 tracks) is P3's job — a separate, larger fetch."
+
+[[fixture]]
+id = "harmonixset"
+dataset = "harmonix"
+split = "dev_and_heldout"  # per-track split deferred to P3 once audio is matched; annotations only for now
+domain = "mixed"  # per-track domain from metadata.csv's Genre column: Genre == "Dance/Electronic" -> electronic, else other. Measured 2026-07-17: 129/912 tracks are Dance/Electronic (14%); Pop is the largest bucket (422) but stays "other" per the conservative default — EDM-adjacent Pop is not assumed electronic without the explicit tag.
+roles = ["grid", "sections"]
+license = "annotations open (CC0-style, LICENSE in the pull); audio NOT redistributed"
+path = "eval/data/harmonixset/dataset"
+n_tracks = 912
+n_electronic_tracks = 129
+truth_kind = "beats_downbeats_segments"
+audio_available = false
+notes = "Annotations only (fetched P1). Audio is user-matched per track against youtube_urls.csv — incremental, P3's job. The electronic slice (129 tracks, Genre==Dance/Electronic) is the one P3 should prioritize matching audio for, given the domain note."
+
+[[fixture]]
+id = "musdb18_compressed"
+dataset = "musdb18"
+split = "heldout"
+domain = "other"  # MUSDB18 skews pop/rock/singer-songwriter; used here for D13 vocal-region truth, not tuning-loop scoring
+roles = ["vocal_regions", "stem_sanity"]
+license = "research/non-commercial (Zenodo 1117372, 'other-nc') — eval-only per D8, never shipped"
+path = "eval/data/musdb18"
+truth_kind = "true_stems"
+notes = "D13: gate the clean vocal stem to derive near-truth activity regions; score our detector (on demucs output of the mix) against them. heldout because it's the closest thing this harness has to an independent listening-quality check for D13, and it's large/slow enough that it won't get iterated against by accident."
+
+# ---------------------------------------------------------------------------
+# Real-stem tracks (tests/fixtures/audio/*) — 5 tracks, Ableton stem splits,
+# exact BPM from directory name, kick-onset ground truth
+# (tests/fixtures/audio_labels/*.csv). Pre-existing fixtures for the Rust
+# mod_harness (docs/AUDIO_EVAL_HARNESS_GUIDE.md) — registered here too per
+# Peter's 2026-07-17 scope addition.
+#
+# Split rationale: all five have been used for TUNING before (the mod_harness
+# regression suite's BUG-042/043/044/045 history) — none of them can serve as
+# an unbiased heldout read, so honesty says dev, not a heldout that's
+# secretly already been seen. True heldout signal for this harness comes
+# from babyslakh/Harmonix/MUSDB18 (never tuned against) and the live-show
+# corpus below.
+# ---------------------------------------------------------------------------
+
+[[fixture]]
+id = "apricots_128bpm"
+dataset = "manifold_own"
+split = "dev"
+domain = "electronic"
+roles = ["drums", "grid"]
+license = "ours"
+path = "tests/fixtures/audio/apricots_128bpm"  # relative to the MAIN checkout, not this worktree
+labels_path = "tests/fixtures/audio_labels/apricots_128bpm.csv"
+bpm = 128
+truth_kind = "kick_onset_csv"
+instrument_filter = "kick"  # the CSV enumerates kicks only — non-kick predicted events are not false positives against it
+label_tolerance_sec = 0.035  # this fixture's own historical convention (AUDIO_EVAL_HARNESS_GUIDE.md); D10's frozen ±50ms is what eval/metrics.py actually scores at
+n_labels = 16
+
+[[fixture]]
+id = "bad_guy_128bpm"
+dataset = "manifold_own"
+split = "dev"
+domain = "electronic"
+roles = ["drums", "grid"]
+license = "ours"
+path = "tests/fixtures/audio/bad_guy_128bpm"
+labels_path = "tests/fixtures/audio_labels/bad_guy_128bpm.csv"
+bpm = 128
+truth_kind = "kick_onset_csv"
+instrument_filter = "kick"
+label_tolerance_sec = 0.035
+n_labels = 17
+notes = "CAVEAT (audio_labels/README.md): stems are unwarped (native 128bpm) while mix is tempo-warped (13.241s); mix_time_s was linearly scaled x0.8828 and snapped to the nearest mix onset. Re-exporting stems warped would remove the caveat."
+
+[[fixture]]
+id = "feel_the_vibration_174bpm"
+dataset = "manifold_own"
+split = "dev"
+domain = "electronic"
+roles = ["drums", "grid"]
+license = "ours"
+path = "tests/fixtures/audio/feel_the_vibration_174bpm"
+labels_path = "tests/fixtures/audio_labels/feel_the_vibration_174bpm.csv"
+bpm = 174
+truth_kind = "kick_onset_csv"
+instrument_filter = "kick"
+label_tolerance_sec = 0.035
+n_labels = 16
+
+[[fixture]]
+id = "inhale_exhale_145bpm"
+dataset = "manifold_own"
+split = "dev"
+domain = "electronic"
+roles = ["drums", "grid"]
+license = "ours"
+path = "tests/fixtures/audio/inhale_exhale_145bpm"
+labels_path = "tests/fixtures/audio_labels/inhale_exhale_145bpm.csv"
+bpm = 145
+truth_kind = "kick_onset_csv"
+instrument_filter = "kick"
+label_tolerance_sec = 0.035
+n_labels = 14
+
+[[fixture]]
+id = "tears_140bpm"
+dataset = "manifold_own"
+split = "dev"
+domain = "electronic"
+roles = ["drums", "grid"]
+license = "ours"
+path = "tests/fixtures/audio/tears_140bpm"
+labels_path = "tests/fixtures/audio_labels/tears_140bpm.csv"
+bpm = 140
+truth_kind = "kick_onset_csv"
+instrument_filter = "kick"
+label_tolerance_sec = 0.035
+n_labels = 10
+
+# ---------------------------------------------------------------------------
+# Live-show corpus (Addendum 2026-07-17) — Peter's 20-minute set, master
+# export "29 MASTER 0012 [2026-04-26 161410].wav" (audio sample 0 = beat
+# 112). Grid = tempoMap (98 points, <=2ms per Peter). Onset truth = clip
+# starts on layers with measured excess >= 0.2 for an instrument class.
+# Section truth = clip starts on layers with ~zero excess (deliberately
+# valuable: measures false-positive rate on quiet/ambient material, which
+# public onset benchmarks under-test).
+#
+# Song segmentation from the project's own timeline markers (7 song-start
+# markers found 2026-07-17: MP INTRO@128, INTEGER@640, PATTERN@1088,
+# STAGNATE@1280, BASALT@1728, ALL IN FOR YOU@2176, OH SO SUDDENLY@2416,
+# through DONE@3104). The project ALSO has 6 named group layers (MIDNIGHT
+# PATIENCE, INTEGER, STAGNATE, BASALT, ALL IN 4 U, WAITING 4 U) that mostly
+# corroborate this but not 1:1 (6 vs 7, and "WAITING 4 U" has no matching
+# marker) — flagging the discrepancy rather than silently picking one; Peter
+# can resolve it in one glance.
+#
+# PROPOSED split (provisional): 5 songs dev, 2 heldout. Heldout picks one
+# dense/drum-heavy song (BASALT, named for its own "HATS" marker — a good
+# onset-truth stress test) and one long, varied song (STAGNATE, which has
+# both DROP sections and its own quieter "STAGNATE" moment — a mixed onset+
+# section test) so heldout isn't systematically easier or harder than dev.
+# Rationale for dev-heavy skew: 7 songs is a small population; heldout needs
+# only enough tracks to be a real regression check, not parity of count.
+#
+# DOMAIN CHECK (Peter's 2026-07-17 note: a heldout set that's all soft rock
+# proves nothing about the target domain): both BASALT and STAGNATE are
+# domain="electronic" — heldout overall is {musdb18_compressed (other),
+# liveshow_basalt (electronic), liveshow_stagnate (electronic)}, so the
+# electronic target genre IS represented in heldout, not just the
+# off-domain MUSDB18 pop/rock set. Once harmonixset's per-track audio
+# matching lands (P3), its electronic slice must ALSO be split across both
+# dev and heldout for the same reason — don't let all 129 Dance/Electronic
+# Harmonix tracks land in dev only.
+# ---------------------------------------------------------------------------
+
+[[fixture]]
+id = "liveshow_midnight_patience"
+dataset = "liveshow"
+split = "dev"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [128.0, 640.0]
+notes = "provisional dev"
+
+[[fixture]]
+id = "liveshow_integer"
+dataset = "liveshow"
+split = "dev"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [640.0, 1088.0]
+notes = "provisional dev"
+
+[[fixture]]
+id = "liveshow_pattern"
+dataset = "liveshow"
+split = "dev"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [1088.0, 1280.0]
+notes = "provisional dev"
+
+[[fixture]]
+id = "liveshow_stagnate"
+dataset = "liveshow"
+split = "heldout"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [1280.0, 1728.0]
+notes = "provisional heldout — long/varied (multiple DROP sections + its own quieter passage)"
+
+[[fixture]]
+id = "liveshow_basalt"
+dataset = "liveshow"
+split = "heldout"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [1728.0, 2176.0]
+notes = "provisional heldout — dense/drum-heavy (own HATS marker), a real onset-truth stress test"
+
+[[fixture]]
+id = "liveshow_all_in_for_you"
+dataset = "liveshow"
+split = "dev"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [2176.0, 2416.0]
+notes = "provisional dev"
+
+[[fixture]]
+id = "liveshow_oh_so_suddenly"
+dataset = "liveshow"
+split = "dev"
+domain = "electronic"
+roles = ["grid", "onset", "section"]
+license = "ours"
+beat_range = [2416.0, 3104.0]
+notes = "provisional dev — has its own VOCAL marker, likely the vocal/ambient-heaviest song; keeping in dev balances heldout toward BASALT/STAGNATE's drum-heavy character"
+
+[fixture_common.liveshow]
+project_path_note = "master audio is gitignored, never committed; see the session's eval_corpus paths in docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P1 landing report for absolute locations (Dropbox, outside the repo)"
+audio_offset_beats = 112.0
+grid_source = "tempoMap (project.json), 98 points, <=2ms per Peter"
+onset_excess_threshold = 0.2
+section_excess_ceiling = 0.05
+demucs_cache = "reuse existing cached separation — see eval/liveshow_labels/ and the P1 landing report for the cache path; never re-separate"
