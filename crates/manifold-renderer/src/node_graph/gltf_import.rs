@@ -1304,7 +1304,21 @@ fn build_object_group(
         // (the recenter stays as transform_3d's own pos_x/y/z param
         // default; the animation source's wired output overrides it at
         // runtime, same as any port-shadow).
-        if m.animations.iter().any(Option::is_some) {
+        //
+        // BUG-205: SKINNED objects are excluded. A skinned mesh's
+        // positioning comes ENTIRELY from its joint palette (the A2
+        // doctrine above) — the joint worlds already include the static
+        // ancestor chain via joint_root_world. resolve_object_animation
+        // walks the same ancestor chain, so a rig with an animated
+        // ancestor above the joint tree (Sketchfab FBX exports animate
+        // `Bip01`, whose static scale is ALSO in that chain) would apply
+        // that ancestor's transform a SECOND time through transform_3d —
+        // skeleton_animated.glb rendered at 0.0254² of its authored size
+        // (a ~12px speck). An ANIMATED ancestor prefix is still sampled
+        // statically by the pose path (the documented joint_root_world
+        // approximation); wiring it here rigidly was never the fix for
+        // that — it double-transforms instead.
+        if m.animations.iter().any(Option::is_some) && skinned_vertices_source.is_none() {
             let anim_node_id = format!("anim_{k}");
             let anim_id = fresh_id();
             let mut anim_node =
@@ -4874,6 +4888,55 @@ mod tests {
         );
     }
 
+    /// BUG-205 regression (double-transform half): a SKINNED object must
+    /// NOT get a `node.gltf_animation_source` wired into its transform_3d.
+    /// skeleton_animated.glb animates `Bip01` — an ancestor ABOVE the
+    /// joint tree whose static 0.0254 scale is already inside the joint
+    /// palette via `joint_root_world` — so the rigid path re-applying that
+    /// chain shrank the render to 0.0254² of its authored size (a ~12px
+    /// speck at the framing distance).
+    #[test]
+    fn skinned_import_gets_no_rigid_animation_source() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let (def, _report) =
+            super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+        assert!(
+            flat.nodes.iter().any(|n| n.type_id == "node.gltf_skeleton_pose"),
+            "rigged import must drive its mesh through node.gltf_skeleton_pose"
+        );
+        assert!(
+            !flat.nodes.iter().any(|n| n.type_id == "node.gltf_animation_source"),
+            "a skinned object's positioning comes entirely from its joint palette — \
+             a rigid node.gltf_animation_source on the same object re-applies the \
+             ancestor chain a second time (BUG-205)"
+        );
+    }
+
+    /// BUG-205 regression (bbox-space half): the import summary's bbox for
+    /// a skinned mesh must live in bind-pose SKINNED space (what
+    /// `node.skin_mesh` renders), not the mesh node's world space (which
+    /// glTF skinning ignores). skeleton_animated.glb's two spaces disagree
+    /// visibly: mesh-node-world y spans 0.36..2.22, bind-skinned y spans
+    /// -0.57..1.20 — the old bbox recentered/framed a box the skeleton
+    /// never occupies (feet cropped below frame).
+    #[test]
+    fn skinned_import_summary_bbox_is_in_bind_skinned_space() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let summary =
+            super::gltf_load::gltf_import_summary(&path).expect("parse skeleton_animated.glb");
+        assert!(
+            summary.bbox_min[1] < 0.0 && summary.bbox_max[1] < 1.5,
+            "bbox must be the bind-pose skinned one (y ≈ -0.57..1.20), got y {:.3}..{:.3} — \
+             the mesh-node-world bbox (y ≈ 0.36..2.22) means the summary regressed to \
+             treating the skinned mesh as static (BUG-205)",
+            summary.bbox_min[1],
+            summary.bbox_max[1]
+        );
+    }
+
     /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 (Table params + the new
     /// node type survive V1 JSON save→reload — the STANDARD §5 gate must
     /// PROVE this, not assume it, per the phase brief).
@@ -5389,12 +5452,9 @@ mod tests {
             "imported_azalea_renders_faithfully_to_png: non-black pixel fraction = {fraction:.4} \
              ({max_attempts} attempts budget, total {total})"
         );
-        assert!(
-            fraction > 0.02,
-            "expected >2% non-black pixels after polling for both background parses, got \
-             {fraction:.4} — likely a broken importer graph, a parse that never landed, or empty geometry"
-        );
-
+        // PNG is written BEFORE the coverage assert so a failing run still
+        // leaves the frame on disk — the assert message alone can't show
+        // WHERE the pixels went (tiny vs offset vs black, BUG-205's triage).
         let out_path = std::env::var("MESH_SNAP_OUT")
             .unwrap_or_else(|_| "target/mesh-snap/imported_azalea.png".to_string());
         if let Some(parent) = std::path::Path::new(&out_path).parent() {
@@ -5404,6 +5464,11 @@ mod tests {
             .unwrap_or_else(|e| panic!("save {out_path}: {e}"));
         println!(
             "imported_azalea_renders_faithfully_to_png: wrote {out_path} (fraction {fraction:.4}, report {report:?})"
+        );
+        assert!(
+            fraction > 0.02,
+            "expected >2% non-black pixels after polling for both background parses, got \
+             {fraction:.4} — likely a broken importer graph, a parse that never landed, or empty geometry"
         );
     }
 
