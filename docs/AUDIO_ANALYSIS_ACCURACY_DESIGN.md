@@ -469,3 +469,40 @@ replacement, DALI, learned sections, realtime tuning → Deferred #1–#4.
   stands: the window is memory of *this* song; trained weights are a prior over
   *music* — beat/downbeat on unfamiliar material and drum-object naming remain
   model candidates (Beat This offline; Deferred #1 Stage 2).
+
+
+## Addendum 2026-07-18 — ADTOF bake-off ACTIVATED (Deferred #1 pulled forward; Fable, overnight orchestration)
+
+Peter's directive (2026-07-17, verbatim intent): *prove we are as good or better than
+ADTOF, or — if we fall short and can't measurably close — document the gap in numbers.*
+That is Deferred #1's "drum accuracy work resuming" trigger. The approach text in §7.1
+stands unchanged (Stage 1 DSP-on-drum-stem with per-track onset clustering; Stage 2 small
+own-trained CRNN with the demucs-separated-render domain-matching trick; both emit into
+the same Event JSON contract). This addendum adds the measured bar, the decision gate,
+and phasing.
+
+**The bar (post-P4 ADTOF, accepted defaults, truth-type-aware scoring):** dense-truth
+F1 kick **0.858** · snare **0.641** · hat **0.303** · perc **0.521**; calibrated
+five-fixture electronic kick mean **0.739**; liveshow sparse recall kick 0.77 / snare
+0.55 / hat 0.93. Candidates are scored by the identical harness, calibration, and
+truth-type rules — no bespoke scoring.
+
+**Decision gate (mechanical, per class):** candidate ≥ ADTOF − noise floor on HELDOUT
+dense electronic-domain truth (E-GMD/Slakh-drums heldout split + self-render holdbacks;
+liveshow heldout as sparse-recall confirmation) → that class ships the candidate and its
+ADTOF arm is deleted. Candidate falls short after ≤3 judged iteration rounds → the gap is
+recorded per class in the scoreboard and ADTOF stays until the commercialization gate
+forces Stage 2. Mixed outcomes ship mixed (per §7.1's own contract: kick may stay DSP
+while hats go learned — or vice versa).
+
+**Phasing:** **B1** — E-GMD fetch (license VERIFY-AT-FETCH) + Slakh drum-truth
+extraction with dev/heldout split; Stage-1 DSP implementation (cluster-first, per §7.1);
+first full scoreboard vs the bar. **B2** — judged iteration (Sonnet sweeps, orchestrator
+accepts; same rules as P4; ≤3 rounds/class). **B3** — verdict landing: per-class
+ship/keep decisions, BUG-069 status update, and — only if gaps remain that matter —
+a Stage-2 training proposal for Peter's explicit approval (compute + dataset build are
+his call; do NOT start training without it).
+
+Sequencing note: runs before P5/P6 by orchestrator decision — P6 (onset swap) touches the
+same drum path and should target whichever detector wins the bake-off, not the outgoing
+one.
