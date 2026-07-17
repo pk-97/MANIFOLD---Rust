@@ -31,6 +31,10 @@ class BeatGrid:
     bpm_derived: Optional[float]
     confidence: float
     onset_to_peak_sec: float = 0.0
+    # Which beat/downbeat source produced this grid: "beat_this" (CPJKU model,
+    # D1) or "autocorr_fallback" (pure-DSP, no model — D1's explicit no-model
+    # fallback, stamped so a run that used it is never silent).
+    tracker: str = "beat_this"
 
 
 @dataclass(frozen=True)
