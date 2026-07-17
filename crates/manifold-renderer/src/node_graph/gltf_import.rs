@@ -5176,7 +5176,7 @@ mod tests {
             for &phase in PHASES {
                 let (def, _report) = super::assemble_import_graph(&path)
                     .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
-                let duration_s = skeleton_pose_duration_s(&def);
+                let duration_s = skeleton_pose_duration_s_or_static(&def);
                 let rgba = render_skinned_import_at_progress(def, w, h, phase, duration_s);
 
                 let mut lit = 0u64;
@@ -6233,6 +6233,36 @@ mod tests {
             None
         }
         find(&def.nodes).expect("assembled graph has no node.gltf_skeleton_pose with a duration_s param")
+    }
+
+    /// Like [`skeleton_pose_duration_s`] but for the general hostile shelf
+    /// (IMPORT_ANYTHING_WAVE_DESIGN.md W1 added a plain unrigged fixture —
+    /// `webp_texture.glb` — alongside the skinned Mixamo-shaped ones):
+    /// `0.0` when the asset has no skeleton pose at all, which
+    /// `render_skinned_import_at_progress` renders as a static rest pose
+    /// regardless of `progress`. The strict panicking variant stays for
+    /// call sites that know their fixture is always skinned.
+    #[cfg(feature = "gpu-proofs")]
+    fn skeleton_pose_duration_s_or_static(
+        def: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) -> f32 {
+        fn find(nodes: &[manifold_core::effect_graph_def::EffectGraphNode]) -> Option<f32> {
+            for node in nodes {
+                if node.type_id.as_str() == "node.gltf_skeleton_pose"
+                    && let Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) =
+                        node.params.get("duration_s")
+                {
+                    return Some(*value);
+                }
+                if let Some(group) = &node.group
+                    && let Some(v) = find(&group.nodes)
+                {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        find(&def.nodes).unwrap_or(0.0)
     }
 
     /// Render an assembled skinned-import `def` at a chosen `progress`
