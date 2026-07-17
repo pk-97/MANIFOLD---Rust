@@ -254,11 +254,15 @@ fn run_render(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // `--relight`: the "3D Shading" toggle (DEPTH_RELIGHT_DESIGN.md P3) — the
-    // smallest honest surface to render an augmented def for the visual
-    // proof, ahead of P5's card toggle.
+    // `--relight`: the "3D Shading" toggle (DEPTH_RELIGHT_DESIGN.md P5) —
+    // renders with the proven-recipe defaults; there's no live instance here
+    // to source live knobs from.
     let def = if relight {
-        manifold_renderer::node_graph::relight::relight_augment(&def, &PrimitiveRegistry::with_builtin())
+        manifold_renderer::node_graph::relight::relight_augment(
+            &def,
+            &PrimitiveRegistry::with_builtin(),
+            &manifold_core::effects::RelightParams::default(),
+        )
     } else {
         def
     };

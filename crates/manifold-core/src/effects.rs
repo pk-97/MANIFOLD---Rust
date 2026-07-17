@@ -437,6 +437,105 @@ pub struct RemovedExposure {
 
 // ─── Effect Instance ───
 
+/// D4's height-origin override for the "3D Shading" relight stage
+/// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/D4, phase P5): `Auto` runs the
+/// compiler's D1 structural walk (falling back to luminance-of-output only
+/// when no `SourceHeight` producer is reachable — the proven default the
+/// whole probe sweep ran on); `Luminance`/`InvertedLuminance` force the
+/// height tap onto the final color's luminance (inverted or not) regardless
+/// of what the structural walk would find, for effects/generators whose
+/// natural output reads better relit from its brightness than from its
+/// nominal depth producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelightHeightFrom {
+    #[default]
+    Auto,
+    Luminance,
+    InvertedLuminance,
+}
+
+/// The D3 relight-stage knobs, exposed as ordinary card params once the "3D
+/// Shading" toggle (`PresetInstance::relight`) is on. Always present on the
+/// instance regardless of the toggle's state — per the no-conditionally-
+/// visible-UI rule the card renders these rows greyed rather than hidden
+/// when the toggle is off, so the values must survive a toggle-off/toggle-on
+/// round trip. Defaults are the probe sweep's proven v6 recipe (D3) /
+/// `node.heightfield_shadow`'s own defaults (D5) — see `relight.rs`'s
+/// template mint for where each field lands.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelightParams {
+    /// Light direction X — fans out to `rl_lambert.light_x` AND
+    /// `rl_shadow.light_x` (the shadow raymarch must track the same light
+    /// direction as the Lambert term, or the shadow reads mismatched against
+    /// the shading whenever this is dragged).
+    #[serde(default = "RelightParams::default_light_x")]
+    pub light_x: f32,
+    /// Light direction Y — same fan-out as `light_x`.
+    #[serde(default = "RelightParams::default_light_y")]
+    pub light_y: f32,
+    /// Bump/occlusion/shadow strength — fans out to `rl_bumps.z_scale`
+    /// (rescaled ×12, so the proven default 0.25 lands on the proven
+    /// z_scale default 3.0), `rl_ao.relief`, and `rl_shadow.relief`.
+    #[serde(default = "RelightParams::default_relief")]
+    pub relief: f32,
+    /// `rl_ao.intensity`.
+    #[serde(default = "RelightParams::default_ao_intensity")]
+    pub ao_intensity: f32,
+    /// `rl_shadow.softness`.
+    #[serde(default = "RelightParams::default_shadow_softness")]
+    pub shadow_softness: f32,
+    /// `rl_exposure.gain`.
+    #[serde(default = "RelightParams::default_gain")]
+    pub gain: f32,
+    /// D4 height-origin override.
+    #[serde(default)]
+    pub height_from: RelightHeightFrom,
+}
+
+impl RelightParams {
+    fn default_light_x() -> f32 {
+        0.4
+    }
+    fn default_light_y() -> f32 {
+        0.6
+    }
+    fn default_relief() -> f32 {
+        0.25
+    }
+    fn default_ao_intensity() -> f32 {
+        1.3
+    }
+    fn default_shadow_softness() -> f32 {
+        0.5
+    }
+    fn default_gain() -> f32 {
+        1.4
+    }
+
+    /// Whether every field is at its proven-recipe default — the
+    /// serialize-skip gate so an untouched instance's `relightParams`
+    /// doesn't appear on the wire (byte-identical old projects, D2).
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Default for RelightParams {
+    fn default() -> Self {
+        Self {
+            light_x: Self::default_light_x(),
+            light_y: Self::default_light_y(),
+            relief: Self::default_relief(),
+            ao_intensity: Self::default_ao_intensity(),
+            shadow_softness: Self::default_shadow_softness(),
+            gain: Self::default_gain(),
+            height_from: RelightHeightFrom::Auto,
+        }
+    }
+}
+
 /// A single effect applied to a clip, layer, or master chain.
 ///
 /// Serialization (custom impls below):
@@ -558,6 +657,22 @@ pub struct PresetInstance {
     /// Generator-only legacy flat field from V1.0.0 (before genParams
     /// nesting); serialized as `genParamVersion` for generator kind.
     pub legacy_param_version: Option<i32>,
+
+    /// The "3D Shading" compile-level toggle (`docs/DEPTH_RELIGHT_DESIGN.md`
+    /// D2, phase P5). `false` (default) is the exact graph that ships today,
+    /// byte-identical — every existing project loads unchanged. `true` makes
+    /// the renderer splice `relight_augment`'s D3 template before
+    /// `final_output` on next rebuild. Shared by both kinds (effects and
+    /// generators are both `PresetInstance`s), so one flag + one command path
+    /// covers both cards. `PresetInstance` has custom Serialize/Deserialize
+    /// impls below (not derived) — this field's wire handling lives there,
+    /// not in a field attribute.
+    pub relight: bool,
+    /// The D3 relight-stage knobs. Always present (see
+    /// [`RelightParams`]'s doc) — the toggle gates whether they're wired
+    /// into the compiled graph, not whether they exist. Same custom-impl
+    /// note as `relight` above.
+    pub relight_params: RelightParams,
 }
 
 // ─── Wire-format helpers for `params` (V1.4) ───
@@ -999,6 +1114,12 @@ impl Serialize for PresetInstance {
         if self.legacy_param3.is_some() {
             field_count += 1;
         }
+        if self.relight {
+            field_count += 1;
+        }
+        if !self.relight_params.is_default() {
+            field_count += 1;
+        }
 
         let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
         s.serialize_field("id", &self.id)?;
@@ -1057,6 +1178,12 @@ impl Serialize for PresetInstance {
         if let Some(v) = self.legacy_param3 {
             s.serialize_field("param3", &v)?;
         }
+        if self.relight {
+            s.serialize_field("relight", &self.relight)?;
+        }
+        if !self.relight_params.is_default() {
+            s.serialize_field("relightParams", &self.relight_params)?;
+        }
         s.end()
     }
 }
@@ -1091,6 +1218,12 @@ impl PresetInstance {
             field_count += 1;
         }
         if self.legacy_param_version.is_some() {
+            field_count += 1;
+        }
+        if self.relight {
+            field_count += 1;
+        }
+        if !self.relight_params.is_default() {
             field_count += 1;
         }
 
@@ -1128,6 +1261,12 @@ impl PresetInstance {
         }
         if let Some(v) = self.legacy_param_version {
             s.serialize_field("genParamVersion", &v)?;
+        }
+        if self.relight {
+            s.serialize_field("relight", &self.relight)?;
+        }
+        if !self.relight_params.is_default() {
+            s.serialize_field("relightParams", &self.relight_params)?;
         }
         s.end()
     }
@@ -1220,6 +1359,10 @@ impl<'de> Deserialize<'de> for PresetInstance {
             legacy_param2: Option<f32>,
             #[serde(default, rename = "param3")]
             legacy_param3: Option<f32>,
+            #[serde(default)]
+            relight: bool,
+            #[serde(default)]
+            relight_params: RelightParams,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -1263,6 +1406,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             legacy_param2: raw.legacy_param2,
             legacy_param3: raw.legacy_param3,
             legacy_param_version: None,
+            relight: raw.relight,
+            relight_params: raw.relight_params,
         })
     }
 }
@@ -1302,6 +1447,10 @@ struct GeneratorInstanceRaw {
     graph: Option<EffectGraphDef>,
     #[serde(default, rename = "genParamVersion")]
     legacy_param_version: Option<i32>,
+    #[serde(default)]
+    relight: bool,
+    #[serde(default)]
+    relight_params: RelightParams,
 }
 
 impl GeneratorInstanceRaw {
@@ -1340,6 +1489,8 @@ impl GeneratorInstanceRaw {
             legacy_param2: None,
             legacy_param3: None,
             legacy_param_version: self.legacy_param_version,
+            relight: self.relight,
+            relight_params: self.relight_params,
         }
     }
 }
@@ -1435,6 +1586,8 @@ impl PresetInstance {
             legacy_param2: None,
             legacy_param3: None,
             legacy_param_version: None,
+            relight: false,
+            relight_params: RelightParams::default(),
         }
     }
 
@@ -1465,6 +1618,8 @@ impl PresetInstance {
             legacy_param2: None,
             legacy_param3: None,
             legacy_param_version: None,
+            relight: false,
+            relight_params: RelightParams::default(),
         };
         s.init_defaults();
         s
@@ -3960,6 +4115,8 @@ mod tests {
             legacy_param2: None,
             legacy_param3: None,
             legacy_param_version: None,
+            relight: false,
+            relight_params: RelightParams::default(),
         };
         let json = serde_json::to_string(&fx).unwrap();
         assert!(
@@ -3996,6 +4153,8 @@ mod tests {
             legacy_param2: None,
             legacy_param3: None,
             legacy_param_version: None,
+            relight: false,
+            relight_params: RelightParams::default(),
         };
         let json = serde_json::to_string(&fx).unwrap();
         assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));
@@ -4008,6 +4167,47 @@ mod tests {
         let b = back.params.get("beta").unwrap();
         assert_eq!(b.value, 0.2);
         assert!(!b.exposed);
+    }
+
+    /// `docs/DEPTH_RELIGHT_DESIGN.md` P5: a pre-P5 project file — no
+    /// `relight`/`relightParams` keys at all — must load with the toggle off
+    /// and every knob at its proven-recipe default (D2's "every existing
+    /// project loads unchanged" contract), and a freshly-constructed instance
+    /// must serialize with NEITHER key present (byte-identical old projects).
+    #[test]
+    fn relight_defaults_false_and_omits_from_wire_when_untouched() {
+        let fx = PresetInstance::new(PresetTypeId::from_string("Mirror".to_string()));
+        assert!(!fx.relight, "relight must default to false");
+        assert_eq!(
+            fx.relight_params,
+            RelightParams::default(),
+            "relight_params must default to the D3 proven recipe"
+        );
+        let json = serde_json::to_string(&fx).unwrap();
+        assert!(!json.contains("\"relight\""), "untouched instance must not emit `relight`: {json}");
+        assert!(
+            !json.contains("relightParams"),
+            "untouched instance must not emit `relightParams`: {json}"
+        );
+
+        // A pre-P5 project's raw JSON (no relight keys at all) still loads —
+        // the field-less shape is exactly what an old saved project looks
+        // like on disk.
+        let legacy_json = r#"{"id":"abc12345","effectType":"Mirror","enabled":true,"collapsed":false,"params":{}}"#;
+        let back: PresetInstance = serde_json::from_str(legacy_json).unwrap();
+        assert!(!back.relight);
+        assert_eq!(back.relight_params, RelightParams::default());
+
+        // Toggling on + editing a knob DOES round-trip.
+        let mut on = fx;
+        on.relight = true;
+        on.relight_params.relief = 0.8;
+        let json_on = serde_json::to_string(&on).unwrap();
+        assert!(json_on.contains("\"relight\":true"));
+        assert!(json_on.contains("relightParams"));
+        let back_on: PresetInstance = serde_json::from_str(&json_on).unwrap();
+        assert!(back_on.relight);
+        assert_eq!(back_on.relight_params.relief, 0.8);
     }
 
     #[test]

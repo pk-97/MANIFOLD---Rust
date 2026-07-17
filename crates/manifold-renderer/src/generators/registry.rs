@@ -3,6 +3,7 @@ use crate::node_graph::primitives::{
     GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
 };
 use crate::preset_runtime::PresetRuntime;
+use manifold_core::effects::RelightParams;
 use manifold_core::preset_def::PresetKind;
 use crate::node_graph::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -146,7 +147,7 @@ impl GeneratorRegistry {
         // No override, no watch context (perf-gate tuning / tests / non-editor
         // call sites) — fuse normally per the device verdict. No instance
         // manifest in scope here, so the reshape reads the def's own shadow.
-        self.create_with_override(device, gen_type, None, width, height, false, None, false)
+        self.create_with_override(device, gen_type, None, width, height, false, None, None)
     }
 
     /// Same as [`Self::create`] but routes a per-layer
@@ -166,13 +167,14 @@ impl GeneratorRegistry {
     /// can be loaded.
     ///
     /// `relight` is the "3D Shading" toggle at the compile level
-    /// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P3): when `true`, the effective def
-    /// is passed through [`crate::node_graph::relight::relight_augment`]
+    /// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5): `Some(params)` passes the
+    /// effective def through [`crate::node_graph::relight::relight_augment`]
     /// before `from_def_with_device` — the depth-companion synthesis + fixed
-    /// relight template appended before `final_output`. `false` (every
-    /// production call site today) is the exact unaugmented def,
-    /// byte-identical to pre-P3 behavior; P5 wires this to the real
-    /// per-instance card toggle.
+    /// relight template (parameterized by the instance's live knobs)
+    /// appended before `final_output`. `None` is the exact unaugmented def,
+    /// byte-identical to pre-P3 behavior. Also vetoes whole-generator fusion
+    /// for this build (see below) — a fused kernel has no topology left for
+    /// the template to splice onto.
     pub fn create_with_override(
         &self,
         device: std::sync::Arc<GpuDevice>,
@@ -182,7 +184,7 @@ impl GeneratorRegistry {
         height: u32,
         is_watched: bool,
         manifest: Option<&manifold_core::params::ParamManifest>,
-        relight: bool,
+        relight: Option<&RelightParams>,
     ) -> Option<Box<PresetRuntime>> {
         let registry = PrimitiveRegistry::with_builtin();
 
@@ -216,7 +218,9 @@ impl GeneratorRegistry {
             // path — only the def changed (fused kernels + bindings retargeted onto
             // them) — so modulation keeps flowing. Same decision as the effect
             // rule, via the one shared `should_render_fused`.
-            let render_def = if crate::node_graph::freeze::install::should_render_fused(is_watched) {
+            let render_def = if relight.is_none()
+                && crate::node_graph::freeze::install::should_render_fused(is_watched)
+            {
                 match crate::node_graph::freeze::install::fused_generator_def_for(&def) {
                     Some(fused) => (*fused).clone(),
                     None => def,
@@ -224,8 +228,8 @@ impl GeneratorRegistry {
             } else {
                 def
             };
-            let render_def = if relight {
-                crate::node_graph::relight::relight_augment(&render_def, &registry)
+            let render_def = if let Some(params) = relight {
+                crate::node_graph::relight::relight_augment(&render_def, &registry, params)
             } else {
                 render_def
             };

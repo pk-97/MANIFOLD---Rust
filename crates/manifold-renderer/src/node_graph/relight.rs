@@ -20,7 +20,8 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::{NodeId, short_id};
+use manifold_core::effects::{RelightHeightFrom, RelightParams};
+use manifold_core::NodeId;
 
 use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::node_graph::depth_rule::DepthRule;
@@ -105,7 +106,17 @@ impl<'a> Mint<'a> {
         self.next_id += 1;
         self.nodes.push(EffectGraphNode {
             id,
-            node_id: NodeId::new(short_id()),
+            // Deterministic, not `short_id()`'s random UUID: card params
+            // (P5) address inner template nodes by stable `node_id` exactly
+            // like a bundled preset's hand-authored JSON node ids, and a
+            // binding's target must survive every future rebuild — a fresh
+            // random id per `relight_augment` call would silently orphan
+            // every persisted binding the moment the chain rebuilds. The
+            // `rl_`-prefixed handle already doubles as a unique, content-
+            // stable name (the idempotence guard above refuses to double
+            // mint it), so reusing it as the node_id costs nothing and buys
+            // the stability card bindings depend on.
+            node_id: NodeId::new(format!("{RL_PREFIX}{handle}")),
             type_id: type_id.to_string(),
             handle: Some(format!("{RL_PREFIX}{handle}")),
             params,
@@ -134,9 +145,18 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 /// therefore the compiled plan, byte-identical to today's — this function
 /// is the entire cost and behavior surface of the toggle.
 ///
+/// `params` is the instance's live D3 card knobs (`PresetInstance::relight_params`,
+/// phase P5) — always present on the instance regardless of the toggle, so
+/// re-enabling restores whatever was last dialed in. `RelightParams::default()`
+/// reproduces the probe's proven v6 recipe exactly.
+///
 /// Panics if `def` already carries `rl_`-prefixed nodes (idempotence guard —
 /// this must never be applied twice to the same def).
-pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> EffectGraphDef {
+pub fn relight_augment(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    params: &RelightParams,
+) -> EffectGraphDef {
     assert!(
         !def.nodes
             .iter()
@@ -165,8 +185,16 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         def.wires[final_wire_pos].from_port.clone(),
     );
 
-    let height_source =
-        find_height_source(def, registry, final_output_id).unwrap_or_else(|| orig_source.clone());
+    // D4: `Auto` runs the structural D1 walk (itself falling back to
+    // luminance-of-output when no `SourceHeight` producer is reachable);
+    // `Luminance`/`InvertedLuminance` force the tap onto the final color's
+    // luminance regardless of what the structural walk would find.
+    let height_source = match params.height_from {
+        RelightHeightFrom::Auto => {
+            find_height_source(def, registry, final_output_id).unwrap_or_else(|| orig_source.clone())
+        }
+        RelightHeightFrom::Luminance | RelightHeightFrom::InvertedLuminance => orig_source.clone(),
+    };
 
     let mut out = def.clone();
     out.wires.remove(final_wire_pos);
@@ -180,6 +208,14 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
     // ── Height branch: dither the tapped height source, blur it into the
     // working height field the rest of the template reads. ──
     let height_gray = mint.node("node.saturation", "height_gray", BTreeMap::from([("saturation".into(), float(0.0))]));
+    // D4 `InvertedLuminance`: one extra invert atom between the grayscale tap
+    // and the dither add — the rest of the template is unchanged, it just
+    // reads the inverted field as "height".
+    let height_tap = if params.height_from == RelightHeightFrom::InvertedLuminance {
+        mint.node("node.invert", "height_inverted", BTreeMap::new())
+    } else {
+        height_gray
+    };
     let dither_noise = mint.node(
         "node.noise",
         "dither_noise",
@@ -206,9 +242,27 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         BTreeMap::from([("kernel_size".into(), enum_val(0)), ("axis".into(), enum_val(1))]),
     );
 
-    // ── Shading from the height field's normal. ──
-    let normal = mint.node("node.surface_bumps", "normal", BTreeMap::from([("z_scale".into(), float(3.0))]));
-    let lambert = mint.node("node.basic_light", "lambert", BTreeMap::from([("ambient".into(), float(0.30))]));
+    // ── Shading from the height field's normal. Relief fans out ×12-scaled
+    // onto z_scale (0.25 → 3.0, the proven default) so one card knob covers
+    // bump strength + AO relief + shadow relief in the same physical units
+    // the D3 recipe tuned each atom at. Light X/Y fan to BOTH the Lambert
+    // term and the shadow raymarch — they must track the same light
+    // direction, or dragging the light knob desyncs the shadow from the
+    // shading it's supposed to darken. ──
+    let normal = mint.node(
+        "node.surface_bumps",
+        "normal",
+        BTreeMap::from([("z_scale".into(), float(params.relief * 12.0))]),
+    );
+    let lambert = mint.node(
+        "node.basic_light",
+        "lambert",
+        BTreeMap::from([
+            ("ambient".into(), float(0.30)),
+            ("light_x".into(), float(params.light_x)),
+            ("light_y".into(), float(params.light_y)),
+        ]),
+    );
     let spec = mint.node("node.shininess", "spec", BTreeMap::from([("power".into(), float(48.0))]));
 
     // ── Occlusion + shadow. ──
@@ -218,9 +272,9 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         "ao",
         BTreeMap::from([
             ("projection".into(), enum_val(1)), // Height Field
-            ("relief".into(), float(0.25)),
+            ("relief".into(), float(params.relief)),
             ("radius".into(), float(0.02)),
-            ("intensity".into(), float(1.3)),
+            ("intensity".into(), float(params.ao_intensity)),
             ("slices".into(), float(4.0)),
             ("steps".into(), float(8.0)),
         ]),
@@ -235,7 +289,16 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         "ao_blur_v",
         BTreeMap::from([("kernel_size".into(), enum_val(0)), ("axis".into(), enum_val(1))]),
     );
-    let shadow = mint.node("node.heightfield_shadow", "shadow", BTreeMap::new());
+    let shadow = mint.node(
+        "node.heightfield_shadow",
+        "shadow",
+        BTreeMap::from([
+            ("light_x".into(), float(params.light_x)),
+            ("light_y".into(), float(params.light_y)),
+            ("softness".into(), float(params.shadow_softness)),
+            ("relief".into(), float(params.relief)),
+        ]),
+    );
 
     // ── Combine: shadow * AO into Lambert, source * shading, + tinted spec, exposure. ──
     let lambert_shadowed = mint.node(
@@ -263,12 +326,12 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         "combined",
         BTreeMap::from([("mode".into(), enum_val(2)), ("amount".into(), float(1.0))]), // Add
     );
-    let exposure = mint.node("node.exposure", "exposure", BTreeMap::from([("gain".into(), float(1.4))]));
+    let exposure = mint.node("node.exposure", "exposure", BTreeMap::from([("gain".into(), float(params.gain))]));
 
-    out.wires.extend([
+    let mut wires = vec![
         wire(height_source.0, &height_source.1, height_gray, "in"),
         wire(dither_noise, "out", dither_scaled, "in"),
-        wire(height_gray, "out", height_dithered, "a"),
+        wire(height_tap, "out", height_dithered, "a"),
         wire(dither_scaled, "out", height_dithered, "b"),
         wire(height_dithered, "out", height_blur_h, "in"),
         wire(height_blur_h, "out", height_blur_v, "in"),
@@ -292,7 +355,14 @@ pub fn relight_augment(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Ef
         wire(spec_tinted, "out", combined, "b"),
         wire(combined, "out", exposure, "in"),
         wire(exposure, "out", final_output_id, "in"),
-    ]);
+    ];
+    // `InvertedLuminance` splices the invert atom between the grayscale tap
+    // and the rest of the chain — the only wire that differs from the
+    // default topology.
+    if height_tap != height_gray {
+        wires.push(wire(height_gray, "out", height_tap, "in"));
+    }
+    out.wires.extend(wires);
 
     out
 }
@@ -365,7 +435,7 @@ mod tests {
     fn augmenting_a_minimal_def_splices_the_template_and_preserves_originals() {
         let reg = registry();
         let def = simple_effect_def();
-        let augmented = relight_augment(&def, &reg);
+        let augmented = relight_augment(&def, &reg, &RelightParams::default());
 
         // Every original node is present, unchanged, at its original id.
         for n in &def.nodes {
@@ -410,8 +480,8 @@ mod tests {
     fn double_application_is_refused() {
         let reg = registry();
         let def = simple_effect_def();
-        let once = relight_augment(&def, &reg);
-        let _twice = relight_augment(&once, &reg);
+        let once = relight_augment(&def, &reg, &RelightParams::default());
+        let _twice = relight_augment(&once, &reg, &RelightParams::default());
     }
 
     #[test]
@@ -467,7 +537,7 @@ mod tests {
             for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id)
                     .unwrap_or_else(|| panic!("bundled preset {type_id:?} has no parsed def"));
-                let augmented = relight_augment(def, &reg);
+                let augmented = relight_augment(def, &reg, &RelightParams::default());
                 let report = validate_def(&augmented, &reg, validate_kind, &device_arc);
                 assert!(
                     report.errors.is_empty(),
@@ -543,7 +613,7 @@ mod tests {
             // Path A: the production wrapper, relight OFF.
             let mut graph_a = Graph::new();
             let src_a = graph_a.add_node(Box::new(Source::new()));
-            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, false) else {
+            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None) else {
                 continue; // a preset that fails to splice fails identically on both paths; skip rather than false-fail
             };
             let final_a = graph_a.add_node(Box::new(FinalOutput::new()));

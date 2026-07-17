@@ -19,7 +19,7 @@ use std::borrow::Cow;
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::effects::PresetInstance;
+use manifold_core::effects::{PresetInstance, RelightParams};
 
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
@@ -102,22 +102,23 @@ pub fn is_skipped_for(skip: SkipMode, _type_id: &PresetTypeId, fx: &PresetInstan
 /// unknown type id / orphan wire).
 ///
 /// `relight` is the "3D Shading" toggle at the compile level
-/// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P3): when `true`, `def` is passed
+/// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5): `Some(params)` passes `def`
 /// through [`crate::node_graph::relight::relight_augment`] before splicing —
-/// the depth-companion synthesis + fixed relight template appended before
-/// `final_output`. `false` (every production call site today) is the exact
-/// unaugmented def, byte-identical to pre-P3 behavior; P5 wires this to the
-/// real per-instance card toggle.
+/// the depth-companion synthesis + fixed relight template (parameterized by
+/// the instance's live `RelightParams`) appended before `final_output`.
+/// `None` is the exact unaugmented def, byte-identical to pre-P3 behavior —
+/// the wire this function's callers use for every def with no per-instance
+/// toggle in scope (tests, thumbnails, the no-override registry path).
 pub fn splice_def_into_chain(
     graph: &mut Graph,
     source: (NodeInstanceId, &'static str),
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-    relight: bool,
+    relight: Option<&RelightParams>,
 ) -> Option<SpliceResult> {
     let augmented;
-    let def = if relight {
-        augmented = crate::node_graph::relight::relight_augment(def, registry);
+    let def = if let Some(params) = relight {
+        augmented = crate::node_graph::relight::relight_augment(def, registry, params);
         &augmented
     } else {
         def

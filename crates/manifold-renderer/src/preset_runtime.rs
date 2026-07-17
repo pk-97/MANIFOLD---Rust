@@ -694,6 +694,17 @@ fn classify_segment_member(
     if preview_effect == Some(&fx.id) || fx.group_id.is_some() {
         return SegmentMember::Boundary;
     }
+    // `docs/DEPTH_RELIGHT_DESIGN.md` P5: relight augmentation is per-def
+    // (`splice_def_into_chain`'s `relight` argument is a single def's
+    // `RelightParams`), and a fused segment's compiled `view.def` already
+    // folds multiple cards' shapes into one kernel — there's no per-member
+    // slot to splice a second card's template into. A relight-on card stays
+    // a segment `Boundary` so it renders through the ordinary per-card path
+    // (where relight is fully wired) instead of silently losing its toggle
+    // inside a fused run.
+    if fx.relight {
+        return SegmentMember::Boundary;
+    }
     let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
         return SegmentMember::Boundary;
     };
@@ -1068,7 +1079,12 @@ impl PresetRuntime {
                             (prev_node, prev_out_port),
                             &view.def,
                             primitives,
-                            false, // P5 wires the per-instance "3D Shading" toggle here
+                            // No per-member toggle to honor here — a
+                            // relight-on card is excluded from fusion
+                            // eligibility (`classify_segment_member`), so
+                            // every member folded into `view.def` has
+                            // `relight == false`.
+                            None,
                         )
                     else {
                         // Near-unreachable: compile_segment_view verified the def
@@ -1262,10 +1278,18 @@ impl PresetRuntime {
             // identical. `fused_view_for` returns `None` for any shape with no
             // fusable region (or a binding that would strand) → renders unfused.
             let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+            // `docs/DEPTH_RELIGHT_DESIGN.md` P5: a relight-on card is never
+            // fused — `fused_view_for` compiles `effective_def` down to one
+            // opaque kernel with no notion of `relight_augment`'s template,
+            // so fusing would silently drop the "3D Shading" toggle instead
+            // of rendering it. Same veto as the segment path
+            // (`classify_segment_member`) at single-card granularity.
             let fused_view: Option<std::sync::Arc<LoadedPresetView>> =
-                if crate::node_graph::freeze::install::should_render_fused(
-                    preview_effect == Some(&fx.id),
-                ) {
+                if !fx.relight
+                    && crate::node_graph::freeze::install::should_render_fused(
+                        preview_effect == Some(&fx.id),
+                    )
+                {
                     crate::node_graph::freeze::install::fused_view_for(effective_def, base_view)
                 } else {
                     None
@@ -1303,12 +1327,23 @@ impl PresetRuntime {
             } else {
                 &view.canonical_def
             };
+            // The "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` P5):
+            // relight-on cards are excluded from fusion eligibility above
+            // (`classify_segment_member`) and from the single-card fusion
+            // gate too — a relight-on card is never `fused_view.is_some()`
+            // here in practice since fusion itself doesn't special-case
+            // relight, but keeping the toggle live on the unfused splice
+            // path is the one that matters: the template needs to see (and
+            // rebuild against) the actual node graph, not a fused kernel
+            // that doesn't know about `rl_` nodes.
+            let relight_params =
+                fx.relight.then_some(&fx.relight_params);
             let splice_result = match splice_def_into_chain(
                 &mut graph,
                 (prev_node, prev_out_port),
                 splice_def,
                 primitives,
-                false, // P5 wires the per-instance "3D Shading" toggle here
+                relight_params,
             ) {
                 Some(r) => r,
                 None => {
@@ -1326,7 +1361,7 @@ impl PresetRuntime {
                         (prev_node, prev_out_port),
                         &base_view.canonical_def,
                         primitives,
-                        false, // P5 wires the per-instance "3D Shading" toggle here
+                        relight_params,
                     ) {
                         Some(r) => r,
                         None => {
@@ -3408,6 +3443,22 @@ fn compute_topology_hash(
         fx.id.as_str().hash(&mut h);
         fx.effect_type().as_str().hash(&mut h);
         fx.enabled.hash(&mut h);
+        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5): the toggle and
+        // its knobs change what `splice_def_into_chain` builds without
+        // touching `fx.graph` or `graph_structure_version` (the template is
+        // synthesized at splice time, not authored into the def) — fold
+        // them into the rebuild key directly so a toggle flip or a knob
+        // drag rebuilds this chain.
+        fx.relight.hash(&mut h);
+        if fx.relight {
+            fx.relight_params.light_x.to_bits().hash(&mut h);
+            fx.relight_params.light_y.to_bits().hash(&mut h);
+            fx.relight_params.relief.to_bits().hash(&mut h);
+            fx.relight_params.ao_intensity.to_bits().hash(&mut h);
+            fx.relight_params.shadow_softness.to_bits().hash(&mut h);
+            fx.relight_params.gain.to_bits().hash(&mut h);
+            fx.relight_params.height_from.hash(&mut h);
+        }
         // Watched (open-in-editor) target: folded into the rebuild key so
         // opening or closing the editor rebuilds exactly the chain holding this
         // effect, flipping it fused ⇄ unfused (the gate at `should_render_fused`
@@ -3952,6 +4003,59 @@ mod topology_hash_tests {
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
+        );
+    }
+
+    /// `docs/DEPTH_RELIGHT_DESIGN.md` P5, full loop: flip
+    /// `PresetInstance::relight` and rebuild the SAME production path
+    /// (`try_build` → `compute_topology_hash`) real `EditingService`
+    /// commands drive — `manifold-editing`'s
+    /// `toggle_relight_undo_roundtrip` (command_roundtrips.rs) proves the
+    /// command correctly flips this same field through undo/redo;
+    /// `manifold-renderer` can't depend on `manifold-editing` (crate-graph
+    /// direction), so this half of the loop proves the OTHER end: the
+    /// renderer reads that field, mints deterministic `rl_`-prefixed nodes
+    /// when it's on, and the topology hash changes so a toggle actually
+    /// rebuilds — then removes them cleanly when toggled back off.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn toggling_relight_adds_and_removes_rl_nodes_on_rebuild() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let lambert_id = manifold_core::NodeId::new("rl_lambert");
+
+        let mut fx = make_default(PresetTypeId::MIRROR);
+        let hash_off = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+        let cg_off = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
+            .expect("Mirror chain builds with relight off");
+        assert!(
+            cg_off.graph.instance_by_node_id(&lambert_id).is_none(),
+            "relight off must NOT contain the rl_lambert template node",
+        );
+
+        fx.relight = true;
+        let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+        assert_ne!(
+            hash_off, hash_on,
+            "toggling relight MUST change the topology hash — otherwise the \
+             chain never rebuilds and the toggle appears dead.",
+        );
+        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
+            .expect("Mirror chain builds with relight on");
+        assert!(
+            cg_on.graph.instance_by_node_id(&lambert_id).is_some(),
+            "relight on must splice the rl_lambert template node into the built chain",
+        );
+
+        // Toggle back off: the rebuilt chain must lose the template again —
+        // proves this isn't a one-way sticky augmentation.
+        fx.relight = false;
+        let cg_off_again =
+            PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
+                .expect("Mirror chain builds with relight off again");
+        assert!(
+            cg_off_again.graph.instance_by_node_id(&lambert_id).is_none(),
+            "toggling relight back off must remove the rl_ template nodes on rebuild",
         );
     }
 

@@ -918,6 +918,79 @@ fn toggle_effect_undo_roundtrip() {
     assert!(project.settings.master_effects[0].enabled);
 }
 
+/// `docs/DEPTH_RELIGHT_DESIGN.md` P5: the "3D Shading" toggle + its D3 knobs,
+/// addressed by `GraphTarget` — proven here on an effect instance; the same
+/// commands address a generator's `gen_params` identically since both are
+/// `PresetInstance` (the `GraphTarget::Generator` case is exercised
+/// elsewhere in this file for the ordinary graph commands, same resolver).
+#[test]
+fn toggle_relight_undo_roundtrip() {
+    let mut project = make_test_project();
+    project
+        .settings
+        .master_effects
+        .push(PresetInstance::new(PresetTypeId::BLOOM));
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = manifold_core::GraphTarget::Effect(effect_id);
+
+    let mut cmd = ToggleRelightCommand::new(target, false, true);
+    cmd.execute(&mut project);
+    assert!(project.settings.master_effects[0].relight);
+
+    cmd.undo(&mut project);
+    assert!(!project.settings.master_effects[0].relight);
+}
+
+#[test]
+fn set_relight_param_undo_roundtrip() {
+    let mut project = make_test_project();
+    project
+        .settings
+        .master_effects
+        .push(PresetInstance::new(PresetTypeId::BLOOM));
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = manifold_core::GraphTarget::Effect(effect_id);
+    let default_relief = project.settings.master_effects[0].relight_params.relief;
+
+    let mut cmd = SetRelightParamCommand::new(target, RelightField::Relief, default_relief, 0.9);
+    cmd.execute(&mut project);
+    assert_eq!(project.settings.master_effects[0].relight_params.relief, 0.9);
+
+    cmd.undo(&mut project);
+    assert_eq!(
+        project.settings.master_effects[0].relight_params.relief,
+        default_relief
+    );
+}
+
+#[test]
+fn set_relight_height_from_undo_roundtrip() {
+    let mut project = make_test_project();
+    project
+        .settings
+        .master_effects
+        .push(PresetInstance::new(PresetTypeId::BLOOM));
+    let effect_id = project.settings.master_effects[0].id.clone();
+    let target = manifold_core::GraphTarget::Effect(effect_id);
+
+    let mut cmd = SetRelightHeightFromCommand::new(
+        target,
+        RelightHeightFrom::Auto,
+        RelightHeightFrom::InvertedLuminance,
+    );
+    cmd.execute(&mut project);
+    assert_eq!(
+        project.settings.master_effects[0].relight_params.height_from,
+        RelightHeightFrom::InvertedLuminance
+    );
+
+    cmd.undo(&mut project);
+    assert_eq!(
+        project.settings.master_effects[0].relight_params.height_from,
+        RelightHeightFrom::Auto
+    );
+}
+
 #[test]
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
