@@ -608,6 +608,7 @@ pub fn dispatch(
         | PanelAction::SceneSetupRemoveModifier(..)
         | PanelAction::SceneSetupMoveModifier(..)
         | PanelAction::SceneSetupNewScene(..)
+        | PanelAction::SceneSetupExposeParam { .. }
         | PanelAction::ContextClearAutomationLane(..)
         | PanelAction::ContextRemoveAutomationLane(..) => project::dispatch_project(
             action,

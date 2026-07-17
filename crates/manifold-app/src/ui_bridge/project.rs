@@ -594,8 +594,96 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
 
+        // UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): expose the
+        // scene row's inner param on the layer's generator card via the SAME
+        // `ToggleNodeParamExposeCommand` the graph editor's expose glyph
+        // dispatches (`app_render.rs`'s `GraphEditCommand::ToggleNodeParamExpose`
+        // handling), constructed here instead of there because the scene
+        // panel never opens the graph editor's canvas (no `watched_graph_target`
+        // to piggyback on) — same "resolve `GraphTarget::Generator` + the
+        // bundled catalog default" shape as every other fourth-surface write
+        // in this file.
+        //
+        // One-way per P3a: if the param is ALREADY exposed (read via
+        // `scene_vm::is_param_exposed` — same "free read off the def" the
+        // panel's own `RowValue::exposed` uses), this is a no-op — a second
+        // click never un-exposes and never mints a second binding. The panel
+        // emits regardless of lit state (see the action's own doc), so this
+        // guard is the actual one-way enforcement point.
+        PanelAction::SceneSetupExposeParam {
+            layer_id,
+            scope_path,
+            node_doc_id,
+            param_id,
+            object_label,
+            param_label,
+            min,
+            max,
+            default_value,
+            is_angle,
+        } => {
+            let Some(default) = generator_catalog_default(project, layer_id) else {
+                return DispatchResult::handled();
+            };
+            let effective_def = project
+                .timeline
+                .find_layer_by_id(layer_id)
+                .and_then(|(_, layer)| layer.generator_graph().cloned())
+                .unwrap_or_else(|| default.clone());
+            if manifold_renderer::node_graph::scene_vm::is_param_exposed(&effective_def, *node_doc_id, param_id) {
+                return DispatchResult::handled();
+            }
+            let Some(node) = find_node_by_scope(&effective_def, scope_path, *node_doc_id) else {
+                return DispatchResult::handled();
+            };
+            let node_id = node.node_id.clone();
+            let node_handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
+                target,
+                node_id,
+                *node_doc_id,
+                node_handle,
+                param_id.clone(),
+                true,
+                default,
+                format!("{object_label} \u{b7} {param_label}"),
+                *min,
+                *max,
+                *default_value,
+                manifold_core::effects::ParamConvert::Float,
+                *is_angle,
+                Vec::new(),
+            )
+            .with_scope(scope_path.clone());
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+
         _ => DispatchResult::unhandled(),
     }
+}
+
+/// Find the `EffectGraphNode` with doc id `node_doc_id` at `scope_path`
+/// (a path of group-node doc ids to descend into, empty = document root) —
+/// the same addressing every graph command's `.with_scope` takes. Used by
+/// `SceneSetupExposeParam` to read the node's stable `node_id`/`handle`
+/// before constructing `ToggleNodeParamExposeCommand`, which (unlike every
+/// other fourth-surface command in this file) needs that identity as a
+/// constructor argument rather than resolving it internally.
+fn find_node_by_scope<'a>(
+    def: &'a manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32],
+    node_doc_id: u32,
+) -> Option<&'a manifold_core::effect_graph_def::EffectGraphNode> {
+    let mut nodes = def.nodes.as_slice();
+    for group_id in scope_path {
+        let group_node = nodes.iter().find(|n| n.id == *group_id)?;
+        nodes = &group_node.group.as_ref()?.nodes;
+    }
+    nodes.iter().find(|n| n.id == node_doc_id)
 }
 
 /// Resolve `layer_id`'s generator-graph target's catalog default — the same

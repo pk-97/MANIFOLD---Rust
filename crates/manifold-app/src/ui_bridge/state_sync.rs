@@ -1484,7 +1484,7 @@ pub fn sync_inspector_data(
     // marker, resolved): the selection's own layer, falling back to
     // `active_layer`.
     if ui.scene_setup_panel.is_open() {
-        use manifold_renderer::node_graph::scene_vm::SceneVm;
+        use manifold_renderer::node_graph::scene_vm::{SceneVm, is_param_exposed};
         use manifold_ui::panels::scene_setup_panel::{
             AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
             SceneSetupState, SceneSetupVm, TransformRowVm,
@@ -1520,6 +1520,14 @@ pub fn sync_inspector_data(
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
                             // fog_density [0,1] / height_falloff [0,2]).
+                            // UX-P3a: `exposed` is a free read off the SAME
+                            // `def` `SceneVm::from_def` just walked
+                            // (`is_param_exposed` — a second independent
+                            // O(nodes) pass, node doc ids unique
+                            // document-wide) — every row built through `row`/
+                            // `scoped_row` gets a correct lit state for free,
+                            // not just the rows P3a actually wires a mod
+                            // button onto.
                             let row = |node_doc_id: u32,
                                        param_id: &str,
                                        value: f32,
@@ -1531,6 +1539,9 @@ pub fn sync_inspector_data(
                                 min,
                                 max,
                                 driven,
+                                exposed: def
+                                    .as_ref()
+                                    .is_some_and(|d| is_param_exposed(d, node_doc_id, param_id)),
                             };
                             // Scoped variant for a P2 Objects row living
                             // inside the object's own group (material/
@@ -1549,6 +1560,9 @@ pub fn sync_inspector_data(
                                 min,
                                 max,
                                 driven,
+                                exposed: def
+                                    .as_ref()
+                                    .is_some_and(|d| is_param_exposed(d, node_doc_id, param_id)),
                             };
                             let transform_row = |t: &manifold_renderer::node_graph::scene_vm::TransformVm| {
                                 // D12 fix: `t`'s own addresses already carry
@@ -3174,6 +3188,11 @@ fn modifier_param_rows(
             min,
             max,
             driven: driven.contains(key),
+            // UX-P3a scoped mod buttons to Environment/Fog + Objects
+            // transform/material — modifier-stack params aren't part of
+            // this phase's mod-button surface, so this is always `false`
+            // (never read; `build_modifier_numeric_row` draws no button).
+            exposed: false,
         },
     };
     let axis = |label: &'static str, key: &str, default: f32| ModifierParamRowVm::Axis {
@@ -3185,6 +3204,7 @@ fn modifier_param_rows(
                 min: 0.0,
                 max: (AXIS_LABELS.len() - 1) as f32,
                 driven: driven.contains(key),
+                exposed: false,
             },
             labels: AXIS_LABELS.to_vec(),
         },
