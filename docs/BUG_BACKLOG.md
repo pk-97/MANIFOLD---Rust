@@ -172,7 +172,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-227 (gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis) — the P6 move/scale gizmo's red X-axis handle and the P5 grid overlay's red X-axis line use near-identical colors, so with both visible the gizmo's X handle is hard to pick out — found 2026-07-17, `lane/realtime3d-viewport` P6 session, while eyeballing the gizmo demo PNGs
+### BUG-233 (gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis) — the P6 move/scale gizmo's red X-axis handle and the P5 grid overlay's red X-axis line use near-identical colors, so with both visible the gizmo's X handle is hard to pick out — found 2026-07-17, `lane/realtime3d-viewport` P6 session, while eyeballing the gizmo demo PNGs
 
 **Status:** OPEN — LOW (cosmetic; functionally the axes are still distinguishable by direction/geometry and the color IS correct per D8's lock-state contract — a unit test asserts the exact RGBA value — this is purely a legibility issue when both overlays render together).
 
