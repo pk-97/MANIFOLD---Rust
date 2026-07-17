@@ -24,20 +24,6 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
-### VD-029 — SCENE_SETUP_PANEL_DESIGN P1's fog-drag L3 flow regressed to unreachable by BUG-199, not re-fixed at P5 landing
-Landed 2026-07-17 (`docs/landings/2026-07-17-scene-setup-panel-p5-wave-close.md`). P1 originally
-reached L3 for the Fog add+drag gesture (`scripts/ui-flows/scene-setup-add-fog-drag.json`,
-green at P1's own landing). By P5's landing the same flow, run against the same azalea fixture,
-fails: clicking "+ Add Fog" resolves to a screen position past the window's own rendered height
-(the Objects section grew across P2–P5, pushing Lights/Environment/Fog/Camera below the fold),
-and BUG-199 (neither utility dock's `ScrollContainer` receives a real scroll input) means nothing
-can bring it back into a clickable position. The flow file is left in its original P1 form
-(reverted, not shipped with a dead-code workaround) rather than papered over. Burn-down: fixing
-BUG-199 (a real, shared, pre-existing UI-shell gap, scoped out of this design) restores L3 for
-this flow with no changes needed to the flow itself — the gesture and assertions are still
-correct, only the click coordinate resolution is blocked. P5's OWN acceptance demo
-(`scene-setup-modifier-stack.json`) stays green because its target rows sit above the fold.
-
 ### VD-028 — VOLUMETRIC_LIGHT_DESIGN P1–P3: mechanically L2 (PNGs rendered and read by the orchestrator), Peter's look-pass not yet run, and the demos read as a visual miss
 Landed 2026-07-13 (`docs/landings/2026-07-13-volumetric-light-p1-p3.md`). All numeric gates
 (V1–V6, CPU-vs-GPU parity, monotonic performer faders, content-thread perf) pass across both
@@ -289,6 +275,20 @@ landing. VD-005 closed at P2 landing. The full backfill pass over recent landing
 will extend this list.)*
 
 ## Closed
+
+### VD-029 — SCENE_SETUP_PANEL_DESIGN P1's fog-drag L3 flow regressed to unreachable by BUG-199 — CLOSED 2026-07-17 (BUG-199 fixed, BUGFIX_WAVE_2026_07_17_DESIGN.md Lane 1)
+Landed 2026-07-17 (`docs/landings/2026-07-17-scene-setup-panel-p5-wave-close.md`), closed the same
+day. P1 originally reached L3 for the Fog add+drag gesture
+(`scripts/ui-flows/scene-setup-add-fog-drag.json`, green at P1's own landing). By P5's landing the
+same flow, run against the same azalea fixture, failed: clicking "+ Add Fog" resolved to a screen
+position past the window's own rendered height (the Objects section grew across P2–P5, pushing
+Lights/Environment/Fog/Camera below the fold), and BUG-199 (neither utility dock's
+`ScrollContainer` received a real scroll input) meant nothing could bring it back into a clickable
+position. Burn-down, as predicted: fixing BUG-199 (`primary_mouse_wheel` now routes wheel events
+over either dock through the generic `UIEvent::Scroll` pipeline) restored L3 for this flow with no
+change to its gesture/assertion logic — only a `Scroll` step was added before the "+ Add Fog"
+click (the button now sits below the fold by construction, same as the real app). Green again,
+15/15 steps, `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-add-fog-drag.json`.
 
 **2026-07-16 burn-down (Peter's direction)** — the following owed live/look passes were
 waived wholesale: the surfaces ship as-is and anything found in use is filed as a new bug

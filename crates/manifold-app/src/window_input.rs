@@ -692,6 +692,23 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
+            // BUG-199: Audio Setup / Scene Setup docks — route through the
+            // generic `UIEvent::Scroll` pipeline (same mechanism the open-
+            // dropdown branch above uses) so the real app and the headless
+            // `Gesture::Scroll` harness share one path. `contains()` is
+            // already the open-check: a closed dock's rect is `Rect::ZERO`.
+            // No per-panel in-place offset here — the docks rebuild every
+            // frame, which is enough to re-apply the new scroll offset.
+            if self.ws.ui_root.layout.scene_setup().contains(pos)
+                || self.ws.ui_root.layout.audio_setup().contains(pos)
+            {
+                self.ws
+                    .ui_root
+                    .input
+                    .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                return;
+            }
+
             if inspector_rect.contains(pos) {
                 // Scroll the inspector in place — offset the content nodes (the
                 // slot is invalidated once per frame via `take_scrolled_in_place`)
