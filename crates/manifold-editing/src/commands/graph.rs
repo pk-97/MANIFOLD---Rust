@@ -3764,30 +3764,55 @@ fn find_scene_object_at_group_output(
     (node.type_id == "node.scene_object").then_some(producer_id)
 }
 
-/// Walk the D6 modifier chain feeding the group's `node.scene_object`'s own
-/// `vertices` INPUT port, backward to the mesh source — mirrors
-/// `scene_vm.rs::trace_scene_object`'s walk (duplicated for the same
-/// cross-crate reason as `MESH_MODIFIER_TYPE_IDS`). BUG-218: pre-D12 this
-/// walked from `system.group_output`'s own `vertices` OUTPUT port, but D12's
-/// `AddSceneObjectCommand`/importer shape only re-exports `object` at the
-/// group boundary — the group output has no `vertices` port at all on any
-/// real grouped object, so that entry point always failed. The scene_object
-/// is located via the group output's `object` producer
-/// (`find_scene_object_at_group_output`), then the chain is walked from ITS
-/// `vertices` input. Returns the chain in WIRE order (source → … → output),
-/// the mesh source's own `(node_id, port)`, and the scene_object's node id
-/// (splice's terminal re-wire target). `None` on anything unparseable
-/// (unwired `vertices`, a dangling wire, a cycle, no resolvable
-/// scene_object) — every caller must refuse the edit rather than guess a
-/// splice point, matching the Vm's own `modifier_chain_parseable` posture.
+/// `walk_mesh_modifier_chain`'s result: the modifier chain in wire order,
+/// the mesh source's own `(node_id, port)`, and the scene_object id for the
+/// import shape (`None` for the migrated/starter shape — see that
+/// function's doc comment for the full duality).
+type ModifierChainWalk = (Vec<u32>, (u32, String), Option<u32>);
+
+/// Walk the D6 modifier chain feeding this group's mesh output, backward to
+/// the mesh source — mirrors `scene_vm.rs::trace_scene_object`'s walk
+/// (duplicated for the same cross-crate reason as `MESH_MODIFIER_TYPE_IDS`).
+///
+/// BUG-218/escape: two legitimate D12-era document shapes exist for the
+/// group `full_modifier_scope` descends into, and both are committed forms
+/// — NOT a fallback for malformed JSON (see `scene_vm.rs:617-618` and the
+/// group-boundary-crossing walk around `scene_vm.rs:759`, which handle the
+/// same duality):
+///   1. **Import shape** (`AddSceneObjectCommand` / glTF importer): the
+///      group's body contains its OWN `node.scene_object`, and the group
+///      boundary re-exports only `object` — no `vertices` port at all. Walk
+///      from the scene_object's own `vertices` INPUT port instead (resolved
+///      via `find_scene_object_at_group_output`).
+///   2. **Migrated/starter shape** (`migrate_scene_object_wires`, e.g. the
+///      bundled `SceneStarter.json`): the minted `node.scene_object` stays a
+///      ROOT-level SIBLING of this group rather than nested inside it — the
+///      group's body is mesh+modifiers only and still re-exports `vertices`
+///      directly via `system.group_output` (the pre-D12 shape, now feeding
+///      a scene_object elsewhere instead of `render_scene` directly). Walk
+///      from `group_out_id`'s own `vertices` OUTPUT port.
+///
+/// Which shape applies is resolved per-call: if `group_out_id`'s `object`
+/// port has a `node.scene_object` producer (shape 1), use it; otherwise fall
+/// through to shape 2's `vertices` port. Returns the chain in WIRE order
+/// (source → … → output), the mesh source's own `(node_id, port)`, and
+/// `Some(scene_object_id)` for shape 1 / `None` for shape 2 (splice's
+/// terminal re-wire target — `None` means re-wire `group_out_id.vertices`
+/// directly). `None` on anything unparseable in BOTH shapes (unwired
+/// `vertices`, a dangling wire, a cycle) — every caller must refuse the edit
+/// rather than guess a splice point, matching the Vm's own
+/// `modifier_chain_parseable` posture.
 fn walk_mesh_modifier_chain(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
     group_out_id: u32,
-) -> Option<(Vec<u32>, (u32, String), u32)> {
-    let scene_object_id = find_scene_object_at_group_output(nodes, wires, group_out_id)?;
+) -> Option<ModifierChainWalk> {
+    let scene_object_id = find_scene_object_at_group_output(nodes, wires, group_out_id);
     let mut chain_rev: Vec<u32> = Vec::new();
-    let mut cursor = wire_producer(wires, scene_object_id, "vertices")?;
+    let mut cursor = match scene_object_id {
+        Some(id) => wire_producer(wires, id, "vertices")?,
+        None => wire_producer(wires, group_out_id, "vertices")?,
+    };
     loop {
         let (node_id, port) = cursor.clone();
         let node = nodes.iter().find(|n| n.id == node_id)?;
@@ -3825,14 +3850,15 @@ fn detach_modifier(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>, 
 }
 
 /// Splice `node_id` (already present in `nodes`, NOT currently wired into the
-/// chain) into the chain feeding the group's `node.scene_object` at
-/// `position` (D6: `0` = just after the mesh source; `None` = end of stack,
-/// just before the scene_object's `vertices` input — clamped to the chain's
-/// length). Shared by Insert (a freshly created node) and Move (an existing
-/// node, freshly detached by `detach_modifier`). BUG-218: the terminal
-/// re-wire target is the scene_object's own `vertices` INPUT port
-/// (`walk_mesh_modifier_chain`'s resolved scene_object id), not the group
-/// output's `vertices` port — that port doesn't exist post-D12.
+/// chain) into the chain feeding this group's mesh output at `position` (D6:
+/// `0` = just after the mesh source; `None` = end of stack, just before the
+/// terminal port — clamped to the chain's length). Shared by Insert (a
+/// freshly created node) and Move (an existing node, freshly detached by
+/// `detach_modifier`). BUG-218/escape: the terminal re-wire target follows
+/// `walk_mesh_modifier_chain`'s resolved shape — the scene_object's own
+/// `vertices` INPUT port for the import shape (`Some(id)`), or
+/// `group_out_id`'s own `vertices` OUTPUT port for the migrated/starter
+/// shape (`None`) — see that function's doc comment for the full duality.
 fn splice_modifier_into_chain(
     nodes: &[EffectGraphNode],
     wires: &mut Vec<EffectGraphWire>,
@@ -3846,7 +3872,10 @@ fn splice_modifier_into_chain(
     let (succ_node, succ_port) = if p < chain.len() {
         (chain[p], "in".to_string())
     } else {
-        (scene_object_id, "vertices".to_string())
+        match scene_object_id {
+            Some(id) => (id, "vertices".to_string()),
+            None => (group_out_id, "vertices".to_string()),
+        }
     };
     let idx = wires.iter().position(|w| {
         w.from_node == pred_node && w.from_port == pred_port && w.to_node == succ_node && w.to_port == succ_port
@@ -7937,6 +7966,68 @@ mod tests {
         }
     }
 
+    /// A one-object scene in the OTHER legitimate D12-era shape —
+    /// `migrate_scene_object_wires`'s output (e.g. the bundled
+    /// `SceneStarter.json`): the mesh-producer group (id 1) contains ONLY
+    /// mesh (id 10) → modifiers (ids 11, 12, …) → `system.group_output` (id
+    /// 99, re-exporting `vertices` DIRECTLY — the pre-D12 shape). The minted
+    /// `node.scene_object` (id 90) stays a ROOT-LEVEL SIBLING of the group,
+    /// wired `group.vertices -> scene_object.vertices` (the migration's
+    /// "same-scope re-point" — see `scene_object_migration.rs`'s
+    /// `migrate_scope`, which only ever retargets the wire's `to_node`/
+    /// `to_port`, never touches the group's own body). BUG-218/escape: the
+    /// group being edited here has NO scene_object inside it and NO
+    /// `object` port at all — `walk_mesh_modifier_chain` must fall through
+    /// to walking the group output's own `vertices` port, matching the
+    /// pre-D12 behavior this shape still relies on.
+    fn migrated_object_group_scene(modifier_type_ids: &[&str]) -> EffectGraphDef {
+        let mesh = plain_node(10, "mesh", "node.cube_mesh");
+        let mut body_nodes = vec![mesh];
+        let mut body_wires = Vec::new();
+        let mut prev = (10u32, "vertices".to_string());
+        for (i, type_id) in modifier_type_ids.iter().enumerate() {
+            let id = 11 + i as u32;
+            body_nodes.push(plain_node(id, &format!("mod{i}"), type_id));
+            body_wires.push(scene_build_wire(prev.0, &prev.1, id, "in"));
+            prev = (id, "out".to_string());
+        }
+        let mut out_node = plain_node(99, "out", GROUP_OUTPUT_TYPE_ID);
+        out_node.handle = None;
+        body_wires.push(scene_build_wire(prev.0, &prev.1, 99, "vertices"));
+        body_nodes.push(out_node);
+
+        let mut group_node = plain_node(1, "Hero", GROUP_TYPE_ID);
+        group_node.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: vec![InterfacePortDef {
+                    name: "vertices".to_string(),
+                    port_type: "Array(Vertex)".to_string(),
+                }],
+                params: Vec::new(),
+            },
+            nodes: body_nodes,
+            wires: body_wires,
+            tint: None,
+        }));
+
+        let scene_object = plain_node(90, "Hero", "node.scene_object");
+        let mut render = plain_node(0, "render", "node.render_scene");
+        render.params.insert("objects".to_string(), SerializedParamValue::Float { value: 1.0 });
+
+        EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![group_node, scene_object, render],
+            wires: vec![
+                scene_build_wire(1, "vertices", 90, "vertices"),
+                scene_build_wire(90, "object", 0, "object_0"),
+            ],
+        }
+    }
+
     /// Wrap `def`'s whole top level inside a fresh outer group at `outer_id`
     /// — the "nested-group placement" gate: the object's group (id 1) now
     /// lives at `scope_path = [outer_id]` instead of root, so
@@ -7962,9 +8053,12 @@ mod tests {
     /// Read the modifier stack's node ids back off `def`, in wire order —
     /// the "Vm chain-trace tests: stack order matches wire order" gate,
     /// re-derived independently of `scene_vm.rs` (this crate can't depend on
-    /// it) by walking the SAME scene_object-`vertices`/`in` chain shape
-    /// (BUG-218: re-anchored on the scene_object's own `vertices` input,
-    /// found via the group output's `object` producer, same as production).
+    /// it) by walking the SAME chain shape production code walks. BUG-218/
+    /// escape: mirrors `walk_mesh_modifier_chain`'s dual-shape resolution —
+    /// if the group output's `object` port resolves to a scene_object,
+    /// anchor on ITS `vertices` input (import shape); otherwise anchor on
+    /// the group output's own `vertices` port directly (migrated/starter
+    /// shape, `scene_vm.rs:617-618`).
     fn modifier_ids_in_wire_order(def: &EffectGraphDef, scope: &[u32]) -> Vec<u32> {
         let mut nodes: &[EffectGraphNode] = &def.nodes;
         let mut wires: &[EffectGraphWire] = &def.wires;
@@ -7975,15 +8069,12 @@ mod tests {
             wires = &body.wires;
         }
         let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
-        let scene_object_id = wires
-            .iter()
-            .find(|w| w.to_node == out_id && w.to_port == "object")
-            .map(|w| w.from_node)
-            .unwrap();
+        let scene_object_id = wires.iter().find(|w| w.to_node == out_id && w.to_port == "object").map(|w| w.from_node);
+        let anchor = scene_object_id.unwrap_or(out_id);
         let mut chain = Vec::new();
         let mut cursor = wires
             .iter()
-            .find(|w| w.to_node == scene_object_id && w.to_port == "vertices")
+            .find(|w| w.to_node == anchor && w.to_port == "vertices")
             .map(|w| (w.from_node, w.from_port.clone()));
         while let Some((node_id, _)) = cursor {
             let node = nodes.iter().find(|n| n.id == node_id).unwrap();
@@ -8024,6 +8115,86 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair)");
+    }
+
+    /// BUG-218 escape: the migrated/starter shape (`migrate_scene_object_wires`
+    /// — the scene_object lives OUTSIDE this group, the group only exports
+    /// `vertices`) must still splice via the group output's `vertices` port,
+    /// not the import shape's scene_object-input anchor. Regression gate for
+    /// the escape found landing this fix: the earlier version of this fix
+    /// only handled the import shape and silently broke this one.
+    #[test]
+    fn insert_modifier_on_migrated_shape_splices_at_group_output_and_undo_restores() {
+        let (mut project, fx) = project_with_graph(migrated_object_group_scene(&[]));
+        let before = graph_of(&project, &fx).clone();
+
+        let mut cmd = InsertMeshModifierCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            "node.bend_mesh".to_string(),
+            None,
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let ids = modifier_ids_in_wire_order(def, &[1]);
+        assert_eq!(ids.len(), 1, "the migrated shape's group output still gains the modifier");
+        let inserted = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap().nodes.iter().find(|n| n.id == ids[0]).unwrap();
+        assert_eq!(inserted.type_id, "node.bend_mesh");
+        // The root-level scene_object (id 90) is untouched — its own
+        // `vertices` wire still comes straight from the group's boundary.
+        assert!(
+            def.wires.iter().any(|w| w.from_node == 1 && w.from_port == "vertices" && w.to_node == 90 && w.to_port == "vertices"),
+            "scene_object still wired directly from the group's vertices boundary"
+        );
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair), migrated shape");
+    }
+
+    /// Companion to the insert gate above: Remove/Move on the migrated shape
+    /// also splice at the group output, not a (nonexistent, in this shape)
+    /// scene_object input.
+    #[test]
+    fn remove_and_move_modifier_on_migrated_shape_splice_at_group_output_and_undo_restores() {
+        let (mut project, fx) =
+            project_with_graph(migrated_object_group_scene(&["node.bend_mesh", "node.twist_mesh", "node.taper_mesh"]));
+        let before = graph_of(&project, &fx).clone();
+        let ids0 = modifier_ids_in_wire_order(&before, &[1]); // [bend, twist, taper]
+
+        let mut remove_cmd = RemoveMeshModifierCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            ids0[1], // remove the middle (twist)
+            mirror_catalog_default(),
+        );
+        remove_cmd.execute(&mut project);
+        let after_remove = graph_of(&project, &fx);
+        assert_eq!(modifier_ids_in_wire_order(after_remove, &[1]), vec![ids0[0], ids0[2]]);
+        remove_cmd.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &before, "undo restores after removing the middle, migrated shape");
+
+        let mut move_cmd = MoveMeshModifierCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            ids0[2], // move taper (last) to the front
+            0,
+            mirror_catalog_default(),
+        );
+        move_cmd.execute(&mut project);
+        let after_move = graph_of(&project, &fx);
+        assert_eq!(
+            modifier_ids_in_wire_order(after_move, &[1]),
+            vec![ids0[2], ids0[0], ids0[1]],
+            "taper moved to the front, migrated shape"
+        );
+        move_cmd.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &before, "undo restores after the move, migrated shape");
     }
 
     #[test]
