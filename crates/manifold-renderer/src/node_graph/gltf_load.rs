@@ -1350,24 +1350,85 @@ pub(crate) struct GltfImportSummary {
     pub animation_report_lines: Vec<String>,
 }
 
-/// One LINEAR-sampled `[f32; 3]` keyframe track (glTF `translation` or
-/// `scale` channel) — GLTF_ANIMATION_DESIGN.md A1. `times` are seconds,
+/// glTF sampler interpolation mode, as encoded in the runtime track
+/// tables' trailing `mode` column (0/1/2 — `node_graph::primitives::
+/// gltf_anim_shared`'s `Interp`) — IMPORT_ANYTHING_WAVE_DESIGN.md W2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GltfInterp {
+    #[default]
+    Linear,
+    Step,
+    CubicSpline,
+}
+
+impl GltfInterp {
+    fn from_gltf(interp: gltf::animation::Interpolation) -> Self {
+        match interp {
+            gltf::animation::Interpolation::Linear => GltfInterp::Linear,
+            gltf::animation::Interpolation::Step => GltfInterp::Step,
+            gltf::animation::Interpolation::CubicSpline => GltfInterp::CubicSpline,
+        }
+    }
+
+    pub(crate) fn to_f32(self) -> f32 {
+        match self {
+            GltfInterp::Linear => 0.0,
+            GltfInterp::Step => 1.0,
+            GltfInterp::CubicSpline => 2.0,
+        }
+    }
+}
+
+/// One keyframe track (glTF `translation`/`scale` channel), any of the
+/// three glTF sampler interpolation modes — GLTF_ANIMATION_DESIGN.md A1,
+/// extended by IMPORT_ANYTHING_WAVE_DESIGN.md W2. `times` are seconds,
 /// non-decreasing per spec (`input` accessor); `values[i]` is the pose at
-/// `times[i]`. Non-LINEAR samplers are not represented here — see
-/// [`GltfAnimationInfo::skipped_channels`].
-#[derive(Debug, Clone, PartialEq)]
+/// `times[i]`. `in_tangents`/`out_tangents` are populated (same length as
+/// `values`) only when `mode == CubicSpline`; empty otherwise — glTF's own
+/// per-keyframe in-tangent/out-tangent triple, needed for the Hermite
+/// sampler in `gltf_anim_shared.rs`.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Vec3Track {
     pub times: Vec<f32>,
     pub values: Vec<[f32; 3]>,
+    pub mode: GltfInterp,
+    pub in_tangents: Vec<[f32; 3]>,
+    pub out_tangents: Vec<[f32; 3]>,
 }
 
-/// One LINEAR-sampled quaternion (`[x, y, z, w]`) keyframe track (glTF
-/// `rotation` channel). Sampling slerps between keyframes — see
-/// `node.gltf_animation_source`.
-#[derive(Debug, Clone, PartialEq)]
+/// One quaternion (`[x, y, z, w]`) keyframe track (glTF `rotation`
+/// channel), any interpolation mode. LINEAR/STEP sampling slerps/holds; see
+/// [`Vec3Track`] for the CUBICSPLINE tangent convention.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct QuatTrack {
     pub times: Vec<f32>,
     pub values: Vec<[f32; 4]>,
+    pub mode: GltfInterp,
+    pub in_tangents: Vec<[f32; 4]>,
+    pub out_tangents: Vec<[f32; 4]>,
+}
+
+impl Vec3Track {
+    /// Keyframe `i`'s (in-tangent, out-tangent) — real values for
+    /// CUBICSPLINE, zero (unused by the LINEAR/STEP sampler) otherwise.
+    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 3], [f32; 3]) {
+        if self.mode == GltfInterp::CubicSpline {
+            (self.in_tangents[i], self.out_tangents[i])
+        } else {
+            ([0.0; 3], [0.0; 3])
+        }
+    }
+}
+
+impl QuatTrack {
+    /// Same as [`Vec3Track::tangents_at`] for a quaternion track.
+    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 4], [f32; 4]) {
+        if self.mode == GltfInterp::CubicSpline {
+            (self.in_tangents[i], self.out_tangents[i])
+        } else {
+            ([0.0; 4], [0.0; 4])
+        }
+    }
 }
 
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
@@ -1438,13 +1499,12 @@ pub(crate) struct GltfObjectAnimation {
 }
 
 /// Parse every `document.animations()` entry into its per-node TRS
-/// tracks. LINEAR interpolation only (A1 scope) — STEP/CUBICSPLINE
-/// channels are recorded in `skipped_channels`, never silently dropped
-/// and never approximated as LINEAR. Morph-weight channels (`path ==
-/// "weights"`) are decoded into [`GltfNodeAnimation::weights`]
-/// (GLTF_ANIMATION_DESIGN.md A3) — only an unreadable weights accessor
-/// (a length that doesn't divide evenly by the keyframe count) still
-/// lands in `skipped_channels`.
+/// tracks. LINEAR, STEP, and CUBICSPLINE interpolation are all supported
+/// for translation/rotation/scale channels (GLTF_ANIMATION_DESIGN.md A1 +
+/// IMPORT_ANYTHING_WAVE_DESIGN.md W2). Morph-weight channels stay
+/// LINEAR-only (A3 scope, unchanged by W2) — a non-LINEAR weights channel
+/// still lands in `skipped_channels`, same as an unreadable weights
+/// accessor (a length that doesn't divide evenly by the keyframe count).
 fn parse_animations(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
@@ -1460,13 +1520,15 @@ fn parse_animations(
                 let target = channel.target();
                 let node_index = target.node().index();
                 let interpolation = sampler.interpolation();
-                if interpolation != gltf::animation::Interpolation::Linear {
+                let is_weights = target.property() == gltf::animation::Property::MorphTargetWeights;
+                if is_weights && interpolation != gltf::animation::Interpolation::Linear {
                     skipped_channels.push(format!(
-                        "node {node_index}: {interpolation:?} interpolation not supported \
-                         (GLTF_ANIMATION_DESIGN.md A1 is LINEAR-only; STEP/CUBICSPLINE Deferred)"
+                        "node {node_index}: {interpolation:?} interpolation not supported on \
+                         morph-weight channels (GLTF_ANIMATION_DESIGN.md A3 is LINEAR-only)"
                     ));
                     continue;
                 }
+                let mode = GltfInterp::from_gltf(interpolation);
                 let reader = channel.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
                 let Some(times) = reader.read_inputs().map(|it| it.collect::<Vec<f32>>()) else {
                     skipped_channels.push(format!(
@@ -1485,15 +1547,16 @@ fn parse_animations(
                 });
                 match outputs {
                     gltf::animation::util::ReadOutputs::Translations(it) => {
-                        entry.translation =
-                            Some(Vec3Track { times, values: it.collect() });
+                        let raw: Vec<[f32; 3]> = it.collect();
+                        entry.translation = Some(vec3_track_from_raw(times, raw, mode));
                     }
                     gltf::animation::util::ReadOutputs::Scales(it) => {
-                        entry.scale = Some(Vec3Track { times, values: it.collect() });
+                        let raw: Vec<[f32; 3]> = it.collect();
+                        entry.scale = Some(vec3_track_from_raw(times, raw, mode));
                     }
                     gltf::animation::util::ReadOutputs::Rotations(it) => {
-                        entry.rotation =
-                            Some(QuatTrack { times, values: it.into_f32().collect() });
+                        let raw: Vec<[f32; 4]> = it.into_f32().collect();
+                        entry.rotation = Some(quat_track_from_raw(times, raw, mode));
                     }
                     gltf::animation::util::ReadOutputs::MorphTargetWeights(it) => {
                         // glTF interleaves every target's weight per
@@ -1526,6 +1589,47 @@ fn parse_animations(
             }
         })
         .collect()
+}
+
+/// Build a [`Vec3Track`] from a channel's raw decoded output. For
+/// CUBICSPLINE, glTF's output accessor packs `3 * times.len()` elements —
+/// per keyframe, an in-tangent, the value, and an out-tangent, in that
+/// order (glTF 2.0 spec, `Interpolation::CubicSpline` doc) — de-interleaved
+/// here into three same-length arrays. LINEAR/STEP outputs are `times.len()`
+/// values with no tangents.
+fn vec3_track_from_raw(times: Vec<f32>, raw: Vec<[f32; 3]>, mode: GltfInterp) -> Vec3Track {
+    if mode == GltfInterp::CubicSpline {
+        let n = times.len();
+        let mut in_tangents = Vec::with_capacity(n);
+        let mut values = Vec::with_capacity(n);
+        let mut out_tangents = Vec::with_capacity(n);
+        for triple in raw.chunks_exact(3) {
+            in_tangents.push(triple[0]);
+            values.push(triple[1]);
+            out_tangents.push(triple[2]);
+        }
+        Vec3Track { times, values, mode, in_tangents, out_tangents }
+    } else {
+        Vec3Track { times, values: raw, mode, in_tangents: Vec::new(), out_tangents: Vec::new() }
+    }
+}
+
+/// Same as [`vec3_track_from_raw`] for a quaternion (`[x, y, z, w]`) track.
+fn quat_track_from_raw(times: Vec<f32>, raw: Vec<[f32; 4]>, mode: GltfInterp) -> QuatTrack {
+    if mode == GltfInterp::CubicSpline {
+        let n = times.len();
+        let mut in_tangents = Vec::with_capacity(n);
+        let mut values = Vec::with_capacity(n);
+        let mut out_tangents = Vec::with_capacity(n);
+        for triple in raw.chunks_exact(3) {
+            in_tangents.push(triple[0]);
+            values.push(triple[1]);
+            out_tangents.push(triple[2]);
+        }
+        QuatTrack { times, values, mode, in_tangents, out_tangents }
+    } else {
+        QuatTrack { times, values: raw, mode, in_tangents: Vec::new(), out_tangents: Vec::new() }
+    }
 }
 
 /// For every mesh-owning node in the scene, its ancestor chain (root
@@ -2945,6 +3049,58 @@ mod animation_tests {
             .join("../../tests/fixtures/gltf/khronos")
     }
 
+    fn hostile_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/hostile")
+    }
+
+    /// IMPORT_ANYTHING_WAVE_DESIGN.md W2 (BUG-187's STEP half): before this
+    /// lane, `step_interp.glb`'s translation channel was dropped with a
+    /// report line (`gltf_load.rs`'s old LINEAR-only gate). Asserts it now
+    /// parses into a real track carrying `GltfInterp::Step`, never
+    /// approximated as LINEAR.
+    #[test]
+    fn step_interp_fixture_parses_as_step_not_dropped() {
+        let path = hostile_dir().join("step_interp.glb");
+        assert!(path.exists(), "step_interp.glb fixture missing at {}", path.display());
+        let (document, buffers, _images) = import_glb(&path).expect("parse step_interp.glb");
+        let animations = parse_animations(&document, &buffers);
+        assert_eq!(animations.len(), 1);
+        assert!(animations[0].skipped_channels.is_empty(), "STEP must not be skipped");
+        let node = &animations[0].nodes[0];
+        let t = node.translation.as_ref().expect("translation track");
+        assert_eq!(t.mode, GltfInterp::Step);
+        assert_eq!(t.times, vec![0.0, 0.5, 1.0, 1.5]);
+    }
+
+    /// Same as [`step_interp_fixture_parses_as_step_not_dropped`] for
+    /// `cubicspline_interp.glb` — also asserts the in/out tangents
+    /// de-interleaved correctly (all-zero in this fixture) and the
+    /// keyframe VALUES survived the de-interleave untouched.
+    #[test]
+    fn cubicspline_interp_fixture_parses_with_tangents_deinterleaved() {
+        let path = hostile_dir().join("cubicspline_interp.glb");
+        assert!(path.exists(), "cubicspline_interp.glb fixture missing at {}", path.display());
+        let (document, buffers, _images) =
+            import_glb(&path).expect("parse cubicspline_interp.glb");
+        let animations = parse_animations(&document, &buffers);
+        assert_eq!(animations.len(), 1);
+        assert!(animations[0].skipped_channels.is_empty(), "CUBICSPLINE must not be skipped");
+        let node = &animations[0].nodes[0];
+        let t = node.translation.as_ref().expect("translation track");
+        assert_eq!(t.mode, GltfInterp::CubicSpline);
+        assert_eq!(t.times, vec![0.0, 0.5, 1.0, 1.5]);
+        assert_eq!(
+            t.values,
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
+            "de-interleaving must not disturb the value triple's own numbers"
+        );
+        assert_eq!(t.in_tangents.len(), 4);
+        assert_eq!(t.out_tangents.len(), 4);
+        for tangent in t.in_tangents.iter().chain(t.out_tangents.iter()) {
+            assert_eq!(*tangent, [0.0, 0.0, 0.0], "this fixture's tangents are authored all-zero");
+        }
+    }
+
     /// GLTF_ANIMATION_DESIGN.md A1 gate fixture. Re-derived inventory
     /// finding (this session): `BoxAnimated.glb` is NOT the "one node,
     /// one mesh, one material" asset the phase brief assumed — it has
@@ -3033,22 +3189,29 @@ mod animation_tests {
         let animations = parse_animations(&document, &buffers);
         assert_eq!(animations.len(), 9, "one animation clip per channel in this fixture");
 
-        // Exactly 3 of the 9 clips (nodes 1, 5, 8 per the fixture's own
-        // authoring) use LINEAR interpolation and must produce a track;
-        // the other 6 (STEP/CUBICSPLINE) must be reported, never
-        // silently dropped, and never sampled as if they were LINEAR.
-        let linear_tracks: usize = animations.iter().map(|a| a.nodes.len()).sum();
+        // IMPORT_ANYTHING_WAVE_DESIGN.md W2: all 9 clips now parse (3
+        // LINEAR + 3 STEP + 3 CUBICSPLINE, per the fixture's own naming —
+        // "Step Scale"/"Linear Scale"/"CubicSpline Scale" etc.) — nothing
+        // skipped, no TRS channel silently dropped or approximated.
+        let tracks: usize = animations.iter().map(|a| a.nodes.len()).sum();
         let skipped: usize = animations.iter().map(|a| a.skipped_channels.len()).sum();
-        assert_eq!(linear_tracks, 3, "LINEAR channels: Scale/Rotation/Translation, one each");
-        assert_eq!(skipped, 6, "STEP + CUBICSPLINE channels must be reported, not dropped");
-        for a in &animations {
-            for line in &a.skipped_channels {
-                assert!(
-                    line.contains("interpolation not supported"),
-                    "unexpected skip reason: {line}"
-                );
-            }
-        }
+        assert_eq!(tracks, 9, "every clip's Scale/Rotation/Translation channel must parse");
+        assert_eq!(skipped, 0, "STEP and CUBICSPLINE are supported now — nothing to report");
+
+        let mode_of = |name: &str| -> GltfInterp {
+            let anim = animations.iter().find(|a| a.name.as_deref() == Some(name)).unwrap();
+            let node = &anim.nodes[0];
+            node.translation
+                .as_ref()
+                .map(|t| t.mode)
+                .or_else(|| node.rotation.as_ref().map(|r| r.mode))
+                .or_else(|| node.scale.as_ref().map(|s| s.mode))
+                .unwrap()
+        };
+        assert_eq!(mode_of("Step Scale"), GltfInterp::Step);
+        assert_eq!(mode_of("Linear Scale"), GltfInterp::Linear);
+        assert_eq!(mode_of("CubicSpline Scale"), GltfInterp::CubicSpline);
+        assert_eq!(mode_of("CubicSpline Rotation"), GltfInterp::CubicSpline);
     }
 }
 
