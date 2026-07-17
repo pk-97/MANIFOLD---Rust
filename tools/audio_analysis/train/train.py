@@ -1,5 +1,5 @@
-"""P2 -- trainer for the Audio Event Classifier
-(docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md D5/D7/D8, §5 P2). Dev-only, never
+"""P2/P3 R1 -- trainer for the Audio Event Classifier
+(docs/AUDIO_EVENT_CLASSIFIER_DESIGN.md D5/D7/D8, §5 P2/P3). Dev-only, never
 ships (D7): trains train.model.EventClassifierCNN on train.dataset's DEV-
 only corpus, prints the checkpoint gate P2 asks for, and writes a torch
 checkpoint train/export.py and manifold_audio/stage1_dsp_detection.py's
@@ -9,18 +9,44 @@ Read-back this file encodes:
   - D5: cross-entropy, small CNN (train.model), <1ms single-hit CPU
     inference is a P4 concern, not trained-for here.
   - D7: Python/PyTorch trainer, dev-only, lives in tools/audio_analysis/train/.
-  - D8: NO ship bar applies at P2 -- "the number is the deliverable", not a
-    pass/fail. The bar (per-class F1 vs a floor) is P3/P4's job.
-  - P2 brief: seeded, class-balanced sampling (`other` capped per-epoch to
-    <=2x the largest drum class), AdamW + cosine schedule, ~100 epochs or
-    early stop on a plateau, MPS with CPU fallback, prints a held-back 10%
-    per-class P/R/F1 table + confusion matrix on a split done BY TRACK (a
-    track's patches never straddle train/val).
-  - FORBIDDEN (P2 brief): no read of the two ship-candidate-reserved
+  - D8: NO ship bar applies at P2/P3 -- "the number is the deliverable", not
+    a pass/fail. The bar (per-class F1 vs a floor) is a P3-final/P4 concern.
+  - P2 brief: seeded, AdamW + cosine schedule, ~100 epochs or early stop on
+    a plateau, MPS with CPU fallback, prints a held-back 10% per-class P/R/F1
+    table + confusion matrix on a split done BY TRACK (a track's patches
+    never straddle train/val).
+  - FORBIDDEN (P2/P3 brief): no read of the two ship-candidate-reserved
     liveshow songs (train.dataset already excludes them at the source-
     loader level -- this file never re-derives or names them); no data-
-    recipe edits beyond P1's pipeline except the `other` cap named above
-    (that IS this phase's own knob, per the brief).
+    recipe edits beyond P1's pipeline except the rebalancing knobs below
+    (P3's own per-round knob).
+
+P3 ROUND 1 -- rebalancing recipe (`--recipe rebalance_v1`, now the default;
+the exact P2 behavior stays reproducible via `--recipe p2`). Diagnosis this
+round responds to (P2's val confusion matrix, read from the committed
+checkpoint): of 788 true `kick` validation patches, 439 (55.7%) were
+predicted `other` -- by far the single largest error mass in the whole
+matrix, and `other`'s per-epoch cap (P2: 2x the largest drum class, drawn
+uniformly, uniform CE loss) is the direct lever on it. Three knobs, dialed
+together as one recipe (none touch data sources, patch geometry, or the
+architecture -- P3 round-1 scope is rebalancing only):
+  1. `other` per-epoch cap: 2.0x -> 1.0x the largest raw drum class. Halves
+     `other`'s share of every epoch's gradient signal, aimed squarely at
+     the kick->other leak above.
+  2. Per-class loss weights: sqrt-inverse-frequency (not full inverse-
+     frequency) over each class's RAW training-split count, normalized to
+     mean 1 across the 6 classes. sqrt-damped specifically because knob 3
+     already oversamples the same thin classes -- stacking full inverse-
+     frequency weight on top of oversampling would double-count the
+     correction for `synth` (128 raw examples) and risked an unstable
+     ~25x combined up-weight; sqrt keeps the two mechanisms complementary
+     rather than compounding.
+  3. Per-class oversampling: every drum class's pool is redrawn (with
+     replacement when needed) up to parity with the largest raw drum class
+     (snare), capped at `OVERSAMPLE_MAX_MULTIPLIER`x its own raw count so a
+     very thin class (synth, one pinned-to-train source track) isn't
+     replayed enough times in one epoch to destabilize training on 128
+     unique patches.
 """
 from __future__ import annotations
 
@@ -54,8 +80,31 @@ WEIGHT_DECAY = 1e-2
 VAL_FRACTION = 0.10
 EARLY_STOP_PATIENCE = 15
 EARLY_STOP_MIN_DELTA = 1e-4
-OTHER_CAP_MULTIPLIER = 2.0  # P2 brief: cap `other` per-epoch to <=2x the largest drum class
 NORMALIZATION_STD_FLOOR = 1e-6
+
+# --- Rebalancing recipes (P3 round 1) -------------------------------------
+# `p2` reproduces the exact P2 checkpoint recipe (uniform CE, no
+# oversampling, `other` capped at 2x the largest raw drum class). `
+# rebalance_v1` is P3 round 1's recipe -- see module docstring for the
+# per-knob rationale. DEFAULT_RECIPE is rebalance_v1: P2's checkpoint
+# numbers are already committed to the dev scoreboard, so overwriting the
+# v1 artifacts with this round's model is the expected default; `--recipe
+# p2` reruns the old recipe on demand for comparison.
+RECIPE_P2 = "p2"
+RECIPE_REBALANCE_V1 = "rebalance_v1"
+RECIPES = (RECIPE_P2, RECIPE_REBALANCE_V1)
+DEFAULT_RECIPE = RECIPE_REBALANCE_V1
+
+OTHER_CAP_MULTIPLIER_P2 = 2.0
+OTHER_CAP_MULTIPLIER_REBALANCE_V1 = 1.0
+# Ceiling on how many times a thin drum class's raw pool may be replayed
+# (with replacement) in one epoch under rebalance_v1 -- keeps `synth` (128
+# raw examples, a single pinned-to-train source track) from being
+# oversampled all the way to snare's ~2200 (a ~17x replay of the same 128
+# unique patches); 6x is the compromise: real parity for classes within
+# ~2-3x of the largest drum class (kick, hat, perc), a bounded rather than
+# maximal correction for synth.
+OVERSAMPLE_MAX_MULTIPLIER = 6.0
 
 MODELS_DIR = DATA_ROOT / "models"
 DEFAULT_CHECKPOINT_PATH = MODELS_DIR / "audio_event_classifier_v1.pt"
@@ -204,21 +253,41 @@ def _fit_normalization(mel: torch.Tensor, side: torch.Tensor) -> Tuple[torch.Ten
 
 
 class EpochSampler:
-    """Every drum class's examples are used in full, every epoch. `other`
-    (the dominant class by a wide margin -- P1 measured ~8800 raw `other`
-    examples vs ~1500 for the largest drum class, snare) is capped per
-    epoch to OTHER_CAP_MULTIPLIER x the largest drum class's count, redrawn
-    (without replacement, uniformly) each epoch from a seeded generator so
-    the model sees a different `other` subset every epoch without ever
-    letting `other` dominate the gradient."""
+    """`other` (the dominant class by a wide margin -- P1 measured ~11000
+    raw `other` training examples vs ~2200 for the largest drum class,
+    snare) is capped per epoch to a recipe-dependent multiple of the
+    largest drum class's count, redrawn (without replacement, uniformly)
+    each epoch from a seeded generator so the model sees a different
+    `other` subset every epoch without ever letting `other` dominate the
+    gradient.
 
-    def __init__(self, examples: Sequence[PatchExample], seed: int):
+    Under `rebalance_v1` (P3 round 1), every drum class's pool is ALSO
+    redrawn each epoch up to parity with the largest raw drum class (with
+    replacement for classes below target, capped at OVERSAMPLE_MAX_MULTIPLIER
+    x that class's own raw count -- see module docstring). Under `p2`, drum
+    classes are used in full every epoch, exactly as P2 shipped."""
+
+    def __init__(self, examples: Sequence[PatchExample], seed: int, recipe: str = DEFAULT_RECIPE):
+        assert recipe in RECIPES, f"unknown recipe {recipe!r}, expected one of {RECIPES}"
+        self.recipe = recipe
         self.by_class: Dict[str, List[int]] = {c: [] for c in CLASS_NAMES}
         for i, ex in enumerate(examples):
             self.by_class[ex.label].append(i)
         self.rng = np.random.default_rng(seed)
         largest_drum = max((len(self.by_class[c]) for c in _DRUM_CLASSES), default=0)
-        self.other_cap = int(round(OTHER_CAP_MULTIPLIER * largest_drum))
+
+        other_mult = OTHER_CAP_MULTIPLIER_REBALANCE_V1 if recipe == RECIPE_REBALANCE_V1 else OTHER_CAP_MULTIPLIER_P2
+        self.other_cap = int(round(other_mult * largest_drum))
+
+        self.oversample_targets: Dict[str, int] = {}
+        if recipe == RECIPE_REBALANCE_V1:
+            for c in _DRUM_CLASSES:
+                raw = len(self.by_class[c])
+                if raw == 0:
+                    continue
+                target = min(largest_drum, int(round(raw * OVERSAMPLE_MAX_MULTIPLIER)))
+                if target > raw:
+                    self.oversample_targets[c] = target
 
     def epoch_indices(self) -> np.ndarray:
         idx: List[int] = []
@@ -226,11 +295,42 @@ class EpochSampler:
             pool = self.by_class[c]
             if c == "other" and len(pool) > self.other_cap:
                 idx.extend(self.rng.choice(pool, size=self.other_cap, replace=False).tolist())
+            elif c in self.oversample_targets:
+                idx.extend(self.rng.choice(pool, size=self.oversample_targets[c], replace=True).tolist())
             else:
                 idx.extend(pool)
         idx_arr = np.array(idx, dtype=np.int64)
         self.rng.shuffle(idx_arr)
         return idx_arr
+
+
+# ---------------------------------------------------------------------------
+# Per-class loss weights (rebalance_v1 only)
+# ---------------------------------------------------------------------------
+
+
+def compute_class_weights(train_examples: Sequence[PatchExample], recipe: str) -> Optional[torch.Tensor]:
+    """sqrt-inverse-frequency per-class weight for nn.CrossEntropyLoss,
+    computed from the TRAINING split's RAW per-class counts (never val, same
+    leakage discipline as _fit_normalization), normalized to mean 1 across
+    the classes that actually have training support. `p2` returns None
+    (uniform CE, reproduces the P2 recipe exactly). See module docstring for
+    why sqrt rather than full inverse-frequency: EpochSampler's oversampling
+    already corrects the same thin classes, and full inverse-frequency
+    stacked on top of that oversampling was measured to over-correct
+    `synth` by roughly 25x combined."""
+    if recipe != RECIPE_REBALANCE_V1:
+        return None
+    counts = {c: 0 for c in CLASS_NAMES}
+    for ex in train_examples:
+        counts[ex.label] += 1
+    inv_sqrt = np.array(
+        [(1.0 / counts[c]) ** 0.5 if counts[c] > 0 else 0.0 for c in CLASS_NAMES], dtype=np.float64,
+    )
+    present = inv_sqrt[inv_sqrt > 0]
+    mean = present.mean() if present.size else 1.0
+    normalized = inv_sqrt / mean
+    return torch.tensor(normalized, dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +374,9 @@ def train_model(
     epochs: int = DEFAULT_EPOCHS,
     device: Optional[torch.device] = None,
     verbose: bool = True,
+    recipe: str = DEFAULT_RECIPE,
 ) -> Tuple[EventClassifierCNN, Dict[str, object]]:
+    assert recipe in RECIPES, f"unknown recipe {recipe!r}, expected one of {RECIPES}"
     device = device or resolve_device()
     set_seed(seed)
 
@@ -292,10 +394,17 @@ def train_model(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs))
-    criterion = nn.CrossEntropyLoss()
-    sampler = EpochSampler(train_examples, seed=seed)
+    class_weights = compute_class_weights(train_examples, recipe)
+    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device) if class_weights is not None else None)
+    sampler = EpochSampler(train_examples, seed=seed, recipe=recipe)
     if verbose:
-        print(f"[train] `other` per-epoch cap: {sampler.other_cap} (largest drum class x{OTHER_CAP_MULTIPLIER})")
+        other_mult = OTHER_CAP_MULTIPLIER_REBALANCE_V1 if recipe == RECIPE_REBALANCE_V1 else OTHER_CAP_MULTIPLIER_P2
+        print(f"[train] recipe={recipe!r} `other` per-epoch cap: {sampler.other_cap} (largest drum class x{other_mult})")
+        if sampler.oversample_targets:
+            print(f"[train] oversample targets (recipe={recipe!r}): {sampler.oversample_targets}")
+        if class_weights is not None:
+            weights_str = ", ".join(f"{c}={w:.4f}" for c, w in zip(CLASS_NAMES, class_weights.tolist()))
+            print(f"[train] per-class loss weights (sqrt-inverse-frequency, recipe={recipe!r}): {weights_str}")
 
     val_mel_d = val_mel.to(device)
     val_side_d = val_side.to(device)
@@ -370,7 +479,10 @@ def train_model(
         "seed": seed, "epochs_requested": epochs, "epochs_run": epochs_run, "best_epoch": best_epoch,
         "final_train_loss": final_train_loss, "final_val_loss": final_val_loss, "best_val_loss": best_val_loss,
         "device": str(device), "n_train": len(train_examples), "n_val": len(val_examples),
-        "other_cap": sampler.other_cap, "val_report": val_report,
+        "recipe": recipe, "other_cap": sampler.other_cap,
+        "oversample_targets": dict(sampler.oversample_targets),
+        "class_weights": class_weights.tolist() if class_weights is not None else None,
+        "val_report": val_report,
     }
     return model, history
 
@@ -394,6 +506,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--out", type=Path, default=DEFAULT_CHECKPOINT_PATH)
+    parser.add_argument(
+        "--recipe", choices=RECIPES, default=DEFAULT_RECIPE,
+        help="rebalancing recipe (P3 round 1): 'rebalance_v1' (default, this round's recipe -- "
+             "see module docstring) or 'p2' (reproduces the exact P2 checkpoint recipe)",
+    )
     args = parser.parse_args(argv)
 
     print(f"[train] building dataset (seed={args.seed}) ...", file=sys.stderr)
@@ -405,7 +522,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"[train] split by track: {len(train_examples)} train / {len(val_examples)} val examples", file=sys.stderr)
 
     t0 = time.time()
-    model, history = train_model(train_examples, val_examples, seed=args.seed, epochs=args.epochs)
+    model, history = train_model(train_examples, val_examples, seed=args.seed, epochs=args.epochs, recipe=args.recipe)
     train_time_sec = time.time() - t0
     history["train_time_sec"] = train_time_sec
     print(f"[train] training completed in {train_time_sec:.1f}s "
