@@ -65,6 +65,10 @@ gltf = { version = "1", features = [
     "KHR_materials_ior",
     "KHR_materials_pbrSpecularGlossiness",
     "KHR_materials_volume",
+    # IMPORT_ANYTHING_WAVE_DESIGN.md W1: EXT_texture_webp textures omit the
+    # base `source` index entirely (the image lives only behind the
+    # extension), which the crate's default validation rejects as Missing.
+    "allow_empty_texture",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

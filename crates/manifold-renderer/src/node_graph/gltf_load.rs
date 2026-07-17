@@ -28,9 +28,14 @@ use crate::generators::mesh_common::MeshVertex;
 /// `KHR_materials_dispersion` (all four raw-JSON sniffed, same doctrine as
 /// clearcoat: no typed accessor exists for any of them in `gltf`/
 /// `gltf-json` 1.4.1). `KHR_materials_volume` is typed (Cargo feature
-/// enabled) so it's covered by the feature-list rows below instead. An
-/// asset whose `extensionsRequired` lists anything NOT in this set fails
-/// loudly, naming the extension — never silently, never approximated.
+/// enabled) so it's covered by the feature-list rows below instead.
+/// `EXT_texture_webp` (IMPORT_ANYTHING_WAVE_DESIGN.md W1) has no typed
+/// crate feature at all — the extension's image source is read via the
+/// raw-JSON `extension_value` sniff and decoded ourselves in
+/// [`import_images_with_webp`], since the crate's own bundled `image`
+/// dependency has no webp support. An asset whose `extensionsRequired`
+/// lists anything NOT in this set fails loudly, naming the extension —
+/// never silently, never approximated.
 const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     // Cargo.toml's `gltf` feature list (typed crate support):
     "KHR_materials_emissive_strength",
@@ -50,6 +55,9 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     "KHR_materials_iridescence",
     "KHR_materials_anisotropy",
     "KHR_materials_dispersion",
+    // IMPORT_ANYTHING_WAVE_DESIGN.md W1 — raw-JSON sniffed + manual decode,
+    // no crate feature exists for this extension at 1.4.1:
+    "EXT_texture_webp",
 ];
 
 /// The ONE parse entry for `.glb`/`.gltf` files (`GLB_XFAIL_BURNDOWN_DESIGN.md`
@@ -120,10 +128,73 @@ pub(crate) fn import_glb(
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let buffers = gltf::import_buffers(&document, Some(base), blob)
         .map_err(|e| format!("{}: buffer import failed: {e}", path.display()))?;
-    let images = gltf::import_images(&document, Some(base), &buffers)
+    let images = import_images_with_webp(&document, base, &buffers)
         .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
 
     Ok((document, buffers, images))
+}
+
+/// `gltf::import_images` hard-fails the ENTIRE document the moment any one
+/// image has an unrecognized mime type — its bundled `image` dependency
+/// only compiles in `png`/`jpeg` decoders (see the crate's own `Cargo.toml`),
+/// so a WebP-textured asset never reaches MANIFOLD's own extension gate at
+/// all. IMPORT_ANYTHING_WAVE_DESIGN.md W1: decode webp images ourselves
+/// (our `image` dependency has the `webp` feature on) and fall back to the
+/// crate's own per-image decode for everything else.
+fn import_images_with_webp(
+    document: &gltf::Document,
+    base: &std::path::Path,
+    buffers: &[gltf::buffer::Data],
+) -> Result<Vec<gltf::image::Data>, String> {
+    let mut out = Vec::with_capacity(document.images().count());
+    for image in document.images() {
+        let mime_type = match image.source() {
+            gltf::image::Source::View { mime_type, .. } => Some(mime_type),
+            gltf::image::Source::Uri { mime_type, .. } => mime_type,
+        };
+        if mime_type == Some("image/webp") {
+            out.push(decode_webp_image(&image, buffers)?);
+        } else {
+            out.push(
+                gltf::image::Data::from_source(image.source(), Some(base), buffers)
+                    .map_err(|e| format!("image {}: decode failed: {e}", image.index()))?,
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Decode one `image/webp` glTF image (bufferView-embedded only — external
+/// URI webp is out of scope for this wave) via the top-level `image` crate,
+/// which has `webp` enabled unlike the `gltf` crate's own bundled decoder.
+fn decode_webp_image(
+    image: &gltf::image::Image,
+    buffers: &[gltf::buffer::Data],
+) -> Result<gltf::image::Data, String> {
+    let view = match image.source() {
+        gltf::image::Source::View { view, .. } => view,
+        gltf::image::Source::Uri { .. } => {
+            return Err(format!(
+                "image {}: external-URI webp images are not supported",
+                image.index()
+            ));
+        }
+    };
+    let buf = &buffers[view.buffer().index()].0;
+    let begin = view.offset();
+    let end = begin + view.length();
+    let encoded = &buf[begin..end];
+
+    let decoded = image::load_from_memory_with_format(encoded, image::ImageFormat::WebP)
+        .map_err(|e| format!("image {}: webp decode failed: {e}", image.index()))?
+        .to_rgba8();
+    let (width, height) = (decoded.width(), decoded.height());
+    Ok(gltf::image::Data {
+        pixels: decoded.into_raw(),
+        format: gltf::image::Format::R8G8B8A8,
+        width,
+        height,
+    })
 }
 
 /// Resolve the scene(s) to import when a glb has no default `scene` index
@@ -690,7 +761,21 @@ pub(crate) fn load_gltf_texture(
             textures.len()
         )
     })?;
-    let img_index = tex.source().index();
+    // EXT_texture_webp textures carry their image only behind the
+    // extension (base `source` is empty — `allow_empty_texture` feature
+    // above) since no fallback format is offered in these assets.
+    let webp_source_index = tex
+        .extensions()
+        .and_then(|ext| ext.get("EXT_texture_webp"))
+        .and_then(|ext| ext.get("source"))
+        .and_then(|v| v.as_u64());
+    let img_index = match webp_source_index {
+        Some(idx) => idx as usize,
+        None => tex
+            .source()
+            .ok_or_else(|| format!("texture {texture_index} has no image source"))?
+            .index(),
+    };
     let data = images.get(img_index).ok_or_else(|| {
         format!(
             "texture {texture_index} references image index {img_index}, out of range ({} images decoded)",
@@ -3028,6 +3113,62 @@ mod tests {
                     "loads_texture_from_azalea_fixture_when_present: texture 0 not decodable ({e}) — mesh-only glb legitimately has no textures, skipping"
                 );
             }
+        }
+    }
+
+    /// IMPORT_ANYTHING_WAVE_DESIGN.md W1 (BUG-186): a cube whose only
+    /// texture is `EXT_texture_webp` (no fallback source, `extensionsRequired`).
+    /// Before this lane it was rejected at import (extension veto) or, once
+    /// the veto is lifted, hard-failed via `gltf::import_images`'
+    /// `UnsupportedImageEncoding` (its bundled decoder has no webp support)
+    /// — both proven dead ends in-session, hence the manual decode path.
+    /// Asserts the decode succeeds and the pixels are a real gradient, not
+    /// a flat fallback color.
+    #[test]
+    fn loads_webp_texture_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/hostile/webp_texture.glb");
+        assert!(path.exists(), "webp_texture.glb fixture missing at {}", path.display());
+        let (w, h, rgba) =
+            load_gltf_texture(&path, 0).unwrap_or_else(|e| panic!("webp texture decode: {e}"));
+        assert!(w > 0 && h > 0, "expected non-zero texture dimensions");
+        assert_eq!(rgba.len(), (w * h * 4) as usize, "expected tightly-packed RGBA8 buffer");
+
+        let mut min = [255u8; 3];
+        let mut max = [0u8; 3];
+        for px in rgba.chunks_exact(4) {
+            for c in 0..3 {
+                min[c] = min[c].min(px[c]);
+                max[c] = max[c].max(px[c]);
+            }
+        }
+        assert!(
+            max[0] > min[0] + 32 || max[1] > min[1] + 32,
+            "expected red-green gradient variance in decoded webp texture, got min={min:?} max={max:?}"
+        );
+    }
+
+    /// BUG-186: `SheenWoodLeatherSofa.glb` also carries `EXT_texture_webp`
+    /// (Khronos conformance suite's real-world webp case). Once W1's decode
+    /// path lands, check whether it now imports — this test's own result is
+    /// the source of truth for whether the manifest promotes it to
+    /// `expect_pass`, not a guess.
+    #[test]
+    fn sheenwoodleathersofa_webp_import_status() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/khronos/SheenWoodLeatherSofa.glb");
+        if !path.exists() {
+            println!("sheenwoodleathersofa_webp_import_status: fixture not fetched, skipping");
+            return;
+        }
+        match gltf_import_summary(&path) {
+            Ok(summary) => println!(
+                "sheenwoodleathersofa_webp_import_status: imports OK, {} materials, bbox {:?}..{:?}",
+                summary.materials.len(),
+                summary.bbox_min,
+                summary.bbox_max,
+            ),
+            Err(e) => println!("sheenwoodleathersofa_webp_import_status: import failed: {e}"),
         }
     }
 
