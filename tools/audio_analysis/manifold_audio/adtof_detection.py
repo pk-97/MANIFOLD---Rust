@@ -24,9 +24,40 @@ _MIDI_TO_TYPE = {
     49: "hat",     # Crash Cymbal → hat (parser already maps "cymbal" → Hat)
 }
 
-# Per-class thresholds (lowered from ADTOF defaults for higher sensitivity).
-# Order matches LABELS_5: kick, snare, tom, hihat, cymbal.
-_DEFAULT_THRESHOLDS = [0.12, 0.14, 0.14, 0.18, 0.18]
+# Per-class thresholds. Order matches LABELS_5: kick, snare, tom, hihat, cymbal.
+#
+# kick/snare/hihat+cymbal updated 2026-07-18 to the P4 precision-pass ACCEPTED
+# values (docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md P4; orchestrator heldout
+# acceptance read, eval/scoreboard/p4_heldout_acceptance.json) --
+# threshold_factor 1.15 (kick), 1.3 (snare), 0.5 (hat, applied to BOTH the
+# hihat and cymbal entries below since manifold's "hat" event type is fed by
+# both) against the PRE-P4 baseline of [0.12, 0.14, 0.14, 0.18, 0.18]:
+#   kick:   0.12 * 1.15 = 0.138
+#   snare:  0.14 * 1.30 = 0.182
+#   tom (perc): unchanged, 1.0x = 0.14
+#   hihat:  0.18 * 0.50 = 0.09
+#   cymbal: 0.18 * 0.50 = 0.09
+# perc/synth are NOT touched by this pass (P4 round-2 verdict: only these
+# three threshold picks were accepted; refractory/median_adaptive/cofire/
+# shape_gate/beat_phase were all rejected for this layer, parked as
+# trigger-selection-layer candidates). manifold_audio.precision_postprocessing
+# .PrecisionConfig() mirrors these same five values for the eval harness.
+_DEFAULT_THRESHOLDS = [0.138, 0.182, 0.14, 0.09, 0.09]
+
+_LABEL_ORDER = ["kick", "snare", "tom", "hihat", "cymbal"]
+
+
+def resolve_thresholds(thresholds: Optional[Dict[str, float]] = None) -> List[float]:
+    """Effective per-class threshold list (LABELS_5 order) detect_drums_adtof
+    will actually apply -- exposed so callers (analyzer.py's progress log)
+    can report exactly what's in force without duplicating this merge logic
+    and risking it drifting from the real one."""
+    thresh_list = list(_DEFAULT_THRESHOLDS)
+    if thresholds:
+        for i, name in enumerate(_LABEL_ORDER):
+            if name in thresholds:
+                thresh_list[i] = float(thresholds[name])
+    return thresh_list
 
 
 def _run_adtof_inference(audio_path: str, fps: int = 100, device: str = "cpu"):
@@ -135,12 +166,7 @@ def detect_drums_adtof(
     )
 
     # Build per-class threshold list in LABELS_5 order: [kick, snare, tom, hihat, cymbal].
-    thresh_list = list(_DEFAULT_THRESHOLDS)
-    if thresholds:
-        _label_order = ["kick", "snare", "tom", "hihat", "cymbal"]
-        for i, name in enumerate(_label_order):
-            if name in thresholds:
-                thresh_list[i] = float(thresholds[name])
+    thresh_list = resolve_thresholds(thresholds)
 
     pred = _run_adtof_inference(audio_path, fps=fps, device=device)  # (time_steps, 5)
 

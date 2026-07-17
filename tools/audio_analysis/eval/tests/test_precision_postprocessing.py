@@ -1,9 +1,19 @@
 """manifold_audio/precision_postprocessing.py tests (P4 §1). Pure-logic /
 synthetic-signal tests only — no ADTOF/basic_pitch model inference (same
 convention as test_full_pack_baseline.py / test_beat_tracker_alignment.py).
-The load-bearing property this module promises is NEUTRAL-DEFAULT
-EQUIVALENCE: every knob at its default reproduces the pre-P4 pipeline's
-candidate set exactly. Each knob gets an isolation test (default = no-op)
+
+Two load-bearing properties, kept as SEPARATE tests since 2026-07-18 (P4
+threshold acceptance changed PrecisionConfig()'s own default thresholds
+from the pre-P4 numbers to the ACCEPTED post-P4 numbers):
+  1. PrecisionConfig()'s defaults ARE the accepted P4 values, pinned exactly
+     (test_precision_config_defaults_are_the_accepted_p4_values).
+  2. The NEUTRAL PATH (every knob other than threshold at its no-op default)
+     reproduces plain NotePeakPickingProcessor(threshold=X).process() output
+     EXACTLY, for ANY threshold X -- proven both at the current shipped
+     default (0.138) and at the historical pre-P4 value (0.12), so "the
+     mechanism is neutral" stays provable independent of which number knob
+     (a) currently holds.
+Each of the other five knobs gets its own isolation test (default = no-op)
 plus at least one test proving it DOES something when turned on."""
 
 from __future__ import annotations
@@ -78,32 +88,61 @@ def test_median_adaptive_empty_or_short_input_returns_no_fires():
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 gate extraction + neutral-default equivalence
+# Accepted defaults (pinned) + the neutral path (provable at any threshold)
 # ---------------------------------------------------------------------------
 
 
-def test_gate_extraction_default_config_matches_shipped_adtof_defaults():
-    """Neutral-default equivalence, empirically: at PrecisionConfig()'s
-    default kick threshold (0.12, == adtof_detection._DEFAULT_THRESHOLDS[0]),
-    running the gate pass + full pipeline at all-default knobs must produce
-    EXACTLY the peaks NotePeakPickingProcessor(threshold=0.12) would (today's
-    shipped behavior), even though the gate pass itself runs at a LOWER
-    threshold (0.12 * BORDERLINE_MARGIN) to surface borderline candidates."""
+def test_precision_config_defaults_are_the_accepted_p4_values():
+    """Pins PrecisionConfig()'s shipped thresholds to the exact P4 precision-
+    pass ACCEPTED values (orchestrator heldout acceptance read,
+    eval/scoreboard/p4_heldout_acceptance.json, 2026-07-18): kick
+    0.12->0.138 (factor 1.15), snare 0.14->0.182 (factor 1.3), hat
+    0.18->0.09 (factor 0.5); perc/synth unchanged (rejected/not evaluated
+    this round). Also pins that every OTHER knob stays at its neutral
+    no-op default -- only (a) changed."""
+    config = PrecisionConfig()
+    assert config.thresholds == {
+        "kick": pytest.approx(0.138),
+        "snare": pytest.approx(0.182),
+        "hat": pytest.approx(0.09),
+        "perc": pytest.approx(0.14),
+        "synth": pytest.approx(0.5),
+    }
+    assert all(v == 0.0 for v in config.refractory_ms.values())
+    assert all(not mc.enabled for mc in config.median_adaptive.values())
+    assert config.cofire_solo_boost == {"kick": 1.0, "hat": 1.0}
+    assert config.cofire_boost_snare == 1.0
+    assert all(not sg.enabled for sg in config.shape_gates.values())
+    assert all(v == 0.0 for v in config.beat_phase_strength.values())
+
+
+def _assert_gate_pipeline_reproduces_plain_threshold_picking(kick_threshold: float) -> None:
+    """Shared body for the neutral-path proof at a given threshold value:
+    running the gate pass + full pipeline with every OTHER knob at its
+    no-op default must produce EXACTLY the peaks
+    NotePeakPickingProcessor(threshold=kick_threshold) would -- even though
+    the gate pass itself runs at a LOWER threshold
+    (kick_threshold * BORDERLINE_MARGIN) to surface borderline candidates."""
     from adtof_pytorch.post_processing import NotePeakPickingProcessor
 
     n_frames = 500
     activations = _make_activation(n_frames, {0: [50, 150, 250, 350]}, peak_height=0.9, floor=0.02)
-    # Add a genuinely borderline (below-threshold, above-gate) blip that
-    # must NOT survive at default config.
-    activations[420, 0] = 0.10  # below threshold 0.12, above gate 0.12*0.6=0.072
+    # A genuinely borderline (below-threshold, above-gate) blip -- empirically
+    # verified (2026-07-18) to clear the gate margin but not the accept
+    # threshold at BOTH values this shared body is called with (0.138 and
+    # 0.12); a smaller blip (e.g. 0.10) clears the gate at 0.12 but not at
+    # the higher 0.138 threshold, so 0.115 is the one value that works for
+    # both and keeps this a single shared test body.
+    activations[420, 0] = 0.115
 
     config = PrecisionConfig()
+    config.thresholds["kick"] = kick_threshold
     fps = 100
 
     gate_candidates = extract_adtof_gate_candidates(activations, fps, "kick", config)
     result = run_precision_pipeline({"kick": gate_candidates}, config)
 
-    reference_proc = NotePeakPickingProcessor(threshold=config.thresholds["kick"], pre_avg=0.1, post_avg=0.01, pre_max=0.02, post_max=0.01, combine=0.02, fps=fps)
+    reference_proc = NotePeakPickingProcessor(threshold=kick_threshold, pre_avg=0.1, post_avg=0.01, pre_max=0.02, post_max=0.01, combine=0.02, fps=fps)
     reference_peaks = [t for t, _ in reference_proc.process(activations[:, 0])]
 
     assert result["kick"] == pytest.approx(reference_peaks)
@@ -111,6 +150,22 @@ def test_gate_extraction_default_config_matches_shipped_adtof_defaults():
     # margin genuinely admits it) but absent from the final accepted set.
     assert any(abs(c.time_sec - 4.20) < 0.02 for c in gate_candidates)
     assert not any(abs(t - 4.20) < 0.02 for t in result["kick"])
+
+
+def test_gate_extraction_reproduces_note_peak_picking_at_the_current_shipped_default():
+    """Neutral path at TODAY's shipped kick threshold (0.138, == the
+    accepted P4 default pinned above)."""
+    _assert_gate_pipeline_reproduces_plain_threshold_picking(PrecisionConfig().thresholds["kick"])
+
+
+def test_gate_extraction_reproduces_note_peak_picking_at_the_historical_pre_p4_value():
+    """Neutral path at the HISTORICAL pre-P4 kick threshold (0.12) --
+    proves the mechanism (gate+accept collapsing to plain threshold
+    picking when every other knob is off) never depended on which specific
+    number knob (a) holds, so updating the shipped default doesn't touch
+    this property. This is the "pre-P4 output still reproducible" half of
+    the 2026-07-18 acceptance."""
+    _assert_gate_pipeline_reproduces_plain_threshold_picking(0.12)
 
 
 def test_gate_margin_constant_is_below_one():

@@ -1,11 +1,24 @@
 """Shared precision post-processing module (P4 §1,
 docs/AUDIO_ANALYSIS_ACCURACY_DESIGN.md §4.2/D6/D9/D11) — applied to the
 ADTOF drum path (kick/snare/hat/perc) and the basic_pitch synth path,
-per-class. This is a PARAMETER LAYER, not a new model: every knob has a
-neutral default that reproduces the pipeline's pre-P4 output exactly (see
-the "neutral default equivalence" tests in eval/tests/
-test_precision_postprocessing.py) — a caller that never touches
-PrecisionConfig gets today's behavior, byte-for-byte.
+per-class. This is a PARAMETER LAYER, not a new model: every knob OTHER
+than (a) has a neutral default (refractory=0, cofire weights=1.0,
+beat-phase strength=0.0, shape gates disabled, median-adaptive disabled)
+that is a structural no-op regardless of the threshold value in force (see
+the "neutral path" tests in eval/tests/test_precision_postprocessing.py).
+
+Threshold defaults (knob a) were updated 2026-07-18 to the P4 precision-
+pass ACCEPTED values (orchestrator heldout acceptance read,
+eval/scoreboard/p4_heldout_acceptance.json) — kick/snare/hat threshold_factor
+1.15/1.3/0.5 against the pre-P4 baseline; perc/synth unchanged at 1.0x. So
+`PrecisionConfig()` today reproduces the CURRENT shipped pipeline
+(manifold_audio.adtof_detection._DEFAULT_THRESHOLDS, same five numbers),
+not the historical pre-P4 pipeline — the pre-P4 equivalence is still
+provable, just by passing the old threshold values explicitly (see
+test_gate_extraction_reproduces_note_peak_picking_at_any_threshold), since
+the neutral-path property (gate+accept collapsing to plain threshold
+picking when every other knob is off) never depended on which specific
+number the threshold held.
 
 Pipeline shape (per class)
 ---------------------------
@@ -29,17 +42,19 @@ Pipeline shape (per class)
    candidate within the window. Default 0ms (no additional suppression
    beyond each extraction pass's own built-in merge).
 
-Neutral-default equivalence, why it holds
--------------------------------------------
-At every knob's default (thresholds = today's per-class defaults, all
-co-fire weights = 1.0, beat-phase strength = 0.0, signal-shape gates
-disabled, refractory = 0ms, median-adaptive disabled): the REFINE step is a
-no-op (multiply-by-1, add-zero, gates that never fire), so no borderline
-candidate is ever promoted over its threshold and no core candidate is ever
-removed — the ACCEPT step reduces to exactly "confidence >= today's
-threshold", which is exactly what today's pipeline already computes. This
-is verified structurally (the code path), not just empirically — but the
-test module ALSO checks it empirically against synthetic activation curves.
+Neutral path, why it holds at ANY threshold
+---------------------------------------------
+At every OTHER knob's default (co-fire weights = 1.0, beat-phase strength
+= 0.0, signal-shape gates disabled, refractory = 0ms, median-adaptive
+disabled): the REFINE step is a no-op (multiply-by-1, add-zero, gates that
+never fire), so no borderline candidate is ever promoted over its threshold
+and no core candidate is ever removed — the ACCEPT step reduces to exactly
+"confidence >= threshold", whatever that threshold's numeric value is. This
+holds independent of knob (a)'s value, which is WHY updating the shipped
+threshold defaults (2026-07-18, see above) doesn't touch this property —
+verified structurally (the code path), and empirically against synthetic
+activation curves at both the current defaults and the historical pre-P4
+values (see test module).
 
 Class scope, per the design doc's own §1 brief (not this module's choice)
 ----------------------------------------------------------------------------
@@ -126,17 +141,22 @@ class ShapeGateConfig:
 @dataclass
 class PrecisionConfig:
     """The full P4 §1 knob set for one track's multi-class candidate
-    refinement. All defaults reproduce pre-P4 behavior exactly (see module
-    docstring)."""
+    refinement. Every knob other than (a) defaults to a structural no-op
+    (see module docstring's "neutral path" section); (a)'s defaults are the
+    CURRENT SHIPPED thresholds (post P4 acceptance, 2026-07-18)."""
 
     # (a) per-class activation thresholds. ADTOF classes default to the
     # existing manifold_audio.adtof_detection._DEFAULT_THRESHOLDS (kick/
     # snare/hat/perc order there is [kick, snare, tom(perc), hihat(hat), cymbal(hat)]
     # -- this module works in MANIFOLD class-name space, not ADTOF label
     # order, so kick/snare/perc map 1:1 and hat is the max of ADTOF's two
-    # hihat+cymbal thresholds' effective floor (both currently 0.18)).
+    # hihat+cymbal thresholds' effective floor). These are the P4 precision-
+    # pass ACCEPTED values (orchestrator heldout acceptance read,
+    # eval/scoreboard/p4_heldout_acceptance.json), not the historical pre-P4
+    # numbers -- kick 0.12->0.138 (factor 1.15), snare 0.14->0.182 (factor
+    # 1.3), hat 0.18->0.09 (factor 0.5); perc/synth unchanged.
     thresholds: Dict[str, float] = field(default_factory=lambda: {
-        "kick": 0.12, "snare": 0.14, "hat": 0.18, "perc": 0.14, "synth": 0.5,
+        "kick": 0.138, "snare": 0.182, "hat": 0.09, "perc": 0.14, "synth": 0.5,
     })
     # (b) per-class refractory windows, milliseconds. 0 = no additional
     # suppression (each extraction pass already merges near-duplicates
