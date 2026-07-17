@@ -2,7 +2,7 @@
 
 # Audio Analysis Accuracy — measured detection, licensed models, sustained objects
 
-**Status:** IN PROGRESS — P1+P2+P3 SHIPPED 2026-07-17 (P3: 19 fixtures, full-pack baselines committed — ADTOF babyslakh kick .818/snare .621/hat .233/perc .349; electronic-domain drum baseline BLOCKED on onset-convention calibration BUG-235; Harmonix audio quarantined BUG-232; fitted-grid negative result, BUG-229 open; next: ADTOF bake-off addendum, then P4 with Fable as tuning judge) · designed 2026-07-08 · Fable
+**Status:** IN PROGRESS — P1–P4 SHIPPED (P4 landed 2026-07-18: truth-type-aware scoring; BUG-235 scorer calibration accepted, five-fixture kick 0.238→0.739; accepted production defaults kick thr×1.15 / snare ×1.3 / hat ×0.5 — dense F1 kick .858 snare .641 hat .303, heldout confirmed no recall regressions, hats +5.5pp; shape/cofire/phase knobs REJECTED for transcription, PARKED for trigger-selection layer; synth deferred n=1 coverage gap. Next: ADTOF bake-off addendum vs post-P4 numbers, then P5/P6) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
