@@ -45,6 +45,9 @@ mod graph_dump;
 // `bug035_verify.rs`, `bug037_verify.rs`) actually live.
 #[cfg(all(target_os = "macos", any(feature = "perf-soak", all(feature = "journey-proofs", test))))]
 mod headless_harness;
+mod import_responsiveness_verify;
+mod import_worker;
+mod import_worker_drain_verify;
 mod input_handler;
 mod input_host;
 #[cfg(target_os = "macos")]
@@ -106,6 +109,9 @@ mod ui_translate;
 mod user_library;
 mod user_prefs;
 mod window_input;
+mod viewport_input;
+// P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
+mod viewport_p5c_demo;
 mod window_registry;
 mod workspace;
 

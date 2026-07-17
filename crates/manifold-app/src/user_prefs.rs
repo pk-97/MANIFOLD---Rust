@@ -109,6 +109,21 @@ impl UserPrefs {
         }
     }
 
+    /// Same disk-free shape as `in_memory`/`for_test`, but unconditionally
+    /// available — the background model-import worker
+    /// (`import_worker.rs::run_import_worker`) uses this to carry just the
+    /// one pref key `blender_import::discover_blender` reads
+    /// (`BLENDER_PATH_PREF_KEY`) across the thread boundary, rather than
+    /// requiring `UserPrefs` itself to be `Clone`/`Send`. A real,
+    /// always-built production call site — not test-only, despite the
+    /// sibling constructors' naming.
+    pub(crate) fn ephemeral() -> Self {
+        Self {
+            data: HashMap::new(),
+            file_path: std::env::temp_dir().join("manifold-import-worker-prefs.json"),
+        }
+    }
+
     /// Get a string value by key, returning `default` if the key doesn't exist.
     /// Equivalent to `PlayerPrefs.GetString(key, default)`.
     pub fn get_string(&self, key: &str, default: &str) -> String {

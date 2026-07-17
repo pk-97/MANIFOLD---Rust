@@ -923,6 +923,9 @@ impl Application {
         // 1a0b. Video-import probe-failure surfacing (BUG-133) — same
         // drain-site cadence as autosave; see `tick_import_failures`.
         self.tick_import_failures();
+        // IMPORT_RESPONSIVENESS_DESIGN.md D3: drain the background
+        // model-import worker's progress channel at the same per-frame site.
+        self.drain_import_progress();
 
         // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1). Unlike
         // autosave this is NOT parked in perform mode — see the matching
@@ -3922,6 +3925,32 @@ impl Application {
             self.last_preview_node = preview_node;
         }
 
+        // P5c (`docs/REALTIME_3D_DESIGN.md`): resolve whether `preview_node`
+        // qualifies for the 3D viewport (a top-level `node.render_scene`
+        // node — `find_snapshot_node` recurses into groups looking for the
+        // type, but `override_camera_def` below only splices into a node
+        // found in the def's FLAT top-level `nodes` list, so a nested
+        // render_scene fails to open with `RenderSceneNodeNotFound`, a known
+        // P5 constraint) and — only if so and the viewport is toggled open —
+        // clone its def, BEFORE the editor workspace is borrowed mutably
+        // below. `watched_def_cloned()` takes `&self` whole, which would
+        // conflict with `ws`'s later mutable borrow of `self.graph_editor`
+        // (same reason `popover_live_value` is resolved before `ws`,
+        // further down).
+        let viewport_is_scene_node = self.last_preview_node.as_ref().is_some_and(|id| {
+            self.content_state
+                .active_graph_snapshot
+                .as_deref()
+                .and_then(|s| find_snapshot_node(&s.nodes, id))
+                .is_some_and(|n| n.type_id == "node.render_scene")
+        });
+        let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
+        let viewport_def = if viewport_is_scene_node && viewport_open {
+            self.watched_def_cloned()
+        } else {
+            None
+        };
+
         // Send the canvas's currently-visible nodes (deduped) so the content
         // thread captures thumbnails only for what's on screen — hidden /
         // off-scope / collapsed-group nodes cost nothing. The set is the whole
@@ -4098,6 +4127,123 @@ impl Application {
         let master_title_y = pane_y;
         let master_img_y = master_title_y + preview_title_h;
         let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
+
+        // P5c (`docs/REALTIME_3D_DESIGN.md`): open/rebuild/sync the 3D
+        // viewport session and reserve its screen rect — the SAME rect the
+        // 2D node-output monitor above occupies, so the viewport slots into
+        // existing dock geometry rather than adding new dock UI. Render
+        // target pixel size tracks the pane at the window's own scale
+        // factor, same crisp-at-any-size convention the audio spectrogram
+        // uses. `viewport_def` was cloned before `ws` was borrowed (see the
+        // comment above its `let` near the top of this function); the
+        // fields read here (`self.primitive_registry`, `gpu.device`,
+        // `self.content_state`, `self.time_since_start`) are all direct
+        // field accesses on OTHER fields than `self.graph_editor`, so they
+        // coexist with `ws`'s mutable borrow without conflict.
+        let viewport_scale = scale as f32;
+        let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
+        let viewport_tex_h = ((preview_h * viewport_scale).round() as u32).clamp(64, 4096);
+        let viewport_ctx = manifold_renderer::preset_context::PresetContext {
+            time: self.time_since_start as f64,
+            beat: mini_current_beat as f64,
+            dt,
+            width: viewport_tex_w,
+            height: viewport_tex_h,
+            output_width: viewport_tex_w,
+            output_height: viewport_tex_h,
+            aspect: viewport_tex_w as f32 / (viewport_tex_h.max(1) as f32),
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: (self.time_since_start as f64 * 60.0) as i64,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        if let Some(def) = viewport_def.as_ref() {
+            // `viewport_def` is only `Some` when `viewport_is_scene_node` held,
+            // which requires `self.last_preview_node` to be `Some` — see its
+            // `let` above.
+            let render_scene_node = self.last_preview_node.clone().expect(
+                "viewport_def is only Some when viewport_is_scene_node held, which requires last_preview_node",
+            );
+            let needs_open = match ws.viewport_session.as_ref() {
+                Some(s) => s.dimensions() != (viewport_tex_w, viewport_tex_h),
+                None => true,
+            };
+            if needs_open {
+                match manifold_renderer::node_graph::ViewportSession::open(
+                    def,
+                    &render_scene_node,
+                    &self.primitive_registry,
+                    std::sync::Arc::clone(&gpu.device),
+                    viewport_tex_w,
+                    viewport_tex_h,
+                    &viewport_ctx,
+                ) {
+                    Ok(session) => ws.viewport_session = Some(session),
+                    Err(_e) => {
+                        // no-silent-fallbacks: a failed splice (e.g. a nested
+                        // render_scene node, the known P5 constraint above)
+                        // clears the session so the pane shows nothing rather
+                        // than a stale or wrong frame.
+                        ws.viewport_session = None;
+                        ws.viewport_pane = None;
+                    }
+                }
+            } else if let Some(session) = ws.viewport_session.as_mut()
+                && session.sync_def(def, &self.primitive_registry, &viewport_ctx).is_err()
+            {
+                ws.viewport_session = None;
+                ws.viewport_pane = None;
+            }
+        } else {
+            ws.viewport_session = None;
+            ws.viewport_pane = None;
+        }
+        ws.viewport_rect = ws
+            .viewport_session
+            .is_some()
+            .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
+
+        // Render if dirty (camera moved this frame, or the session was just
+        // (re)built above — never per display tick: `render_if_dirty` is a
+        // no-op cache hit unless `ViewportSession`'s own `dirty` flag is set,
+        // which only navigation input (`viewport_input::apply`, below) or a
+        // def change sets) and upload into the UI-device-local pane the
+        // present pass blits below — same `TexturePane::local` + `upload_texture`
+        // pattern the audio spectrogram uses (`ui_frame.rs`).
+        if let Some(session) = ws.viewport_session.as_mut() {
+            let (w, h) = session.dimensions();
+            let rgba = session
+                .render_if_dirty(
+                    &viewport_ctx,
+                    &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
+                    None,
+                    &[],
+                )
+                .to_vec();
+            let need_new_tex = !matches!(
+                ws.viewport_pane.as_ref().and_then(|p| p.local_target()),
+                Some(tex) if tex.width == w && tex.height == h
+            );
+            if need_new_tex {
+                let tex = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                    label: "3D Viewport",
+                    mip_levels: 1,
+                });
+                ws.viewport_pane = Some(crate::texture_pane::TexturePane::local(tex));
+            }
+            if let Some(pane) = ws.viewport_pane.as_ref()
+                && let Some(tex) = pane.local_target()
+            {
+                gpu.device.upload_texture(tex, &rgba);
+            }
+        }
 
         // The graph-editor panel is now just the node-output inspector + the
         // Smart-preview toggle (all param authoring moved onto the node face in
@@ -4386,7 +4532,11 @@ impl Application {
             // Node-output monitor — the selected image node's captured output.
             // Only when that node has an image; a non-image node's pane is
             // filled with the value inspector text instead (drawn above).
+            // Suppressed while the P5c 3D viewport occupies this same pane
+            // (below) — the two are mutually exclusive views of the same
+            // reserved rect, never composited together.
             if show_image
+                && ws.viewport_session.is_none()
                 && let Some(bridge) = self.node_preview_texture_bridge.as_ref()
             {
                 let front = bridge.front_index() as usize;
@@ -4413,6 +4563,25 @@ impl Application {
                         "Node Preview → Sidebar",
                     );
                 }
+            }
+            // P5c 3D viewport — the persistent `ViewportSession`'s composited
+            // RGBA8 (scene + D7 overlays), uploaded into a UI-device-local
+            // pane above and blit here through the same unified
+            // `TexturePane` path the audio spectrogram uses. `Local`, never
+            // an IOSurface bridge: the session rendered on THIS (editor UI)
+            // thread just above, so there's no cross-thread hand-off.
+            if let Some(pane) = ws.viewport_pane.as_mut() {
+                crate::texture_pane::blit_texture_pane(
+                    pane,
+                    &gpu.device,
+                    &mut present_enc,
+                    blit_p,
+                    blit_s,
+                    &drawable_tex,
+                    (preview_x, node_img_y, preview_w, preview_h),
+                    scale,
+                    "Viewport → Sidebar",
+                );
             }
             // Master-out monitor — the live compositor output, the same texture
             // the main/perform window presents. Imported into `ui_preview_textures`
