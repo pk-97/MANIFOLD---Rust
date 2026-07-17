@@ -2738,7 +2738,10 @@ impl ScenePanel {
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.scene_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
-            // The dock rebuilds every frame, which re-applies the new offset.
+            // `window_input.rs`'s dock-scroll branch also sets
+            // `needs_rebuild` so the next frame actually re-applies the
+            // new offset (BUG-219: it used to assume this happened for
+            // free every frame — it doesn't).
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())
