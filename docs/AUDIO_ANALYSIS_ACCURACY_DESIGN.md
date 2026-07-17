@@ -2,7 +2,7 @@
 
 # Audio Analysis Accuracy — measured detection, licensed models, sustained objects
 
-**Status:** APPROVED design, not built · 2026-07-08 · Fable
+**Status:** IN PROGRESS — P1 SHIPPED 2026-07-17 (harness core, D7/D10/D11/D14, live-show fixture + provisional split awaiting Peter's veto; metamorphic invariance failure = BUG-227, a pipeline finding, not loosened) · designed 2026-07-08 · Fable
 **Prerequisites:** none. All work in `tools/audio_analysis/` plus two small Rust seams (new trigger-type variants + inspector rows) in P5.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
