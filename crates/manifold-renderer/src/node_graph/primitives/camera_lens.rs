@@ -86,6 +86,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "All four params are port-shadowed — wire an LFO into exposure_ev for a strobe, a fader into f_stop to rack focus (once CINEMATIC_POST's coc_from_depth reads it), a drop macro into shutter_angle for a motion-blur smear. Defaults are neutral, so dropping this node with every slider untouched changes nothing downstream. node.render_scene multiplies its final straight rgb by exp2(exposure_ev) every frame (docs/CAMERA_AND_LENS_DESIGN.md D5) — that's live today. focus_distance/f_stop/shutter_angle are read by CINEMATIC_POST's DoF/motion-blur atoms once those ship; wiring this node ahead of time is harmless.",
     examples: [],
     picker: { label: "Camera Lens", category: Atom },

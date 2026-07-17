@@ -38,6 +38,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: CombineNearest,
     composition_notes: "Prefer over Mix(Lerp) when wiring a processed branch back over an unprocessed source — the named ports make the intent self-documenting in composite graphs. The `wet_dry` input is an optional control wire: when wired, the scalar value overrides the same-named param for that frame.",
     examples: ["composite.bloom", "composite.halation", "composite.watercolor"],
     picker: { label: "Wet/Dry", category: Atom },

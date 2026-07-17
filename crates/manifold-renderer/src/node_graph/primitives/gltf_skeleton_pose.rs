@@ -183,6 +183,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "gltf_import.rs builds all six Tables at import time from GltfMaterialInfo::skin, sorted ascending by joint_index (topology tables) or (clip_index, joint_index) (track tables). Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
     examples: [],
     picker: { label: "glTF Skeleton Pose", category: Driver },

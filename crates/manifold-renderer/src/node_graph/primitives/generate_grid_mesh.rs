@@ -95,6 +95,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "max_capacity ≥ resolution_x × resolution_y. The chain build pre-allocates max_capacity × 32 bytes and triggers a rebuild when changed; resolution sliders only write uniforms. Default 256×256 = 65k vertices ≈ 2 MB. size_x / size_y are port-shadows-param: aspect-correct the mesh by wiring `system.generator_input.aspect → math.multiply(b=2.0) → size_x` (matches the legacy MetallicGlass mesh that spans [-aspect, +aspect] in X).",
     examples: [],
     picker: { label: "Grid Mesh", category: Atom },

@@ -54,6 +54,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Both min and max are port-shadows-param so a control wire (LFO, audio bridge) can modulate the clamp range. When min > max the WGSL clamp returns min for all inputs — set sensibly. For one-sided clamps use `min=-INF` (or a very negative value) or `max=INF` (or a very large value). The texture-side sibling of `node.array_math` op `Clamp01`.",
     examples: [],
     picker: { label: "Clamp", category: Atom },

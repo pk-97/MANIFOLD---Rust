@@ -117,6 +117,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: output channels encode velocity + confidence + validity, not height — unlike depth_map's literal depth output, flow isn't a meaningful height surrogate
+    depth_rule: Terminal,
     composition_notes: "Wire `out` → node.uv_displace_by_flow.flow to advect a source by per-pixel motion (background → particles-along-flow effects, motion-blur-style trails). Wire G channel through node.channel_mixer to use confidence as a mask. Wire `cut_score` → node.filter (threshold ~0.28) → reset_trigger on any downstream stateful primitive to clear frame-to-frame state on hard scene cuts. Until two frames have been inferenced, both outputs are zero. If the native plugin is unavailable, primitive logs a warning once and outputs zero/black.",
     examples: [],
     picker: { label: "Optical Flow", category: Atom },

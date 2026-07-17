@@ -1769,6 +1769,9 @@ mod tests {
     }
 
     impl EffectNode for SilentAliasedNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -1906,6 +1909,9 @@ mod tests {
     }
 
     impl EffectNode for RecordingNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -2366,6 +2372,9 @@ mod tests {
     }
 
     impl EffectNode for NeedsStateNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -2763,6 +2772,9 @@ mod tests {
     }
 
     impl EffectNode for PureCountingNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -2967,6 +2979,9 @@ mod tests {
     }
 
     impl EffectNode for EmptyDrivenNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -3116,6 +3131,9 @@ mod tests {
     }
 
     impl EffectNode for DrawShapedNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -3266,6 +3284,9 @@ mod alias_gpu_tests {
     }
 
     impl EffectNode for GatedSourceNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -3299,6 +3320,9 @@ mod alias_gpu_tests {
     }
 
     impl EffectNode for GenObservingNode {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

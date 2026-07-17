@@ -50,6 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the `x` input (mirrors how node.array_math sizes its `out` to its `a` input) so the pack auto-sizes to whatever the upstream curve length is — no separate `max_capacity` knob to keep in sync. Processing truncates to min(x_capacity, y_capacity, out_capacity) so a shorter axis channel naturally clips the curve length. The internal PROJ_SCALE = 0.25 is intentionally not a user param — it's the screen-fit factor baked into the curve-space contract render_lines expects. Pair with node.range + node.array_math (ScaleOffset + Sin) per axis to build any parametric curve (Lissajous, Rose, hypocycloid, audio waveform). To cancel the PROJ_SCALE factor (e.g. when the upstream axis chain already encodes the desired screen-fractional radius), set `scale = 4.0` — this is the documented pattern for polygon outlines whose `size` param is already in screen-fractional units.",
     examples: [],
     picker: { label: "Combine XY (curve)", category: Atom },

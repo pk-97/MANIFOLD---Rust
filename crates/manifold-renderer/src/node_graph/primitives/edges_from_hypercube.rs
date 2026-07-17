@@ -55,6 +55,7 @@ crate::primitive! {
         edges: Array(EdgePair),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Output capacity is fixed at 32 (the hypercube edge count). Edges connect (i, i^bit) for bit ∈ {1,2,4,8} where j > i. The table is constant across `dimension` — when node.hypercube_points collapses an axis, the affected edges become zero-length and node.draw_lines skips/dots them. Drive the paired node.hypercube_points for the matching corners.",
     examples: [],
     picker: { label: "Hypercube Edges (4D)", category: Atom },

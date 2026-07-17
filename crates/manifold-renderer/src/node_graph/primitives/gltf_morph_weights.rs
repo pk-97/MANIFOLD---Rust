@@ -124,6 +124,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "gltf_import.rs builds weight_tracks at import time from GltfObjectMorph plus the resolved node.gltf_skeleton_pose. Wire `weights` into node.morph_targets_blend's `weights` input (BufferGather — a target-index lookup, not coincident with morph_targets_blend's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
     examples: [],
     picker: { label: "glTF Morph Weights", category: Driver },

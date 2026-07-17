@@ -42,6 +42,7 @@ crate::primitive! {
             enum_values: PLATONIC_SHAPES,
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity is fixed at PLATONIC_MAX_EDGES (30 — Icosa / Dodeca have the most edges); slots past the active shape's edge count are EdgePair::SENTINEL so node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line. Indices are stable per shape and reference the paired `node.platonic_solid_points` slot ordering — drive both atoms' `shape` input from the same scalar so vertices and edges always agree.",
     examples: [],
     picker: { label: "Platonic Solid Edges", category: Atom },

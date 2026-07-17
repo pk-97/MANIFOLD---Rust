@@ -283,6 +283,9 @@ impl Watercolor {
 }
 
 impl EffectNode for Watercolor {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Warp
+    }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }

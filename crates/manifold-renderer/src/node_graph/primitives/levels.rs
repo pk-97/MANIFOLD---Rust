@@ -88,6 +88,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "All five inputs are port-shadows-param so a control wire can modulate any axis. Defaults (scale=1, offset=0, lo=0, hi=1, gamma=1) are a saturate. For a passthrough, widen lo/hi past the input range. pow on a negative base is undefined — the shader maxes against 0 before pow so a misconfigured `lo < 0` with a fractional gamma still produces defined output. Composes with itself: a `levels → levels` chain in JSON is two dispatches, equivalent to the legacy MetallicGlass's `(feedback_luma * 0.7 + 0.3) * 1.8 - 0.25` chain expressed as one levels per stage (or pre-multiplied into one levels — `scale = 0.7 * 1.8 = 1.26`, `offset = 0.3 * 1.8 - 0.25 = 0.29`).",
     examples: ["preset.generator.metallic_glass"],
     picker: { label: "Levels", category: Atom },

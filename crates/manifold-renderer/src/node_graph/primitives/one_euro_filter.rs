@@ -64,6 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire after any noisy Channels producer (blob_detect_ffi, depth_estimate_midas, audio analyzer). min_cutoff sets the baseline smoothing when the signal is still — lower = more smoothing. beta controls how aggressively the filter opens up during fast motion — higher = more responsive to speed. d_cutoff is the derivative filter's cutoff — rarely needs changing. All three are port-shadows-param so control wires can modulate them per-frame.",
     examples: [],
     picker: { label: "One Euro Filter", category: Driver },

@@ -50,6 +50,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Use to remap one scalar to another via a single affine step. Defaults (scale=1, offset=0) pass through. For `freq = 3 + 5 * complexity`: scale=5, offset=3, a=complexity (wired or bound). For `t = time * speed`: scale=speed_value, offset=0 (or just use Math.Multiply if `scale` is itself a wire). Negative `scale` lets you express subtractions inline (e.g. `0.3 - 0.28*c` is scale=-0.28, offset=0.3).",
     examples: [],
     picker: { label: "Scale + Offset (value)", category: Driver },

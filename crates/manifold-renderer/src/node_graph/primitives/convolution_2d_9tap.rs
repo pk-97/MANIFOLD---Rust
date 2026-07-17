@@ -64,6 +64,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Kernel layout (row-major): k0 k1 k2 / k3 k4 k5 / k6 k7 k8. Defaults to identity (k4=1, rest=0) so an unconfigured node passes through. Example kernels: Laplacian = [0 -1 0 / -1 4 -1 / 0 -1 0], Sobel-X = [1 0 -1 / 2 0 -2 / 1 0 -1], box blur = [1/9 1/9 1/9 × 3 rows] (toggle normalise off), sharpen = [0 -1 0 / -1 5 -1 / 0 -1 0]. normalise=true divides by sum(weights) — useful for blurs that should preserve energy.",
     examples: [],
     picker: { label: "Custom Convolution", category: Atom },

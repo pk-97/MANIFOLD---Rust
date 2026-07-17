@@ -97,6 +97,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire blob_detect_ffi's `blobs` output → this primitive's `in`, and this primitive's `out` → track_persist's `in`. Bounds are in the detector's normalised 0..1 coordinate space. For naturalistic camera footage, max_aspect ~6 + min_height ~0.02 rejects horizon strips while keeping people-sized boxes; max_area_frac 0.5 reproduces the old hardcoded plugin reject (bbox covering >50% of frame). min_height / max_aspect / max_area_frac are port-shadowed so a control can drive them live.",
     examples: [],
     picker: { label: "Filter Detections", category: Driver },

@@ -47,6 +47,7 @@ crate::primitive! {
             enum_values: &["Bayer", "Halftone", "Lines", "X-Hatch", "Noise", "Diamond"],
         },
     ],
+    depth_rule: SourceHeight,
     composition_notes: "Screen-space: pixel_pos = id + 0.5 (matches the legacy fused dither). Pattern density is intrinsic to the output pixel grid, so it stays size-coherent across render-scale changes. Output is constant in time. Pair: dither_pattern -> dither(in=source, pattern=dither_pattern.out, amount).",
     examples: ["preset.effect.dither"],
     picker: { label: "Dither Pattern", category: Atom },

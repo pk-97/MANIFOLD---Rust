@@ -55,6 +55,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Warp,
     composition_notes: "bias = 0.5 maps [0, 1] flow channels to [-0.5, +0.5] offset (Watercolor convention). bias = 0 treats already-signed flow data directly. weight scales the offset in UV units (Watercolor default 0.001 ≈ 1 pixel at 1080p). Sampling is bilinear; out-of-bounds UVs wrap or clamp depending on the sampler (default linear+clamp).",
     examples: [],
     picker: { label: "UV Displace by Flow", category: Atom },

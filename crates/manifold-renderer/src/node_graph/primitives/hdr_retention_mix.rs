@@ -59,6 +59,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: CombineNearest,
     composition_notes: "Pair with `node.exposure` for level-rider effects (AutoGain) where uniform RGB scaling would push highlights into / out of clip. Wire the gained branch into `compressed` and the un-gained source into `reference`. retention defaults to 1.0 (HDR ceiling pinned). The retention input is port-shadowable so the value can ride a control wire when needed.",
     examples: ["preset.effect.auto_gain"],
     picker: { label: "HDR Mix", category: Atom },

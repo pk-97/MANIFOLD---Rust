@@ -770,6 +770,7 @@ mod tests {
                 enum_values: &[],
             },
         ],
+        depth_rule: Terminal,
         composition_notes: "Used by tests; do not reference from real code.",
         param_contracts: [
             ("both_sided", manifold_core::effects::RangeContract {

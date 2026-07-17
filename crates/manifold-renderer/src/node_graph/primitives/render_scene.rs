@@ -1938,6 +1938,9 @@ fn build_uniforms(
 }
 
 impl EffectNode for RenderScene {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::SourceHeight
+    }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
@@ -3780,6 +3783,9 @@ mod tests {
     }
 
     impl EffectNode for StubProducer {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }

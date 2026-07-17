@@ -123,6 +123,9 @@ impl Default for InjectBurst {
 }
 
 impl EffectNode for InjectBurst {
+    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+        crate::node_graph::depth_rule::DepthRule::Terminal
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }

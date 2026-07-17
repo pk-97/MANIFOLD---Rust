@@ -47,6 +47,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Rec. 709 weights (0.2126, 0.7152, 0.0722) — same as node.luminance. Wire wins over param. HDR-safe (no clamp). Pair with node.exposure (exposure) + node.contrast + node.hue_saturation to rebuild a full colour-grade chain from atoms.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Saturation", category: Atom },

@@ -76,6 +76,7 @@ crate::primitive! {
             enum_values: GRADIENT_WRAP_MODES,
         },
     ],
+    depth_rule: Inherit,
     composition_notes: "Output is a SIGNED vec2 field. Pair with `node.normalize` for direction-only gradients (used in fluid-sim curl forcing), or feed directly into `node.rotate_vector` for arbitrary-angle curl flow. For a per-channel gradient of an RG texture (oily-fluid pattern), instance this primitive twice with channel=R and channel=G and combine downstream. Defaults (Texel + Clamp) preserve legacy oily-fluid / heightmap behaviour. Use scale_mode=UV + wrap_mode=Repeat to compose with `scale_offset_texture` + `rotate_vec2_by_angle` as the decomposed `fluid_gradient_rotate` pipeline.",
     examples: [],
     picker: { label: "Edge Slope", category: Atom },

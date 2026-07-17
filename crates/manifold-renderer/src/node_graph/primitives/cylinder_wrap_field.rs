@@ -89,6 +89,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Output capacity follows the `uv` input. `instance_scale` is written into the .w of pos_scale on every emitted InstanceTransform — pair with node.torus_wrap_field downstream of node.switch_array<InstanceTransform> and feed the SAME scale wire into both so the .w stays continuous across a cyl↔tor morph. Rotation is left at zero on every output; pair with node.rotation_jitter downstream for hash-driven per-instance rotation. Taper = 0 disables tapering (straight cylinder); larger values sharpen the top.",
     examples: [],
     picker: { label: "Cylinder Wrap Field", category: Atom },

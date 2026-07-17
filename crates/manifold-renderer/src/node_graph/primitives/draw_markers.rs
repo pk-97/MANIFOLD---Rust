@@ -94,6 +94,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Wire a detector chain (node.blob_tracker → node.track_persist → node.one_euro_filter) into `detections` and the video into `in`. Stack multiple instances for layered HUDs (brackets + crosshair = the Blob Track look: brackets at size_fraction 0.4 / thickness 2, crosshair at 0.3 / 1.5). alpha is port-shadowed — wire one amount control into every Draw node's alpha to fade the whole HUD. Skips to a zero-cost passthrough while the detector reports nothing.",
     examples: [],
     picker: { label: "Draw Markers", category: Atom },

@@ -116,6 +116,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "orbit / tilt / roll / fov_y are angle params, so the editor and outer-card sliders display and edit them in degrees natively while storage stays in radians. Expose them directly. Older presets like DigitalPlants / MetallicGlass instead wire a `node.scale_offset_value` (scale = π/180) ahead of each angle input to turn a degrees-valued driver into radians, which still works. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — `node.render_mesh` takes the Camera directly and derives the per-pixel view vector (V = camera_pos - world_pos) internally for its PBR material.",
     examples: [],
     picker: { label: "Orbit Camera", category: Driver },

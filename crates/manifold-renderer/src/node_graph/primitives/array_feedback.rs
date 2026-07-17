@@ -39,6 +39,7 @@ crate::primitive! {
         out: Array(Particle),
     },
     params: [],
+    depth_rule: Terminal,
     composition_notes: "Pair with SimulateParticles (Phase A.7) to build feedback-driven simulations. SeedParticles emits initial state; ArrayFeedback caches it for replay. For FluidSim-style clip-trigger re-seeding: wire `system.generator_input.trigger_count` into `reset_trigger` and a seed-pattern producer (`seed_particles_from_texture` or `wgsl_compute`-driven density-rejection seed) into `seed` — every trigger edge clears the simulation and reloads the seed. First observation of `reset_trigger` arms without firing so the first-alloc seed isn't double-copied.",
     examples: [],
     picker: { label: "Array Feedback", category: Atom },

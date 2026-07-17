@@ -84,6 +84,8 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    // depth_rule: reads `depth` (not color) at the same texel with no UV remap — mechanically pointwise like the other single-texture-input compute atoms (hash_field_by_seed, field_combine)
+    depth_rule: Inherit,
     composition_notes: "CoC-computation half of DoF v1 — pair with two node.variable_blur nodes (Horizontal then Vertical, ping-ponged) for the gather; this atom does no blurring itself (no-fused-monolith). `max_radius` MUST match the downstream variable_blur nodes' own `max_radius` param — this atom normalizes coc_px by ITS max_radius before emitting, and variable_blur denormalizes by its OWN max_radius (step_size = width_sample * max_radius + 1.0); a mismatch desyncs the blur radius from the physically-computed CoC. `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized). `focus_distance`/`f_stop` are read off the wired Camera's lens block (set upstream by node.camera_lens — insert one camera_lens between the camera source and both render_scene and this node so DoF and exposure read the same lens).",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "CoC From Depth", category: Atom },

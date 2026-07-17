@@ -21,6 +21,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
+    depth_rule: Inherit,
     composition_notes: "BA of `in` ignored. Output is unbounded above (length can exceed 1 for large vec2 inputs); pair with `node.exposure` or `node.smoothstep` to remap the range as needed. Chain: `color → length_vec2 → heightmap_to_normal` is the oily-fluid normal pipeline.",
     examples: [],
     picker: { label: "Vector Length", category: Atom },

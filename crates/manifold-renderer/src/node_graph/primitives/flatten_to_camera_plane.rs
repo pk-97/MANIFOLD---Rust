@@ -72,6 +72,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
+    depth_rule: Terminal,
     composition_notes: "Aliased in/out — mutates the particle buffer in place. `flatten` is port-shadow so a slider / LFO drives the depth-collapse live; flatten <= 0 is a no-op (inert at the default). Wire a Camera (node.orbit_camera) into `camera` so the compression direction tracks the live view — the same camera should feed the display projector (node.draw_particles_camera). Place last in the per-particle position chain (after node.keep_in_box_3d), matching the legacy order.",
     examples: ["FluidSim3D"],
     picker: { label: "Flatten to Camera Plane", category: Atom },

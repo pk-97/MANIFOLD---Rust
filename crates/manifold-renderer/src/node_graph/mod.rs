@@ -23,6 +23,7 @@ mod bundled_presets;
 pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
+pub mod depth_rule;
 pub mod descriptor;
 pub mod preview_encoding;
 mod effect_node;
