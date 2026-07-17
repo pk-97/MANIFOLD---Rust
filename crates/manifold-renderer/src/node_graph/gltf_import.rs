@@ -4960,6 +4960,76 @@ mod tests {
         }
     }
 
+    /// Merge every hostile fixture into a real existing scene (the azalea
+    /// import) and run the merged def through the same CPU chain — merge
+    /// reuses `build_object_group`, but that sharing is exactly the kind
+    /// of claim this shelf exists to prove rather than assume (BUG-204's
+    /// class: two features correct alone, never composed). Also pins
+    /// BUG-205 through the merge path: a merged skinned object must get
+    /// its skeleton pose and must NOT get a rigid animation source.
+    #[test]
+    fn hostile_fixtures_merge_into_existing_scene() {
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        let (target, _report) = super::assemble_import_graph(&azalea_fixture_path())
+            .expect("assemble azalea target scene");
+        let (render_id, existing_objects) = render_scene_objects(&target);
+        for path in hostile_fixture_paths() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let plan = super::assemble_merge_plan(&target, &path)
+                .unwrap_or_else(|e| panic!("{name}: assemble_merge_plan failed: {e}"));
+
+            let had_skin =
+                plan.new_nodes.iter().any(|n| contains_type(n, "node.gltf_skeleton_pose"));
+            let has_rigid_anim =
+                plan.new_nodes.iter().any(|n| contains_type(n, "node.gltf_animation_source"));
+            if had_skin {
+                assert!(
+                    !has_rigid_anim,
+                    "{name}: merged skinned object carries a rigid gltf_animation_source — \
+                     BUG-205's double-transform through the merge path"
+                );
+            }
+
+            let mut merged = target.clone();
+            merged.nodes.extend(plan.new_nodes.clone());
+            merged.wires.extend(plan.new_wires.clone());
+            if let Some(node) = merged.nodes.iter_mut().find(|n| n.id == render_id) {
+                node.params.insert(
+                    "objects".to_string(),
+                    SerializedParamValue::Int { value: plan.new_objects_count as i32 },
+                );
+            }
+            if let Some(meta) = merged.preset_metadata.as_mut() {
+                meta.params.extend(plan.new_card_params.clone());
+                meta.bindings.extend(plan.new_card_bindings.clone());
+                meta.string_bindings.extend(plan.new_string_bindings.clone());
+            }
+
+            let registry = PrimitiveRegistry::with_builtin();
+            let graph = merged
+                .clone()
+                .into_graph(&registry)
+                .unwrap_or_else(|e| panic!("{name}: merged graph failed to build: {e:?}"));
+            let (errors, _warnings) =
+                crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+            assert!(errors.is_empty(), "{name}: card lints rejected the merged def: {errors:?}");
+            PresetRuntime::from_def(merged, &registry, None)
+                .unwrap_or_else(|e| panic!("{name}: merged PresetRuntime build failed: {e:?}"));
+            let _ = existing_objects;
+        }
+    }
+
+    /// Group-aware type search: merge plans emit one GROUP node per object
+    /// with the real producers in its `group.body`.
+    fn contains_type(node: &EffectGraphNode, type_id: &str) -> bool {
+        if node.type_id == type_id {
+            return true;
+        }
+        node.group
+            .as_ref()
+            .is_some_and(|g| g.nodes.iter().any(|inner| contains_type(inner, type_id)))
+    }
+
     /// Render every hostile fixture and check framing invariants — the
     /// automated form of "does it look plausibly right": enough lit pixels
     /// to be a real render (BUG-205's speck fails), not a full-frame

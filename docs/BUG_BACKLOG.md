@@ -51,6 +51,9 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-096 | **camera-rotate-sliders-jump-no-degrees** | FluidSim3D Rotate X/Y/Z sliders jump instead of rotating smoothly, no degrees readout — PARTIAL 2026-07-10 (legacy orbit phase + tilt sign restored in preset; degrees readout + jump investigation still open) |
+| BUG-207 | **materialless-skinned-mesh-silently-imports-static-at-node-scale** | a skinned mesh with NO material silently loses its skin (resolution keyed `Some(material_index)` never matches the default-material bucket) and imports as a static mesh through the node transform glTF skinning ignores — Blender exports put bind-meters in the skin path, so the object renders ~100× wrong-sized (invisible) with no report line — MED |
+| BUG-208 | **skin-plus-morph-drops-morph-silently** | an object with BOTH a skin and morph targets imports with morph animation silently dropped (`gltf_import.rs` A3 guard `skinned_vertices_source.is_none()`, no report line in the skip branch) — the Mixamo body-rig + facial-blendshape class — MED |
+| BUG-209 | **animated-ancestor-above-joint-tree-sampled-statically** | root motion authored on a node ABOVE a skin's joint tree is frozen at its static TRS (`joint_root_world` is static by design; the rigid path that would have carried it is correctly excluded post-BUG-205) — LOW until a real asset exhibits it |
 | BUG-206 | **import-framing-crops-elongated-objects** | tall/thin imports overflow the synthesized orbit camera's frame (cropped top AND bottom at default framing) — `distance = 2.2 * radius` uses the bbox half-DIAGONAL, marginal for elongated shapes once tilt+perspective are added — LOW |
 | BUG-203 | **fluidsim2d-count-dims-display** | FluidSim2D: raising Particle Count dims the image instead of reading as more particles — MED |
 | BUG-201 | **interaction-overlay-automation-callback-type-complexity** | `manifold-ui --all-targets` clippy fails on 4 `type_complexity` findings in `interaction_overlay.rs`, unrelated to BUG-112 — LOW (lint-only) |
@@ -160,6 +163,36 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-207 (materialless-skinned-mesh-silently-imports-static-at-node-scale) — a rigged mesh with no material renders invisible (~100× wrong-sized) with nothing in the report — found 2026-07-17 (Fable seam-hunt session; hostile-shelf probe, Blender-exported materialless rig)
+
+**Status:** OPEN — MED (real-asset class: raw Mixamo/store downloads frequently ship materialless).
+
+**Symptom:** import succeeds, report shows `default_material_vertex_count > 0`, frame renders black (lit fraction exactly 0.0000). The geometry IS imported (BUG-171's `DEFAULT_MATERIAL_MESH_PARAM = -2` path loads all vertices — verified: static DefaultOnly loader returns the full 372) but as a STATIC mesh at the wrong size.
+
+**Root cause:** two stacked seams. (1) `gltf_load.rs` skin/morph/animation resolution keys `nodes_by_material.get(&Some(material_index as usize))` — materialless primitives live in the `None` bucket and the synthetic default-material entry carries the `u32::MAX` sentinel, so `skin`/`morph` NEVER resolve for it (the synthetic entry is also hardcoded `skin: None`); `find_skinned_node_for_material` has the same `Some(...)` comparison. (2) With the skin lost, the object falls to `node.gltf_mesh_source`, which world-transforms by the mesh node's transform — a transform glTF skinning IGNORES (§3.7.3.3), and which Blender exports expect to be ignored (skinned POSITIONs are written in bind-meters). Measured on the probe fixture: mesh-node-world bbox 0.01 tall vs bind-skinned 1.0 tall — the render is 1% of the framed size. No report line fires (the only signal is a console warn, whose text — "v1 does not import these" — is itself stale since BUG-171 DID make them import).
+
+**Fix shape:** make the default-material bucket a first-class material key: resolve skin/morph/animations for the sentinel entry from the `None` bucket (a `DefaultMaterial`-aware filter in `find_skinned_node_for_material` / `flatten_skinned_node`, mirroring `MaterialFilter::DefaultOnly`); also fix `gltf_skinned_mesh_source`'s `material_index` param for the sentinel (`u32::MAX as i32` = -1 collides with the pre-existing "unset" value — route through `DEFAULT_MATERIAL_MESH_PARAM = -2` like the static node). Update the stale import warn text while there. Regression: a materialless variant of `hostile/mixamo_like.glb` on the shelf — the render sweep's lit-fraction floor catches the invisible case automatically.
+
+### BUG-208 (skin-plus-morph-drops-morph-silently) — an object with both a skin and morph targets imports with its morph animation gone and no report line — found 2026-07-17 (Fable seam-hunt session; code-confirmed, no fixture yet)
+
+**Status:** OPEN — MED (the Mixamo body-rig + facial-blendshapes class; directly relevant to stage avatars).
+
+**Symptom (predicted, code-confirmed):** body skinning animates, face/blendshape animation is absent; the import report says nothing.
+
+**Root cause:** `gltf_import.rs` `build_object_group`: `morphed_vertices_source` is only built when `skinned_vertices_source.is_none()` (A3's documented out-of-scope call, "re-derive if a future asset needs both") — but the skip branch pushes NO report line, violating the D9 "every unmapped feature is a report line, never a silent drop" doctrine the importer follows everywhere else.
+
+**Fix shape:** minimum (one line, do regardless): push a report line when an `m.morph` is skipped because the object is skinned. Real fix: chain the paths — glTF applies morph THEN skin, so wire `node.morph_targets_blend` between `node.gltf_skinned_mesh_source`'s vertices and `node.skin_mesh`'s `in` (weights node unchanged). Needs a skin+morph fixture on the hostile shelf (Blender: armature + shape key on one mesh — `scripts/blender/make_hostile_rig.py` is the template) and a phase-distinctness render proof for both channels.
+
+### BUG-209 (animated-ancestor-above-joint-tree-sampled-statically) — root motion authored on a node above a skin's joint tree is frozen — promoted from BUG-205's "known remaining approximation" note, 2026-07-17
+
+**Status:** OPEN — LOW (no real asset observed exhibiting it: Mixamo roots motion inside the rig at Hips; the Sketchfab Bip01 case bakes animated values ≈ its static TRS).
+
+**Symptom (predicted):** a rig whose ancestor prefix genuinely animates (translation/rotation/scale keyframes with values that CHANGE) plays its pose correctly but stays pinned in place — the prefix motion is dropped.
+
+**Root cause:** `gltf_skeleton_pose` roots joint worlds at `joint_root_world` — the STATIC ancestor-chain product (`static_world_matrix`), by design (GLTF_ANIMATION_DESIGN.md A2). Post-BUG-205 the rigid `gltf_animation_source` no longer re-applies the chain (that was a double-transform, not a fix for this), so the animated prefix has no carrier at all.
+
+**Fix shape:** extend the pose primitive with prefix tracks — sample the ancestor chain's animated TRS per frame (one extra Table keyed like the joint tracks, joint index -1 or a dedicated `prefix_tracks` param) and compose it in place of the static `joint_root_world`. Gate with a shelf fixture whose prefix translates across the frame (make_hostile_rig.py variant: keyframe the `UnitConversion` empty).
 
 ### BUG-206 (import-framing-crops-elongated-objects) — tall/thin imports overflow the synthesized camera's frame — found 2026-07-17 (first synthetic hostile-fixture run: Blender-generated skinned cylinder, 10:1 aspect, cropped top AND bottom at default framing)
 
