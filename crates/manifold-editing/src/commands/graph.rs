@@ -2464,20 +2464,28 @@ fn shift_indexed_ports_down(wires: &mut [EffectGraphWire], to_node: u32, prefix:
     }
 }
 
-/// The remove-object gesture (BUG-193): the inverse of
+/// The remove-object gesture (BUG-193, retargeted to the SCENE_OBJECT_AND_PANEL_V2
+/// `Object` wire model — the object's mesh/transform/material/maps no longer
+/// reach `render_scene` as a parallel-port triplet, they arrive as one
+/// `object_k` wire out of a `node.scene_object` node, D1/D4): the inverse of
 /// [`AddSceneObjectCommand`] — one undoable composite edit that (1) deletes
-/// the object's group node and its three root wires (`mesh_k`/`transform_k`/
-/// `material_k` → `render_scene`), (2) decrements `objects`, (3) renumbers
-/// every wire whose object-port index exceeds `k` down by one so the slots
-/// stay dense. Same whole-level snapshot/restore undo shape as
+/// the object's producer node (the `scene_object`'s enclosing group when one
+/// exists — the importer/grouped shape, D5 — else the `scene_object` node
+/// itself) and its `object_k` wire into `render_scene`, (2) decrements
+/// `objects`, (3) renumbers every `object_j` wire (`j > k`) down by one so
+/// the slots stay dense. Same whole-level snapshot/restore undo shape as
 /// `AddSceneObjectCommand` — a structural composite edit, not a hand-reversed
-/// sequence of sub-steps.
+/// sequence of sub-steps. Ungrouped hand-built objects (a loose `scene_object`
+/// whose mesh/transform/material producers are NOT wrapped in a group) are a
+/// known gap shared with the pre-migration version of this command — deleting
+/// only the `scene_object` node leaves those loose producers orphaned rather
+/// than walking the full exclusive-upstream-subgraph D11 describes; tracked
+/// for P3 to handle if a real ungrouped scene needs it.
 ///
-/// `object_index` (`k`, the 0-based slot in `mesh_k`/`material_k`/
-/// `transform_k`) is resolved by the caller from the live Vm's own
-/// `ObjectKnownRow::index` — not re-derived here, same "UI's already-resolved
-/// index is the one source of truth" posture `AddSceneObjectCommand::next_index`
-/// documents.
+/// `object_index` (`k`, the 0-based slot in `object_k`) is resolved by the
+/// caller from the live Vm's own `ObjectKnownRow::index` — not re-derived
+/// here, same "UI's already-resolved index is the one source of truth"
+/// posture `AddSceneObjectCommand::next_index` documents.
 #[derive(Debug)]
 pub struct RemoveSceneObjectCommand {
     target: GraphTarget,
@@ -2517,10 +2525,10 @@ impl Command for RemoveSceneObjectCommand {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let prev = (nodes.clone(), wires.clone());
 
-            let mesh_port = format!("mesh_{k}");
-            let group_id = wires
+            let object_port = format!("object_{k}");
+            let producer_id = wires
                 .iter()
-                .find(|w| w.to_node == render_id && w.to_port == mesh_port)
+                .find(|w| w.to_node == render_id && w.to_port == object_port)
                 .map(|w| w.from_node)?;
 
             let current_objects = match nodes.iter().find(|n| n.id == render_id)?.params.get("objects") {
@@ -2528,16 +2536,9 @@ impl Command for RemoveSceneObjectCommand {
                 _ => return None,
             };
 
-            nodes.retain(|n| n.id != group_id);
-            wires.retain(|w| {
-                !(w.to_node == render_id
-                    && (w.to_port == format!("mesh_{k}")
-                        || w.to_port == format!("material_{k}")
-                        || w.to_port == format!("transform_{k}")))
-            });
-            for prefix in ["mesh", "material", "transform"] {
-                shift_indexed_ports_down(wires, render_id, prefix, k);
-            }
+            nodes.retain(|n| n.id != producer_id);
+            wires.retain(|w| !(w.to_node == render_id && w.to_port == object_port));
+            shift_indexed_ports_down(wires, render_id, "object", k);
 
             nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
                 "objects".to_string(),
@@ -6566,35 +6567,48 @@ mod tests {
     /// A fixture with 3 objects wired as `AddSceneObjectCommand` builds them
     /// (group + mesh_k/material_k/transform_k wires), so removal tests can
     /// exercise the middle-object renumbering case (BUG-193's core claim).
+    /// Builds `count` bare `node.scene_object` producers wired directly to
+    /// `render_scene`'s `object_k` ports (the D3/D4 shape) — hand-built
+    /// rather than via `AddSceneObjectCommand`, whose `catalog_default` still
+    /// emits the pre-migration legacy-port shape (P3's job to retarget, see
+    /// docs/BUG_BACKLOG.md). Returns the def and each producer's node id.
     fn render_scene_with_objects(count: u32) -> (EffectGraphDef, Vec<u32>) {
         let mut def = render_scene_graph(0, 0);
-        let mut group_ids = Vec::new();
+        def.nodes.iter_mut().find(|n| n.id == 0).unwrap().params.insert(
+            "objects".to_string(),
+            SerializedParamValue::Float { value: count as f32 },
+        );
+        let mut object_ids = Vec::new();
         for k in 0..count {
-            let (mut project, fx) = project_with_graph(def.clone());
-            let mut cmd = AddSceneObjectCommand::new(
-                GraphTarget::Effect(fx.clone()),
-                vec![],
-                0,
-                k,
-                (0.0, 0.0),
-                mirror_catalog_default(),
-            );
-            cmd.execute(&mut project);
-            def = graph_of(&project, &fx).clone();
-            let group = def
-                .nodes
-                .iter()
-                .find(|n| n.handle.as_deref() == Some(format!("Object {}", k + 1).as_str()))
-                .expect("group created")
-                .id;
-            group_ids.push(group);
+            let id = 100 + k;
+            def.nodes.push(EffectGraphNode {
+                id,
+                node_id: manifold_core::NodeId::new(format!("obj{k}")),
+                type_id: "node.scene_object".to_string(),
+                handle: Some(format!("Object {}", k + 1)),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            });
+            def.wires.push(EffectGraphWire {
+                from_node: id,
+                from_port: "object".to_string(),
+                to_node: 0,
+                to_port: format!("object_{k}"),
+            });
+            object_ids.push(id);
         }
-        (def, group_ids)
+        (def, object_ids)
     }
 
     #[test]
     fn remove_scene_object_middle_deletes_group_and_renumbers_survivors() {
-        let (fixture, group_ids) = render_scene_with_objects(3);
+        let (fixture, object_ids) = render_scene_with_objects(3);
         let (mut project, fx) = project_with_graph(fixture);
         let before = graph_of(&project, &fx).clone();
 
@@ -6615,37 +6629,29 @@ mod tests {
             "objects decremented by one"
         );
         assert!(
-            !def.nodes.iter().any(|n| n.id == group_ids[1]),
-            "the removed object's group node is gone"
+            !def.nodes.iter().any(|n| n.id == object_ids[1]),
+            "the removed object's scene_object node is gone"
         );
         assert!(
-            def.nodes.iter().any(|n| n.id == group_ids[0]),
+            def.nodes.iter().any(|n| n.id == object_ids[0]),
             "object 0 survives untouched"
         );
         assert!(
-            def.nodes.iter().any(|n| n.id == group_ids[2]),
+            def.nodes.iter().any(|n| n.id == object_ids[2]),
             "object 2 survives (renumbered)"
         );
         // Object 0 stays at slot 0.
-        assert!(def.wires.iter().any(|w| w.from_node == group_ids[0]
-            && w.from_port == "vertices"
+        assert!(def.wires.iter().any(|w| w.from_node == object_ids[0]
+            && w.from_port == "object"
             && w.to_node == 0
-            && w.to_port == "mesh_0"));
+            && w.to_port == "object_0"));
         // Object 2 (formerly slot 2) is renumbered down to slot 1.
-        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
-            && w.from_port == "vertices"
+        assert!(def.wires.iter().any(|w| w.from_node == object_ids[2]
+            && w.from_port == "object"
             && w.to_node == 0
-            && w.to_port == "mesh_1"));
-        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
-            && w.from_port == "material"
-            && w.to_node == 0
-            && w.to_port == "material_1"));
-        assert!(def.wires.iter().any(|w| w.from_node == group_ids[2]
-            && w.from_port == "transform"
-            && w.to_node == 0
-            && w.to_port == "transform_1"));
+            && w.to_port == "object_1"));
         // No dangling slot-2 wires left behind.
-        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "mesh_2"));
+        assert!(!def.wires.iter().any(|w| w.to_node == 0 && w.to_port == "object_2"));
 
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
