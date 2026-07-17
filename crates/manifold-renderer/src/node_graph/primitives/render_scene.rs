@@ -4725,7 +4725,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut data = vec![0u8; (n * n * 4) as usize];
         for y in 0..n {
             let band = y / band_h;
-            let v: u8 = if band % 2 == 0 { 13 } else { 242 };
+            let v: u8 = if band.is_multiple_of(2) { 13 } else { 242 };
             for x in 0..n {
                 let o = ((y * n + x) * 4) as usize;
                 data[o] = v;

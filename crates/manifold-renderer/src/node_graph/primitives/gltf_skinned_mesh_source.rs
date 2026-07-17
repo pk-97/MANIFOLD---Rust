@@ -63,6 +63,29 @@ crate::primitive! {
             range: Some((36.0, 8000000.0)),
             enum_values: &[],
         },
+        // BUG-194/BUG-195 (SCENE_SETUP_PANEL_DESIGN.md D4/D5): import-time
+        // provenance, never read by `evaluate()`/`run()` — stamped by
+        // `gltf_import.rs` at import/merge time and read back by
+        // `SceneVm::from_def` (the header's vertex-count row) and
+        // `merge_import_into_graph` (scale-sanity's reference-radius pick).
+        // -1 / -1.0 mean "unknown" (a hand-built node never touched by the
+        // importer) — never a fabricated non-negative default.
+        ParamDef {
+            name: Cow::Borrowed("source_vertex_count"),
+            label: "Source Vertex Count",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 8_000_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("source_bbox_radius"),
+            label: "Source Bbox Radius",
+            ty: ParamType::Float,
+            default: ParamValue::Float(-1.0),
+            range: None,
+            enum_values: &[],
+        },
     ],
     composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source. max_capacity is the pre-allocation ceiling in vertices for all three arrays (they stay coincident); gltf_import.rs sets it to the exact parsed vertex count.",
     examples: [],

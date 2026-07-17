@@ -53,8 +53,15 @@ tests/fixtures/gltf/khronos/*
 !tests/fixtures/gltf/khronos/manifest.json
 
 # G-P6 HDRI demo material (Poly Haven CC0, fetched by
-# scripts/fetch-gltf-conformance.sh) + the held-out AMG GT3 fixture
-# (licensing unverified) — both kept untracked for repo size / licensing,
+# scripts/fetch-gltf-conformance.sh) — kept untracked for repo size,
 # never vendored (audit table, GLB_CONFORMANCE_DESIGN.md §1).
 tests/fixtures/gltf/kloppenheim_07_puresky_4k.exr
-tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb
+
+# Peter drops downloaded look-test GLBs (large, licensing unvetted) straight
+# into this folder — blanket-ignore them so they never read as dirt in
+# worktree slots (untracked-but-not-ignored files wedge the ring: the slot
+# never returns to idle; bit 2026-07-17). Already-tracked fixtures
+# (DamagedHelmet, the blossom set, …) are unaffected — gitignore only
+# applies to untracked files. To deliberately track a NEW fixture, use
+# `git add -f` or add a `!tests/fixtures/gltf/<name>.glb` exception here.
+tests/fixtures/gltf/*.glb

@@ -179,8 +179,9 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    after 19 per-task worktrees × 15–60 GB targets = 455 GB filled the
    disk).** `python3 scripts/agent-worktree.py acquire <task-label> <branch>
    [--tip REF] [--owner TEXT]` re-points the warmest idle slot with
-   `checkout -B`; slots are anonymous (`slot-0`…`slot-5`, task label lives
-   in the lease), capped at 6 with no override — all-busy is a loud `POOL
+   `checkout -B`; slots are anonymous (`slot-0`…`slot-9`, task label lives
+   in the lease), capped at 10 with no override (raised from 6 on
+   2026-07-17; worst case ~270 GB fully warm) — all-busy is a loud `POOL
    FULL` error to surface to Peter, never to work around. A slot's
    `target/` past 25 GB is wiped at acquire. Idle = clean status + HEAD
    is-ancestor of origin/main + lease absent or stale (8 h). The script
