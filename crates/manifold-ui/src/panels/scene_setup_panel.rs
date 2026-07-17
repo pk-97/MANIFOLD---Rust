@@ -5494,6 +5494,47 @@ mod tests {
         ));
     }
 
+    /// C-P1d's own acceptance-flow gate, at the render level (the
+    /// `--script` headless harness can't independently confirm this half:
+    /// `PanelAction::DriverToggle`'s dispatch is proven correct by log
+    /// inspection — `cargo xtask ui-snap gltfscene --script
+    /// scripts/ui-flows/scene-card-convergence-c-p1d-roughness-scrub-drawer-undo.json`
+    /// shows the exact `DriverToggle(Generator, "scene.10.roughness")` fire
+    /// — but the SAME class of harness gap BUG-234/BUG-239 already
+    /// documented means the resulting drawer's own visible text isn't
+    /// reliably observable through that same script run, so this proves
+    /// the OTHER half directly: feed a Roughness row with
+    /// `RowModulation.driver_active = true` — the exact shape
+    /// `dispatch_inspector`'s `DriverToggle` arm produces on the next
+    /// resync — and confirm `build_object_card_row`'s driven branch
+    /// actually renders `build_driver_config`'s beat-grid drawer (the
+    /// "Straight"/"Dotted"/"Triplet" feel row is deep enough into the
+    /// drawer body to prove it built past the tab strip, not just reserved
+    /// the slot).
+    #[test]
+    fn roughness_driver_active_renders_the_drawer_inline() {
+        let mut vm = azalea_shaped_vm();
+        if let ObjectRowVm::Known(row) = &mut vm.objects[0]
+            && let ObjectMaterialVm::Pbr { roughness, .. } = &mut row.material
+        {
+            roughness.modulation.driver_active = true;
+            roughness.modulation.driver_beat_div_idx = 2;
+        }
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let has_text = |needle: &str| {
+            (0..tree.count())
+                .any(|i| tree.get_node(tree.id_at(i)).is_some_and(|n| n.text.as_deref() == Some(needle)))
+        };
+        assert!(has_text("Straight"), "an armed driver must render its config drawer INLINE in the panel");
+        assert!(has_text("Dotted"));
+        assert!(has_text("Triplet"));
+    }
+
     /// BUG-224 regression: the × close button used to call `self.close()`
     /// directly, which only flips the panel-local `open` flag — it never
     /// told the app to reset `layout.scene_setup_width` back to 0 or to
