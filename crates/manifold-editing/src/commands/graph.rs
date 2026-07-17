@@ -2708,16 +2708,24 @@ fn collect_all_handles(nodes: &[EffectGraphNode], out: &mut std::collections::Ha
 /// never carried by a duplicate. `next_id`/`taken` are threaded through so
 /// nested clones (a duplicated object's inner mesh/material/transform/
 /// scene_object nodes) each get their own fresh id and collision-free
-/// handle, ascending.
+/// handle, ascending. `node_id_map` (BUG-212) collects every (old stable
+/// [`NodeId`], new stable `NodeId`) pair produced across the WHOLE subtree —
+/// the caller uses it to re-target `string_bindings` entries whose
+/// `BindingTarget::Node` falls inside the duplicated subtree onto the
+/// clone's fresh ids, so file-dependent nodes (e.g. `node.gltf_mesh_source`)
+/// keep their "Model File" path binding on the copy.
 fn deep_clone_with_fresh_ids(
     src: &EffectGraphNode,
     next_id: &mut u32,
     taken: &mut std::collections::HashSet<String>,
+    node_id_map: &mut Vec<(NodeId, NodeId)>,
 ) -> EffectGraphNode {
     let mut node = src.clone();
     node.id = *next_id;
     *next_id += 1;
+    let old_node_id = node.node_id.clone();
     node.node_id = NodeId::new(manifold_core::short_id());
+    node_id_map.push((old_node_id, node.node_id.clone()));
     node.exposed_params = Default::default();
     node.handle = node.handle.as_deref().map(|h| dedup_handle(h, taken));
     if let Some(group) = node.group.as_deref_mut() {
@@ -2725,7 +2733,7 @@ fn deep_clone_with_fresh_ids(
         let mut new_nodes = Vec::with_capacity(group.nodes.len());
         for n in &group.nodes {
             let old_id = n.id;
-            let cloned = deep_clone_with_fresh_ids(n, next_id, taken);
+            let cloned = deep_clone_with_fresh_ids(n, next_id, taken, node_id_map);
             id_map.push((old_id, cloned.id));
             new_nodes.push(cloned);
         }
@@ -2779,6 +2787,11 @@ pub struct DuplicateSceneObjectCommand {
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit. Set on execute.
     prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// BUG-212: the WHOLE `preset_metadata.string_bindings` vec before this
+    /// edit's append — whole-snapshot undo, same convention as `prev` above.
+    /// `None` when the target has no `preset_metadata` at all (nothing to
+    /// snapshot, nothing to restore).
+    prev_string_bindings: Option<Vec<StringBindingDef>>,
 }
 
 impl DuplicateSceneObjectCommand {
@@ -2789,7 +2802,15 @@ impl DuplicateSceneObjectCommand {
         source_index: u32,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self { target, scope_path, render_scene_node_id, source_index, catalog_default, prev: None }
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            source_index,
+            catalog_default,
+            prev: None,
+            prev_string_bindings: None,
+        }
     }
 }
 
@@ -2798,6 +2819,7 @@ impl Command for DuplicateSceneObjectCommand {
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
         let src_k = self.source_index;
+        let mut node_id_map: Vec<(NodeId, NodeId)> = Vec::new();
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let prev = (nodes.clone(), wires.clone());
@@ -2808,7 +2830,7 @@ impl Command for DuplicateSceneObjectCommand {
             let mut next_id = max_node_id_over(nodes) + 1;
             let mut taken = std::collections::HashSet::new();
             collect_all_handles(nodes, &mut taken);
-            let mut clone = deep_clone_with_fresh_ids(&source_node, &mut next_id, &mut taken);
+            let mut clone = deep_clone_with_fresh_ids(&source_node, &mut next_id, &mut taken, &mut node_id_map);
             // D11's exact top-level convention (handle + " 2") overrides
             // whatever `deep_clone_with_fresh_ids`'s generic dedup pass
             // assigned to the TOP node — derived from the SOURCE's own
@@ -2861,9 +2883,65 @@ impl Command for DuplicateSceneObjectCommand {
             Some(prev)
         });
         self.prev = result.flatten();
+        if self.prev.is_none() {
+            // The clone itself was refused (unresolvable source/level) — no
+            // subtree was cloned, so there's nothing to sweep bindings for.
+            self.prev_string_bindings = None;
+            return;
+        }
+
+        // BUG-212: `deep_clone_with_fresh_ids` mints fresh `NodeId`s for
+        // every cloned node (D11 — a stale NodeId would let a card binding
+        // silently double-drive both the original and the copy), which
+        // makes `string_bindings` entries dangle by the same mechanism —
+        // unlike `bindings`/`exposed_params` (D11: performer-facing card
+        // exposes, deliberately NOT carried by a duplicate), `string_bindings`
+        // is the importer's own "Model File" path plumbing (one entry per
+        // file-dependent node, fanned out under a shared outer id) and
+        // dropping it silently breaks mesh loading on the clone. Clone every
+        // entry whose target falls inside the duplicated subtree, re-targeted
+        // at the clone's fresh NodeId, same `id`/`label`/`default_value`.
+        // Reached at the same undo-unit boundary `RenameSceneObjectCommand`'s
+        // D5 sweep uses (`resolve_target_instance`, outside
+        // `with_target_graph_mut`'s narrower graph-only view).
+        if !node_id_map.is_empty()
+            && let Some(inst) = resolve_target_instance(&self.target, project)
+            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
+        {
+            self.prev_string_bindings = Some(meta.string_bindings.clone());
+            let new_entries: Vec<StringBindingDef> = meta
+                .string_bindings
+                .iter()
+                .filter_map(|b| match &b.target {
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } => node_id_map
+                        .iter()
+                        .find(|(old, _)| old == node_id)
+                        .map(|(_, new_id)| StringBindingDef {
+                            id: b.id.clone(),
+                            label: b.label.clone(),
+                            default_value: b.default_value.clone(),
+                            target: manifold_core::effect_graph_def::BindingTarget::Node {
+                                node_id: new_id.clone(),
+                                param: param.clone(),
+                            },
+                        }),
+                    manifold_core::effect_graph_def::BindingTarget::Composite { .. } => None,
+                })
+                .collect();
+            meta.string_bindings.extend(new_entries);
+        } else {
+            self.prev_string_bindings = None;
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if let Some(prev_sb) = self.prev_string_bindings.clone()
+            && let Some(inst) = resolve_target_instance(&self.target, project)
+            && let Some(meta) = inst.graph.as_mut().and_then(|g| g.preset_metadata.as_mut())
+        {
+            meta.string_bindings = prev_sb;
+        }
+
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -3671,27 +3749,51 @@ fn remove_wire_into(wires: &mut Vec<EffectGraphWire>, to_node: u32, to_port: &st
     Some((w.from_node, w.from_port))
 }
 
-/// Walk the D6 modifier chain feeding `group_out_id`'s `vertices` port,
-/// backward from the group output to the mesh source — mirrors
-/// `scene_vm.rs::trace_group_body`'s walk (duplicated for the same
-/// cross-crate reason as `MESH_MODIFIER_TYPE_IDS`). Returns the chain in WIRE
-/// order (source → … → output) plus the mesh source's own `(node_id, port)`.
-/// `None` on anything unparseable (unwired `vertices`, a dangling wire, a
-/// cycle) — every caller must refuse the edit rather than guess a splice
-/// point, matching the Vm's own `modifier_chain_parseable` posture.
+/// D12: find the `node.scene_object` bound at this level — the producer of
+/// `group_out_id`'s `object` port. Mirrors `scene_vm.rs::find_scene_object_in_group`
+/// (duplicated for the same cross-crate reason as `MESH_MODIFIER_TYPE_IDS`).
+/// `None` when the level doesn't have this shape (unparseable/hand-edited
+/// group) — callers must refuse the edit, never guess.
+fn find_scene_object_at_group_output(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    group_out_id: u32,
+) -> Option<u32> {
+    let (producer_id, _) = wire_producer(wires, group_out_id, "object")?;
+    let node = nodes.iter().find(|n| n.id == producer_id)?;
+    (node.type_id == "node.scene_object").then_some(producer_id)
+}
+
+/// Walk the D6 modifier chain feeding the group's `node.scene_object`'s own
+/// `vertices` INPUT port, backward to the mesh source — mirrors
+/// `scene_vm.rs::trace_scene_object`'s walk (duplicated for the same
+/// cross-crate reason as `MESH_MODIFIER_TYPE_IDS`). BUG-218: pre-D12 this
+/// walked from `system.group_output`'s own `vertices` OUTPUT port, but D12's
+/// `AddSceneObjectCommand`/importer shape only re-exports `object` at the
+/// group boundary — the group output has no `vertices` port at all on any
+/// real grouped object, so that entry point always failed. The scene_object
+/// is located via the group output's `object` producer
+/// (`find_scene_object_at_group_output`), then the chain is walked from ITS
+/// `vertices` input. Returns the chain in WIRE order (source → … → output),
+/// the mesh source's own `(node_id, port)`, and the scene_object's node id
+/// (splice's terminal re-wire target). `None` on anything unparseable
+/// (unwired `vertices`, a dangling wire, a cycle, no resolvable
+/// scene_object) — every caller must refuse the edit rather than guess a
+/// splice point, matching the Vm's own `modifier_chain_parseable` posture.
 fn walk_mesh_modifier_chain(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
     group_out_id: u32,
-) -> Option<(Vec<u32>, (u32, String))> {
+) -> Option<(Vec<u32>, (u32, String), u32)> {
+    let scene_object_id = find_scene_object_at_group_output(nodes, wires, group_out_id)?;
     let mut chain_rev: Vec<u32> = Vec::new();
-    let mut cursor = wire_producer(wires, group_out_id, "vertices")?;
+    let mut cursor = wire_producer(wires, scene_object_id, "vertices")?;
     loop {
         let (node_id, port) = cursor.clone();
         let node = nodes.iter().find(|n| n.id == node_id)?;
         if !MESH_MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
             chain_rev.reverse();
-            return Some((chain_rev, (node_id, port)));
+            return Some((chain_rev, (node_id, port), scene_object_id));
         }
         chain_rev.push(node_id);
         if chain_rev.len() > 64 {
@@ -3723,11 +3825,14 @@ fn detach_modifier(nodes: &[EffectGraphNode], wires: &mut Vec<EffectGraphWire>, 
 }
 
 /// Splice `node_id` (already present in `nodes`, NOT currently wired into the
-/// chain) into the chain feeding `group_out_id` at `position` (D6: `0` = just
-/// after the mesh source; `None` = end of stack, just before the group
-/// output — clamped to the chain's length). Shared by Insert (a freshly
-/// created node) and Move (an existing node, freshly detached by
-/// `detach_modifier`).
+/// chain) into the chain feeding the group's `node.scene_object` at
+/// `position` (D6: `0` = just after the mesh source; `None` = end of stack,
+/// just before the scene_object's `vertices` input — clamped to the chain's
+/// length). Shared by Insert (a freshly created node) and Move (an existing
+/// node, freshly detached by `detach_modifier`). BUG-218: the terminal
+/// re-wire target is the scene_object's own `vertices` INPUT port
+/// (`walk_mesh_modifier_chain`'s resolved scene_object id), not the group
+/// output's `vertices` port — that port doesn't exist post-D12.
 fn splice_modifier_into_chain(
     nodes: &[EffectGraphNode],
     wires: &mut Vec<EffectGraphWire>,
@@ -3735,13 +3840,13 @@ fn splice_modifier_into_chain(
     node_id: u32,
     position: Option<usize>,
 ) -> Option<()> {
-    let (chain, mesh_source) = walk_mesh_modifier_chain(nodes, wires, group_out_id)?;
+    let (chain, mesh_source, scene_object_id) = walk_mesh_modifier_chain(nodes, wires, group_out_id)?;
     let p = position.unwrap_or(chain.len()).min(chain.len());
     let (pred_node, pred_port) = if p == 0 { mesh_source } else { (chain[p - 1], "out".to_string()) };
     let (succ_node, succ_port) = if p < chain.len() {
         (chain[p], "in".to_string())
     } else {
-        (group_out_id, "vertices".to_string())
+        (scene_object_id, "vertices".to_string())
     };
     let idx = wires.iter().position(|w| {
         w.from_node == pred_node && w.from_port == pred_port && w.to_node == succ_node && w.to_port == succ_port
@@ -3942,7 +4047,7 @@ impl Command for MoveMeshModifierCommand {
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
             let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
-            let (chain, _) = walk_mesh_modifier_chain(nodes, wires, out_id)?;
+            let (chain, _, _) = walk_mesh_modifier_chain(nodes, wires, out_id)?;
             if !chain.contains(&modifier_id) {
                 return None; // not a member of THIS object's chain — refuse.
             }
@@ -7306,6 +7411,98 @@ mod tests {
         assert_eq!(def, &before, "undo restores the pre-duplicate graph exactly (inverse-pair)");
     }
 
+    /// BUG-212: `string_bindings` (the importer's "Model File" path
+    /// plumbing — one `StringBindingDef` per file-dependent node, fanned
+    /// out under a shared outer id) must follow a duplicated object's
+    /// cloned nodes, re-targeted at the clone's fresh `NodeId`, same
+    /// `id`/`label`/`default_value` — the same mechanism as D5's rename
+    /// sweep, exercised here for `DuplicateSceneObjectCommand`.
+    #[test]
+    fn duplicate_scene_object_command_clones_string_bindings_onto_fresh_node_id_and_undo_restores() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        )
+        .execute(&mut project);
+
+        // Simulate the importer's "Model File" binding: one string_bindings
+        // entry targeting the object's mesh node by its stable NodeId.
+        let mesh_node_id = {
+            let def = graph_of(&project, &fx);
+            let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
+            let mesh = group.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.cube_mesh").unwrap();
+            mesh.node_id.clone()
+        };
+        {
+            let effect = project.find_effect_by_id_mut(&fx).unwrap();
+            let def = effect.graph.as_mut().unwrap();
+            def.preset_metadata = Some(PresetMetadata {
+                id: PresetTypeId::new("test.scene"),
+                display_name: "Test Scene".into(),
+                category: String::new(),
+                osc_prefix: String::new(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: Default::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: vec![StringBindingDef {
+                    id: "model_file".into(),
+                    label: "Model File".into(),
+                    default_value: "assets/hero.glb".into(),
+                    target: BindingTarget::Node { node_id: mesh_node_id.clone(), param: "path".into() },
+                }],
+            });
+        }
+        let before_meta = graph_of(&project, &fx).preset_metadata.clone().unwrap();
+
+        let mut cmd = DuplicateSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0, // duplicate object 0 (the only object)
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let clone = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1 2")).unwrap();
+        let clone_mesh = clone.group.as_ref().unwrap().nodes.iter().find(|n| n.type_id == "node.cube_mesh").unwrap();
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(meta.string_bindings.len(), 2, "the clone's mesh node gets its own string_bindings entry");
+        let clone_binding = meta
+            .string_bindings
+            .iter()
+            .find(|b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == clone_mesh.node_id))
+            .expect("a string_bindings entry targets the clone's fresh NodeId");
+        assert_eq!(clone_binding.id, "model_file");
+        assert_eq!(clone_binding.default_value, "assets/hero.glb", "same default_value as the source entry");
+        // The original entry (still targeting the SOURCE mesh's NodeId) is untouched.
+        assert!(meta.string_bindings.iter().any(
+            |b| matches!(&b.target, BindingTarget::Node { node_id, .. } if *node_id == mesh_node_id)
+        ));
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert_eq!(
+            def.preset_metadata.as_ref().unwrap(),
+            &before_meta,
+            "undo restores string_bindings exactly (inverse-pair)"
+        );
+    }
+
     #[test]
     fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restores() {
         let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
@@ -7682,10 +7879,15 @@ mod tests {
 
     /// A one-object scene: `render_scene` (id 0, `objects=1`) wired to a
     /// named group (id 1) containing a mesh source (id 10) → the given
-    /// modifier chain (ids 11, 12, … in wire order) → `system.group_output`
-    /// (id 99) — the shape `AddSceneObjectCommand` / the glTF importer both
-    /// produce, close enough to exercise the splice commands against a
-    /// realistic nested-group body.
+    /// modifier chain (ids 11, 12, … in wire order) → `node.scene_object`
+    /// (id 90) → `system.group_output` (id 99, re-exporting `object` only)
+    /// — the real D12 `AddSceneObjectCommand`/importer shape (see
+    /// `AddSceneObjectCommand::execute`), close enough to exercise the
+    /// splice commands against a realistic nested-group body. BUG-218: this
+    /// fixture used to construct the pre-D12 shape (group_output's own
+    /// `vertices` port re-exported directly, no scene_object at all) — that
+    /// shape never reproduced the bug the commands actually hit against
+    /// real objects, so it's replaced wholesale rather than kept alongside.
     fn object_group_scene(modifier_type_ids: &[&str]) -> EffectGraphDef {
         let mesh = plain_node(10, "mesh", "node.cube_mesh");
         let mut body_nodes = vec![mesh];
@@ -7697,9 +7899,14 @@ mod tests {
             body_wires.push(scene_build_wire(prev.0, &prev.1, id, "in"));
             prev = (id, "out".to_string());
         }
+        let scene_object_id = 90;
+        let scene_object = plain_node(scene_object_id, "Hero", "node.scene_object");
+        body_wires.push(scene_build_wire(prev.0, &prev.1, scene_object_id, "vertices"));
+        body_nodes.push(scene_object);
+
         let mut out_node = plain_node(99, "out", GROUP_OUTPUT_TYPE_ID);
         out_node.handle = None;
-        body_wires.push(scene_build_wire(prev.0, &prev.1, 99, "vertices"));
+        body_wires.push(scene_build_wire(scene_object_id, "object", 99, "object"));
         body_nodes.push(out_node);
 
         let mut group_node = plain_node(1, "Hero", GROUP_TYPE_ID);
@@ -7707,8 +7914,8 @@ mod tests {
             interface: GroupInterface {
                 inputs: Vec::new(),
                 outputs: vec![InterfacePortDef {
-                    name: "vertices".to_string(),
-                    port_type: "Array(Vertex)".to_string(),
+                    name: "object".to_string(),
+                    port_type: "Object".to_string(),
                 }],
                 params: Vec::new(),
             },
@@ -7726,7 +7933,7 @@ mod tests {
             description: None,
             preset_metadata: None,
             nodes: vec![group_node, render],
-            wires: vec![scene_build_wire(1, "vertices", 0, "mesh_0")],
+            wires: vec![scene_build_wire(1, "object", 0, "object_0")],
         }
     }
 
@@ -7755,7 +7962,9 @@ mod tests {
     /// Read the modifier stack's node ids back off `def`, in wire order —
     /// the "Vm chain-trace tests: stack order matches wire order" gate,
     /// re-derived independently of `scene_vm.rs` (this crate can't depend on
-    /// it) by walking the SAME `vertices`/`in` chain shape.
+    /// it) by walking the SAME scene_object-`vertices`/`in` chain shape
+    /// (BUG-218: re-anchored on the scene_object's own `vertices` input,
+    /// found via the group output's `object` producer, same as production).
     fn modifier_ids_in_wire_order(def: &EffectGraphDef, scope: &[u32]) -> Vec<u32> {
         let mut nodes: &[EffectGraphNode] = &def.nodes;
         let mut wires: &[EffectGraphWire] = &def.wires;
@@ -7766,10 +7975,15 @@ mod tests {
             wires = &body.wires;
         }
         let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
+        let scene_object_id = wires
+            .iter()
+            .find(|w| w.to_node == out_id && w.to_port == "object")
+            .map(|w| w.from_node)
+            .unwrap();
         let mut chain = Vec::new();
         let mut cursor = wires
             .iter()
-            .find(|w| w.to_node == out_id && w.to_port == "vertices")
+            .find(|w| w.to_node == scene_object_id && w.to_port == "vertices")
             .map(|w| (w.from_node, w.from_port.clone()));
         while let Some((node_id, _)) = cursor {
             let node = nodes.iter().find(|n| n.id == node_id).unwrap();
