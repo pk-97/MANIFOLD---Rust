@@ -1919,46 +1919,79 @@ pub fn sync_inspector_data(
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::None
                                 }
                             };
+                            // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md
+                            // D3): the converted Environment/Fog rows also
+                            // need their driver/envelope/audio-mod facts —
+                            // this crate is the only side with a
+                            // `PresetInstance` to query.
+                            use manifold_ui::panels::scene_setup_panel::{
+                                ModulatedRow, synth_world_param_id,
+                            };
+                            let gen_inst = l.gen_params();
+                            let mrow = |node_doc_id: u32, param_key: &str, v: RowValue| ModulatedRow {
+                                modulation: Box::new(row_modulation_for_id(
+                                    gen_inst,
+                                    synth_world_param_id(node_doc_id, param_key).as_ref(),
+                                    automation_latched,
+                                )),
+                                value: v,
+                            };
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
                                         mode_is_hdri: e.mode_value != 0,
-                                        intensity: row(
+                                        intensity: mrow(
                                             e.intensity_addr.node_doc_id,
-                                            &e.intensity_addr.param_id,
-                                            e.intensity_value,
-                                            e.intensity_driven,
-                                            0.0,
-                                            4.0,
+                                            "intensity",
+                                            row(
+                                                e.intensity_addr.node_doc_id,
+                                                &e.intensity_addr.param_id,
+                                                e.intensity_value,
+                                                e.intensity_driven,
+                                                0.0,
+                                                4.0,
+                                            ),
                                         ),
-                                        fill: row(
+                                        fill: mrow(
                                             e.fill_addr.node_doc_id,
-                                            &e.fill_addr.param_id,
-                                            e.fill_value,
-                                            e.fill_driven,
-                                            0.0,
-                                            2.0,
+                                            "fill",
+                                            row(
+                                                e.fill_addr.node_doc_id,
+                                                &e.fill_addr.param_id,
+                                                e.fill_value,
+                                                e.fill_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                         hdri_file: e.hdri_file_value,
                                     }
                                 }
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
                                     EnvironmentRowVm::Bare {
-                                        intensity: row(
+                                        intensity: mrow(
                                             e.intensity_addr.node_doc_id,
-                                            &e.intensity_addr.param_id,
-                                            e.intensity_value,
-                                            e.intensity_driven,
-                                            0.0,
-                                            4.0,
+                                            "intensity",
+                                            row(
+                                                e.intensity_addr.node_doc_id,
+                                                &e.intensity_addr.param_id,
+                                                e.intensity_value,
+                                                e.intensity_driven,
+                                                0.0,
+                                                4.0,
+                                            ),
                                         ),
-                                        fill: row(
+                                        fill: mrow(
                                             e.fill_addr.node_doc_id,
-                                            &e.fill_addr.param_id,
-                                            e.fill_value,
-                                            e.fill_driven,
-                                            0.0,
-                                            2.0,
+                                            "fill",
+                                            row(
+                                                e.fill_addr.node_doc_id,
+                                                &e.fill_addr.param_id,
+                                                e.fill_value,
+                                                e.fill_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                     }
                                 }
@@ -1972,21 +2005,29 @@ pub fn sync_inspector_data(
                             let atmosphere = match vm.atmosphere {
                                 manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
                                     AtmosphereRowVm::Wired {
-                                        density: row(
+                                        density: mrow(
                                             a.density_addr.node_doc_id,
-                                            &a.density_addr.param_id,
-                                            a.density_value,
-                                            a.density_driven,
-                                            0.0,
-                                            1.0,
+                                            "density",
+                                            row(
+                                                a.density_addr.node_doc_id,
+                                                &a.density_addr.param_id,
+                                                a.density_value,
+                                                a.density_driven,
+                                                0.0,
+                                                1.0,
+                                            ),
                                         ),
-                                        height_falloff: row(
+                                        height_falloff: mrow(
                                             a.height_falloff_addr.node_doc_id,
-                                            &a.height_falloff_addr.param_id,
-                                            a.height_falloff_value,
-                                            a.height_falloff_driven,
-                                            0.0,
-                                            2.0,
+                                            "height_falloff",
+                                            row(
+                                                a.height_falloff_addr.node_doc_id,
+                                                &a.height_falloff_addr.param_id,
+                                                a.height_falloff_value,
+                                                a.height_falloff_driven,
+                                                0.0,
+                                                2.0,
+                                            ),
                                         ),
                                     }
                                 }
@@ -1994,6 +2035,10 @@ pub fn sync_inspector_data(
                                     AtmosphereRowVm::None
                                 }
                             };
+                            let (audio_send_labels, audio_send_ids) = (
+                                project.audio_setup.sends.iter().map(|s| s.label.clone()).collect(),
+                                project.audio_setup.sends.iter().map(|s| s.id.clone()).collect(),
+                            );
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
                                 scene_name: l.name.clone(),
@@ -2004,6 +2049,8 @@ pub fn sync_inspector_data(
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
+                                audio_send_labels,
+                                audio_send_ids,
                                 objects,
                                 lights,
                                 camera,
@@ -2498,15 +2545,10 @@ fn build_audio_card_state(
 /// `automation_latched` is `ContentState::automation_latched_params`, same as
 /// every other caller of `build_card_modulation`.
 ///
-/// Not yet called from production code this session — the mandatory
-/// refactor deliverable ships ahead of its consumer. Un-suppression trigger:
-/// the scene panel's exposed-row inline-drawer rendering (D9/D10 of
-/// SCENE_PANEL_UX_DESIGN.md's UX-P3 amendment) wires this into
-/// `sync_inspector_data`'s scene section to source each exposed row's
-/// `ParamModState`/`AudioCardState` slice — the follow-up phase this
-/// session's report names as not completed. Delete this allow (and the
-/// function, if still unused) if that phase is abandoned instead.
-#[allow(dead_code)]
+/// Un-suppression trigger fired (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md
+/// C-P1a): called by [`row_modulation_for_id`] below, which flattens this
+/// query's sized-to-1 output into one [`RowModulation`] scalar struct per
+/// Environment/Fog row for `sync_inspector_data`'s scene section.
 pub(crate) fn lookup_param_mod_for_id(
     inst: &PresetInstance,
     param_id: &str,
@@ -2517,6 +2559,56 @@ pub(crate) fn lookup_param_mod_for_id(
         build_card_modulation(inst, 1, resolve, automation_latched),
         build_audio_card_state(inst, 1, resolve),
     )
+}
+
+/// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): flatten
+/// [`lookup_param_mod_for_id`]'s sized-to-1 `(CardModulation, AudioCardState)`
+/// into one scalar [`manifold_ui::panels::scene_setup_panel::RowModulation`]
+/// for a single Environment/Fog row. `inst = None` (no generator on the
+/// layer yet, or the layer isn't a generator) returns the idle default —
+/// same "no modulation, not an error" contract `lookup_param_mod_for_id`
+/// itself has for an un-modulated param.
+pub(crate) fn row_modulation_for_id(
+    inst: Option<&PresetInstance>,
+    param_id: &str,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+) -> manifold_ui::panels::scene_setup_panel::RowModulation {
+    use manifold_ui::panels::scene_setup_panel::RowModulation;
+    let Some(inst) = inst else {
+        return RowModulation::default();
+    };
+    let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched);
+    RowModulation {
+        driver_active: m.driver_active[0],
+        trim_min: m.trim_min[0],
+        trim_max: m.trim_max[0],
+        driver_beat_div_idx: m.driver_beat_div_idx[0],
+        driver_waveform_idx: m.driver_waveform_idx[0],
+        driver_reversed: m.driver_reversed[0],
+        driver_dotted: m.driver_dotted[0],
+        driver_triplet: m.driver_triplet[0],
+        driver_free_period: m.driver_free_period[0],
+        envelope_active: m.envelope_active[0],
+        target_norm: m.target_norm[0],
+        env_decay: m.env_decay[0],
+        automation_active: m.automation_active[0],
+        automation_overridden: m.automation_overridden[0],
+        audio_active: a.active[0],
+        audio_send_id: a.send_id[0].clone(),
+        audio_kind_idx: a.kind_idx[0],
+        audio_band_idx: a.band_idx[0],
+        audio_range_min: a.range_min[0],
+        audio_range_max: a.range_max[0],
+        audio_invert: a.invert[0],
+        audio_rate: a.rate[0],
+        audio_sensitivity: a.sensitivity[0],
+        audio_attack_ms: a.attack_ms[0],
+        audio_release_ms: a.release_ms[0],
+        audio_trigger_mode_idx: a.trigger_mode_idx[0],
+        audio_action_idx: a.action_idx[0],
+        audio_step_amount: a.step_amount[0],
+        audio_wrap_idx: a.wrap_idx[0],
+    }
 }
 
 #[cfg(test)]
