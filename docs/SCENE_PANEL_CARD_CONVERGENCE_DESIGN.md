@@ -1,0 +1,78 @@
+# Scene Panel Card Convergence — the Properties body becomes real card rows
+
+**Status:** APPROVED design, not built · 2026-07-17 · Fable
+**Prerequisites:** SCENE_PANEL_UX UX-P1..P3b-i (SHIPPED `76251784`). Supersedes SCENE_PANEL_UX's D2/D3 rendering decisions and RESOLVES its blocked UX-P3b-ii.
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
+
+Peter, 2026-07-17, looking at the shipped P3a/P3b-i panel: *"Why did you build new custom input and modulation buttons and infra? We should just use the same widgets etc from the cards. This is bugged like crazy already, we should just keep the interaction models and UI and elements and systems from the existing infra please."* And on undo: *"The undo and redo node to operate over click and release of params, not every single tiny step."*
+
+The root cause is a design error in SCENE_PANEL_UX, stated here so nobody repeats it: its D2/D3 said shape the rows **like** the card's rows, which produced a third widget dialect — lookalike mod buttons, lookalike sliders, panel-local click routing, per-mouse-move undo entries — each subtly diverging from the card's real interaction model. Two execution sessions independently refused to bolt card drawers onto those rows; that refusal was this design being asked for. The fix: **the panel's parameter rows ARE the card's rows** — same builder, same click router, same drag protocol, same drawers, same mod buttons — and the bespoke row builders are deleted. Chrome that is genuinely panel-shaped (outliner, name field, eye toggles, Add-modifier dropdown, section labels) stays.
+
+On stage: every parameter in the app scrubs, types, resets, exposes, and modulates identically — one interaction model to learn — and a scrub is one undo step, so mid-set undo takes back the gesture, not the last half-pixel of it.
+
+## 1. Audit — what exists (verified 2026-07-17, against `76251784`)
+
+| Piece | Where | State |
+|---|---|---|
+| The shared row subsystem | `build_param_row` (param_slider_shared.rs:2223), `match_param_row_click` (:2705), `build_audio_mod_drawer` (:1714) | The real widgets. Host inputs: `ParamInfo`, `ParamModState`, slot index `i`, `GraphParamTarget`, `SliderColors`, `label_width`, `active_tab`, compact flag |
+| Third-consumer precedent | `audio_trigger_section.rs` | Proves the row layer hosts outside the two cards |
+| `ParamInfo` | param_card.rs:97 | `param_id: ParamId` (an OWNED string id is already a supported case — user-tier effect params), `min/max/default`, `whole_numbers`, `is_angle`, `exposed`, toggle flag |
+| Card drag protocol | slider.rs `SliderDragState` + the card dispatch arms | Begin (snapshot) → live Changed → Commit on release = ONE undo unit. The scene panel's bespoke scrub instead dispatches a command per motion event — Peter's undo complaint |
+| Per-param mod lookup | `lookup_param_mod_for_id` (state_sync.rs:2500, landed by C5) | Exactly the query card-row hosting needs; currently `#[allow(dead_code)]` with this design as its named un-suppression trigger |
+| Exposure mechanism | P3a: `SceneSetupExposeParam` → `ToggleNodeParamExposeCommand`, named `<Owner> · <Label>`; round-trip proven (manifold-playback tests) | SURVIVES unchanged — this design replaces rendering, not mechanism |
+| Scene addressing | `RowAddr { scope_path, node_doc_id, param_id }` (scene VM) vs. card addressing `(GraphParamTarget, ParamId, i)` | The one genuine seam this design must decide (D2) |
+| Bespoke layer to delete | scene_setup_panel.rs: `build_object_slider_row`, `build_mod_button`, `build_numeric_row`/`build_triplet_row`/`build_light_*_row`/`build_camera_*_row`/`build_modifier_numeric_row` value/slider/mod chrome, `value_cell_at` hover plumbing, scrub-hairline draw | The third dialect. Deletion gates in §4. (`value_cell.rs` the GESTURE contract stays — other docks use it; the scene panel just stops being a consumer for param rows) |
+| C5's sizing inventory | SCENE_PANEL_UX "as attempted" note | 8 parallel per-row arrays + card-lifetime state (`mod_active_tab`, copy-flash) — the honest cost, now committed as D3's `SceneCardState` |
+
+## 2. Decisions
+
+**D1 — Scene param rows render and interact through `build_param_row`/`match_param_row_click`/`build_audio_mod_drawer`, full stop.** Every parameter row the Properties body shows — object transforms, color components, Metallic/Roughness, Environment/Fog, Light, Camera, Lens, Modifier params — is built by the shared builder from a synthesized `ParamInfo`. The drawers open inline in the panel (this IS UX-P3b-ii, no longer blocked); the mod/driver/envelope buttons are the card's own components with the card's own lit/driven states. Rows that aren't params (name field, eyes, Add-modifier, enum/axis steppers where the card has no equivalent — check for a card enum row first and use it if one exists, escalate if genuinely absent) remain panel chrome.
+*Rejected: keeping any bespoke param-row builder for "simple" rows* — the mixed dialect is the bug class being deleted.
+
+**D2 — Addressing rides synthesized owned `ParamId`s + a per-frame panel map; `GraphParamTarget` is untouched.** `ParamInfo.param_id` already supports owned ids. The panel synthesizes a stable id per row (opaque, e.g. `scene.{node_doc_id}.{param}` with scope disambiguation), builds a frame-local `AHashMap<ParamId, RowAddr>` alongside the row list, and the scene dispatch arms resolve incoming card actions through that map to the existing scene command routing. When a row IS exposed, its id is the exposure's real id, so drawers/modulation hit the existing card param directly and `lookup_param_mod_for_id` supplies `ParamModState`.
+*Rejected: adding a `SceneNode` variant to `GraphParamTarget`* — the enum is `Copy` and flows through dozens of dispatch arms; a `Vec<u32>` scope path breaks that for one consumer. *Rejected: eager-exposing every visible row so all ids are real exposures* — floods the card and the perform surface with params nobody chose (SCENE_PANEL_UX D8's standing rejection).
+
+**D3 — The panel owns a `SceneCardState`, shaped like the cards' own state.** The 8 parallel arrays + `mod_active_tab` + copy-flash that C5 inventoried, rebuilt per selection change exactly as the panel's VM already is (D1 of SCENE_PANEL_UX: no staleness), populated via `lookup_param_mod_for_id`. No scene-local driven cache beyond it — driven visuals read the same facts the cards read.
+
+**D4 — Drag = card protocol = one undo unit per gesture.** Scene rows adopt the Begin/Changed/Commit drag session the card sliders run: pointer-down snapshots, motion updates live (through the existing live-param path the panel's value writes already use), release commits ONE command carrying before→after. Type-in and right-click-reset commit single units as they already do on cards. This kills the per-motion undo spam for every scene param at once.
+Consequences, stated honestly: mid-drag values are live on the content thread before the commit lands (same as cards — that's the shipped semantic, not new risk). If the panel's current per-event command path can't express Begin/Commit without a new command, reuse the exact command pair/shape the card dispatch uses — escalate if the scene command family genuinely lacks a commit-with-prior-value shape rather than inventing a third.
+
+**D5 — Unbounded params get their `ParamDef` range; where none exists, this doc fixes the soft range.** `ParamInfo` requires min/max. Use the param's own `ParamDef::range` wherever defined (`⚠ VERIFY-AT-IMPL: rg the transform_3d / light / camera ParamDefs for `range:` — most scene params have one`). For any genuinely rangeless param: position ±10.0, scale 0.01..10.0, rotation ±360° (display degrees, storage radians via `is_angle`). Type-in accepts values beyond the soft range (the card's existing text-entry behavior governs); the soft range only shapes the slider track.
+
+## 3. Invariants & enforcement
+
+| Invariant | Enforcement |
+|---|---|
+| No bespoke param-row builders remain | negative gate: `rg -n 'build_object_slider_row|build_mod_button|fn build_numeric_row|fn build_triplet_row|build_light_numeric_row|build_camera_numeric_row|build_modifier_numeric_row' crates/manifold-ui/src/panels/scene_setup_panel.rs` → 0 hits |
+| One undo unit per scrub gesture | unit test: drag session Begin→3×Changed→Commit produces exactly one undo entry; undo restores the pre-drag value (extends the card's own drag-protocol test pattern) |
+| Card and panel rows share one code path | `build_param_row` call sites in scene_setup_panel.rs resolve into param_slider_shared.rs (positive `rg` in the phase report); no copied builder bodies |
+| Exposure round-trip still holds | existing manifold-playback round-trip tests stay green untouched |
+| Panel id map is total | debug_assert + unit test: every built row's synthesized id resolves through the map back to its RowAddr |
+
+## 4. Phasing
+
+Test scope per phase: `cargo nextest run -p manifold-ui -p manifold-app -p manifold-editing -p manifold-playback`; scoped clippy; full sweep at landing. No GPU runs (no shader/kernel).
+
+### C-P1 — the row swap (one session, HIGH effort)
+- **Entry state:** `76251784`+. Re-verify: build_param_row signature (param_slider_shared.rs:2223), lookup_param_mod_for_id (state_sync.rs:2500), the card drag-protocol dispatch arms, P3a's expose dispatch (ui_bridge/project.rs).
+- **Read-back:** this doc whole; param_card.rs + param_slider_shared.rs module docs; the card's drag Begin/Changed/Commit arms end-to-end; DESIGN_DOC_STANDARD §5–§6.
+- **Deliverables:** D1 row swap for ALL param-row families; D2 id map; D3 `SceneCardState`; D4 drag protocol; D5 ranges; deletion of the bespoke layer (§3 row 1); un-suppress `lookup_param_mod_for_id`; updated flow scripts (`scene-setup-select-updates`, `scene-panel-ux-p3a-expose-modulate`, `scene-panel-ux-p3b-i-expose-light`, `scene-setup-modifier-stack` — selectors move to the card-row widget names); the §3 undo-granularity and id-map tests.
+- **Gate:** all §3 rows; all four flows green; focused nextest + scoped clippy.
+- **Acceptance demo:** L3 — a NEW flow: scrub Roughness via the real card slider in the panel, open its drawer inline, toggle a driver, then undo ONCE and assert the pre-scrub value returns. PNGs of the converged Properties body (cards' visual language, drawers open inline) — orchestrator reviews against the effect card side-by-side for dialect drift.
+- **Performer gesture:** grab an object's Position, scrub it around, hit undo once — the object returns to where the gesture started. The flow asserts exactly this.
+- **Forbidden moves:** keeping ANY bespoke row builder alive "for the simple rows"; a second drag protocol; parsing scene addresses out of id strings (the map is the resolver); touching `GraphParamTarget`; eager exposure; modifying playback modulation.
+
+### C-P2 — polish + paper (one session)
+- **Deliverables:** affordance-legibility PNG pass (label widths, drawer tab strip fit in the narrow dock — the doc grants `label_width`/compact-mode tuning ONLY via build_param_row's existing host inputs); SCENE_PANEL_UX_DESIGN.md status updated (D2/D3 superseded-by note, UX-P3b-ii resolved-by note); VERIFICATION_DEBT sweep; landing report.
+- **Gate:** flows re-green; PNG review; supersession `rg` for the old builder names across docs/ + memory → fixed or tombstoned.
+
+## 5. Decided — do not reopen
+1. Panel param rows = card rows, one builder, no exceptions for "simple" rows (D1).
+2. Addressing = synthesized owned ParamIds + panel map; `GraphParamTarget` untouched (D2).
+3. One undo unit per gesture via the card drag protocol (D4).
+4. Exposure-on-demand mechanism survives as-is; drawers now open inline AND on the card — same underlying config (D1+P3a).
+5. Soft ranges per D5 where ParamDefs are silent.
+
+## 6. Deferred
+- **Color picker** — unchanged from SCENE_PANEL_UX (revive with a second consumer).
+- **Card-side grouping of scene exposures** — revive if the generator card's list gets noisy in real use (SCENE_PANEL_UX D8's recorded consequence).

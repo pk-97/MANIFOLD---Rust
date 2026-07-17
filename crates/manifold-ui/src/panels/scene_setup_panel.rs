@@ -1323,6 +1323,19 @@ impl ScenePanel {
         self.build_properties(tree, inner_x, inner_w, cy, vm, selected)
     }
 
+    /// External selection write (REALTIME_3D_DESIGN.md P6): a viewport
+    /// object-pick sets the SAME UI-local `self.selection` map an outliner
+    /// row click does (`handle_event`'s `SceneSetupSelectionChanged` arm) —
+    /// one selection store for the whole app, not a second one that could
+    /// drift from the panel's own. The caller (the graph-editor window's
+    /// mouse-press handler) is responsible for redrawing/rebuilding
+    /// whatever reads this panel's Properties section afterward; this call
+    /// alone doesn't trigger one (it has no `PanelAction` dispatch loop to
+    /// push through, unlike `handle_event`'s click arm).
+    pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
+        self.selection.insert(layer_id, sel);
+    }
+
     /// The current selection for `vm.layer_id`, resolving the D7 fallback
     /// (a dangling id after a graph edit, or no entry yet) to the first
     /// Known object, else World — and persisting the resolved value back

@@ -1,6 +1,6 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
-**Status:** IN PROGRESS — UX-P1 + UX-P2 SHIPPED 2026-07-17 (`6dd700e7`); UX-P3a (exposure-on-demand mod strip) BUILT 2026-07-17 on `wave/scene-panel-ux-p3-build`, pending landing — see §5 UX-P3 "as built" note; UX-P3b split per its own recommendation — UX-P3b-i (mod-button-only parity for Light/Camera/Modifier rows) BUILT 2026-07-17 on `wave/scene-panel-ux-p3-build`, pending landing — see UX-P3b-i's own "as built" note below; UX-P3b-ii (the "one virtual card" drawer architecture) NOT STARTED, BLOCKED on Peter's product call · Sonnet
+**Status:** SHIPPED UX-P1..P3b-i 2026-07-17 (`76251784`) — D2/D3's bespoke-row rendering and the UX-P3b-ii fork are SUPERSEDED by docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md (Peter, same day: use the real card widgets/interaction models, not lookalikes; scrub undo = one unit per gesture). The exposure mechanism (D8) and selection fix (D1) stand. · 2026-07-17 · Fable
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 

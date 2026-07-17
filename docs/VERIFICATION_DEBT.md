@@ -24,6 +24,15 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-030 — editor-window surfaces (REALTIME_3D P5c viewport, P6 gizmos) reach L2 only
+Landed 2026-07-17 (`34a38a45`, `b4d2d448`; `docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
+
+### VD-031 — modulation/scrub L3 claims are dispatch+value-level, not pixels (harness gaps BUG-234/BUG-235)
+Landed 2026-07-17 (UX-P3a `ee30d52d`, convergence C-P1a on-branch). The `--script` harness never runs a content-thread tick (BUG-234) and doesn't visually update slider fill mid-flow (BUG-235), so every "value modulates / scrub moves the slider" claim rests on Rust value tests plus static PNGs. Burn-down: the verification-infra lane (BUG-225/226/234/235) queued next wave; close when a flow can assert a changing value across snapshots.
+
+### VD-032 — UX-P2 mid-scrub hairline unproven in pixels
+Landed 2026-07-17 (`6dd700e7`). The ui-snap Drag gesture is atomic (no mid-drag snapshot), so the scrub hairline is pinned by unit test only. Burn-down: harness gains a mid-drag snapshot point (same infra lane), or accepted as unit-test-covered when the convergence rebuild replaces these rows entirely (likely moot after C-P1b..d).
+
 ### VD-028 — VOLUMETRIC_LIGHT_DESIGN P1–P3: mechanically L2 (PNGs rendered and read by the orchestrator), Peter's look-pass not yet run, and the demos read as a visual miss
 Landed 2026-07-13 (`docs/landings/2026-07-13-volumetric-light-p1-p3.md`). All numeric gates
 (V1–V6, CPU-vs-GPU parity, monotonic performer faders, content-thread perf) pass across both
