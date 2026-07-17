@@ -22,13 +22,51 @@ turn. Fails open on any error.
 """
 import json
 import re
+import shlex
 import sys
 
-TEST_CMD = re.compile(r"\bcargo\b[^|;&]*\b(nextest|test)\b")
 # Evidence that a test run's outcome was actually surfaced.
 SUMMARY = re.compile(r"test result:|Summary \[")
-# Commands that mention cargo test but don't run tests.
-NON_RUN = re.compile(r"--help|--list\b|\bcargo\s+(clippy|build|check|run)\b")
+
+# Shell operators that separate command positions (mirror of
+# preToolUseBash.py's segment split — kept local so this guard has no
+# import-order coupling; the set only needs to be conservative).
+_OPS = {"&&", "||", ";", "|", "&"}
+
+
+def _is_test_invocation(command: str) -> bool:
+    """True iff some command POSITION is a real `cargo test`/`cargo nextest`
+    run. Tokenizes with shlex (same approach as preToolUseBash.py's
+    `_shlex_segments`) so quoted strings — commit messages, python -c
+    scripts, heredoc bodies — can never false-positive (three self-observed
+    false positives drove this; regex-over-raw-text is unfixable here).
+    Heredoc bodies are excluded by matching only the first line. Malformed
+    quoting = not a match (fail-open toward silence)."""
+    first_line = command.split("\n", 1)[0]
+    try:
+        tokens = shlex.split(first_line, posix=True)
+    except ValueError:
+        return False
+    segments, current = [], []
+    for t in tokens:
+        if t in _OPS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        segments.append(current)
+    for seg in segments:
+        # find `cargo` allowing env-var prefixes (FOO=bar cargo test ...)
+        idx = next((i for i, t in enumerate(seg) if "=" not in t), None)
+        if idx is None or not seg[idx].endswith("cargo"):
+            continue
+        rest = seg[idx + 1 :]
+        sub = next((t for t in rest if not t.startswith("-")), "")
+        if sub == "nextest" or (sub == "test" and "--help" not in rest and "--list" not in rest):
+            return True
+    return False
 
 
 def main() -> None:
@@ -38,7 +76,7 @@ def main() -> None:
             return
         tool_input = data.get("tool_input") or {}
         command = tool_input.get("command", "")
-        if not TEST_CMD.search(command) or NON_RUN.search(command):
+        if not _is_test_invocation(command):
             return
 
         if tool_input.get("run_in_background"):
