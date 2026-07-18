@@ -861,10 +861,41 @@ pub fn push_state(
     }
 
     // Sync effect card values (master, layer, clip)
+    sync_card_values(ui, project, active_layer);
+}
+
+/// Push per-frame card VALUES (slider fill + readout, enabled toggle, card
+/// name) from `project` into the already-configured inspector cards of any
+/// window's `ui` — master effects, active layer's effects, generator params.
+/// Window-agnostic: `push_state` calls it for the main window every frame,
+/// and the graph-editor window's present path calls it on its own
+/// `ed.ui_root` with the same `local_project`/`active_layer`, so card sliders
+/// track drivers / mappings / envelopes in both windows instead of freezing
+/// between structural syncs. No drag guard needed here: the actively-dragged
+/// field is restored into `local_project` upstream of every call
+/// (`app_render.rs`'s snapshot-drain `drag.apply`), so this writes the user's
+/// own value straight back — user-owned in both windows.
+pub fn sync_card_values(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>) {
+    let tree = &mut ui.tree;
+    // Master effects
+    for (i, effect) in project.settings.master_effects.iter().enumerate() {
+        if let Some(card) = ui.inspector.master_effect_mut(i) {
+            card.sync_effect_name(
+                tree,
+                manifold_core::preset_type_registry::display_name(effect.effect_type()),
+            );
+            card.sync_enabled(tree, effect.enabled);
+            card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
+        }
+    }
+
+    // Layer effects
+    if let Some(idx) = active_layer
+        && let Some(layer) = project.timeline.layers.get(idx)
+        && let Some(effects) = &layer.effects
     {
-        // Master effects
-        for (i, effect) in project.settings.master_effects.iter().enumerate() {
-            if let Some(card) = ui.inspector.master_effect_mut(i) {
+        for (i, effect) in effects.iter().enumerate() {
+            if let Some(card) = ui.inspector.layer_effect_mut(i) {
                 card.sync_effect_name(
                     tree,
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
@@ -873,36 +904,19 @@ pub fn push_state(
                 card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
             }
         }
+    }
 
-        // Layer effects
-        if let Some(idx) = active_layer
-            && let Some(layer) = project.timeline.layers.get(idx)
-            && let Some(effects) = &layer.effects
-        {
-            for (i, effect) in effects.iter().enumerate() {
-                if let Some(card) = ui.inspector.layer_effect_mut(i) {
-                    card.sync_effect_name(
-                        tree,
-                        manifold_core::preset_type_registry::display_name(effect.effect_type()),
-                    );
-                    card.sync_enabled(tree, effect.enabled);
-                    card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.params));
-                }
-            }
-        }
-
-        // Generator params (stored on layer, not clip)
-        if let Some(idx) = active_layer
-            && let Some(layer) = project.timeline.layers.get(idx)
-            && let Some(gp_state) = layer.gen_params()
-            && let Some(gp) = ui.inspector.gen_params_mut()
-        {
-            gp.sync_gen_type_name(
-                tree,
-                manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
-            );
-            gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.params));
-        }
+    // Generator params (stored on layer, not clip)
+    if let Some(idx) = active_layer
+        && let Some(layer) = project.timeline.layers.get(idx)
+        && let Some(gp_state) = layer.gen_params()
+        && let Some(gp) = ui.inspector.gen_params_mut()
+    {
+        gp.sync_gen_type_name(
+            tree,
+            manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
+        );
+        gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.params));
     }
 }
 
@@ -3298,6 +3312,85 @@ mod param_label_tests {
             "label must show the live param name, got {label:?}"
         );
         assert!(!label.contains('?'), "label must not fall back to ?, got {label:?}");
+    }
+}
+
+#[cfg(test)]
+mod sync_card_values_tests {
+    //! The extraction proof for `sync_card_values`: a param value changed in
+    //! the (UI-local) project after the inspector was configured must reach
+    //! the card's on-tree value text through `sync_card_values` alone — no
+    //! structural re-sync, no rebuild. This is the exact call the
+    //! graph-editor window's present path now makes every frame
+    //! (`app_render.rs::present_graph_editor_window`), so the test guards the
+    //! editor-window slider-freeze fix, not just the helper.
+    use super::*;
+    use manifold_core::params::{Param, ParamManifest};
+
+    fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
+        manifold_core::effect_graph_def::ParamSpecDef {
+            id: id.to_string(),
+            name: name.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.5,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: manifold_core::macro_bank::MacroCurve::default(),
+            invert: false,
+            is_angle: false,
+            is_trigger_gate: false,
+            wraps: false,
+            section: None,
+        }
+    }
+
+    fn tree_has_text(ui: &UIRoot, needle: &str) -> bool {
+        ui.tree
+            .nodes()
+            .iter()
+            .any(|n| n.text.as_deref() == Some(needle))
+    }
+
+    #[test]
+    fn project_param_change_reaches_card_value_text_via_sync_card_values() {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+        fx.params =
+            ParamManifest::from_params(vec![Param::user_added(user_spec("user_glow", "Glow Amount"))]);
+        project.settings.master_effects.push(fx);
+
+        // Configure + build exactly as the structural sync does, at the
+        // pre-change value (0.5 → "0.50" via `format_param_value`'s `{:.2}`).
+        let mut ui = UIRoot::new();
+        let selection = SelectionState::default();
+        sync_inspector_data(&mut ui, &project, None, &selection, &[]);
+        ui.build_inspector_in_rect(manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0));
+        assert!(
+            tree_has_text(&ui, "0.50"),
+            "baseline: the configured card must show the pre-change value"
+        );
+
+        // A modulation-style write to the local project, then ONLY the
+        // value-sync call — no configure, no rebuild.
+        project.settings.master_effects[0]
+            .params
+            .get_mut("user_glow")
+            .expect("user_glow param")
+            .value = 0.75;
+        sync_card_values(&mut ui, &project, None);
+
+        assert!(
+            tree_has_text(&ui, "0.75"),
+            "sync_card_values must push the new value onto the already-built card"
+        );
+        // No "stale text is gone" assertion: "0.50" legitimately appears on
+        // other widgets (e.g. mapping trim fields seeded from the same
+        // default), so disappearance is not a sound oracle here.
     }
 }
 
