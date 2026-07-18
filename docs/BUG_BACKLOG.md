@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-246 | **unguarded-inspector-gestures-race-full-snapshot-acceptance** | audio-gain / mod-config / trim-style drags have no `ActiveInspectorDrag` guard, so a full project snapshot accepted mid-drag (data_version bump from any concurrent Execute) stomps the in-flight value — wrong or missing undo pair on release — MED |
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
@@ -197,6 +198,16 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause (attributed per-event, `eval/odf_attribution.py` for A; `MANIFOLD_KICK_DEBUG` for B):** A — 26/41 transient fires were quiet-passage admissions, pad flux ~80 ODF units clearing the old `SUPERFLUX_DELTA` (48) while the median baseline is ~0; the rest are big swell attacks passing the novelty test (candidate ~1000+ vs ref ~0), unaffected by this fix. B — kick-ridge fires on the pad are coherent 6-hop descents (drop 10–16 bins, matching `KICK_DROP_BINS`) whose apex peaks (~86–109 raw tilted-column units) sit in the SAME magnitude range as `edm_kit`'s real kick-ridge apexes (~62–104, observed via the same debug tap on real material). Neither the absolute floor (`KICK_ABS_FLOOR`) nor the relative floor (`KICK_MIN_PEAK`) can separate them: sweeping `KICK_ABS_FLOOR` at 40/60/65/70/75/80 killed `edm_kit`'s `kick_low` (15→0) and the `kicks`/`busymix`/`densemix` selftest guards (8/7/8→0/0/0) at the same step that first touched the pad (40, the lowest tested); sweeping `KICK_MIN_PEAK` at 0.15/0.2/0.25/0.3 had ZERO effect on the pad's 30 fires even at 2.5x default, while 0.25+ started costing `densemix`'s guard.
 
 **Fix shape:** Part A done via `SUPERFLUX_DELTA` (see Status). Part B needs a discriminator other than peak magnitude — the two constants swept this session are provably a dead end (see Root cause). A sustained-energy veto (the pad's ridge sits atop continuously-elevated Low-band energy, unlike a kick's transient rise from a quiet floor) or a birth-context gate (require the ridge's onset hop to itself be near a Low-band amplitude rise) are the remaining candidate shapes — neither implemented or swept this session; both are logic changes, out of this session's harness-gated-tuning-only scope.
+
+### BUG-246 (unguarded-inspector-gestures-race-full-snapshot-acceptance) — audio-gain / mod-config / trim-style drags aren't in `ActiveInspectorDrag`, so a full snapshot accepted mid-drag stomps the in-flight value — found 2026-07-18 while fixing the macro/scene undo regression (`30712691`)
+
+**Status:** OPEN — MED (pre-existing class, NOT part of the `ac96c65c` regression: these fields aren't carried in the per-tick `ModulationSnapshot`, so the race needs a `data_version` bump mid-drag — any concurrent `Execute` landing, e.g. a MIDI phantom-clip commit, which is routine on stage).
+
+**Symptom:** while dragging an audio-gain / mod-shape / step-amount / crossover / trim slider, a full project snapshot acceptance (`app_render.rs` ~line 808) replaces `local_project`; the restore at ~817 only covers `ActiveInspectorDrag` variants (MasterOpacity, LedBrightness, LayerOpacity, Param, Macro, SceneParam). Unguarded drags visibly snap back mid-gesture, and the commit handler's re-read of `new_val` from `local_project` produces a wrong or skipped undo command (same mechanism the macro fix's red test proves).
+
+**Root cause:** the commit handlers derive `new_val` by re-reading a project that concurrent snapshot acceptance can rewrite; only guarded gesture kinds are restored.
+
+**Fix shape:** either add guard variants for the remaining gesture families (mechanical, follows the Macro/SceneParam precedent in `30712691`), or the class-level version: commit handlers carry the gesture's final value instead of re-reading `local_project`. The two new dispatch tests in `inspector.rs` (`macro_drag_survives_a_mid_gesture_modulation_snapshot`, `scene_row_drag_survives_a_full_snapshot_replacement`) are the template for proving each family.
 
 ### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
