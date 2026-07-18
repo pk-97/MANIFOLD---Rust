@@ -69,6 +69,14 @@ pub struct CompositorFrame<'a> {
     /// ever depends on visibility); the compositor just elides their final
     /// blend dispatch, which the opaque layer would overwrite anyway.
     pub occluded_layers: &'a [i32],
+    /// Subset of `occluded_layers` whose generators AND effect chains are
+    /// skipped entirely this frame, not just their blend (see
+    /// `compute_render_skip_indices` in the content pipeline). These layers
+    /// produce no `LayerOutput` — they are neither rendered nor blended.
+    /// Safe because the opaque occluder gate (Opaque blend at opacity 1.0)
+    /// guarantees a skipped layer resumes rendering before it can become
+    /// visible again. Empty when the optimization is off or a preview is open.
+    pub render_skip: &'a [i32],
 }
 
 impl<'a> CompositorFrame<'a> {

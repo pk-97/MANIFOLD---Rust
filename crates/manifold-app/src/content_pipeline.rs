@@ -117,6 +117,40 @@ fn compute_occluded_layer_indices(
     }
 }
 
+/// From the occluded set, pick the layers safe to skip RENDERING entirely
+/// (generators + effect chains), not just their final blend. See
+/// `ContentPipeline::render_skip_scratch` for the safety argument.
+///
+/// Conservative on purpose — the set only ever SHRINKS the work, and a
+/// wrongly-kept layer just wastes perf while a wrongly-skipped one that feeds
+/// LED would blank the wall. So we skip only plain **top-level leaf** layers
+/// (no group, no parent) that are **not** LED-tapped, and we disable the whole
+/// optimization while any authoring preview is open (previews consume the
+/// hidden layer's output). Grouped layers and LED layers stay on the
+/// blend-skip-only path. `out` is cleared and refilled; empty = skip nothing.
+fn compute_render_skip_indices(
+    layers: &[manifold_core::layer::Layer],
+    occluded: &[i32],
+    enabled: bool,
+    preview_active: bool,
+    out: &mut Vec<i32>,
+) {
+    out.clear();
+    if !enabled || preview_active {
+        return;
+    }
+    for &idx in occluded {
+        // Skip only a plain top-level leaf that isn't feeding LED. Any layer
+        // we can't positively classify as safe stays on the render path.
+        let safe = layers.iter().find(|l| l.index == idx).is_some_and(|l| {
+            !l.is_group() && l.parent_layer_id.is_none() && !l.blit_to_led
+        });
+        if safe {
+            out.push(idx);
+        }
+    }
+}
+
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
@@ -903,6 +937,27 @@ pub struct ContentPipeline {
     /// depends on visibility. Recomputed every frame (opacity/blend are live
     /// performance surfaces); pre-allocated scratch, no per-frame allocation.
     occluded_layers_scratch: Vec<i32>,
+    /// Subset of `occluded_layers_scratch` that is safe to skip RENDERING
+    /// entirely this frame (not just blend): plain top-level leaf layers,
+    /// not routed to LED, hidden behind a full-opacity `Opaque` layer. Their
+    /// generators AND effect chains are skipped — the big perf win when rapid
+    /// clips / audio triggers stack many layers under an opaque hit.
+    ///
+    /// Safety rests on the occluder gate (`Opaque` blend AT opacity 1.0): a
+    /// skipped layer always resumes rendering BEFORE it can become visible
+    /// again — either the occluder hard-cuts off (any state pop hides inside
+    /// the same hard cut) or it fades, dropping below opacity 1.0, which
+    /// un-occludes and restarts these layers while still hidden behind the
+    /// near-opaque wall. So even stateful layers (feedback, sims) can be
+    /// skipped without a visible discontinuity. LED-tapped layers and any
+    /// authoring node-preview are excluded (they consume hidden output).
+    /// Groups and grouped children are never skipped (only blend-skipped).
+    /// Empty whenever the optimization is disabled or a preview is active.
+    render_skip_scratch: Vec<i32>,
+    /// Toggle for the occlusion render-skip optimization above. Read once at
+    /// construction from `MANIFOLD_OCCLUSION_RENDER_SKIP` (default on; set to
+    /// `0` to A/B the perf win against today's blend-skip-only behavior).
+    occlusion_render_skip_enabled: bool,
     /// §8 D5: master/global effect chains have no owning layer, so their
     /// audio-trigger fires accumulate here instead of on a `GeneratorRenderer`
     /// layer state. Clip contribution is always 0 for master (no clip
@@ -997,6 +1052,10 @@ impl ContentPipeline {
             last_node_preview_info: None,
             last_live_node_params: Vec::new(),
             occluded_layers_scratch: Vec::new(),
+            render_skip_scratch: Vec::new(),
+            occlusion_render_skip_enabled: std::env::var("MANIFOLD_OCCLUSION_RENDER_SKIP")
+                .map(|v| v != "0")
+                .unwrap_or(true),
             master_trigger_count: 0,
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
@@ -1865,6 +1924,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &tick_result.ready_clips,
             &mut self.occluded_layers_scratch,
         );
+        // Render-skip: of the occluded layers, which are safe to not render at
+        // all this frame (generators + effect chains), not just skip blending.
+        // Disabled while a node preview is open — a previewed layer's hidden
+        // output is still consumed by the editor.
+        let preview_active = self.node_preview_request.is_some()
+            || self.node_preview_generator.is_some()
+            || !self.node_atlas_visible.is_empty();
+        compute_render_skip_indices(
+            layers,
+            &self.occluded_layers_scratch,
+            self.occlusion_render_skip_enabled,
+            preview_active,
+            &mut self.render_skip_scratch,
+        );
 
         {
             let mut gen_enc = native_device.create_encoder("Generators");
@@ -1908,6 +1981,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             dt as f32,
                             layers,
                             data_version,
+                            &self.render_skip_scratch,
                         );
                         break;
                     }
@@ -2167,6 +2241,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             output_width: self.output_w,
             output_height: self.output_h,
             occluded_layers: &self.occluded_layers_scratch,
+            render_skip: &self.render_skip_scratch,
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
         rtrace.mark("descriptors");
@@ -3544,5 +3619,109 @@ mod occlusion_tests {
             "child of a group above the cutoff keeps rendering"
         );
         assert!(out.contains(&3), "plain layer below the cutoff is culled");
+    }
+}
+
+#[cfg(test)]
+mod render_skip_tests {
+    use super::{compute_occluded_layer_indices, compute_render_skip_indices};
+    use manifold_core::layer::Layer;
+    use manifold_core::{BlendMode, LayerType};
+    use manifold_playback::scheduler::ActiveClipRef;
+
+    fn layer(index: i32, blend: BlendMode, opacity: f32) -> Layer {
+        let mut l = Layer::new(format!("L{index}"), LayerType::Video, index);
+        l.default_blend_mode = blend;
+        l.opacity = opacity;
+        l
+    }
+
+    fn clip(layer_index: i32) -> ActiveClipRef {
+        ActiveClipRef {
+            clip_id: format!("clip-{layer_index}").into(),
+            layer_index,
+            clip_index: 0,
+            start_beat: manifold_core::Beats(0.0),
+            duration_beats: manifold_core::Beats(4.0),
+            is_looping: false,
+            is_video: false,
+        }
+    }
+
+    /// The occluded set for the layer stack, for feeding render-skip.
+    fn occluded(layers: &[Layer], clips: &[ActiveClipRef]) -> Vec<i32> {
+        let mut o = Vec::new();
+        compute_occluded_layer_indices(layers, clips, &mut o);
+        o
+    }
+
+    #[test]
+    fn plain_occluded_leaves_are_render_skipped() {
+        let layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+            layer(2, BlendMode::Additive, 1.0),
+        ];
+        let clips = vec![clip(0), clip(1), clip(2)];
+        let occ = occluded(&layers, &clips);
+        assert_eq!(occ, vec![1, 2], "both below the opaque cutoff are occluded");
+        let mut skip = Vec::new();
+        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        assert_eq!(skip, vec![1, 2], "plain top-level leaves render-skip too");
+    }
+
+    #[test]
+    fn led_tapped_occluded_layer_is_not_skipped() {
+        let mut layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+            layer(2, BlendMode::Normal, 1.0),
+        ];
+        layers[1].blit_to_led = true; // feeds the LED wall even while hidden
+        let clips = vec![clip(0), clip(1), clip(2)];
+        let occ = occluded(&layers, &clips);
+        assert_eq!(occ, vec![1, 2], "occlusion still lists the LED layer");
+        let mut skip = Vec::new();
+        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        assert_eq!(
+            skip,
+            vec![2],
+            "the LED-tapped layer keeps rendering; only the plain leaf skips"
+        );
+    }
+
+    #[test]
+    fn grouped_child_below_cutoff_is_not_render_skipped() {
+        // Occluder at top, then a group header below it with a child, plus a
+        // plain leaf. The child is occluded but must not render-skip — only
+        // top-level leaves do.
+        let occluder = layer(0, BlendMode::Opaque, 1.0);
+        let mut group_header = layer(1, BlendMode::Normal, 1.0);
+        group_header.layer_type = LayerType::Group;
+        let mut child = layer(2, BlendMode::Normal, 1.0);
+        child.parent_layer_id = Some(group_header.layer_id.clone());
+        let plain = layer(3, BlendMode::Normal, 1.0);
+        let layers = vec![occluder, group_header, child, plain];
+        let occ = occluded(&layers, &[clip(0), clip(2), clip(3)]);
+        let mut skip = Vec::new();
+        compute_render_skip_indices(&layers, &occ, true, false, &mut skip);
+        assert!(!skip.contains(&1), "group header is never render-skipped");
+        assert!(!skip.contains(&2), "grouped child is never render-skipped");
+        assert!(skip.contains(&3), "plain top-level leaf still render-skips");
+    }
+
+    #[test]
+    fn disabled_or_preview_active_skips_nothing() {
+        let layers = vec![
+            layer(0, BlendMode::Opaque, 1.0),
+            layer(1, BlendMode::Normal, 1.0),
+        ];
+        let occ = occluded(&layers, &[clip(0), clip(1)]);
+        assert_eq!(occ, vec![1]);
+        let mut skip = Vec::new();
+        compute_render_skip_indices(&layers, &occ, false, false, &mut skip);
+        assert!(skip.is_empty(), "toggle off → render nothing skipped");
+        compute_render_skip_indices(&layers, &occ, true, true, &mut skip);
+        assert!(skip.is_empty(), "preview open → render nothing skipped");
     }
 }

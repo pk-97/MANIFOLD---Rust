@@ -1072,6 +1072,15 @@ impl LayerCompositor {
                 continue;
             }
 
+            // Render-skip: hidden behind a full-opacity Opaque layer and safe
+            // to not render at all (content pipeline's render_skip set). Push
+            // no LayerOutput — the layer is neither rendered nor blended. Only
+            // plain top-level non-LED leaves land here, so groups/LED are
+            // unaffected (they stay on the blend-skip-only path).
+            if frame.render_skip.contains(&layer_idx) {
+                continue;
+            }
+
             // Check if this layer has layer-level effects
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
@@ -1849,6 +1858,12 @@ impl LayerCompositor {
             }
 
             let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+
+            // Render-skip (parallel path mirror of `generate_layers`): skip
+            // hidden-behind-opaque leaves entirely — no encoder, no output.
+            if frame.render_skip.contains(&layer_idx) {
+                continue;
+            }
 
             // Create per-layer command buffer
             let mut layer_enc = device.create_encoder("Layer");
