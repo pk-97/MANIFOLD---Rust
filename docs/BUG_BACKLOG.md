@@ -51,7 +51,6 @@ or human can read it, and it needs no external tool.
 | ID | Nickname | One line |
 |---|---|---|
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
-| BUG-242 | **live-trigger-edge-rearm-hostage-to-shape-release** | dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — recall gap is algorithmic — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
 | BUG-240 | **scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture** | `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no row family has supported since the card convergence — flow-script rot, not a live-app defect — LOW |
@@ -189,16 +188,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
-
-**Status:** FIXED 2026-07-18 (same evening; Peter approved). `TransientEdge` now advances on the sensitivity-scaled RAW impulse (no attack/release smoothing) in both consumers — `live_trigger.rs` clip triggers and `modulation.rs` trigger-gates; the conditioned envelope is unchanged for meters/modulation. Measured at DEFAULT shape: edm_kit generic-hit recall 0.204 → 0.714 @ P 1.000; kick_hat byte-identical (0.785/1.000/0.646); 617 unit tests green. Known cost, accepted deliberately: sustained_pad trigger fires 46 → 71 — the envelope was MASKING the analyzer's pad false fires; the trigger layer is now faithful, so BUG-243 (the analyzer-level pad fix) is the sole remaining owner of that symptom.
-
-**Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
-
-**Root cause:** `TransientEdge::advance(conditioned, 0.5)` re-arms only when the shape-conditioned envelope falls below 0.5, and the default `AudioModShape` release (120 ms) exceeds dense hit spacing (~80 ms), so the edge never re-arms between hits. Measured: `--release-ms 20` on the dumper takes generic-hit recall 0.204 → 0.673 at precision 1.000, timing 4.6 ms; sparse fixture (`kick_hat`) unchanged.
-
-**Fix shape:** decouple trigger re-arm from the modulation shape's release — give `TransientEdge` its own re-arm criterion (fixed short re-arm window ≈ the analyzer's 32 ms refractory, or hysteresis on the RAW impulse rather than the conditioned envelope) so the visual envelope can stay long while the trigger stays fast. Parameter-level stopgap: short release on trigger routes (works today, but couples visual feel to detection).
-
 ### BUG-243 (analyzer-false-fires-on-sustained-pads) — sustained pad/swell material fires transient + kick events with zero real hits — found 2026-07-18, same session
 
 **Status:** OPEN — HIGH (raised from MEDIUM 2026-07-18: BUG-242's fix removed the envelope smoothing that was accidentally masking these at the trigger layer — pad-driven trigger routes now see the analyzer's false fires directly, 71 trigger fires on the pad fixture. This bug is now the sole owner of the pad-chatter symptom).
@@ -228,7 +217,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause:** popover fields are seeded-at-open UI state with no membership in the per-frame value-sync plane (`sync_card_values` family).
 
 **Fix shape:** include the popover's non-focused fields in the per-frame value sync (skip the actively-edited field, same drag-guard convention `sync_card_values` documents), or resync on a mapping-version bump.
-
 
 ### BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no family has supported since C-P1a, and none supports at all as of C-P1d — found 2026-07-18 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d closing session, re-verifying BUG-236's two flows
 
@@ -1295,6 +1283,16 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+
+### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
+
+**Status:** FIXED 2026-07-18 (same evening; Peter approved). `TransientEdge` now advances on the sensitivity-scaled RAW impulse (no attack/release smoothing) in both consumers — `live_trigger.rs` clip triggers and `modulation.rs` trigger-gates; the conditioned envelope is unchanged for meters/modulation. Measured at DEFAULT shape: edm_kit generic-hit recall 0.204 → 0.714 @ P 1.000; kick_hat byte-identical (0.785/1.000/0.646); 617 unit tests green. Known cost, accepted deliberately: sustained_pad trigger fires 46 → 71 — the envelope was MASKING the analyzer's pad false fires; the trigger layer is now faithful, so BUG-243 (the analyzer-level pad fix) is the sole remaining owner of that symptom.
+
+**Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
+
+**Root cause:** `TransientEdge::advance(conditioned, 0.5)` re-arms only when the shape-conditioned envelope falls below 0.5, and the default `AudioModShape` release (120 ms) exceeds dense hit spacing (~80 ms), so the edge never re-arms between hits. Measured: `--release-ms 20` on the dumper takes generic-hit recall 0.204 → 0.673 at precision 1.000, timing 4.6 ms; sparse fixture (`kick_hat`) unchanged.
+
+**Fix shape:** decouple trigger re-arm from the modulation shape's release — give `TransientEdge` its own re-arm criterion (fixed short re-arm window ≈ the analyzer's 32 ms refractory, or hysteresis on the RAW impulse rather than the conditioned envelope) so the visual envelope can stay long while the trigger stays fast. Parameter-level stopgap: short release on trigger routes (works today, but couples visual feel to detection).
 
 ### BUG-238 (scene-setup-camera-world-light-eye-toggle-reads-as-dead) — the Scene Setup outliner's dimmed eye glyph on Camera/World/Light rows reads as a broken button, not a disabled one — found 2026-07-17, Peter live-testing the dock ("The params and visibility buttons for all of these cameras, world, lights, etc don't work either. They do nothing currently.")
 
