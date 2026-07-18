@@ -50,8 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
-| BUG-243 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
-| BUG-242 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
+| BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
+| BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
 | BUG-240 | **scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture** | `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no row family has supported since the card convergence — flow-script rot, not a live-app defect — LOW |
 | BUG-239 | **headless-script-harness-shows-stale-value-after-nontrivial-dispatch** | a `--script` flow's PNG/tree-dump keeps showing a param's PRE-write value after a real, correctly-dispatched write — headless-verification-only gap, live app unaffected — MED |
 | BUG-233 | **gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis** | the move/scale gizmo's red X-axis handle and the viewport grid's red X-axis line are near-identical colors, so the handle is hard to pick out with both overlays on — legibility only — LOW |
@@ -187,7 +187,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
-### BUG-242 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
+### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
 **Status:** OPEN — LOW-MED (the value plane for non-numeric kinds silently falls back to structural-sync cadence; a driver or command writing an enum/color/vec param shows stale on the node face while the render is already using the new value).
 
@@ -197,7 +197,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** widen the live tap's value type to a small enum (scalar / vecN / color / enum-index) or add a parallel non-scalar feed, then match in `apply_live_values`; table stays rebuild-only. Scope it with the FREEZE_COMPILER_MAP / graph runtime owner — the tap is renderer-side.
 
-### BUG-243 (mapping-popover-trim-fields-dont-track-external-edits-after-open) — an open mapping popover's trim min/max fields keep their seeded values when the mapping is edited from elsewhere; reopening reseeds correctly — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
+### BUG-245 (mapping-popover-trim-fields-dont-track-external-edits-after-open) — an open mapping popover's trim min/max fields keep their seeded values when the mapping is edited from elsewhere; reopening reseeds correctly — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
 **Status:** OPEN — LOW (narrow: needs the popover open while another surface — other window, OSC, command — edits the same mapping's trim; closing and reopening the popover shows the right values).
 
