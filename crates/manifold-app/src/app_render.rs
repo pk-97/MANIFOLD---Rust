@@ -4353,6 +4353,7 @@ impl Application {
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::sync_card_values(&mut ws.ui_root, &self.local_project, editor_active_idx);
+        crate::ui_bridge::sync_scene_row_values(&mut ws.ui_root, &self.local_project);
 
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small, so a clear + rebuild is cheaper than dirty-tracking and

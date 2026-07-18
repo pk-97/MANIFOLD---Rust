@@ -1261,6 +1261,39 @@ struct ModExposeCtx {
 /// between — D3's "no scene-local driven cache beyond it" reads off the SAME
 /// per-row facts every frame, but the row's IDENTITY — its index — must stay
 /// stable across frames independent of which sections are currently wired).
+/// How a driven row's read-only value label renders its number — captured at
+/// build time so the per-frame value sync (`sync_row_values`) reproduces the
+/// exact text the driven branch built, per row family (plain / degrees /
+/// enum-labelled).
+#[derive(Clone, Debug)]
+enum DrivenFmt {
+    Plain,
+    Degrees,
+    Labels(Vec<String>),
+}
+
+/// Per-frame sync handle for one driven (wire-fed) row: the value label's
+/// tree node, the row's real write/read address, and its display format.
+/// The driven branch used to discard the label `NodeId`, which froze driven
+/// rows between structural syncs — this is the handle that unfreezes them.
+#[derive(Clone, Debug)]
+struct DrivenValueLabel {
+    label: NodeId,
+    addr: RowAddr,
+    fmt: DrivenFmt,
+}
+
+fn driven_text(value: f32, fmt: &DrivenFmt) -> String {
+    match fmt {
+        DrivenFmt::Plain => format!("{value:.2} (driven)"),
+        DrivenFmt::Degrees => format!("{:.1}\u{00b0} (driven)", value.to_degrees()),
+        DrivenFmt::Labels(labels) => {
+            let idx = value.round().clamp(0.0, (labels.len().max(1) - 1) as f32) as usize;
+            format!("{} (driven)", labels.get(idx).map(String::as_str).unwrap_or("?"))
+        }
+    }
+}
+
 struct SceneCardState {
     param_info: Vec<ParamInfo>,
     mod_state: ParamModState,
@@ -1271,6 +1304,11 @@ struct SceneCardState {
     /// falling into `with_preset_graph_mut`.
     id_map: ahash::AHashMap<manifold_foundation::ParamId, (RowAddr, f32)>,
     slider_ids: Vec<Option<crate::slider::SliderNodeIds>>,
+    /// Fixed-slot twin of `slider_ids` for DRIVEN rows: the read-only value
+    /// label's sync handle. Exactly one of `slider_ids[slot]` /
+    /// `driven_value_ids[slot]` is `Some` for a built row; both `None` for an
+    /// unbuilt slot. Consumed by `sync_row_values` every frame.
+    driven_value_ids: Vec<Option<DrivenValueLabel>>,
     row_catcher_ids: Vec<Option<NodeId>>,
     driver_btn_ids: Vec<Option<NodeId>>,
     envelope_btn_ids: Vec<Option<NodeId>>,
@@ -1302,6 +1340,7 @@ impl SceneCardState {
             mod_state: ParamModState::allocate(0),
             id_map: ahash::AHashMap::new(),
             slider_ids: Vec::new(),
+            driven_value_ids: Vec::new(),
             row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
@@ -1336,6 +1375,7 @@ impl SceneCardState {
         self.param_info.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.slider_ids.resize(n, None);
+        self.driven_value_ids.resize_with(n, || None);
         self.row_catcher_ids.resize(n, None);
         self.driver_btn_ids.resize(n, None);
         self.envelope_btn_ids.resize(n, None);
@@ -1647,6 +1687,56 @@ impl ScenePanel {
     }
 
     /// Build the panel as a docked column into `rect`
+    /// The layer this panel is live on, if it's showing the full panel.
+    /// The app's per-frame value sync uses this to resolve the layer's
+    /// generator graph without re-deriving the selection.
+    pub fn live_layer_id(&self) -> Option<&LayerId> {
+        match &self.state {
+            SceneSetupState::Live(vm) => Some(&vm.layer_id),
+            _ => None,
+        }
+    }
+
+    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): push
+    /// fresh row values onto the already-built panel without a structural
+    /// rebuild. `resolve` maps a row's `RowAddr` to its current value in the
+    /// caller's project; `None` skips the row (unresolvable rows keep their
+    /// built text). Non-driven rows update their card slider (fill + thumb +
+    /// readout); driven rows update their read-only value label through the
+    /// handle the driven branch now keeps (`driven_value_ids`).
+    pub fn sync_row_values(&self, tree: &mut UITree, resolve: &dyn Fn(&RowAddr) -> Option<f32>) {
+        if !self.open {
+            return;
+        }
+        for card in [
+            &self.world_card,
+            &self.object_card,
+            &self.light_card,
+            &self.camera_card,
+            &self.modifier_card,
+        ] {
+            for (slot, ids) in card.slider_ids.iter().enumerate() {
+                let Some(ids) = ids else { continue };
+                let info = &card.param_info[slot];
+                let Some((addr, _)) = card.id_map.get(&info.param_id) else { continue };
+                let Some(v) = resolve(addr) else { continue };
+                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.min, info.max);
+                let text = super::param_slider_shared::format_param_value(
+                    v,
+                    info.min,
+                    info.whole_numbers,
+                    info.is_angle,
+                    info.value_labels.as_deref(),
+                );
+                crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
+            }
+            for entry in card.driven_value_ids.iter().flatten() {
+                let Some(v) = resolve(&entry.addr) else { continue };
+                tree.set_text(entry.label, &driven_text(v, &entry.fmt));
+            }
+        }
+    }
+
     /// (`ScreenLayout::scene_setup()`). No-op when closed.
     pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {
         if !self.open {
@@ -2585,16 +2675,19 @@ impl ScenePanel {
             // dimmed render, same presentation the deleted bespoke builder
             // used.
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            tree.add_label(
+            let fmt = DrivenFmt::Plain;
+            let value_label = tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 usable_w - LABEL_W,
                 ROW_H,
-                &format!("{:.2} (driven)", row.value.value),
+                &driven_text(row.value.value, &fmt),
                 driven_label_style(),
             );
             self.world_card.slider_ids[slot] = None;
+            self.world_card.driven_value_ids[slot] =
+                Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.world_card.param_info[slot] = placeholder_param_info();
             self.build_expose_button(
                 tree, mod_x, cy, &row.value, "World", label, false,
@@ -2661,6 +2754,7 @@ impl ScenePanel {
         self.world_card.audio_configs[slot] = built.audio_config;
         self.world_card.mod_tab_ids[slot] = built.mod_tabs;
         self.world_card.slider_ids[slot] = built.slider;
+        self.world_card.driven_value_ids[slot] = None;
         if let Some(name) = world_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
         }
@@ -2761,21 +2855,19 @@ impl ScenePanel {
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            let text = if is_angle {
-                format!("{:.1}\u{00b0} (driven)", row.value.value.to_degrees())
-            } else {
-                format!("{:.2} (driven)", row.value.value)
-            };
-            tree.add_label(
+            let fmt = if is_angle { DrivenFmt::Degrees } else { DrivenFmt::Plain };
+            let value_label = tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 usable_w - LABEL_W,
                 ROW_H,
-                &text,
+                &driven_text(row.value.value, &fmt),
                 driven_label_style(),
             );
             self.object_card.slider_ids[slot] = None;
+            self.object_card.driven_value_ids[slot] =
+                Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.object_card.param_info[slot] = placeholder_param_info();
             if let Some(offset) = mod_offset {
                 self.build_expose_button(
@@ -2844,6 +2936,7 @@ impl ScenePanel {
         self.object_card.audio_configs[slot] = built.audio_config;
         self.object_card.mod_tab_ids[slot] = built.mod_tabs;
         self.object_card.slider_ids[slot] = built.slider;
+        self.object_card.driven_value_ids[slot] = None;
         if let Some(name) = object_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
         }
@@ -3036,22 +3129,22 @@ impl ScenePanel {
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            let text = if let Some(labels) = labels {
-                let idx = row.value.value.round().clamp(0.0, (labels.len().max(1) - 1) as f32) as usize;
-                format!("{} (driven)", labels.get(idx).copied().unwrap_or("?"))
-            } else {
-                format!("{:.2} (driven)", row.value.value)
+            let fmt = match labels {
+                Some(labels) => DrivenFmt::Labels(labels.iter().map(|s| s.to_string()).collect()),
+                None => DrivenFmt::Plain,
             };
-            tree.add_label(
+            let value_label = tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 usable_w - LABEL_W,
                 ROW_H,
-                &text,
+                &driven_text(row.value.value, &fmt),
                 driven_label_style(),
             );
             self.light_card.slider_ids[slot] = None;
+            self.light_card.driven_value_ids[slot] =
+                Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.light_card.param_info[slot] = placeholder_param_info();
             if let Some(offset) = mod_offset {
                 self.build_expose_button(
@@ -3120,6 +3213,7 @@ impl ScenePanel {
         self.light_card.audio_configs[slot] = built.audio_config;
         self.light_card.mod_tab_ids[slot] = built.mod_tabs;
         self.light_card.slider_ids[slot] = built.slider;
+        self.light_card.driven_value_ids[slot] = None;
         if let Some(name) = light_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
         }
@@ -3285,21 +3379,19 @@ impl ScenePanel {
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            let text = if is_angle {
-                format!("{:.1}\u{00b0} (driven)", row.value.value.to_degrees())
-            } else {
-                format!("{:.2} (driven)", row.value.value)
-            };
-            tree.add_label(
+            let fmt = if is_angle { DrivenFmt::Degrees } else { DrivenFmt::Plain };
+            let value_label = tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 usable_w - LABEL_W,
                 ROW_H,
-                &text,
+                &driven_text(row.value.value, &fmt),
                 driven_label_style(),
             );
             self.camera_card.slider_ids[slot] = None;
+            self.camera_card.driven_value_ids[slot] =
+                Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.camera_card.param_info[slot] = placeholder_param_info();
             self.build_expose_button(
                 tree, mod_x, cy, &row.value, "Camera", label, is_angle,
@@ -3366,6 +3458,7 @@ impl ScenePanel {
         self.camera_card.audio_configs[slot] = built.audio_config;
         self.camera_card.mod_tab_ids[slot] = built.mod_tabs;
         self.camera_card.slider_ids[slot] = built.slider;
+        self.camera_card.driven_value_ids[slot] = None;
         if let Some(name) = camera_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
         }
@@ -3575,22 +3668,22 @@ impl ScenePanel {
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
-            let text = if let Some(labels) = labels {
-                let idx = row.value.value.round().clamp(0.0, (labels.len().max(1) - 1) as f32) as usize;
-                format!("{} (driven)", labels.get(idx).copied().unwrap_or("?"))
-            } else {
-                format!("{:.2} (driven)", row.value.value)
+            let fmt = match labels {
+                Some(labels) => DrivenFmt::Labels(labels.iter().map(|s| s.to_string()).collect()),
+                None => DrivenFmt::Plain,
             };
-            tree.add_label(
+            let value_label = tree.add_label(
                 Some(self.content_parent),
                 inner_x + LABEL_W,
                 cy,
                 usable_w - LABEL_W,
                 ROW_H,
-                &text,
+                &driven_text(row.value.value, &fmt),
                 driven_label_style(),
             );
             self.modifier_card.slider_ids[slot] = None;
+            self.modifier_card.driven_value_ids[slot] =
+                Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.modifier_card.param_info[slot] = placeholder_param_info();
             if let Some(offset) = mod_offset {
                 self.build_expose_button(
@@ -3668,6 +3761,7 @@ impl ScenePanel {
         self.modifier_card.audio_configs[slot] = built.audio_config;
         self.modifier_card.mod_tab_ids[slot] = built.mod_tabs;
         self.modifier_card.slider_ids[slot] = built.slider;
+        self.modifier_card.driven_value_ids[slot] = None;
         if let Some(name) = modifier_param_driver_btn_automation_name(param_slot) {
             tree.set_name(built.driver_btn, name);
         }
@@ -4975,8 +5069,22 @@ mod tests {
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         // C-P1a: a driven row builds no `build_param_row` slider at all
         // (the read-only dimmed render instead) — `world_card.slider_ids`
-        // stays `None` at that row's fixed slot.
+        // stays `None` at that row's fixed slot — and the read-only value
+        // label's sync handle is kept instead, so the per-frame value sync
+        // can update the driven row (it used to be discarded, freezing the
+        // row between structural syncs).
         assert!(panel.world_card.slider_ids[WORLD_ENV_INTENSITY].is_none());
+        assert!(
+            panel.world_card.driven_value_ids[WORLD_ENV_INTENSITY].is_some(),
+            "driven row must keep its value-label sync handle"
+        );
+        // A per-frame value sync resolving the row to 2.0 must rewrite the
+        // read-only label's text in place — no rebuild.
+        panel.sync_row_values(&mut tree, &|_addr| Some(2.0));
+        assert!(
+            tree.nodes().iter().any(|n| n.text.as_deref() == Some("2.00 (driven)")),
+            "sync_row_values must push the fresh driven value onto the label"
+        );
     }
 
     /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md §3 "Panel id map is total":
