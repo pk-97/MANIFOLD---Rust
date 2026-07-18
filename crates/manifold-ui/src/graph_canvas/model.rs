@@ -599,6 +599,17 @@ pub(crate) struct ParamView {
     /// group face shows the card surface, not an authoring picker). Built by
     /// [`build_group_param_rows`], never by [`format_param_for_node`].
     pub(crate) outer_param_id: Option<String>,
+    /// `Some((inner_node_id, inner_param_name))` for a **group-face mirror
+    /// row** ([`build_group_param_rows`]): the live feed
+    /// (`ContentState::live_node_params`) is keyed by the *inner* node's
+    /// stable [`manifold_foundation::NodeId`] and its own param name, not by
+    /// this row's `name` (renamed to `outer_param_id`) or by the group
+    /// node's own `node_id` (empty — groups are structural, not live nodes).
+    /// [`GraphCanvas::apply_live_values`] uses this to look the row up in the
+    /// live feed directly instead of matching on the enclosing node.
+    /// `None` for every ordinary node-face row, where the enclosing node's
+    /// own `node_id` + this row's `name` are already the right key.
+    pub(crate) live_source: Option<(manifold_foundation::NodeId, String)>,
 }
 
 /// Whether a `String` param names a filesystem path — folder / file / dir /
@@ -758,6 +769,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         // Ordinary node-face row — never a group-face mirror. See
         // `build_group_param_rows` for the other constructor.
         outer_param_id: None,
+        live_source: None,
     }
 }
 
@@ -825,6 +837,11 @@ pub(crate) fn build_group_param_rows(
         // top of itself would be noise, not information.
         pv.outer_driver = None;
         pv.outer_param_id = Some(r.outer_param_id.clone());
+        // Live values for this row come from the inner node the routing
+        // targets, not from `pv.name` (already overwritten with
+        // `outer_param_id` above) or the enclosing group's own `node_id`
+        // (empty — see `apply_live_values`).
+        pv.live_source = Some((node.node_id.clone(), r.inner_param.clone()));
         out.push(pv);
     }
     out
@@ -1550,12 +1567,20 @@ impl GraphCanvas {
         // `self.nodes` is borrowed mutably).
         let mut spark_updates: Vec<(manifold_foundation::NodeId, f32)> = Vec::new();
         for node in &mut self.nodes {
-            if node.node_id.is_empty() {
+            // Ordinary rows match against the enclosing node's own live
+            // entry; group-face mirror rows (`live_source`, D6) carry their
+            // own inner (node_id, param) key instead and are matched
+            // per-row below, so a group with an empty `node_id` (it's
+            // structural, not a live node) isn't skipped wholesale — only
+            // its non-mirror rows (none, today) would have nothing to match.
+            let node_vals = if node.node_id.is_empty() {
+                None
+            } else {
+                by_id.get(&node.node_id)
+            };
+            if node_vals.is_none() && !node.params.iter().any(|p| p.live_source.is_some()) {
                 continue;
             }
-            let Some(vals) = by_id.get(&node.node_id) else {
-                continue;
-            };
             let node_id = node.id;
             // The node's first ranged numeric param drives its sparkline — the
             // same "primary" pick the collapsed summary uses, so the trace and
@@ -1568,7 +1593,14 @@ impl GraphCanvas {
                 {
                     continue;
                 }
-                let Some(&(_, value)) = vals.iter().find(|(name, _)| *name == pv.name) else {
+                let found = if let Some((src_id, src_name)) = &pv.live_source {
+                    by_id
+                        .get(src_id)
+                        .and_then(|vals| vals.iter().find(|(name, _)| *name == src_name.as_str()))
+                } else {
+                    node_vals.and_then(|vals| vals.iter().find(|(name, _)| *name == pv.name))
+                };
+                let Some(&(_, value)) = found else {
                     continue;
                 };
                 let Some((value_str, fill)) = numeric_value_fill(pv.kind, value, pv.range) else {
@@ -1586,7 +1618,12 @@ impl GraphCanvas {
                     primary_fill = Some(f);
                 }
             }
-            if let Some(f) = primary_fill {
+            // Sparkline history is keyed by the node's own `node_id` — a
+            // group's is empty, so a group-face row's live update doesn't
+            // feed a (meaningless) empty-keyed trace.
+            if !node.node_id.is_empty()
+                && let Some(f) = primary_fill
+            {
                 spark_updates.push((node.node_id.clone(), f));
             }
         }
