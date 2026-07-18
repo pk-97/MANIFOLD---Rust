@@ -103,10 +103,6 @@ pub struct ContentThread {
     pub osc_param_router: manifold_playback::osc_param_router::OscParamRouter,
     /// Ableton Live OSC bridge — discovers session, pushes macro values.
     pub ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge,
-    /// Set to true when Ableton wrote param values last frame, so the state-push
-    /// in the FOLLOWING frame forces a modulation snapshot (bridge apply runs after
-    /// the state push in the same frame, so we need a 1-frame sticky signal).
-    pub ableton_active_last_frame: bool,
 
     // ── Tempo recording (port of C# PlaybackController fields) ──
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
@@ -1075,22 +1071,18 @@ impl ContentThread {
         if version_changed {
             self.last_data_version = version;
         }
-        // Send a project snapshot when data_version changes (editing commands)
-        // OR when modulation is active (LFO/envelope writes to param_values
-        // without bumping data_version — UI needs live modulated values).
-        // Include Ableton as a modulation source. Bridge apply() runs after this
-        // state push (same frame), so we use last frame's flag — on the following
-        // frame, evaluate_modulation will have already reset each slot's value
-        // from its updated base, so the snapshot will contain Ableton values.
-        let modulation_active = tick_result.modulation_active || self.ableton_active_last_frame;
+        // Send a project snapshot when data_version changes (editing commands).
+        // Value-only writers (LFO/envelope/Ableton/OSC/automation) never bump
+        // data_version — those ride the ModulationSnapshot, which is now sent
+        // EVERY tick (see below), so no writer class can leave the UI stale.
 
         // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
         // on the next tick — avoids per-frame Vec allocation.
         self.engine.reclaim_tick_result(tick_result);
 
         // Arc<Project> snapshot: only deep-clone when data_version changes.
-        // Modulation frames send a lightweight ModulationSnapshot instead
-        // (just param_values Vec<f32> clones — no full Project clone).
+        // Per-frame param values ride the lightweight ModulationSnapshot
+        // instead (just param_values Vec<f32> clones — no full Project clone).
         let snapshot = if version_changed {
             // Structural change — create a new Arc with a fresh clone.
             let arc = self
@@ -1103,18 +1095,19 @@ impl ContentThread {
             None
         };
 
-        // Build lightweight modulation snapshot when drivers/envelopes are
-        // active — contains only the param_values that changed this frame.
-        // Uses a reusable scratch buffer: capture_into() clears and refills
-        // without allocating (vecs keep capacity), then clone() copies the
-        // flat buffer (3 allocations vs ~128 with the old nested Vec<Vec<f32>>).
-        let modulation_snapshot = if modulation_active {
-            if let Some(project) = self.engine.project() {
-                self.mod_scratch.capture_into(project);
-                Some(self.mod_scratch.clone())
-            } else {
-                None
-            }
+        // Build the lightweight modulation snapshot EVERY tick, not only when
+        // drivers/envelopes/Ableton are active: OSC-router writes, automation
+        // lane sampling, and MutateProjectLive drags all move param_values
+        // without flagging `modulation_active`, and gating the send on that
+        // flag left the UI showing stale values until the next structural
+        // snapshot. The capture is a linear walk over the param manifests into
+        // a reusable scratch buffer (zero-alloc steady state), then one clone
+        // of the flat buffer. Blocks are id-keyed at capture, so a structural
+        // edit landing between capture and the UI's apply can't misroute
+        // values (see ModulationSnapshot).
+        let modulation_snapshot = if let Some(project) = self.engine.project() {
+            self.mod_scratch.capture_into(project);
+            Some(self.mod_scratch.clone())
         } else {
             None
         };
@@ -1631,12 +1624,9 @@ impl ContentThread {
             self.editing_service.notify_external_change();
         }
 
-        let ableton_active = if let Some(p) = self.engine.project_mut() {
-            self.ableton_bridge.apply(p, self.time_since_start.0)
-        } else {
-            false
-        };
-        self.ableton_active_last_frame = ableton_active;
+        if let Some(p) = self.engine.project_mut() {
+            self.ableton_bridge.apply(p, self.time_since_start.0);
+        }
 
         // OSC timecode sync — M4L mode only. `enable_osc`/`disable_osc` had
         // zero callers anywhere in the app before this fix (F1,

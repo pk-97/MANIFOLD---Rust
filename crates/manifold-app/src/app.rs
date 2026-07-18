@@ -2635,7 +2635,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
                 osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
                 ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
-                ableton_active_last_frame: false,
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
                 led_controller: None,
