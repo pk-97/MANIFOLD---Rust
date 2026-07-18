@@ -564,7 +564,22 @@ const SUPERFLUX_THRESH_FACTOR: f32 = 7.0;
 /// Raised 3.0 → 48.0 by the same P3 sweep — the plateau that clears the false
 /// fires runs from ~30 to ~300 (real kicks start dropping out above ~400), so
 /// 48.0 sits with margin on both sides against denser real material.
-const SUPERFLUX_DELTA: f32 = 48.0;
+/// Raised 48.0 → 80.0 by the BUG-243 sweep (2026-07-18): sustained-pad flux
+/// flickers ~80 ODF units against a ≈0 median baseline, clearing the old
+/// 48.0 floor and firing 6+29 median-criterion transients (full+low bands)
+/// on 20 s of pad-only material. Swept {80, 100, 125, 150} on the pad fixture
+/// (`self_render/sustained_pad_100bpm`) via `causal_events` — 80 already
+/// collapses full/low to 3 fires each (matching mid/high's untouched 3,
+/// which are genuine swell attacks passing the NOVELTY criterion, out of
+/// this knob's scope); 100/125/150 measured identical, so 80 is the minimal
+/// value in the sweep set. Verified lossless on recall fixtures (edm_kit
+/// 0.714 R / 1.000 P unchanged, kick_hat 0.785/1.000/0.646 unchanged, arp_16th
+/// 252 unchanged) and on the P3 false-fire guards (dive/riser/growl fires
+/// held at 0 or dropped; kicks/busymix/densemix fire counts unchanged at
+/// 8/7/7 low-band). The remaining pad fires are kick-ridge false positives
+/// (BUG-243 part B, unfixed — see `KICK_ABS_FLOOR`/`KICK_MIN_PEAK` below) and
+/// the 3+3+3+3 novelty-admitted swell attacks, neither owned by this delta.
+const SUPERFLUX_DELTA: f32 = 80.0;
 /// BUG-044 novelty criterion (see the second-criterion comment in
 /// [`reduce_send`]): how far the ODF candidate must exceed the recent-window
 /// MAX to fire on dense material where the median test has self-raised past
@@ -625,6 +640,17 @@ const ODF_NOVELTY_HI: usize = 10;
 const KICK_WIN: usize = 6; // descent-confirmation window (hops) = fire latency
 const KICK_DROP_BINS: f32 = 10.0; // net descent required across the window (bins)
 const KICK_STEP_MAX: f32 = 4.0; // max down-step per hop (2 bins/hop + slop)
+/// BUG-243 part B (2026-07-18): swept 0.15/0.2/0.25/0.3 against the
+/// `sustained_pad_100bpm` fixture's 30 kick-ridge false fires — ZERO effect at
+/// any tested value (pad `kick_low` held at 30 all the way to 0.3, 2.5x the
+/// default), while 0.25+ started costing `densemix`'s guard (kick_fires
+/// 8→7→6, right at its `>= 6` floor). Root cause traced with
+/// `MANIFOLD_KICK_DEBUG`: the pad's false-firing ridges have apex peaks
+/// (~86–109 raw column units) squarely inside the same range as `edm_kit`'s
+/// real kick ridges (~62–104) — this knob filters CANDIDATE peaks by
+/// fraction-of-band-max, and the pad's ridges are not weak relative to their
+/// own band, so no relative floor separates them from real kicks. Left at
+/// its P3 (2026-07-06) value; not the fix for BUG-243B — see `KICK_ABS_FLOOR`.
 const KICK_MIN_PEAK: f32 = 0.12; // ridge floor as a fraction of the band max
 /// Absolute ridge-peak floor (tilted-column units), paired with the relative
 /// `KICK_MIN_PEAK`. The relative floor scales down in quiet passages, so
@@ -635,6 +661,19 @@ const KICK_MIN_PEAK: f32 = 0.12; // ridge floor as a fraction of the band max
 /// not. Swept 2026-07-07 at d10/w6: 0.001 no effect, 0.005 riser 13→0 at ZERO
 /// recall/latency cost, 0.02 kills a real synth kick (guard 8→7), 0.08
 /// collapses recall — 0.005 is the plateau point with 4x margin to the cliff.
+///
+/// BUG-243 part B (2026-07-18) re-swept this same knob against the pad's 30
+/// kick-ridge false fires and found NO safe value: `MANIFOLD_KICK_DEBUG`
+/// showed the pad's false-firing ridge apexes (~86–109 raw units) and
+/// `edm_kit`'s real kick apexes (~62–104) occupy the SAME magnitude range —
+/// confirmed by sweeping 40/60/65/70/75/80 (all comfortably above the 2026-07
+/// cliff, since this knob and that sweep's 0.001–0.08 units evidently predate
+/// a column-scale change): every value from 40 up killed `edm_kit`'s
+/// `kick_low` (15→0) and the `kicks`/`busymix`/`densemix` selftest guards
+/// (8/7/8 → 0/0/0) in the same step that first touched the pad. There is no
+/// floor that separates real kicks from this pad's false ridges — BUG-243
+/// part B is UNFIXED via either documented knob; left at 0.005. See
+/// `docs/BUG_BACKLOG.md` BUG-243 for the honest partial-fix status.
 const KICK_ABS_FLOOR: f32 = 0.005;
 const KICK_AGE_CAP: usize = KICK_WIN + 6; // reject long-lived (portamento) ridges
 const KICK_MAX_GAP: u8 = 1; // a ridge may skip one hop before it dies
@@ -757,6 +796,16 @@ impl KickRidges {
             if coherent {
                 tk.fired = true;
                 ridge_fire = true;
+                if std::env::var_os("MANIFOLD_KICK_DEBUG").is_some() {
+                    let birth = tk.birth;
+                    let len = tk.len;
+                    let drop = front - back;
+                    let peak = front;
+                    let bins = &tk.bins[..len];
+                    eprintln!(
+                        "KICKDBG hop={hop} birth={birth} len={len} drop={drop:.3} peak={peak:.3} bins={bins:?}"
+                    );
+                }
             }
         }
 
