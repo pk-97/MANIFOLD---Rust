@@ -765,7 +765,7 @@ fn build_segment_cards(
     for &k in fuse_idxs {
         let fx = active_effects[k].1;
         let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
-        let def = if fx.relight {
+        let def = if fx.relight_active() {
             crate::node_graph::relight::relight_augment(
                 fx.graph.as_ref().unwrap_or(&view.canonical_def),
                 primitives,
@@ -1283,7 +1283,7 @@ impl PresetRuntime {
                                 .cloned()
                                 .collect();
                         let relight_writes = build_relight_writes(
-                            fx.relight,
+                            fx.relight_active(),
                             &card_handles,
                             &node_map,
                             &bound.fused_retarget,
@@ -1399,7 +1399,7 @@ impl PresetRuntime {
             // via `EffectSlot::relight_writes`. `height_from` changes template
             // topology, so it legitimately recompiles — it is not folded into
             // the default-augmented key.
-            let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight {
+            let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight_active() {
                 std::borrow::Cow::Owned(crate::node_graph::relight::relight_augment(
                     effective_def,
                     primitives,
@@ -1459,7 +1459,7 @@ impl PresetRuntime {
             let relight_params = if fused_view.is_some() {
                 None
             } else {
-                fx.relight.then_some(&fx.relight_params)
+                fx.relight_active().then_some(&fx.relight_params)
             };
             let splice_result = match splice_def_into_chain(
                 &mut graph,
@@ -1682,7 +1682,7 @@ impl PresetRuntime {
             // is the graph version (a binding add/remove/reshape bumps it).
             let user_bindings_version = fx.graph_version;
             let relight_writes = build_relight_writes(
-                fx.relight,
+                fx.relight_active(),
                 &handles,
                 &node_map,
                 &bound.fused_retarget,
@@ -3621,8 +3621,8 @@ fn compute_topology_hash(
         // height_from changes the height tap), so they stay in the rebuild key.
         // The float D3 knobs are now live uniforms written per-frame, so they
         // must NOT be hashed — otherwise a knob drag would rebuild the chain.
-        fx.relight.hash(&mut h);
-        if fx.relight {
+        fx.relight_active().hash(&mut h);
+        if fx.relight_active() {
             fx.relight_params.height_from.hash(&mut h);
         }
         // Watched (open-in-editor) target: folded into the rebuild key so
@@ -4186,6 +4186,12 @@ mod topology_hash_tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn toggling_relight_adds_and_removes_rl_nodes_on_rebuild() {
+        // Relight disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // `relight_active()` is false so no template is spliced. The augment
+        // machinery itself stays covered by `node_graph::relight`'s ungated tests.
+        if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let lambert_id = manifold_core::NodeId::new("rl_lambert");
@@ -4253,10 +4259,20 @@ mod topology_hash_tests {
 
         fx.relight_params.height_from = manifold_core::effects::RelightHeightFrom::Luminance;
         let height_from_changed = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        assert_ne!(
-            base, height_from_changed,
-            "height_from changes template topology and must rebuild",
-        );
+        if manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            assert_ne!(
+                base, height_from_changed,
+                "height_from changes template topology and must rebuild",
+            );
+        } else {
+            // Feature disabled app-wide: `relight_active()` is false, so the
+            // relight template is never spliced and no relight field — knob or
+            // height_from — touches the topology hash.
+            assert_eq!(
+                base, height_from_changed,
+                "with the relight feature disabled, height_from must not affect the hash",
+            );
+        }
     }
 
     #[test]
@@ -7099,6 +7115,11 @@ mod chain_fusion_tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn relight_on_fused_matches_unfused_on_probe_graphs() {
+        // Relight disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // both paths render inert, so this would pass vacuously — skip instead.
+        if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
@@ -7172,6 +7193,11 @@ mod chain_fusion_tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn relight_knob_drag_visibly_changes_fused_output() {
+        // Relight disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // no relight template is fused, so knob drags have no output to change.
+        if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
@@ -7220,6 +7246,11 @@ mod chain_fusion_tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn relight_float_knob_drag_hits_fused_view_cache() {
+        // Relight disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // no relight template is fused, so there is no knob-invariant cache path.
+        if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
@@ -7276,6 +7307,11 @@ mod chain_fusion_tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn mixed_relight_segment_fuses_to_one_region() {
+        // Relight disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // no relight template is spliced, so there is no mixed-region case to fuse.
+        if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let device = crate::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);

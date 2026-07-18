@@ -1611,6 +1611,16 @@ where
 }
 
 impl PresetInstance {
+    /// Whether the relight stage should actually be compiled/rendered for this
+    /// instance. Gated by [`manifold_foundation::RELIGHT_FEATURE_ENABLED`] so
+    /// the disabled feature is inert even for projects that saved
+    /// `relight: true`. All renderer compile/fusion/hash decisions consult
+    /// this, never the raw field.
+    #[inline]
+    pub fn relight_active(&self) -> bool {
+        manifold_foundation::RELIGHT_FEATURE_ENABLED && self.relight
+    }
+
     /// The per-instance graph override (`None` ⇒ use the catalog default).
     /// One home for both effects and generators after the graph-home
     /// unification (the generator graph used to live on `Layer`).

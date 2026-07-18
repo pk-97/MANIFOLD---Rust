@@ -15,10 +15,12 @@
 //! model, no GPU. Domain types the UI needs are adapted at the app boundary
 //! (`docs/UI_LAYERING_INVERSION.md`).
 
+pub mod feature_flags;
 pub mod hash;
 pub mod id;
 pub mod units;
 
+pub use feature_flags::RELIGHT_FEATURE_ENABLED;
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use units::{Beats, Bpm, Seconds, beats_to_seconds, seconds_to_beats};
