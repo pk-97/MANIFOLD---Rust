@@ -65,7 +65,7 @@ Addendum, 2026-07-18 (Fable): The daemon is off — Peter's call, and a fair one
 
 - **Content thread** owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and the `Project`. Runs at project FPS (default 60).
 - **UI thread** (winit) renders, handles input, presents GPU output.
-- UI → Content: `ContentCommand` (crossbeam, bounded 64). Content → UI: `ContentState` snapshots (crossbeam, bounded 4).
+- UI → Content: `ContentCommand`. Content → UI: `ContentState` snapshots. Both crossbeam **unbounded** (`app.rs`'s spawn block), consumer drains to latest — backpressure comes from drain-to-latest, not channel capacity.
 - GPU output: IOSurface zero-copy triple-buffer with atomic `front_index`.
 
 ## Crates
