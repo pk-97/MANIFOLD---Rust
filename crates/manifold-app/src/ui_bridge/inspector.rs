@@ -3116,13 +3116,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
-        // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md P5b) ─────
-        // Both the toggle and a knob commit bump `bump_graph_structure_version`
-        // (`ToggleRelightCommand`/`SetRelightParamCommand`'s own `execute` —
-        // see their doc comments), so every arm here returns `structural()`:
-        // the D3 template is spliced in at compile time from the instance's
-        // CURRENT `relight`/`relight_params`, never a per-frame runtime knob,
-        // so a live drag preview needs the same re-splice a commit does.
+        // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md D8/P7) ─────
+        // The toggle and `height_from` change template topology, so they stay
+        // structural. The D3 float knobs are now live uniforms written per
+        // frame, so a drag updates the local project + the content thread via
+        // `MutateProjectLive` and returns `handled()` — no chain rebuild.
         PanelAction::RelightToggle(gpt) => {
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
@@ -3150,9 +3148,12 @@ pub(super) fn dispatch_inspector(
             {
                 let f = crate::ui_translate::relight_field_to_editing(*field);
                 let v = *val;
+                // Live drag: update the UI-side project immediately so the
+                // slider follows the pointer, and mirror to the content thread
+                // via `MutateProjectLive`. No `bump_graph_structure_version`
+                // — float knobs are per-frame uniforms (D8/P7).
                 project.with_preset_graph_mut(&target, |inst| {
                     f.set(&mut inst.relight_params, v);
-                    inst.bump_graph_structure_version();
                 });
                 let t = target.clone();
                 ContentCommand::send(
@@ -3160,12 +3161,11 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::MutateProjectLive(Box::new(move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
                             f.set(&mut inst.relight_params, v);
-                            inst.bump_graph_structure_version();
                         });
                     })),
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PanelAction::RelightParamCommit(gpt, field) => {
             if let Some(old_val) = drag_snapshot.take()
@@ -3182,7 +3182,7 @@ pub(super) fn dispatch_inspector(
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PanelAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =

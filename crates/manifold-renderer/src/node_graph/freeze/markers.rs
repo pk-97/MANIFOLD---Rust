@@ -72,6 +72,20 @@ pub enum Marker {
         type_id: String,
         camera_port: Option<String>,
     },
+    /// `// @input_access: <port> <token>` — fused texture codegen (install),
+    /// one per `src_<e>` texture input, recording how the region's members
+    /// actually read it (`coincident` / `coincident_texel` / `gather` /
+    /// `gather_texel`). Without it `node.wgsl_compute` reports the default
+    /// (filtering) access and the executor's mixed-consumer rule wrongly
+    /// vetoes fp32 promotion of a shared upstream intermediate (P7/D8: the
+    /// relight height field read fp16 by the fused kernel while GTAO asked
+    /// for fp32).
+    InputAccess { port: String, token: String },
+    /// `// @precision_critical: <port>` — fused texture codegen (install), one
+    /// per `src_<e>` consumed by a member port the atom declares
+    /// `precision_critical` (D6(a)). Lets the fused kernel keep requesting the
+    /// fp32 upstream intermediate its members would have requested unfused.
+    PrecisionCritical { port: String },
 }
 
 impl Marker {
@@ -104,6 +118,8 @@ impl Marker {
                     }
                 }
             }
+            Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
+            Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
         }
     }
 
@@ -155,6 +171,18 @@ impl Marker {
         if let Some(rest) = c.strip_prefix("@camera_external:") {
             let name = rest.trim();
             return (!name.is_empty()).then(|| Marker::CameraExternal { name: name.to_string() });
+        }
+        if let Some(rest) = c.strip_prefix("@input_access:") {
+            let mut parts = rest.split_whitespace();
+            let port = parts.next()?;
+            let token = parts.next()?;
+            return matches!(token, "coincident" | "coincident_texel" | "gather" | "gather_texel")
+                .then(|| Marker::InputAccess { port: port.to_string(), token: token.to_string() });
+        }
+        if let Some(rest) = c.strip_prefix("@precision_critical:") {
+            let name = rest.trim();
+            return (!name.is_empty())
+                .then(|| Marker::PrecisionCritical { port: name.to_string() });
         }
         if let Some(rest) = c.strip_prefix("@derived_uniform_member:") {
             let mut parts = rest.split_whitespace();

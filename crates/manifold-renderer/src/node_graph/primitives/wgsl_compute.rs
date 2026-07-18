@@ -217,6 +217,15 @@ pub struct WgslCompute {
     /// doesn't match a baked variant, so a mis-classified (actually-dynamic) field
     /// is always rendered correctly, just via the fallback.
     static_param_fields: Vec<String>,
+    /// P7/D8 precision propagation: per-texture-input access parsed from the
+    /// install's `// @input_access:` markers, aligned to the texture inputs of
+    /// [`Self::inputs`] in declaration order (the `input_access_of` contract).
+    /// Empty (the trait default) when the source carries no markers — every
+    /// hand-authored kernel keeps its prior conservative-filtering treatment.
+    input_access_view: &'static [crate::node_graph::freeze::classify::InputAccess],
+    /// Ports named by `// @precision_critical:` markers — the fused kernel
+    /// re-declares the D6(a) fp32 request its members would have made unfused.
+    precision_critical_view: &'static [&'static str],
     /// Bounded LRU of specialized kernel variants, keyed by the baked value-set.
     /// Front = most-recently-used. `SPEC_CACHE_CAP` deep so a swept slider can't
     /// accumulate pipelines.
@@ -420,6 +429,8 @@ impl WgslCompute {
             uniform_scratch: Vec::new(),
             last_logged_uniforms: AHashMap::new(),
             static_param_fields: Vec::new(),
+            input_access_view: &[],
+            precision_critical_view: &[],
             spec_variants: Vec::new(),
             last_spec_key: None,
             spec_stable: 0,
@@ -514,6 +525,62 @@ impl WgslCompute {
         // value-keys). Drop them and the stability tracker so specialization
         // re-derives from the new kernel.
         self.static_param_fields = parsed.static_param_fields;
+        // P7/D8: rebuild the leaked access/precision views from the source's
+        // markers, aligned to the texture inputs in declaration order. No
+        // markers → empty slices → identical-to-before trait defaults.
+        {
+            use crate::node_graph::freeze::classify::InputAccess;
+            let mut access_map: AHashMap<String, InputAccess> = AHashMap::new();
+            let mut pc_ports: Vec<String> = Vec::new();
+            for line in strip_block_comments(&self.source).lines() {
+                match Marker::parse(line) {
+                    Some(Marker::InputAccess { port, token }) => {
+                        let access = match token.as_str() {
+                            "coincident" => InputAccess::Coincident,
+                            "coincident_texel" => InputAccess::CoincidentTexel,
+                            "gather" => InputAccess::Gather,
+                            "gather_texel" => InputAccess::GatherTexel,
+                            _ => continue,
+                        };
+                        access_map.insert(port, access);
+                    }
+                    Some(Marker::PrecisionCritical { port }) => {
+                        if !pc_ports.contains(&port) {
+                            pc_ports.push(port);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if access_map.is_empty() && pc_ports.is_empty() {
+                self.input_access_view = &[];
+                self.precision_critical_view = &[];
+            } else {
+                let access_vec: Vec<InputAccess> = self
+                    .inputs
+                    .iter()
+                    .filter(|i| {
+                        matches!(
+                            i.ty,
+                            PortType::Texture2D
+                                | PortType::Texture2DTyped(_)
+                                | PortType::Texture3D
+                        )
+                    })
+                    .map(|i| access_map.get(i.name.as_ref()).copied().unwrap_or_default())
+                    .collect();
+                self.input_access_view = Box::leak(access_vec.into_boxed_slice());
+                let pc_vec: Vec<&'static str> = pc_ports
+                    .into_iter()
+                    .map(|p| {
+                        let leaked: &'static str = Box::leak(p.into_boxed_str());
+                        self._leaked_strings.push(leaked);
+                        leaked
+                    })
+                    .collect();
+                self.precision_critical_view = Box::leak(pc_vec.into_boxed_slice());
+            }
+        }
         self.spec_variants.clear();
         self.last_spec_key = None;
         self.spec_stable = 0;
@@ -1934,6 +2001,14 @@ impl EffectNode for WgslCompute {
             return;
         }
         self.reparse(source.to_string());
+    }
+
+    fn input_access(&self) -> &'static [crate::node_graph::freeze::classify::InputAccess] {
+        self.input_access_view
+    }
+
+    fn precision_critical_inputs(&self) -> &'static [&'static str] {
+        self.precision_critical_view
     }
 
     fn fusion_kind(&self) -> FusionKind {

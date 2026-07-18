@@ -474,10 +474,8 @@ pub fn relight_height_from_to_core(
 /// depend on `manifold-editing` (`UiRelightField`'s doc), so this is the
 /// boundary translation every relight-knob command construction goes
 /// through.
-pub fn relight_field_to_editing(
-    v: UiRelightField,
-) -> manifold_editing::commands::effects::RelightField {
-    use manifold_editing::commands::effects::RelightField as Core;
+pub fn relight_field_to_editing(v: UiRelightField) -> manifold_core::effects::RelightField {
+    use manifold_core::effects::RelightField as Core;
     match v {
         UiRelightField::LightX => Core::LightX,
         UiRelightField::LightY => Core::LightY,

@@ -209,6 +209,19 @@ impl GeneratorRegistry {
         };
 
         if let Some(def) = effective_def {
+            // D8/P7: relight now fuses. Augment with DEFAULT knob values before
+            // the fusion compiler so the fused-generator cache key (and generated
+            // WGSL) is knob-invariant; the live values are written per-frame via
+            // `PresetRuntime::set_relight_params`.
+            let def_for_fusion = if relight.is_some() {
+                crate::node_graph::relight::relight_augment(
+                    &def,
+                    &registry,
+                    &RelightParams::default(),
+                )
+            } else {
+                def
+            };
             // On-demand fusion (design step 2): fuse THIS exact shape — shipped,
             // edited, or created — unless the editor is watching it (then unfused
             // so per-node preview can sample inner-node textures and edits render
@@ -218,20 +231,15 @@ impl GeneratorRegistry {
             // path — only the def changed (fused kernels + bindings retargeted onto
             // them) — so modulation keeps flowing. Same decision as the effect
             // rule, via the one shared `should_render_fused`.
-            let render_def = if relight.is_none()
-                && crate::node_graph::freeze::install::should_render_fused(is_watched)
+            let render_def = if crate::node_graph::freeze::install::should_render_fused(is_watched)
             {
-                match crate::node_graph::freeze::install::fused_generator_def_for(&def) {
+                match crate::node_graph::freeze::install::fused_generator_def_for(&def_for_fusion)
+                {
                     Some(fused) => (*fused).clone(),
-                    None => def,
+                    None => def_for_fusion,
                 }
             } else {
-                def
-            };
-            let render_def = if let Some(params) = relight {
-                crate::node_graph::relight::relight_augment(&render_def, &registry, params)
-            } else {
-                render_def
+                def_for_fusion
             };
             match PresetRuntime::from_def_with_device(
                 render_def,

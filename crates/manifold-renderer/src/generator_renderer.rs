@@ -429,7 +429,8 @@ impl GeneratorRenderer {
                 ls.generator_type != gen_type
                     || ls.override_version != current_override_version
                     || ls.built_watched != is_watched_now
-                    || ls.applied_relight != (relight, relight_params)
+                    || ls.applied_relight.0 != relight
+                    || ls.applied_relight.1.height_from != relight_params.height_from
             });
 
         if needs_create {
@@ -781,6 +782,13 @@ impl GeneratorRenderer {
                 // by source_id; empty when the layer has no generator instance.
                 let empty = ParamManifest::default();
                 let params = layer.gen_params().map(|gp| &gp.params).unwrap_or(&empty);
+                let relight_params = layer
+                    .gen_params()
+                    .map(|gp| gp.relight_params)
+                    .unwrap_or_default();
+                layer_state
+                    .generator
+                    .set_relight_params(&relight_params);
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,

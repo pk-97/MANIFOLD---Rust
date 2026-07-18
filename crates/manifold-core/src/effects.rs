@@ -437,6 +437,55 @@ pub struct RemovedExposure {
 
 // ─── Effect Instance ───
 
+/// One of the D3 relight-stage float knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
+/// D3). Lives in `manifold-core` because both the renderer (per-frame
+/// uniform writes) and the editing commands need to address the same field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelightField {
+    LightX,
+    LightY,
+    Relief,
+    AoIntensity,
+    ShadowSoftness,
+    Gain,
+}
+
+impl RelightField {
+    /// Read this field off a [`RelightParams`].
+    pub fn get(self, p: &RelightParams) -> f32 {
+        match self {
+            Self::LightX => p.light_x,
+            Self::LightY => p.light_y,
+            Self::Relief => p.relief,
+            Self::AoIntensity => p.ao_intensity,
+            Self::ShadowSoftness => p.shadow_softness,
+            Self::Gain => p.gain,
+        }
+    }
+
+    /// Write this field on a [`RelightParams`].
+    pub fn set(self, p: &mut RelightParams, value: f32) {
+        match self {
+            Self::LightX => p.light_x = value,
+            Self::LightY => p.light_y = value,
+            Self::Relief => p.relief = value,
+            Self::AoIntensity => p.ao_intensity = value,
+            Self::ShadowSoftness => p.shadow_softness = value,
+            Self::Gain => p.gain = value,
+        }
+    }
+
+    /// Every float field, in UI declaration order.
+    pub const ALL: &[Self] = &[
+        Self::LightX,
+        Self::LightY,
+        Self::Relief,
+        Self::AoIntensity,
+        Self::ShadowSoftness,
+        Self::Gain,
+    ];
+}
+
 /// D4's height-origin override for the "3D Shading" relight stage
 /// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/D4, phase P5): `Auto` runs the
 /// compiler's D1 structural walk (falling back to luminance-of-output only

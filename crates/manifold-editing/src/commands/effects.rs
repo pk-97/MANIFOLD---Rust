@@ -3,7 +3,7 @@ use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::{EffectId, GraphTarget};
 use manifold_core::effects::{
     PresetInstance, ParamConvert, ParamEnvelope, ParamId, ParameterDriver,
-    UserParamBinding,
+    UserParamBinding, RelightField,
 };
 use manifold_core::params::Param;
 use manifold_core::project::Project;
@@ -353,50 +353,6 @@ impl Command for ToggleRelightCommand {
     }
 }
 
-/// Addresses one of [`manifold_core::effects::RelightParams`]'s numeric
-/// knobs (D3) — the card's Light X/Y, Relief, AO Intensity, Shadow
-/// Softness, and Gain sliders each drive one variant. One command type
-/// instead of six near-identical structs; `field` selects the target so
-/// undo/redo replay against the right slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelightField {
-    LightX,
-    LightY,
-    Relief,
-    AoIntensity,
-    ShadowSoftness,
-    Gain,
-}
-
-impl RelightField {
-    /// Read this field off a `RelightParams` — `pub` (not just used inside
-    /// this module) so the app-layer dispatch (`ui_bridge/inspector.rs`'s
-    /// `RelightParamSnapshot`/`RelightParamCommit` handlers) can read/write a
-    /// knob's live value without duplicating this match.
-    pub fn get(self, p: &manifold_core::effects::RelightParams) -> f32 {
-        match self {
-            Self::LightX => p.light_x,
-            Self::LightY => p.light_y,
-            Self::Relief => p.relief,
-            Self::AoIntensity => p.ao_intensity,
-            Self::ShadowSoftness => p.shadow_softness,
-            Self::Gain => p.gain,
-        }
-    }
-
-    /// Write this field on a `RelightParams` — see [`Self::get`]'s doc.
-    pub fn set(self, p: &mut manifold_core::effects::RelightParams, value: f32) {
-        match self {
-            Self::LightX => p.light_x = value,
-            Self::LightY => p.light_y = value,
-            Self::Relief => p.relief = value,
-            Self::AoIntensity => p.ao_intensity = value,
-            Self::ShadowSoftness => p.shadow_softness = value,
-            Self::Gain => p.gain = value,
-        }
-    }
-}
-
 /// Change one relight knob (D3). Always live on the instance regardless of
 /// whether the toggle is on — see `RelightParams`'s doc: the card renders
 /// these rows greyed, never hidden, when the toggle is off, so editing while
@@ -436,14 +392,14 @@ impl Command for SetRelightParamCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.new_value);
-            inst.bump_graph_structure_version();
+            // D8/P7: float knobs are live uniforms — no structure bump. The
+            // per-frame apply path writes the new value into the spliced graph.
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.old_value);
-            inst.bump_graph_structure_version();
         }
     }
 
