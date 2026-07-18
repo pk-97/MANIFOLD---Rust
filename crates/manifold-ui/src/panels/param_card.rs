@@ -3507,6 +3507,29 @@ impl ParamCardPanel {
         }
     }
 
+    /// BUG-250: map a [`RowClick::EnumValueCell`] hit to the shared
+    /// cycle-or-dropdown action set (`enum_value_cell_actions`). The cell
+    /// node id comes from the row's own slider ids (the dropdown anchors
+    /// under it); the current value is the synced base value, matching what
+    /// the cell displays.
+    fn enum_value_cell_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        clicked: NodeId,
+    ) -> Vec<PanelAction> {
+        let info = &self.param_info[pi];
+        let labels = info.value_labels.clone().unwrap_or_default();
+        let cell = self
+            .slider_ids
+            .get(pi)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.value_text)
+            .unwrap_or(clicked);
+        let value = self.base_values.get(pi).copied().unwrap_or(info.default);
+        enum_value_cell_actions(target, self.pid_at(pi), &labels, value, info.min, cell)
+    }
+
     /// The "A" audio-mod button action — always opens (arms) or closes
     /// (disarms) this param's audio drawer, never the Audio Setup modal. With no
     /// sends defined yet, arming auto-creates the project's first send and points
@@ -3730,6 +3753,9 @@ impl ParamCardPanel {
                     let addr = self.osc_addresses[pi].clone().unwrap_or_default();
                     vec![PanelAction::CopyOscAddress(addr)]
                 }
+                RowClick::EnumValueCell(pi) => {
+                    self.enum_value_cell_action(GraphParamTarget::Effect(ei), pi, id)
+                }
             };
         }
 
@@ -3899,6 +3925,9 @@ impl ParamCardPanel {
                     }
                     let addr = self.osc_addresses[pi].clone().unwrap_or_default();
                     vec![PanelAction::CopyOscAddress(addr)]
+                }
+                RowClick::EnumValueCell(pi) => {
+                    self.enum_value_cell_action(GraphParamTarget::Generator, pi, id)
                 }
             };
         }
@@ -4635,8 +4664,15 @@ impl ParamCardPanel {
                 // no `SliderZone` of its own), so it stays hand-registered.
                 if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
                     intents.claim_area(catcher);
-                    intents.on(catcher, RightClick, menu);
+                    intents.on(catcher, RightClick, menu.clone());
                 }
+                // The value cell carries the same menu: it wins the hit-test
+                // over the catcher (BUG-250's fix made it interactive per its
+                // zone contract), and `ValueCell + RightClick` is a contract
+                // dead stop hosts may bind (D13) — binding it keeps the
+                // pre-fix "right-click anywhere off-track opens the menu"
+                // behavior instead of degrading to the card menu.
+                intents.on(ids.value_text, RightClick, menu);
             }
         }
     }

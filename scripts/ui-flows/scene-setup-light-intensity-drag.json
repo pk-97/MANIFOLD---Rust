@@ -18,7 +18,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Outliner"
+          "text": "Objects"
         }
       },
       "check": "Exists"
@@ -54,7 +54,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.light.intensity_value"
+          "name": "scene_setup.light.intensity_track"
         }
       },
       "gesture": {

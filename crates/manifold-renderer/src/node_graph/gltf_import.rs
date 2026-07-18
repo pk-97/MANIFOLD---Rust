@@ -2653,6 +2653,8 @@ fn build_import_graph(
     // conflicts) into the same never-silent report doctrine as every
     // other D9 line above.
     report_lines.extend(summary.animation_report_lines.iter().cloned());
+    // BUG-213: same fold for unimplemented OPTIONAL extensionsUsed entries.
+    report_lines.extend(summary.extension_report_lines.iter().cloned());
 
     let report = ImportReport {
         material_count: summary.materials.len(),
@@ -3321,6 +3323,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_curation_round_trip.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build 20-object graph");
@@ -3709,6 +3712,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_model.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build grouped graph");
@@ -3962,6 +3966,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_seed_test.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -4031,6 +4036,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let center = [
             (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
@@ -4123,6 +4129,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_mat_0_collision.glb");
         let (def, _report) =
@@ -4173,6 +4180,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
@@ -4188,6 +4196,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         }
     }
 
@@ -4700,6 +4709,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_all_maps.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -4787,6 +4797,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_orm.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -4845,6 +4856,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_over_featured.glb");
         let (def, report) = build_import_graph(&summary, path).expect("build graph");
@@ -4920,6 +4932,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_sun.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -5009,6 +5022,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_round_trip.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -5081,6 +5095,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_animation_wiring.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -5532,6 +5547,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_animation_round_trip.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -5579,6 +5595,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_glass_round_trip.glb");
         let (def, _report) = build_import_graph(&summary, path).expect("build graph");
@@ -5700,6 +5717,7 @@ mod tests {
             default_material_vertex_count: 0,
             animations: Vec::new(),
             animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
         };
         let path = std::path::Path::new("/tmp/synthetic_model.glb");
         let (mut def, _report) = build_import_graph(&summary, path).expect("build graph");

@@ -420,6 +420,13 @@ impl BitmapSlider {
                 ..UIStyle::default()
             },
         );
+        // The value box is the `ValueCell` zone — interactive per this type's
+        // own contract (`ids.value_text`: "interactive — double-click to
+        // type"). Without the flag the hit-test skips it and every value-cell
+        // gesture falls through to the full-row catcher behind it, which is
+        // what made double-click type-in and enum click-to-change dead on the
+        // real input path (BUG-250's root).
+        tree.set_flag(ids.value_text, UIFlags::INTERACTIVE);
 
         Slider { ids, reset }
     }

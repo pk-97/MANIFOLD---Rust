@@ -7,6 +7,6 @@
   },
   "Snapshot",
   {
-    "Assert": { "selector": { "Query": { "text": "Outliner" } }, "check": "Exists" }
+    "Assert": { "selector": { "Query": { "text": "Objects" } }, "check": "Exists" }
   }
 ]
