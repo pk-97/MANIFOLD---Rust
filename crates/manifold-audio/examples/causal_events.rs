@@ -14,16 +14,18 @@
 //! [{"time_sec": 1.234, "kind": "transients_low"}, ...]
 //! ```
 //!
-//! Shapes are the `LayerClipTrigger::new` defaults (sensitivity 1.0, attack
-//! 5 ms, release 120 ms — the out-of-box live tuning), so this measures the
-//! causal path as-shipped, not a hand-tuned variant. The one deliberate
-//! difference from the stage: evaluation runs at the analyzer's hop cadence
-//! (~5.33 ms) rather than the engine's 60 fps tick — strictly finer than
-//! live, and the same convention `mod_harness` already uses.
+//! Shapes default to sensitivity 1.0, attack 5 ms, release 120 ms (the
+//! out-of-box live tuning) unless overridden by `--sensitivity`, `--attack-ms`,
+//! or `--release-ms`, so this measures the causal path as-shipped or at a
+//! chosen tuning. The one deliberate difference from the stage: evaluation runs
+//! at the analyzer's hop cadence (~5.33 ms) rather than the engine's 60 fps
+//! tick — strictly finer than live, and the same convention `mod_harness`
+//! already uses.
 //!
 //! ```text
 //! cargo run -p manifold-audio --example causal_events -- <clip.(wav|aiff|mp3|flac)> \
-//!     [--out events.json] [--start s] [--dur s]
+//!     [--out events.json] [--start s] [--dur s] \
+//!     [--sensitivity 1.0] [--attack-ms 5.0] [--release-ms 120.0]
 //! ```
 
 use std::collections::HashMap;
@@ -52,6 +54,9 @@ struct Args {
     out: String,
     start_s: f32,
     dur_s: f32,
+    sensitivity: f32,
+    attack_ms: f32,
+    release_ms: f32,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -60,6 +65,9 @@ fn parse_args() -> Result<Args, String> {
         out: String::new(),
         start_s: 0.0,
         dur_s: f32::INFINITY,
+        sensitivity: 1.0,
+        attack_ms: 5.0,
+        release_ms: 120.0,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -72,6 +80,15 @@ fn parse_args() -> Result<Args, String> {
             "--out" => args.out = next(&mut i)?,
             "--start" => args.start_s = next(&mut i)?.parse().map_err(|e| format!("--start: {e}"))?,
             "--dur" => args.dur_s = next(&mut i)?.parse().map_err(|e| format!("--dur: {e}"))?,
+            "--sensitivity" => {
+                args.sensitivity = next(&mut i)?.parse().map_err(|e| format!("--sensitivity: {e}"))?
+            }
+            "--attack-ms" => {
+                args.attack_ms = next(&mut i)?.parse().map_err(|e| format!("--attack-ms: {e}"))?
+            }
+            "--release-ms" => {
+                args.release_ms = next(&mut i)?.parse().map_err(|e| format!("--release-ms: {e}"))?
+            }
             s if s.starts_with("--") => return Err(format!("unknown flag {s}")),
             s => args.input = s.to_string(),
         }
@@ -79,13 +96,15 @@ fn parse_args() -> Result<Args, String> {
     }
     if args.input.is_empty() {
         return Err(
-            "usage: causal_events <clip> [--out events.json] [--start s] [--dur s]".into(),
+            "usage: causal_events <clip> [--out events.json] [--start s] [--dur s] \
+             [--sensitivity 1.0] [--attack-ms 5.0] [--release-ms 120.0]".into(),
         );
     }
     if args.out.is_empty() {
+        let stem = args.input.trim_end_matches(|c| c != '.').trim_end_matches('.');
         args.out = format!(
-            "{}.causal_events.json",
-            args.input.trim_end_matches(|c| c != '.').trim_end_matches('.')
+            "{stem}.s{:.2}.a{:.1}.r{:.1}.causal_events.json",
+            args.sensitivity, args.attack_ms, args.release_ms
         );
     }
     Ok(args)
@@ -148,6 +167,9 @@ fn main() {
             feature: AudioFeature::new(feature_kind, band),
         });
         cfg.enabled = true;
+        cfg.shape.sensitivity = args.sensitivity;
+        cfg.shape.attack_ms = args.attack_ms;
+        cfg.shape.release_ms = args.release_ms;
         layer.clip_triggers.push(cfg);
         layer_kind.insert(layer.layer_id.as_str().to_string(), kind);
         layers.push(layer);
