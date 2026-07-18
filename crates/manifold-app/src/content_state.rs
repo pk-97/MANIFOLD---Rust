@@ -259,34 +259,46 @@ pub struct ContentState {
 
 /// Lightweight snapshot of modulated param values.
 /// Captures only `param_values` from effects and generator params,
-/// avoiding a full `Project::clone()` on every modulation frame.
+/// avoiding a full `Project::clone()` on every frame.
 ///
 /// All float values are packed into a single flat buffer (`values`).
 /// A parallel `block_lens` array records the length of each param block.
-/// Layout order: macros, master effects, then per-layer (effects, gen).
-/// Clone = 4 Vec allocations (values + block_lens + block_topos + layer_shapes)
-/// instead of ~128 separate Vec<f32> clones.
+/// Each block also carries its owner id (`block_owners`), so `apply`
+/// routes every block by IDENTITY — layer/effect insertion, removal, or
+/// reorder between capture and apply can no longer misroute or silently
+/// starve a block. The `topology` stamp still guards a found-by-id block
+/// against a same-frame manifest reshape (skipped for exactly one frame —
+/// the next capture re-keys).
+/// Clone = 4 Vec allocations (values + block_lens + block_topos +
+/// block_owners) instead of ~128 separate Vec<f32> clones.
 #[derive(Clone)]
 pub struct ModulationSnapshot {
-    /// All param values concatenated: macros | master_fx0 | master_fx1 | ...
-    /// | layer0_fx0 | layer0_fx1 | ... | layer0_gen | layer1_fx0 | ...
+    /// All param values concatenated in block order.
     values: Vec<f32>,
     /// Length of each param block in `values`, in the same order.
-    /// block 0 = macros, blocks 1..1+master_count = master effects,
-    /// remaining blocks = per-layer effects and gen params (see layer_shapes).
     block_lens: Vec<u16>,
     /// `ParamManifest::topology` for each block at capture time, parallel to
     /// `block_lens` (D8). Apply skips any block whose live manifest topology no
     /// longer matches the captured stamp — this catches same-length param
     /// reorders, which a `len == len` check silently misroutes. The macro block
-    /// (index 0) has no manifest; its slot holds a sentinel `0` and is guarded
-    /// per-slot instead.
+    /// has no manifest; its slot holds a sentinel `0` and is guarded per-slot
+    /// instead.
     block_topos: Vec<u32>,
-    /// Number of master effect blocks (immediately after the macro block).
-    master_count: u16,
-    /// Per-layer: (effect_count, has_gen_params). Determines how many
-    /// blocks in `block_lens` belong to each layer.
-    layer_shapes: Vec<(u16, bool)>,
+    /// Owner of each block, parallel to `block_lens`, captured at capture time.
+    /// Apply resolves the destination by this id, never by walk position.
+    block_owners: Vec<BlockOwner>,
+}
+
+/// Identifies the owner of one param block in a [`ModulationSnapshot`], so
+/// `apply` can find the destination manifest by stable id.
+#[derive(Clone)]
+enum BlockOwner {
+    /// The macro bank — no per-slot ids, routed by slot index.
+    Macros,
+    /// A master or per-layer effect instance's `ParamManifest`.
+    Effect(EffectId),
+    /// A layer's generator `ParamManifest`.
+    GenParams(manifold_core::LayerId),
 }
 
 impl ModulationSnapshot {
@@ -296,43 +308,43 @@ impl ModulationSnapshot {
             values: Vec::new(),
             block_lens: Vec::new(),
             block_topos: Vec::new(),
-            master_count: 0,
-            layer_shapes: Vec::new(),
+            block_owners: Vec::new(),
         }
     }
 
     /// Fill this snapshot from the project, reusing existing vec capacity.
     /// Called each frame on the content thread's scratch instance — zero
-    /// allocation after the first frame (vecs grow once, never shrink).
+    /// allocation after the first frame (vecs grow once, never shrink; id
+    /// clones are `Arc<str>` refbumps).
     pub fn capture_into(&mut self, project: &Project) {
         self.values.clear();
         self.block_lens.clear();
         self.block_topos.clear();
-        self.layer_shapes.clear();
+        self.block_owners.clear();
 
-        // Macros (block 0) — no ParamManifest; guarded per-slot on apply, so
-        // its topology slot is a sentinel that's never consulted.
+        // Macros — no ParamManifest; guarded per-slot on apply, so its
+        // topology slot is a sentinel that's never consulted.
         let macro_count = project.settings.macro_bank.slots.len();
         for slot in &project.settings.macro_bank.slots {
             self.values.push(slot.value);
         }
         self.block_lens.push(macro_count as u16);
         self.block_topos.push(0);
+        self.block_owners.push(BlockOwner::Macros);
 
         // Master effects — pack only `.value` from each ParamSlot;
         // exposure isn't a modulation concern and must not round-trip
         // through the per-frame fast path.
-        self.master_count = project.settings.master_effects.len() as u16;
         for fx in &project.settings.master_effects {
             let len = fx.params.len();
             self.values.extend(fx.params.iter().map(|p| p.value));
             self.block_lens.push(len as u16);
             self.block_topos.push(fx.params.topology());
+            self.block_owners.push(BlockOwner::Effect(fx.id.clone()));
         }
 
         // Per-layer: effects + optional gen params
         for layer in &project.timeline.layers {
-            let effect_count = layer.effects.as_ref().map_or(0, |effects| effects.len());
             let has_gen = layer.layer_type == LayerType::Generator && layer.gen_params().is_some();
 
             if let Some(effects) = &layer.effects {
@@ -341,6 +353,7 @@ impl ModulationSnapshot {
                     self.values.extend(fx.params.iter().map(|p| p.value));
                     self.block_lens.push(len as u16);
                     self.block_topos.push(fx.params.topology());
+                    self.block_owners.push(BlockOwner::Effect(fx.id.clone()));
                 }
             }
 
@@ -349,101 +362,76 @@ impl ModulationSnapshot {
                 self.values.extend(gp.params.iter().map(|p| p.value));
                 self.block_lens.push(len as u16);
                 self.block_topos.push(gp.params.topology());
+                self.block_owners.push(BlockOwner::GenParams(layer.layer_id.clone()));
             }
-
-            self.layer_shapes.push((effect_count as u16, has_gen));
         }
     }
 
     /// Apply modulated values to a project in-place. Overwrites only
-    /// `param_values` — no structural changes, no allocations if lengths match.
+    /// `param_values` — no structural changes, no allocations.
+    ///
+    /// Routing is by owner id, never by position: a layer or effect added,
+    /// removed, or reordered between capture and apply can no longer misroute
+    /// values or starve later blocks. The per-block topology stamp still skips
+    /// a found-by-id block whose manifest was reshaped mid-flight (a one-frame
+    /// skip; the next capture re-keys). A block whose owner id no longer
+    /// resolves (deleted since capture) is skipped with a loud log — the old
+    /// positional walk dropped this silently.
     pub fn apply(&self, project: &mut Project) {
         let mut cursor = 0usize; // position in values
-        let mut block = 0usize; // position in block_lens
 
-        // Macros (block 0)
-        let macro_len = *self.block_lens.get(block).unwrap_or(&0) as usize;
-        for i in 0..macro_len {
-            if let Some(slot) = project.settings.macro_bank.slots.get_mut(i) {
-                slot.value = self.values[cursor + i];
-            }
-        }
-        cursor += macro_len;
-        block += 1;
-
-        // Master effects — write only `.value` per slot; the `.exposed`
-        // flag is host-state, not modulation-state.
-        for i in 0..self.master_count as usize {
-            let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
-            if let Some(fx) = project.settings.master_effects.get_mut(i)
-                && fx.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
-            {
-                for (slot, &v) in fx
-                    .params
-                    .iter_mut()
-                    .zip(&self.values[cursor..cursor + len])
-                {
-                    slot.value = v;
+        for (block, owner) in self.block_owners.iter().enumerate() {
+            let len = self.block_lens.get(block).copied().unwrap_or(0) as usize;
+            let stamp = self.block_topos.get(block).copied().unwrap_or(u32::MAX);
+            let slice = &self.values[cursor..cursor + len];
+            match owner {
+                BlockOwner::Macros => {
+                    for (i, &v) in slice.iter().enumerate() {
+                        if let Some(slot) = project.settings.macro_bank.slots.get_mut(i) {
+                            slot.value = v;
+                        }
+                    }
+                }
+                // Write only `.value` per slot; the `.exposed` flag is
+                // host-state, not modulation-state.
+                BlockOwner::Effect(id) => {
+                    match project.find_effect_by_id_mut(id) {
+                        Some(fx) if fx.params.topology() == stamp => {
+                            for (slot, &v) in fx.params.iter_mut().zip(slice) {
+                                slot.value = v;
+                            }
+                        }
+                        Some(_) => { /* manifest reshaped mid-flight — one-frame skip */ }
+                        None => {
+                            log::warn!(
+                                "[ModulationSnapshot] effect {id} not found at apply — \
+                                 deleted since capture; block skipped"
+                            );
+                        }
+                    }
+                }
+                BlockOwner::GenParams(layer_id) => {
+                    let gp = project
+                        .timeline
+                        .find_layer_by_id_mut(layer_id.as_str())
+                        .and_then(|(_, layer)| layer.gen_params_mut());
+                    match gp {
+                        Some(gp) if gp.params.topology() == stamp => {
+                            for (slot, &v) in gp.params.iter_mut().zip(slice) {
+                                slot.value = v;
+                            }
+                        }
+                        Some(_) => { /* manifest reshaped mid-flight — one-frame skip */ }
+                        None => {
+                            log::warn!(
+                                "[ModulationSnapshot] gen params for layer {layer_id} not found \
+                                 at apply — deleted since capture; block skipped"
+                            );
+                        }
+                    }
                 }
             }
             cursor += len;
-            block += 1;
-        }
-
-        // Layer effects + generator params
-        for (i, &(effect_count, has_gen)) in self.layer_shapes.iter().enumerate() {
-            // Advance cursor/block for every effect block regardless of
-            // whether the layer/effect exists on the UI side. The flat buffer
-            // layout is authoritative — skipping blocks without advancing
-            // would desync all subsequent data.
-            if let Some(layer) = project.timeline.layers.get_mut(i) {
-                for j in 0..effect_count as usize {
-                    let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
-                    if let Some(effects) = &mut layer.effects
-                        && let Some(fx) = effects.get_mut(j)
-                        && fx.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
-                    {
-                        for (slot, &v) in fx
-                            .params
-                            .iter_mut()
-                            .zip(&self.values[cursor..cursor + len])
-                        {
-                            slot.value = v;
-                        }
-                    }
-                    cursor += len;
-                    block += 1;
-                }
-
-                // Generator params — write only `.value` per slot, mirroring
-                // the effect path; `.exposed` is host-state, not modulation.
-                if has_gen {
-                    let len = *self.block_lens.get(block).unwrap_or(&0) as usize;
-                    if let Some(gp) = layer.gen_params_mut()
-                        && gp.params.topology() == self.block_topos.get(block).copied().unwrap_or(u32::MAX)
-                    {
-                        for (slot, &v) in gp
-                            .params
-                            .iter_mut()
-                            .zip(&self.values[cursor..cursor + len])
-                        {
-                            slot.value = v;
-                        }
-                    }
-                    cursor += len;
-                    block += 1;
-                }
-            } else {
-                // Layer gone — skip its blocks
-                for _ in 0..effect_count {
-                    cursor += *self.block_lens.get(block).unwrap_or(&0) as usize;
-                    block += 1;
-                }
-                if has_gen {
-                    cursor += *self.block_lens.get(block).unwrap_or(&0) as usize;
-                    block += 1;
-                }
-            }
         }
     }
 }
@@ -523,6 +511,7 @@ mod modulation_topology_guard_tests {
     use super::*;
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
+    use manifold_core::layer::Layer;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::PresetTypeId;
 
@@ -561,12 +550,24 @@ mod modulation_topology_guard_tests {
         )
     }
 
+    fn effect(entries: &[(&str, f32)]) -> PresetInstance {
+        let mut fx = PresetInstance::new(PresetTypeId::new("test.effect"));
+        fx.params = manifest(entries);
+        fx
+    }
+
     fn project_with_master(params: ParamManifest) -> Project {
         let mut project = Project::default();
         let mut fx = PresetInstance::new(PresetTypeId::new("test.effect"));
         fx.params = params;
         project.settings.master_effects.push(fx);
         project
+    }
+
+    fn layer_with_effect(name: &str, index: i32, entries: &[(&str, f32)]) -> Layer {
+        let mut layer = Layer::new_video(name.to_string(), index);
+        layer.effects = Some(vec![effect(entries)]);
+        layer
     }
 
     /// D8 — the exact case the old `len == len` guard missed: a same-length
@@ -622,5 +623,161 @@ mod modulation_topology_guard_tests {
             "unchanged topology must apply the captured value"
         );
         assert_eq!(m.get("b").unwrap().value, 0.20);
+    }
+
+    /// Id-keyed routing (a): a layer INSERTED between capture and apply must
+    /// not shift the routing of the layers after it. The old positional walk
+    /// routed by layer index, so every block after the insertion landed on the
+    /// wrong layer's effects; the id-keyed apply resolves by LayerId/EffectId.
+    #[test]
+    fn apply_routes_by_id_when_layer_inserted() {
+        let mut project = Project::default();
+        let layer_a = layer_with_effect("A", 0, &[("p", 0.10)]);
+        let layer_b = layer_with_effect("B", 1, &[("q", 0.20)]);
+        let fx_a = layer_a.effects.as_ref().unwrap()[0].id.clone();
+        let fx_b = layer_b.effects.as_ref().unwrap()[0].id.clone();
+        project.timeline.layers.push(layer_a);
+        project.timeline.layers.push(layer_b);
+
+        let mut snap = ModulationSnapshot::empty();
+        snap.capture_into(&project);
+
+        // UI side drifts (as modulation would), then a structural insert lands
+        // before this snapshot is applied.
+        project
+            .find_effect_by_id_mut(&fx_a)
+            .unwrap()
+            .params
+            .get_mut("p")
+            .unwrap()
+            .value = 0.90;
+        project
+            .find_effect_by_id_mut(&fx_b)
+            .unwrap()
+            .params
+            .get_mut("q")
+            .unwrap()
+            .value = 0.80;
+        let inserted = layer_with_effect("NEW", 2, &[("z", 0.50)]);
+        let fx_new = inserted.effects.as_ref().unwrap()[0].id.clone();
+        project.timeline.layers.insert(0, inserted);
+
+        snap.apply(&mut project);
+
+        assert_eq!(
+            project
+                .find_effect_by_id(&fx_a)
+                .unwrap()
+                .params
+                .get("p")
+                .unwrap()
+                .value,
+            0.10,
+            "layer A's effect must receive ITS captured value despite the insert"
+        );
+        assert_eq!(
+            project
+                .find_effect_by_id(&fx_b)
+                .unwrap()
+                .params
+                .get("q")
+                .unwrap()
+                .value,
+            0.20,
+            "layer B's effect must receive ITS captured value despite the insert"
+        );
+        assert_eq!(
+            project
+                .find_effect_by_id(&fx_new)
+                .unwrap()
+                .params
+                .get("z")
+                .unwrap()
+                .value,
+            0.50,
+            "the inserted layer is not in the snapshot — must stay untouched"
+        );
+    }
+
+    /// Id-keyed routing (b): effects REORDERED between capture and apply must
+    /// still receive their own captured values. The old positional walk wrote
+    /// effect 0's values into effect 1 and vice versa; id routing can't.
+    #[test]
+    fn apply_routes_by_id_when_effects_reordered() {
+        let mut project = Project::default();
+        let fx_x = effect(&[("p", 0.10)]);
+        let fx_y = effect(&[("q", 0.20)]);
+        let id_x = fx_x.id.clone();
+        let id_y = fx_y.id.clone();
+        project.settings.master_effects.push(fx_x);
+        project.settings.master_effects.push(fx_y);
+
+        let mut snap = ModulationSnapshot::empty();
+        snap.capture_into(&project);
+
+        // Reorder + drift.
+        project.settings.master_effects.swap(0, 1);
+        for fx in &mut project.settings.master_effects {
+            for p in fx.params.iter_mut() {
+                p.value = 0.99;
+            }
+        }
+
+        snap.apply(&mut project);
+
+        assert_eq!(
+            project
+                .find_effect_by_id(&id_x)
+                .unwrap()
+                .params
+                .get("p")
+                .unwrap()
+                .value,
+            0.10,
+            "effect X must get X's captured value after reorder"
+        );
+        assert_eq!(
+            project
+                .find_effect_by_id(&id_y)
+                .unwrap()
+                .params
+                .get("q")
+                .unwrap()
+                .value,
+            0.20,
+            "effect Y must get Y's captured value after reorder"
+        );
+    }
+
+    /// Always-send contract (c): capture must produce a complete snapshot from
+    /// a project with NO drivers/envelopes/Ableton activity — the content
+    /// thread sends the snapshot every tick now, so the capture path carries
+    /// no dependence on a `modulation_active` flag. Two consecutive ticks on
+    /// the same scratch buffer both yield a full snapshot.
+    #[test]
+    fn capture_is_complete_without_any_modulation_active() {
+        let mut project = Project::default();
+        project
+            .timeline
+            .layers
+            .push(layer_with_effect("A", 0, &[("p", 0.10)]));
+        project.settings.master_effects.push(effect(&[("m", 0.30)]));
+
+        let mut scratch = ModulationSnapshot::empty();
+        for tick in 0..2 {
+            scratch.capture_into(&project);
+            let snap = scratch.clone();
+            // macros + master fx + layer fx = 3 blocks, every tick.
+            assert_eq!(
+                snap.block_owners.len(),
+                3,
+                "tick {tick}: snapshot must be complete with no modulation source"
+            );
+            assert_eq!(
+                snap.values.len(),
+                project.settings.macro_bank.slots.len() + 2,
+                "tick {tick}: values must cover macros + master fx + layer fx"
+            );
+        }
     }
 }
