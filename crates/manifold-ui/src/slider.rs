@@ -45,7 +45,10 @@ pub struct SliderNodeIds {
     pub fill: NodeId,            // non-interactive — subtle fill from left to value
     pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
     pub value_text: NodeId,      // interactive — double-click to type (in the right gutter, D13)
-    pub track_rect: Rect,        // usable track (excludes value gutter); for x_to_normalized()
+    pub track_rect: Rect,        // usable track (excludes value gutter), captured at build time.
+                                 // x/width stay valid (in-place scroll shifts only y), so it's fine
+                                 // for x_to_normalized(); NEVER use its y to position nodes — read
+                                 // tree.get_bounds(track) instead (BUG-257).
     /// The slider's normalized default, for right-click reset.
     pub default_normalized: f32,
 }
