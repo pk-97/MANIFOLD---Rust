@@ -4664,8 +4664,15 @@ impl ParamCardPanel {
                 // no `SliderZone` of its own), so it stays hand-registered.
                 if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
                     intents.claim_area(catcher);
-                    intents.on(catcher, RightClick, menu);
+                    intents.on(catcher, RightClick, menu.clone());
                 }
+                // The value cell carries the same menu: it wins the hit-test
+                // over the catcher (BUG-250's fix made it interactive per its
+                // zone contract), and `ValueCell + RightClick` is a contract
+                // dead stop hosts may bind (D13) — binding it keeps the
+                // pre-fix "right-click anywhere off-track opens the menu"
+                // behavior instead of degrading to the card menu.
+                intents.on(ids.value_text, RightClick, menu);
             }
         }
     }

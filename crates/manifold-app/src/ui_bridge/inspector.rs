@@ -246,28 +246,36 @@ fn resolve_graph_target(
 /// write address, `GraphTarget`, and catalog default — `None` unless
 /// `param_id` resolves through `ScenePanel::resolve_scene_param`'s id map
 /// (a real card/exposed param falls through to the caller's existing path).
-/// C-P1a only ever converts root-scoped rows (Environment/Fog) on the
-/// layer's OWN generator, so `gpt` is always `GraphParamTarget::Generator`
-/// whenever the id-map lookup hits — the `GraphTarget::Generator` match is a
-/// sanity check, not a second branch (a scene row could never resolve
-/// through `GraphParamTarget::Effect`).
+/// The `GraphTarget` comes from the panel's own docked layer
+/// (`live_layer_id`), never the active-layer context: scene rows always
+/// address the panel's own generator, and active-layer resolution silently
+/// no-op'd every write when the two differed. The context args stay in the
+/// signature so the call sites read uniformly with `resolve_graph_target`.
 #[allow(clippy::too_many_arguments)]
 fn resolve_scene_write(
     ui: &UIRoot,
     project: &Project,
-    gpt: &GraphParamTarget,
+    _gpt: &GraphParamTarget,
     param_id: &manifold_core::effects::ParamId,
-    editor_target: Option<&manifold_core::GraphTarget>,
-    tab: InspectorTab,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
+    _editor_target: Option<&manifold_core::GraphTarget>,
+    _tab: InspectorTab,
+    _active_layer: &Option<LayerId>,
+    _selection: &SelectionState,
 ) -> Option<(
     manifold_ui::panels::scene_setup_panel::RowAddr,
     manifold_core::GraphTarget,
     manifold_core::effect_graph_def::EffectGraphDef,
 )> {
     let (addr, _snapshot_val) = ui.scene_setup_panel.resolve_scene_param(param_id)?;
-    let target = resolve_graph_target(gpt, editor_target, tab, active_layer, selection, project)?;
+    // The scene panel edits the scene of its OWN docked layer — resolve the
+    // target from the panel's `live_layer_id`, not the app's active layer.
+    // Routing through `resolve_graph_target` (active layer) silently dropped
+    // every converted-row write whenever the panel's layer wasn't active —
+    // which is always the case in the headless harness, where no layer is
+    // ever activated (the enum/drag writes all no-op'd, only the bespoke
+    // layer-id-carrying scene actions worked).
+    let lid = ui.scene_setup_panel.live_layer_id()?.clone();
+    let target = manifold_core::GraphTarget::Generator(lid);
     let manifold_core::GraphTarget::Generator(lid) = &target else {
         return None;
     };
@@ -317,6 +325,15 @@ fn read_scene_node_param(
             let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
             match node.params.get(&addr.param_id) {
                 Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => Some(*value),
+                // Enum/Int/Bool params (light `shadow_softness` is `Enum`)
+                // still write as Float through `SetGraphNodeParamCommand` —
+                // the primitives read both shapes (`ParamValue::Enum` or
+                // `Float`, see the light primitive's `softness_idx` match) —
+                // so the read half coerces them to f32 too. Without this the
+                // old==new gate saw `None` and every enum row write no-op'd.
+                Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => Some(*value as f32),
+                Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => Some(*value as f32),
+                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => Some(*value as u8 as f32),
                 _ => None,
             }
         })
@@ -1378,7 +1395,17 @@ pub(super) fn dispatch_inspector(
             if let Some((addr, target, catalog_default)) = resolve_scene_write(
                 ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
             ) {
-                let old_val = read_scene_node_param(project, &target, &addr);
+                // `read_scene_node_param` only sees STORED params — a def
+                // node omits keys still at their declared default (an
+                // untouched light has no `shadow_softness` key at all), so
+                // fall back to the panel's displayed snapshot from the id
+                // map, which resolves declared defaults (same source
+                // `ParamSnapshot` uses for the drag trio).
+                let snap = ui
+                    .scene_setup_panel
+                    .resolve_scene_param(param_id)
+                    .map(|(_, v)| v);
+                let old_val = read_scene_node_param(project, &target, &addr).or(snap);
                 if let Some(old_val) = old_val
                     && (old_val - *new_val).abs() > f32::EPSILON
                 {

@@ -116,7 +116,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.fog.density_value"
+          "name": "scene_setup.fog.density_track"
         }
       },
       "gesture": {
