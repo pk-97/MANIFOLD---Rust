@@ -1732,6 +1732,7 @@ impl UIRoot {
         self.layer_headers.register_intents(&mut self.intents);
         self.inspector.register_intents(&mut self.intents);
         self.viewport.register_intents(&mut self.intents);
+        self.scene_setup_panel.register_intents(&mut self.intents);
     }
 
     /// Resolve a discrete-gesture event through node-intent dispatch. Returns

@@ -1,6 +1,6 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
-**Status:** SHIPPED UX-P1..P3b-i 2026-07-17 (`76251784`) — D2/D3's bespoke-row rendering and the UX-P3b-ii fork are SUPERSEDED by docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md (Peter, same day: use the real card widgets/interaction models, not lookalikes; scrub undo = one unit per gesture). The exposure mechanism (D8) and selection fix (D1) stand. · 2026-07-17 · Fable
+**Status:** SHIPPED UX-P1..P3b-i 2026-07-17 (`76251784`) — D2/D3's bespoke-row rendering and the UX-P3b-ii fork are SUPERSEDED by docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md (Peter, same day: use the real card widgets/interaction models, not lookalikes; scrub undo = one unit per gesture). The exposure mechanism (D8) and selection fix (D1) stand. **2026-07-18 amendment:** the D8/D9 exposure "∿" button COLUMN is REMOVED (Peter's call) — BUG-249's expose-then-arm made it redundant (arming any D/E/A button materializes the exposure itself); the exposure MECHANISM (`SceneSetupExposeParam` handler + the arm funnel) stands, only the dedicated per-row button and its flow scripts (`scene-panel-ux-p3a-expose-modulate.json`, `scene-panel-ux-p3b-i-expose-light.json`) are gone. · 2026-07-17 · Fable
 **Prerequisites:** SCENE_OBJECT_AND_PANEL_V2 (SHIPPED `e78d97d2`). Independent of REALTIME_3D P5/P6 (viewport/gizmos) — the two land in the same wave but share no code seam.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md §5–§6 before starting any phase.
 
