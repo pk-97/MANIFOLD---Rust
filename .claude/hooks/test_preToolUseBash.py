@@ -296,6 +296,29 @@ def test_worktree_read_and_remove_unaffected():
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
 
 
+def test_cc_fleet_lane_workflow_preapproved():
+    # K3 lane workflow (2026-07-18 routing directive): spawn/poll auto-allow.
+    check(
+        "cc-fleet subagent spawn is pre-approved",
+        hook.is_preapproved_command(
+            "cc-fleet subagent kimi-code --prompt-file /tmp/b.md --background"
+        ),
+    )
+    check(
+        "ccf alias + status polling is pre-approved",
+        hook.is_preapproved_command("ccf subagent-status abc123"),
+    )
+    # Provider mutation and key material still prompt.
+    check(
+        "cc-fleet add is NOT pre-approved",
+        not hook.is_preapproved_command("cc-fleet add evil --api-key-stdin"),
+    )
+    check(
+        "cc-fleet keyget is NOT pre-approved",
+        not hook.is_preapproved_command("cc-fleet keyget kimi-code"),
+    )
+
+
 def test_pipe_deny_active_in_default_mode():
     check("pipey test cmd is not pre-approved", not hook.is_preapproved_command(PIPEY_CMD))
     out = run_hook_main({
@@ -478,6 +501,7 @@ def main():
     test_merge_while_on_main_reminds()
     test_merge_while_on_other_branch_unaffected()
     test_bare_push_on_main_branch_reminds()
+    test_cc_fleet_lane_workflow_preapproved()
     test_pipe_deny_active_in_default_mode()
     test_pipe_deny_skipped_in_auto_mode()
     test_pipe_deny_active_when_mode_missing()

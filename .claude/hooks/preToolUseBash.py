@@ -121,6 +121,19 @@ CARGO_READ_SUB = {
     "metadata", "tree", "verify-project", "locate-project", "pkgid",
 }
 
+# cc-fleet subcommands safe to auto-allow: read-only inspection plus the
+# durably-authorized K3 lane workflow (spawning/polling headless subagents —
+# Peter's 2026-07-18 routing directive, approved in-session: K3-low via the
+# `kimi-code` provider is the default lane agent, and prompt friction
+# defeats the policy; spend is bounded by the Kimi membership plan).
+# Provider mutation (add/edit/remove/import/default), key material (keyget),
+# interactive/tmux modes (run/spawn/teardown/hide/show), and
+# uninstall/update deliberately still prompt.
+CC_FLEET_SUB = {
+    "list", "models", "doctor", "ps", "subagent", "subagent-status",
+    "subagent-gc", "refresh", "help", "completion",
+}
+
 # Shell keywords. `for`/`select`/`case`/`in`/`function` introduce a data
 # list rather than a command, so a segment beginning with one of those is
 # pre-approved. The rest are stripped from the left of a segment until a
@@ -330,6 +343,10 @@ def segment_is_allowed(seg: str) -> bool:
             i += 1
         sub = toks[i] if i < len(toks) else ""
         return sub in CARGO_READ_SUB
+
+    if head in ("cc-fleet", "ccf"):
+        sub = next((t for t in toks[1:] if not t.startswith("-")), "")
+        return sub in CC_FLEET_SUB
 
     if head == "sed":
         # `-i` / `--in-place` edits the file. Reject any short-flag cluster
