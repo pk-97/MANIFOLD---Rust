@@ -517,6 +517,12 @@ impl GeneratorRenderer {
         dt: f32,
         layers: &[Layer],
         data_version: u64,
+        // Layer indices to skip rendering entirely this frame: hidden behind a
+        // full-opacity Opaque layer and safe to not render (content pipeline's
+        // `compute_render_skip_indices`). Their generators don't dispatch and
+        // their sim state simply pauses — safe because the occluder gate lets
+        // them resume before they can be seen again. Empty = render everything.
+        render_skip: &[i32],
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
@@ -672,6 +678,13 @@ impl GeneratorRenderer {
                 self.render_info_scratch[clip_idx];
             if layer_index < 0 {
                 continue; // sentinel — clip not found
+            }
+            // Render-skip: this layer is hidden behind a full-opacity Opaque
+            // layer and safe to not render at all. Skip the generator dispatch
+            // — its render target keeps its last frame (never blended while
+            // occluded) and its sim state pauses until the layer is revealed.
+            if render_skip.contains(&layer_index) {
+                continue;
             }
 
             // Skip-mode (parity with the effect chain's `is_skipped_for`): a
