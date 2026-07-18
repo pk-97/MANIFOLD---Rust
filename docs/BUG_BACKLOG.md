@@ -205,34 +205,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** root fix, not per-action patching: scene-row modulation must target a param the runtime can resolve. Either (a) route ALL card-shaped actions through the scene id_map and store scene-row modulation against the real inner-node address (needs a driver/envelope/audio-mod runtime that can write `RowAddr`-shaped targets — the same write path `SetGraphNodeParamCommand` uses), or (b) make arming a scene row's modulation first materialize a REAL exposed instance param bound to the inner node (the existing `SceneSetupExposeParam` mechanism) and hang the driver off that. (b) reuses the entire existing modulation runtime unchanged and is the shape the design's "same widgets, same systems" directive implies. Blocked-on-nothing; needs a design call on (a) vs (b).
 
-### BUG-250 (scene-panel-enum-value-cells-dead-after-convergence-removed-enum-click-path) — enum rows lost their click interaction in C-P1c/d — found 2026-07-18, same audit
-
-**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`311bfb2a` + `d28bfff4`) — enum click dispatch restored; follow-up root fixes: value_text INTERACTIVE flag, scene writes target panel's own layer, enum/int/bool reads. 15/16 scene flows green; `scene-setup-empty-states.json` stale (PLASMA/NOISE FIELD layers not in gltfscene fixture) — retarget or retire.
-
-**Symptom:** clicking the value cell of any enum row (Light's Cast Shadows On/Off, Shadow Softness Hard/Soft/VerySoft/Contact, Light Mode, Modifier Axis X/Y/Z) dispatches no action and changes nothing — verified headless: a name-targeted click on `scene_setup.light.cast_shadows_value` emits zero PanelActions. The only way to change an enum is to drag the row's slider track.
-
-**Root cause:** the P4/D9 mechanism for enum interaction was `PanelAction::SceneSetupEnumClicked` (click value → dropdown/cycle). C-P1c/d moved enum rows onto the card core's `value_labels` path and deleted every `SceneSetupEnumClicked` producer — the landing report flags the variant as "dead weight" cleanup, not realizing the producers WERE the interaction. `value_labels` in the shared card core is display-only (`format_param_value`, `param_slider_shared.rs:838`); `match_param_row_click` has no variant for a value-cell click, and the card's type-in path explicitly excludes `value_labels` params (`param_card.rs:1085`). So the regression is inherent to the conversion, not a wiring miss.
-
-**Fix shape:** give the shared card core a real enum-cell interaction (click cycles a 2-state, 3+ opens the dropdown — the behavior SCENE_OBJECT_AND_PANEL_V2 D9 committed to), emitting through the existing ParamSnapshot/Changed/Commit trio so the scene id_map interception and undo granularity come free — and so the inspector card's own `value_labels` params gain the same affordance. Do NOT resurrect `SceneSetupEnumClicked` (bespoke, panel-only — the convergence was right to kill it, wrong to replace it with nothing).
-
-### BUG-251 (scene-and-audio-dock-scroll-inverted-vs-every-other-surface) — both docks negate the shared wheel delta — found 2026-07-18, same audit
-
-**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`ea812c24`).
-
-**Symptom:** mouse-wheel/trackpad scroll in the Scene Setup and Audio Setup docks moves content in the opposite direction from the inspector, browser, and every other scrolling surface.
-
-**Root cause:** `window_input.rs` hands the same normalized `dy` to every consumer. Inspector: `apply_scroll_delta(delta)` (inspector.rs:953). Scene dock: `handle_scroll` negates — `apply_scroll_delta(-delta)` (`scene_setup_panel.rs:3863`); `audio_setup_panel.rs:567` has the identical negation (BUG-199's fix apparently copied the wrong sign convention and the scene panel copied the audio panel).
-
-**Fix shape:** drop both negations; add a shared-direction assertion or a flow that scrolls two surfaces and compares offsets so a third panel can't re-introduce it.
-
-### BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale-outliner-assert) — most scene-panel flow coverage silently never ran at the convergence landing — found 2026-07-18, same audit
-
-**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`f101a585` + flow retargets in `d28bfff4`); `scene-setup-empty-states.json` remains stale (wrong fixture).
-
-**Symptom:** 8 of the 21 scene flow scripts (`add-fog-drag`, `eye-toggle`, `fog-undo-removes-fog`, `heldout-merge-snapshot`, `light-cast-shadows-toggle`, `light-intensity-drag`, `numeric-typein-box`, `shadow-softness-dropdown`) fail at step 2 on `Assert Query(text="Outliner")` — the header was renamed "Objects" — so every later step (the actual button under test) never executes. The landing fixed the three scripts in its own gate list and left the rest dead. `scene-setup-empty-states.json` is additionally broken at step 0 (expects a "PLASMA" layer the `gltfscene` fixture doesn't have). With the assert patched, `eye-toggle` (9/9), `fog-undo` (17/17), `numeric-typein-box` (8/8), `heldout-merge` (3/3) pass; `cast-shadows-toggle` and `shadow-softness-dropdown` fail for the real reason (BUG-250); `add-fog-drag`/`light-intensity-drag` fail only their final displayed-value assert (BUG-239 class, dispatch verified). BUG-240 (scrub-fine) is one instance of this same rot, already logged.
-
-**Fix shape:** sweep all scene flows to the "Objects" header + a fixture that satisfies empty-states; then a meta-gate: a landing that claims flow re-verification must run EVERY `scene-*` flow, or a nightly/pre-landing runner that executes the whole `scripts/ui-flows/` directory and fails on any script that can no longer reach its last step.
-
 ### BUG-248 (gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers) — GUI FPS degradation reported after importing/deleting heavy STATIC (non-animated) glb layers; headless import render is clean — found 2026-07-18 during GLTF_ANIM_RUNTIME_V2_DESIGN.md P4 acceptance
 
 **Status:** OPEN — symptom reported by Peter with `apricot_blossom_cluster_lod.glb`. Root cause unknown.
@@ -450,26 +422,6 @@ Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF r
 **Root cause:** deliberate BUG-181 contract — non-Lerp `node.mix` modes are RGB-only and pass `a`'s alpha through so an AO map's alpha=1 can't overwrite a display chain's real alpha. Correct for masks; for feedback accumulation it means the blend's alpha never widens to cover the trail RGB it just wrote.
 
 **Fix shape:** don't revert BUG-181. D7's cheap fix (the `set_alpha`-before-blend idiom, documented in `node.mix`'s and `node.feedback`'s `composition_notes` @ f2684402) is shipped and is the current answer for anyone who hits this. Still open/undecided: an explicit `alpha` mode enum on `node.mix` (PassA / Lerp / Max) so accumulation graphs can opt into alpha-max without the extra `set_alpha` node — Peter's call, no consumer has asked for it since the idiom shipped.
-
-### BUG-214 (ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist) — `EXT_mesh_gpu_instancing` is fully implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
-
-**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
-
-**Symptom (would-be):** an asset that lists `EXT_mesh_gpu_instancing` under `extensionsRequired` (spec-legal — an exporter may mark it required when the asset's geometry depends on the instance transforms to exist at all) is rejected at import with "unsupported extension (MANIFOLD does not import this extension)" — even though MANIFOLD fully parses and renders this extension (`gltf_load.rs:278-394`, instance transform composition via `mat4_mul`, non-`F32` accessor and sparse-accessor guards, buffer-bounds checks).
-
-**Root cause:** `MANIFOLD_SUPPORTED_EXTENSIONS` (`gltf_load.rs:34-53`) is the allowlist the `extensionsRequired` veto (`gltf_load.rs:110-116`) checks membership against. It was populated from the crate's typed-feature list plus the raw-JSON-sniffed material extensions (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E1-E6); `EXT_mesh_gpu_instancing` support landed separately (`GLB_XFAIL_BURNDOWN_DESIGN.md` D6, BUG-168) and was never added to this array, since none of that work's own fixtures marked it `extensionsRequired`.
-
-**Fix shape:** add `"EXT_mesh_gpu_instancing"` to `MANIFOLD_SUPPORTED_EXTENSIONS`. One-line, no behavior change for any asset that doesn't mark it required (the extension is already read via `node.extension_value(...)` regardless of the required-list check). Verify with a fixture that lists it under `extensionsRequired` rather than only `extensionsUsed` (the local `SimpleInstancing.glb` and hostile-shelf instancing fixtures use the looser `extensionsUsed` form and don't currently exercise this path).
-
-### BUG-213 (no-report-line-for-unimplemented-optional-material-extensions) — MANIFOLD never reads `document.extensions_used()`, so any unimplemented *optional* extension silently degrades with no report line — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
-
-**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
-
-**Symptom:** an asset carrying `KHR_materials_diffuse_transmission` (4 Khronos assets: `DiffuseTransmissionPlant/Teacup/Test.glb`, `ScatteringSkull.glb`, currently `xfail:diffuse-transmission-deferred`) imports and renders as a plain opaque material — correct in that nothing crashes or looks broken, but the user gets no indication the translucency effect they authored is missing. The same silent-degrade will recur for any future ratified extension MANIFOLD doesn't implement yet, since nothing currently detects it.
-
-**Root cause:** `document.extensions_used()` — the glTF field listing every *optional* extension an asset carries (as opposed to `extensionsRequired`, which lists only the ones the asset cannot render correctly without) — has zero call sites anywhere in `crates/manifold-renderer/src/node_graph/`. The only unsupported-extension detection MANIFOLD has is the `extensionsRequired` veto (`gltf_load.rs:110-116`), which by spec definition never fires for optional extensions. `ImportReport::report_lines` (`gltf_import.rs:93`, fed today only by the animation-drop paths in `gltf_load.rs`) is the existing channel this should feed into.
-
-**Fix shape:** after import, diff `document.extensions_used()` against a `MANIFOLD_RECOGNIZED_EXTENSIONS` set (the union of `MANIFOLD_SUPPORTED_EXTENSIONS` plus every raw-JSON-sniffed extension read without a required-list entry, e.g. `EXT_mesh_gpu_instancing` — see BUG-214) and push one `report_lines` entry per unrecognized name. This is a one-time generic fix that retroactively covers `KHR_materials_diffuse_transmission` and every future gap, rather than a one-off patch per extension — see `docs/GLTF_EXTENSION_ROADMAP.md` for the full writeup (this is that doc's top-ranked finding). The full `KHR_materials_diffuse_transmission` BTDF lobe itself (as opposed to just naming its absence) is separate, lower-priority follow-on work — not required to close this entry.
 
 ### BUG-209 (animated-ancestor-above-joint-tree-sampled-statically) — root motion authored on a node above a skin's joint tree is frozen — promoted from BUG-205's "known remaining approximation" note, 2026-07-17
 
@@ -1362,6 +1314,54 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+
+### BUG-250 (scene-panel-enum-value-cells-dead-after-convergence-removed-enum-click-path) — enum rows lost their click interaction in C-P1c/d — found 2026-07-18, same audit
+
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`311bfb2a` + `d28bfff4`) — enum click dispatch restored; follow-up root fixes: value_text INTERACTIVE flag, scene writes target panel's own layer, enum/int/bool reads. 15/16 scene flows green; `scene-setup-empty-states.json` stale (PLASMA/NOISE FIELD layers not in gltfscene fixture) — retarget or retire.
+
+**Symptom:** clicking the value cell of any enum row (Light's Cast Shadows On/Off, Shadow Softness Hard/Soft/VerySoft/Contact, Light Mode, Modifier Axis X/Y/Z) dispatches no action and changes nothing — verified headless: a name-targeted click on `scene_setup.light.cast_shadows_value` emits zero PanelActions. The only way to change an enum is to drag the row's slider track.
+
+**Root cause:** the P4/D9 mechanism for enum interaction was `PanelAction::SceneSetupEnumClicked` (click value → dropdown/cycle). C-P1c/d moved enum rows onto the card core's `value_labels` path and deleted every `SceneSetupEnumClicked` producer — the landing report flags the variant as "dead weight" cleanup, not realizing the producers WERE the interaction. `value_labels` in the shared card core is display-only (`format_param_value`, `param_slider_shared.rs:838`); `match_param_row_click` has no variant for a value-cell click, and the card's type-in path explicitly excludes `value_labels` params (`param_card.rs:1085`). So the regression is inherent to the conversion, not a wiring miss.
+
+**Fix shape:** give the shared card core a real enum-cell interaction (click cycles a 2-state, 3+ opens the dropdown — the behavior SCENE_OBJECT_AND_PANEL_V2 D9 committed to), emitting through the existing ParamSnapshot/Changed/Commit trio so the scene id_map interception and undo granularity come free — and so the inspector card's own `value_labels` params gain the same affordance. Do NOT resurrect `SceneSetupEnumClicked` (bespoke, panel-only — the convergence was right to kill it, wrong to replace it with nothing).
+
+### BUG-251 (scene-and-audio-dock-scroll-inverted-vs-every-other-surface) — both docks negate the shared wheel delta — found 2026-07-18, same audit
+
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`ea812c24`).
+
+**Symptom:** mouse-wheel/trackpad scroll in the Scene Setup and Audio Setup docks moves content in the opposite direction from the inspector, browser, and every other scrolling surface.
+
+**Root cause:** `window_input.rs` hands the same normalized `dy` to every consumer. Inspector: `apply_scroll_delta(delta)` (inspector.rs:953). Scene dock: `handle_scroll` negates — `apply_scroll_delta(-delta)` (`scene_setup_panel.rs:3863`); `audio_setup_panel.rs:567` has the identical negation (BUG-199's fix apparently copied the wrong sign convention and the scene panel copied the audio panel).
+
+**Fix shape:** drop both negations; add a shared-direction assertion or a flow that scrolls two surfaces and compares offsets so a third panel can't re-introduce it.
+
+### BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale-outliner-assert) — most scene-panel flow coverage silently never ran at the convergence landing — found 2026-07-18, same audit
+
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`f101a585` + flow retargets in `d28bfff4`); `scene-setup-empty-states.json` remains stale (wrong fixture).
+
+**Symptom:** 8 of the 21 scene flow scripts (`add-fog-drag`, `eye-toggle`, `fog-undo-removes-fog`, `heldout-merge-snapshot`, `light-cast-shadows-toggle`, `light-intensity-drag`, `numeric-typein-box`, `shadow-softness-dropdown`) fail at step 2 on `Assert Query(text="Outliner")` — the header was renamed "Objects" — so every later step (the actual button under test) never executes. The landing fixed the three scripts in its own gate list and left the rest dead. `scene-setup-empty-states.json` is additionally broken at step 0 (expects a "PLASMA" layer the `gltfscene` fixture doesn't have). With the assert patched, `eye-toggle` (9/9), `fog-undo` (17/17), `numeric-typein-box` (8/8), `heldout-merge` (3/3) pass; `cast-shadows-toggle` and `shadow-softness-dropdown` fail for the real reason (BUG-250); `add-fog-drag`/`light-intensity-drag` fail only their final displayed-value assert (BUG-239 class, dispatch verified). BUG-240 (scrub-fine) is one instance of this same rot, already logged.
+
+**Fix shape:** sweep all scene flows to the "Objects" header + a fixture that satisfies empty-states; then a meta-gate: a landing that claims flow re-verification must run EVERY `scene-*` flow, or a nightly/pre-landing runner that executes the whole `scripts/ui-flows/` directory and fails on any script that can no longer reach its last step.
+
+### BUG-214 (ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist) — `EXT_mesh_gpu_instancing` is fully implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
+
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
+
+**Symptom (would-be):** an asset that lists `EXT_mesh_gpu_instancing` under `extensionsRequired` (spec-legal — an exporter may mark it required when the asset's geometry depends on the instance transforms to exist at all) is rejected at import with "unsupported extension (MANIFOLD does not import this extension)" — even though MANIFOLD fully parses and renders this extension (`gltf_load.rs:278-394`, instance transform composition via `mat4_mul`, non-`F32` accessor and sparse-accessor guards, buffer-bounds checks).
+
+**Root cause:** `MANIFOLD_SUPPORTED_EXTENSIONS` (`gltf_load.rs:34-53`) is the allowlist the `extensionsRequired` veto (`gltf_load.rs:110-116`) checks membership against. It was populated from the crate's typed-feature list plus the raw-JSON-sniffed material extensions (`GLTF_MATERIAL_EXTENSIONS_DESIGN.md` E1-E6); `EXT_mesh_gpu_instancing` support landed separately (`GLB_XFAIL_BURNDOWN_DESIGN.md` D6, BUG-168) and was never added to this array, since none of that work's own fixtures marked it `extensionsRequired`.
+
+**Fix shape:** add `"EXT_mesh_gpu_instancing"` to `MANIFOLD_SUPPORTED_EXTENSIONS`. One-line, no behavior change for any asset that doesn't mark it required (the extension is already read via `node.extension_value(...)` regardless of the required-list check). Verify with a fixture that lists it under `extensionsRequired` rather than only `extensionsUsed` (the local `SimpleInstancing.glb` and hostile-shelf instancing fixtures use the looser `extensionsUsed` form and don't currently exercise this path).
+
+### BUG-213 (no-report-line-for-unimplemented-optional-material-extensions) — MANIFOLD never reads `document.extensions_used()`, so any unimplemented *optional* extension silently degrades with no report line — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
+
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
+
+**Symptom:** an asset carrying `KHR_materials_diffuse_transmission` (4 Khronos assets: `DiffuseTransmissionPlant/Teacup/Test.glb`, `ScatteringSkull.glb`, currently `xfail:diffuse-transmission-deferred`) imports and renders as a plain opaque material — correct in that nothing crashes or looks broken, but the user gets no indication the translucency effect they authored is missing. The same silent-degrade will recur for any future ratified extension MANIFOLD doesn't implement yet, since nothing currently detects it.
+
+**Root cause:** `document.extensions_used()` — the glTF field listing every *optional* extension an asset carries (as opposed to `extensionsRequired`, which lists only the ones the asset cannot render correctly without) — has zero call sites anywhere in `crates/manifold-renderer/src/node_graph/`. The only unsupported-extension detection MANIFOLD has is the `extensionsRequired` veto (`gltf_load.rs:110-116`), which by spec definition never fires for optional extensions. `ImportReport::report_lines` (`gltf_import.rs:93`, fed today only by the animation-drop paths in `gltf_load.rs`) is the existing channel this should feed into.
+
+**Fix shape:** after import, diff `document.extensions_used()` against a `MANIFOLD_RECOGNIZED_EXTENSIONS` set (the union of `MANIFOLD_SUPPORTED_EXTENSIONS` plus every raw-JSON-sniffed extension read without a required-list entry, e.g. `EXT_mesh_gpu_instancing` — see BUG-214) and push one `report_lines` entry per unrecognized name. This is a one-time generic fix that retroactively covers `KHR_materials_diffuse_transmission` and every future gap, rather than a one-off patch per extension — see `docs/GLTF_EXTENSION_ROADMAP.md` for the full writeup (this is that doc's top-ranked finding). The full `KHR_materials_diffuse_transmission` BTDF lobe itself (as opposed to just naming its absence) is separate, lower-priority follow-on work — not required to close this entry.
 
 ### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
 
