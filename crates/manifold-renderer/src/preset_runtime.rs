@@ -50,7 +50,7 @@
 use ahash::AHashMap;
 use manifold_core::PresetTypeId;
 use manifold_core::NodeId;
-use manifold_core::effects::{EffectGroup, PresetInstance};
+use manifold_core::effects::{EffectGroup, PresetInstance, RelightField, RelightParams};
 use manifold_core::id::{EffectGroupId, EffectId};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 
@@ -568,6 +568,25 @@ fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
     errors.push(err);
 }
 
+/// One live D3 relight knob mapped to a runtime node param (unfused template
+/// node) or a fused kernel uniform field. Built at chain-graph construction
+/// and applied every frame so float-knob edits never need a structural
+/// rebuild (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7).
+#[derive(Clone, Debug)]
+struct RelightParamWrite {
+    field: RelightField,
+    target_inst: NodeInstanceId,
+    target_param: String,
+    scale: f32,
+}
+
+impl RelightParamWrite {
+    fn apply(&self, graph: &mut Graph, params: &RelightParams) {
+        let value = self.field.get(params) * self.scale;
+        let _ = graph.set_param(self.target_inst, &self.target_param, ParamValue::Float(value));
+    }
+}
+
 struct EffectSlot {
     effect_id: EffectId,
     effect_type: PresetTypeId,
@@ -677,6 +696,87 @@ struct EffectSlot {
     /// the right namespace for BOTH a surviving node (via `node_map`) and a
     /// fused-away one (via `fused_retarget`) — BUG-111.
     card_prefix: String,
+    /// Live D3 relight knob → runtime param/uniform-field writes, applied
+    /// every frame when the card's toggle is on. Empty when relight is off.
+    relight_writes: Vec<RelightParamWrite>,
+}
+
+impl EffectSlot {
+    /// Push the live relight knob values into the spliced graph. No-op if the
+    /// card had relight off at build time (the template was never spliced).
+    fn apply_relight_params(&self, graph: &mut Graph, params: &RelightParams) {
+        for w in &self.relight_writes {
+            w.apply(graph, params);
+        }
+    }
+}
+
+/// Build the per-frame relight write list for one card/segment-member.
+/// `fused_retarget` is the fused view's retarget map (single-card:
+/// `LoadedPresetView::fused_retarget`; segment: `SegmentView::retarget`).
+fn build_relight_writes(
+    relight: bool,
+    handles: &[(std::borrow::Cow<'static, str>, NodeInstanceId)],
+    node_map: &[(NodeId, NodeInstanceId)],
+    fused_retarget: &AHashMap<(String, String), (NodeId, String)>,
+    card_prefix: &str,
+) -> Vec<RelightParamWrite> {
+    if !relight {
+        return Vec::new();
+    }
+    let mut writes = Vec::new();
+    for field in RelightField::ALL {
+        for target in crate::node_graph::relight::relight_field_targets(*field) {
+            let handle = format!("{card_prefix}{}", target.node_handle);
+            let param = target.param_name;
+            if let Some((fused_node_id, fused_field)) =
+                fused_retarget.get(&(handle.clone(), param.to_string()))
+            {
+                if let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == fused_node_id) {
+                    writes.push(RelightParamWrite {
+                        field: *field,
+                        target_inst: *inst,
+                        target_param: fused_field.clone(),
+                        scale: target.scale,
+                    });
+                }
+            } else if let Some((_, inst)) = handles.iter().find(|(h, _)| h == &handle) {
+                writes.push(RelightParamWrite {
+                    field: *field,
+                    target_inst: *inst,
+                    target_param: param.to_string(),
+                    scale: target.scale,
+                });
+            }
+        }
+    }
+    writes
+}
+
+/// Build the `(def, view)` slice for a fused segment, augmenting relight-on
+/// members with DEFAULT knob values so the segment content key (and fused
+/// WGSL) is knob-invariant.
+fn build_segment_cards(
+    fuse_idxs: &[usize],
+    active_effects: &[(usize, &PresetInstance)],
+    primitives: &PrimitiveRegistry,
+) -> Vec<(EffectGraphDef, &'static LoadedPresetView)> {
+    let mut cards = Vec::with_capacity(fuse_idxs.len());
+    for &k in fuse_idxs {
+        let fx = active_effects[k].1;
+        let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
+        let def = if fx.relight {
+            crate::node_graph::relight::relight_augment(
+                fx.graph.as_ref().unwrap_or(&view.canonical_def),
+                primitives,
+                &RelightParams::default(),
+            )
+        } else {
+            fx.graph.as_ref().unwrap_or(&view.canonical_def).clone()
+        };
+        cards.push((def, view));
+    }
+    cards
 }
 
 /// The active (enabled, group-enabled) effects of a chain, with their original
@@ -724,17 +824,6 @@ fn classify_segment_member(
     primitives: &PrimitiveRegistry,
 ) -> SegmentMember {
     if preview_effect == Some(&fx.id) || fx.group_id.is_some() {
-        return SegmentMember::Boundary;
-    }
-    // `docs/DEPTH_RELIGHT_DESIGN.md` P5: relight augmentation is per-def
-    // (`splice_def_into_chain`'s `relight` argument is a single def's
-    // `RelightParams`), and a fused segment's compiled `view.def` already
-    // folds multiple cards' shapes into one kernel — there's no per-member
-    // slot to splice a second card's template into. A relight-on card stays
-    // a segment `Boundary` so it renders through the ordinary per-card path
-    // (where relight is fully wired) instead of silently losing its toggle
-    // inside a fused run.
-    if fx.relight {
         return SegmentMember::Boundary;
     }
     let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
@@ -805,15 +894,7 @@ pub fn prewarm_chain_segments(
         }
         let (j, fuse_idxs) = segment_run(&members, i);
         if fuse_idxs.len() >= 2 {
-            let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = fuse_idxs
-                .iter()
-                .map(|&k| {
-                    let fx = active[k].1;
-                    let view = loaded_preset_view_by_id(fx.effect_type())
-                        .expect("eligibility implies view");
-                    (fx.graph.as_ref().unwrap_or(&view.canonical_def), view)
-                })
-                .collect();
+            let cards = build_segment_cards(&fuse_idxs, &active, primitives);
             let _ = freeze_install::fused_segment_view_for(&cards);
         }
         i = j.max(i + 1);
@@ -1046,15 +1127,9 @@ impl PresetRuntime {
                     i = j;
                     continue;
                 }
-                let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = fuse_idxs
-                    .iter()
-                    .map(|&k| {
-                        let fx = active_effects[k].1;
-                        let view = loaded_preset_view_by_id(fx.effect_type())
-                            .expect("eligibility implies view");
-                        (fx.graph.as_ref().unwrap_or(&view.canonical_def), view)
-                    })
-                    .collect();
+                let cards = build_segment_cards(
+                    &fuse_idxs, &active_effects, primitives,
+                );
                 match freeze_install::fused_segment_view_for(&cards) {
                     freeze_install::SegmentLookup::Ready(view) => {
                         // Skipped (transparent) cards inside the run splice
@@ -1207,6 +1282,13 @@ impl PresetRuntime {
                                 .filter(|(name, _)| name.starts_with(prefix.as_str()))
                                 .cloned()
                                 .collect();
+                        let relight_writes = build_relight_writes(
+                            fx.relight,
+                            &card_handles,
+                            &node_map,
+                            &bound.fused_retarget,
+                            &prefix,
+                        );
                         effect_nodes.push(EffectSlot {
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
@@ -1221,6 +1303,7 @@ impl PresetRuntime {
                             def_content_key: 0,
                             generator_input_node,
                             card_prefix: prefix.clone(),
+                            relight_writes,
                         });
                     }
                     prev_node = output.0;
@@ -1310,19 +1393,29 @@ impl PresetRuntime {
             // identical. `fused_view_for` returns `None` for any shape with no
             // fusable region (or a binding that would strand) → renders unfused.
             let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
-            // `docs/DEPTH_RELIGHT_DESIGN.md` P5: a relight-on card is never
-            // fused — `fused_view_for` compiles `effective_def` down to one
-            // opaque kernel with no notion of `relight_augment`'s template,
-            // so fusing would silently drop the "3D Shading" toggle instead
-            // of rendering it. Same veto as the segment path
-            // (`classify_segment_member`) at single-card granularity.
+            // D8/P7: relight now fuses. Augment with DEFAULT knob values before
+            // the fusion compiler so the fused-view cache key (and generated
+            // WGSL) is knob-invariant; the live values are written per-frame
+            // via `EffectSlot::relight_writes`. `height_from` changes template
+            // topology, so it legitimately recompiles — it is not folded into
+            // the default-augmented key.
+            let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight {
+                std::borrow::Cow::Owned(crate::node_graph::relight::relight_augment(
+                    effective_def,
+                    primitives,
+                    &RelightParams::default(),
+                ))
+            } else {
+                std::borrow::Cow::Borrowed(effective_def)
+            };
             let fused_view: Option<std::sync::Arc<LoadedPresetView>> =
-                if !fx.relight
-                    && crate::node_graph::freeze::install::should_render_fused(
-                        preview_effect == Some(&fx.id),
+                if crate::node_graph::freeze::install::should_render_fused(
+                    preview_effect == Some(&fx.id),
+                ) {
+                    crate::node_graph::freeze::install::fused_view_for(
+                        &effective_def_for_fusion,
+                        base_view,
                     )
-                {
-                    crate::node_graph::freeze::install::fused_view_for(effective_def, base_view)
                 } else {
                     None
                 };
@@ -1344,8 +1437,9 @@ impl PresetRuntime {
                 continue;
             }
             // The def actually spliced into the chain:
-            //   - fused  → the fused def (it already folds the effective shape's
-            //              content, canonical or edited, into one kernel);
+            //   - fused  → the fused def (already contains the relight template
+            //              with default params if the toggle is on; live values
+            //              are pushed per-frame via `relight_writes`);
             //   - else, an edited override → the user's wiring, materialized
             //              directly (the watched / non-fusable case);
             //   - else   → the canonical preset.
@@ -1359,17 +1453,14 @@ impl PresetRuntime {
             } else {
                 &view.canonical_def
             };
-            // The "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` P5):
-            // relight-on cards are excluded from fusion eligibility above
-            // (`classify_segment_member`) and from the single-card fusion
-            // gate too — a relight-on card is never `fused_view.is_some()`
-            // here in practice since fusion itself doesn't special-case
-            // relight, but keeping the toggle live on the unfused splice
-            // path is the one that matters: the template needs to see (and
-            // rebuild against) the actual node graph, not a fused kernel
-            // that doesn't know about `rl_` nodes.
-            let relight_params =
-                fx.relight.then_some(&fx.relight_params);
+            // D8/P7: when the card is fused, the relight template is already
+            // folded into `splice_def`; do NOT re-augment. On the unfused path
+            // the template is spliced here with the live knob values.
+            let relight_params = if fused_view.is_some() {
+                None
+            } else {
+                fx.relight.then_some(&fx.relight_params)
+            };
             let splice_result = match splice_def_into_chain(
                 &mut graph,
                 (prev_node, prev_out_port),
@@ -1590,6 +1681,13 @@ impl PresetRuntime {
             // The user tail lives in the graph now, so its rebuild signal
             // is the graph version (a binding add/remove/reshape bumps it).
             let user_bindings_version = fx.graph_version;
+            let relight_writes = build_relight_writes(
+                fx.relight,
+                &handles,
+                &node_map,
+                &bound.fused_retarget,
+                "",
+            );
             effect_nodes.push(EffectSlot {
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
@@ -1606,6 +1704,7 @@ impl PresetRuntime {
                 ),
                 generator_input_node: generator_input_id,
                 card_prefix: String::new(),
+                relight_writes,
             });
             prev_node = output.0;
             prev_out_port = output.1;
@@ -2114,6 +2213,12 @@ impl PresetRuntime {
                 slot.bound.cache.clear_tail(n_static);
             }
             slot.bound.apply(&mut self.graph, &fx.params);
+            // Push the "3D Shading" D3 relight knobs into the spliced graph
+            // every frame. Float-knob edits are no longer structural (D8/P7),
+            // so the chain doesn't rebuild on a drag; these writes keep the
+            // live values reaching the template nodes (unfused) or the fused
+            // kernel's uniform fields (fused).
+            slot.apply_relight_params(&mut self.graph, &fx.relight_params);
             // If the preset includes a `system.generator_input` node,
             // push every frame-context scalar (time / beat / aspect /
             // output dims / trigger_count / anim_progress) into its
@@ -2874,6 +2979,7 @@ impl PresetRuntime {
             def_content_key: 0,
             generator_input_node: Some(generator_input_id),
             card_prefix: String::new(),
+            relight_writes: Vec::new(),
         };
 
         let mut g = Self {
@@ -3234,6 +3340,16 @@ impl PresetRuntime {
         ctx.anim_progress
     }
 
+    /// Push live "3D Shading" D3 relight knob values into the generator's
+    /// spliced graph. Called by `GeneratorRenderer` every frame before
+    /// `render` so float-knob edits never need a structural rebuild
+    /// (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7).
+    pub fn set_relight_params(&mut self, params: &RelightParams) {
+        if let Some(slot) = self.effect_nodes.first() {
+            slot.apply_relight_params(&mut self.graph, params);
+        }
+    }
+
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
@@ -3500,20 +3616,13 @@ fn compute_topology_hash(
         fx.id.as_str().hash(&mut h);
         fx.effect_type().as_str().hash(&mut h);
         fx.enabled.hash(&mut h);
-        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` P5): the toggle and
-        // its knobs change what `splice_def_into_chain` builds without
-        // touching `fx.graph` or `graph_structure_version` (the template is
-        // synthesized at splice time, not authored into the def) — fold
-        // them into the rebuild key directly so a toggle flip or a knob
-        // drag rebuilds this chain.
+        // "3D Shading" (`docs/DEPTH_RELIGHT_DESIGN.md` D8/P7): the toggle and
+        // `height_from` change template topology (relight off = no template;
+        // height_from changes the height tap), so they stay in the rebuild key.
+        // The float D3 knobs are now live uniforms written per-frame, so they
+        // must NOT be hashed — otherwise a knob drag would rebuild the chain.
         fx.relight.hash(&mut h);
         if fx.relight {
-            fx.relight_params.light_x.to_bits().hash(&mut h);
-            fx.relight_params.light_y.to_bits().hash(&mut h);
-            fx.relight_params.relief.to_bits().hash(&mut h);
-            fx.relight_params.ao_intensity.to_bits().hash(&mut h);
-            fx.relight_params.shadow_softness.to_bits().hash(&mut h);
-            fx.relight_params.gain.to_bits().hash(&mut h);
             fx.relight_params.height_from.hash(&mut h);
         }
         // Watched (open-in-editor) target: folded into the rebuild key so
@@ -4097,10 +4206,15 @@ mod topology_hash_tests {
             "toggling relight MUST change the topology hash — otherwise the \
              chain never rebuilds and the toggle appears dead.",
         );
-        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
-            .expect("Mirror chain builds with relight on");
+        // D8/P7: a relight-on card fuses, so `rl_lambert` lives inside the
+        // fused kernel rather than as a standalone node. Force the unfused
+        // (watched-editor) path to observe the spliced template node directly.
+        let cg_on_unfused = PresetRuntime::try_build(
+            &[fx.clone()], &[], &primitives, &device, None, 256, 256, Some(&fx.id), None
+        )
+        .expect("Mirror chain builds with relight on (watched / unfused)");
         assert!(
-            cg_on.graph.instance_by_node_id(&lambert_id).is_some(),
+            cg_on_unfused.graph.instance_by_node_id(&lambert_id).is_some(),
             "relight on must splice the rl_lambert template node into the built chain",
         );
 
@@ -4113,6 +4227,35 @@ mod topology_hash_tests {
         assert!(
             cg_off_again.graph.instance_by_node_id(&lambert_id).is_none(),
             "toggling relight back off must remove the rl_ template nodes on rebuild",
+        );
+    }
+
+    /// D8/P7: float relight knobs are live uniforms, so dragging them must NOT
+    /// change the topology hash (no chain rebuild). `height_from` changes
+    /// template topology and legitimately rebuilds.
+    #[test]
+    fn relight_float_knobs_do_not_change_topology_hash() {
+        let mut fx = make_default(PresetTypeId::MIRROR);
+        fx.relight = true;
+        let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+
+        fx.relight_params.light_x += 0.1;
+        fx.relight_params.light_y += 0.1;
+        fx.relight_params.relief += 0.1;
+        fx.relight_params.ao_intensity += 0.1;
+        fx.relight_params.shadow_softness += 0.1;
+        fx.relight_params.gain += 0.1;
+        let knobs_moved = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+        assert_eq!(
+            base, knobs_moved,
+            "float relight knob drags must not change the topology hash",
+        );
+
+        fx.relight_params.height_from = manifold_core::effects::RelightHeightFrom::Luminance;
+        let height_from_changed = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
+        assert_ne!(
+            base, height_from_changed,
+            "height_from changes template topology and must rebuild",
         );
     }
 
@@ -6945,6 +7088,245 @@ mod chain_fusion_tests {
             moved.max_abs,
             moved.over_count,
             moved.total
+        );
+    }
+
+    /// D8/P7: a relight-on card must render identically whether the freeze
+    /// compiler collapses it to one fused kernel or it runs per-atom. The
+    /// fused path augments with DEFAULT knob values and writes live values
+    /// per-frame; the unfused path splices the template with live values at
+    /// build time. Both must land on the same pixels.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn relight_on_fused_matches_unfused_on_probe_graphs() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        for probe in [PresetTypeId::MIRROR, PresetTypeId::COLOR_GRADE] {
+            let probe = probe.clone();
+            let mut fx = make_default(probe.clone());
+            set_param(&mut fx, "amount", 1.0);
+            fx.relight = true;
+
+            let mut fused = PresetRuntime::try_build(
+                std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
+                None, None,
+            )
+            .expect("fused relight-on chain builds");
+            assert!(!fused.pending_segments);
+            let fused_kernel_count = fused
+                .graph
+                .nodes()
+                .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
+                .count();
+            assert!(
+                fused_kernel_count >= 1,
+                "{probe:?}: relight-on card must use at least one fused kernel"
+            );
+
+            // Force the unfused path by watching the card: `should_render_fused`
+            // returns false, so the relight template splices per-atom.
+            let mut unfused = PresetRuntime::try_build(
+                std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
+                Some(&fx.id), None,
+            )
+            .expect("unfused relight-on chain builds");
+            let unfused_kernel_count = unfused
+                .graph
+                .nodes()
+                .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
+                .count();
+            assert_eq!(
+                unfused_kernel_count, 0,
+                "{probe:?}: watched card must not be fused"
+            );
+
+            run_once(&mut fused, &device, &input, std::slice::from_ref(&fx), &pc);
+            run_once(&mut unfused, &device, &input, std::slice::from_ref(&fx), &pc);
+            run_once(&mut fused, &device, &input, std::slice::from_ref(&fx), &pc);
+            run_once(&mut unfused, &device, &input, std::slice::from_ref(&fx), &pc);
+
+            let differ = TextureDiff::new(&device);
+            let r = differ.compare(
+                &device,
+                fused.output_texture().unwrap(),
+                unfused.output_texture().unwrap(),
+                1.0e-2,
+                3.0e-2,
+            );
+            assert!(
+                r.passes(0.005) && r.over_count < 64,
+                "{probe:?}: fused relight must match unfused relight: max_abs={}, over={}/{}",
+                r.max_abs, r.over_count, r.total
+            );
+        }
+    }
+
+    /// D8/P7: float-knob edits are live uniforms, so dragging a knob on a
+    /// fused relight-on card must visibly change the output without rebuilding
+    /// the chain. This proves the per-frame `EffectSlot::relight_writes` path
+    /// reaches the fused kernel.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn relight_knob_drag_visibly_changes_fused_output() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut fx = make_default(PresetTypeId::MIRROR);
+        set_param(&mut fx, "amount", 1.0);
+        fx.relight = true;
+        fx.relight_params.light_x = 0.7;
+        fx.relight_params.light_y = -0.4;
+        fx.relight_params.relief = 0.6;
+        fx.relight_params.gain = 1.8;
+
+        let mut cg = PresetRuntime::try_build(
+            std::slice::from_ref(&fx), &[], &primitives, &device, None, w, h,
+            None, None,
+        )
+        .expect("fused relight-on chain builds");
+        run_once(&mut cg, &device, &input, std::slice::from_ref(&fx), &pc);
+        let before = snapshot_output(&cg, &device, w, h);
+
+        fx.relight_params.light_x = -0.7;
+        fx.relight_params.gain = 0.5;
+        run_once(&mut cg, &device, &input, std::slice::from_ref(&fx), &pc);
+
+        let differ = TextureDiff::new(&device);
+        let moved = differ.compare(
+            &device,
+            &before.texture,
+            cg.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert!(
+            moved.over_count > 0,
+            "dragging relight knobs on a fused card must change the output: max_abs={}, over={}/{}",
+            moved.max_abs, moved.over_count, moved.total
+        );
+    }
+
+    /// D8/P7: the fused-view cache key must be knob-invariant for float D3
+    /// knobs. Building a relight-on card with two different float-knob sets
+    /// must hit the same cache entry; only `height_from` (topology) may mint
+    /// a new entry.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn relight_float_knob_drag_hits_fused_view_cache() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+
+        let mut fx = make_default(PresetTypeId::COLOR_GRADE);
+        fx.relight = true;
+
+        // Prime the cache with default knobs.
+        let _ = PresetRuntime::try_build(
+            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
+            None, None,
+        )
+        .expect("prime build");
+        let cache_len_after_default =
+            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+
+        // Move every float knob; the cache should NOT grow.
+        fx.relight_params.light_x += 0.5;
+        fx.relight_params.light_y -= 0.3;
+        fx.relight_params.relief += 0.4;
+        fx.relight_params.ao_intensity += 0.5;
+        fx.relight_params.shadow_softness += 0.2;
+        fx.relight_params.gain += 0.5;
+        let _ = PresetRuntime::try_build(
+            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
+            None, None,
+        )
+        .expect("knob-drag build");
+        let cache_len_after_knobs =
+            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+        assert_eq!(
+            cache_len_after_default, cache_len_after_knobs,
+            "float-knob drag must be a fused-view cache HIT, not a new compile"
+        );
+
+        // `height_from` changes template topology: this MAY mint a new entry.
+        fx.relight_params.height_from =
+            manifold_core::effects::RelightHeightFrom::InvertedLuminance;
+        let _ = PresetRuntime::try_build(
+            std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256,
+            None, None,
+        )
+        .expect("height-from build");
+        let cache_len_after_height_from =
+            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+        assert!(
+            cache_len_after_height_from >= cache_len_after_knobs,
+            "height_from is allowed to add a fused-view variant"
+        );
+    }
+
+    /// D8/P7: a fused segment may now mix relight-on and relight-off members.
+    /// The relight-on member is augmented with default params before the
+    /// segment is concatenated, so the whole run fuses into one segment view.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn mixed_relight_segment_fuses_to_one_region() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+
+        let mut e1 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e1, "amount", 1.0);
+        e1.relight = true;
+
+        let mut e2 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e2, "amount", 1.0);
+        e2.relight = false;
+
+        let effects = vec![e1, e2];
+
+        // Seed the segment cache so the chain builds fused (tests don't enqueue
+        // the background worker).
+        let cards = build_segment_cards(&[0, 1], &[(0, &effects[0]), (1, &effects[1])], &primitives);
+        let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
+            cards.iter().map(|(d, v)| (d, *v)).collect();
+        freeze_install::seed_segment_cache_for_test(&card_refs, &primitives)
+            .expect("mixed ColorGrade segment fuses");
+
+        let cg = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("mixed relight segment chain builds");
+        assert!(!cg.pending_segments, "mixed segment must be ready after seeding");
+        assert_eq!(
+            cg.effect_nodes.len(),
+            2,
+            "one EffectSlot per member survives"
+        );
+        let fused_kernels = cg
+            .graph
+            .nodes()
+            .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
+            .count();
+        // The relight template cannot collapse to a single kernel — its blur
+        // pair and GTAO are gather/camera cut points — so the strict claim is:
+        // the segment path ran (one segment view, per-card path not taken),
+        // the template's nodes are present, and BOTH template stretches fused
+        // (the base+height region and the shading region).
+        assert!(
+            fused_kernels >= 2,
+            "mixed relight-on/off segment must fuse both template regions, got {fused_kernels}"
+        );
+        assert!(
+            cg.graph.nodes().any(|n| {
+                crate::node_graph::relight::is_relight_node_id(n.node_id.as_str())
+            }),
+            "relight template nodes must be present in the fused segment graph"
         );
     }
 

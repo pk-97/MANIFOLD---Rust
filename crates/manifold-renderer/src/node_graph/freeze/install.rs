@@ -334,6 +334,12 @@ thread_local! {
         std::cell::RefCell::new(LruCache::new(FUSED_CACHE_CAP));
 }
 
+/// Test-only cache size observation for D8/P7 knob-invariance proofs.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn fused_effect_cache_len_for_test() -> usize {
+    FUSED_EFFECT_CACHE.with(|c| c.borrow().len())
+}
+
 /// On-demand fused view for ANY effect shape, keyed by the def's structural
 /// content. Cache hit → return; miss → compile (blocking, content thread),
 /// cache, return. `base` supplies the canonical outer bindings + skip mode —
@@ -595,11 +601,15 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
 
 /// Segment lookup for the chain builder. Hit → `Ready`/`Refused`; miss →
 /// enqueue on the worker and report `Pending` (the chain splices per-card this
-/// build). Content thread only.
+/// build). Content thread only. `cards` carries owned defs so relight-on
+/// members can be augmented before fusion while keeping the view references
+/// for bindings.
 pub fn fused_segment_view_for(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(EffectGraphDef, &'static LoadedPresetView)],
 ) -> SegmentLookup {
-    let key = segment_key(cards);
+    let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
+        cards.iter().map(|(d, v)| (d, *v)).collect();
+    let key = segment_key(&card_refs);
     if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
             Some(view) => SegmentLookup::Ready(view),
@@ -625,7 +635,7 @@ pub fn fused_segment_view_for(
         if newly_queued {
             let job = SegmentJob {
                 key,
-                cards: cards.iter().map(|(d, v)| ((*d).clone(), *v)).collect(),
+                cards: cards.iter().map(|(d, v)| (d.clone(), *v)).collect(),
             };
             if segment_worker().tx.send(job).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
@@ -1582,6 +1592,12 @@ pub(crate) fn fuse_canonical_def_masked(
                 if bound_targets.contains(&(stable.as_str().to_string(), p.name.to_string())) {
                     bound_fields.insert(field.clone());
                 }
+                // D8/P7: relight template params are live uniforms written per-frame;
+                // they must never be `@static_param`-specialized, or the fused kernel
+                // would bake the default seed value and ignore knob drags.
+                if crate::node_graph::relight::is_relight_node_id(stable.as_str()) {
+                    bound_fields.insert(field.clone());
+                }
                 retarget.insert(
                     (stable.as_str().to_string(), p.name.to_string()),
                     (fused_id.clone(), field.clone()),
@@ -1686,6 +1702,68 @@ pub(crate) fn fuse_canonical_def_masked(
                 // pipeline cache on every value change (the slider-drag stutter).
                 if !controlled.contains(field.as_str()) && !bound_fields.contains(field.as_str()) {
                     markers.push_str(&Marker::StaticParam { field: field.clone() }.emit());
+                    markers.push('\n');
+                }
+            }
+            // P7/D8 precision propagation: the fused node replaces its members
+            // as the CONSUMER of every external texture, so it must report the
+            // access and precision-criticality those members declared — else
+            // the executor's fp32 promotion (D6(a), `wants_fp32_intermediate`)
+            // sees a default filtering consumer and vetoes the upstream fp32
+            // the unfused chain would have allocated (the fp16-height relight
+            // divergence). Per slot: filtering wins across members (fp32 is
+            // non-filterable, so one true sampler read makes the veto correct);
+            // precision_critical is emitted only for texel-exact reads.
+            let mut slot_access: Vec<Option<crate::node_graph::freeze::classify::InputAccess>> =
+                vec![None; region.externals.len()];
+            let mut slot_pc: Vec<bool> = vec![false; region.externals.len()];
+            for (m_idx, member) in all_members.iter().enumerate() {
+                let node = &node_keepalive[m_idx];
+                let tex_ports: Vec<&str> = node
+                    .inputs()
+                    .iter()
+                    .filter(|i| {
+                        matches!(
+                            i.ty,
+                            PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
+                        )
+                    })
+                    .map(|i| i.name.as_ref())
+                    .collect();
+                for (idx, ri) in member.inputs.iter().enumerate() {
+                    let RegionInput::External(e) = ri else { continue };
+                    let Some(port_name) = tex_ports.get(idx).copied() else { continue };
+                    let access = member.input_access.get(idx).copied().unwrap_or_default();
+                    slot_access[*e] = Some(match slot_access[*e] {
+                        Some(prev) if prev.is_filtering_sampler() => prev,
+                        _ => access,
+                    });
+                    if access.is_texel_exact()
+                        && node.precision_critical_inputs().contains(&port_name)
+                    {
+                        slot_pc[*e] = true;
+                    }
+                }
+            }
+            for (e, access) in slot_access.iter().enumerate() {
+                let Some(access) = access else { continue };
+                use crate::node_graph::freeze::classify::InputAccess as IA;
+                let token = match access {
+                    IA::Coincident => "coincident",
+                    IA::CoincidentTexel => "coincident_texel",
+                    IA::Gather => "gather",
+                    IA::GatherTexel => "gather_texel",
+                    _ => continue, // buffer-domain accesses never name a src texture
+                };
+                markers.push_str(
+                    &Marker::InputAccess { port: format!("src_{e}"), token: token.to_string() }
+                        .emit(),
+                );
+                markers.push('\n');
+                if slot_pc[e] {
+                    markers.push_str(
+                        &Marker::PrecisionCritical { port: format!("src_{e}") }.emit(),
+                    );
                     markers.push('\n');
                 }
             }

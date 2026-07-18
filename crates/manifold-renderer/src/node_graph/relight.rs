@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::effects::{RelightHeightFrom, RelightParams};
+use manifold_core::effects::{RelightField, RelightHeightFrom, RelightParams};
 use manifold_core::NodeId;
 
 use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
@@ -43,6 +43,75 @@ fn float(v: f32) -> SerializedParamValue {
 
 fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
+}
+
+/// Maps a live D3 knob to the `(handle, param)` of the template node it
+/// drives, plus any value scaling the template applies at mint time so the
+/// live write matches. Handles are `rl_`-prefixed and deterministic, so this
+/// mapping is static and can be resolved against a spliced graph (unfused
+/// handles) or a fused retarget map (fused uniform fields).
+pub struct RelightTarget {
+    pub node_handle: &'static str,
+    pub param_name: &'static str,
+    /// Multiplier applied to the raw field value before writing. The template
+    /// bakes `relief * 12.0` into `surface_bumps.z_scale`, so the Relief
+    /// knob's `rl_normal` target uses `12.0`; all others are `1.0`.
+    pub scale: f32,
+}
+
+pub fn relight_field_targets(field: RelightField) -> &'static [RelightTarget] {
+    match field {
+        RelightField::LightX => &[
+            RelightTarget { node_handle: "rl_lambert", param_name: "light_x", scale: 1.0 },
+            RelightTarget { node_handle: "rl_shadow", param_name: "light_x", scale: 1.0 },
+        ],
+        RelightField::LightY => &[
+            RelightTarget { node_handle: "rl_lambert", param_name: "light_y", scale: 1.0 },
+            RelightTarget { node_handle: "rl_shadow", param_name: "light_y", scale: 1.0 },
+        ],
+        RelightField::Relief => &[
+            RelightTarget { node_handle: "rl_normal", param_name: "z_scale", scale: 12.0 },
+            RelightTarget { node_handle: "rl_ao", param_name: "relief", scale: 1.0 },
+            RelightTarget { node_handle: "rl_shadow", param_name: "relief", scale: 1.0 },
+        ],
+        RelightField::AoIntensity => &[RelightTarget {
+            node_handle: "rl_ao",
+            param_name: "intensity",
+            scale: 1.0,
+        }],
+        RelightField::ShadowSoftness => &[RelightTarget {
+            node_handle: "rl_shadow",
+            param_name: "softness",
+            scale: 1.0,
+        }],
+        RelightField::Gain => &[RelightTarget {
+            node_handle: "rl_exposure",
+            param_name: "gain",
+            scale: 1.0,
+        }],
+    }
+}
+
+/// Human-readable name for a relight knob, for logs / test failure messages.
+pub fn relight_field_name(field: RelightField) -> &'static str {
+    match field {
+        RelightField::LightX => "Light X",
+        RelightField::LightY => "Light Y",
+        RelightField::Relief => "Relief",
+        RelightField::AoIntensity => "AO Intensity",
+        RelightField::ShadowSoftness => "Shadow Softness",
+        RelightField::Gain => "Gain",
+    }
+}
+
+/// True for any stable node id that belongs to the relight template. Segment
+/// members are prefixed with `c{i}.`, so strip one dot-prefixed segment before
+/// checking the `rl_` prefix.
+pub fn is_relight_node_id(node_id: &str) -> bool {
+    node_id
+        .split_once('.')
+        .map(|(_, rest)| rest.starts_with(RL_PREFIX))
+        .unwrap_or_else(|| node_id.starts_with(RL_PREFIX))
 }
 
 /// D1/D4 backward walk: starting at the node feeding `final_output`'s `in`

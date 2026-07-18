@@ -13,16 +13,26 @@ use crate::node_graph::primitive::Primitive;
 // WGSL alignment: each vec3 occupies 16 bytes (12 data + 4 pad). Total 48.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// Field order MUST match the PARAMS declaration order below — the runtime
+// pipeline is the codegen-generated kernel (`standalone_for_spec`), whose
+// uniform layout is derived from PARAMS in order. BUG (found P7, 2026-07-18):
+// this struct had `power` 4th while PARAMS declare view_x/y/z before `power`,
+// so the standalone dispatch fed the kernel view=(48,0,0), power=1.0 — the
+// production "weird tints" specular. The gpu_tests parity oracle packs its
+// own bytes per kernel, so it never exercised THIS struct.
 struct BlinnUniforms {
     light_x: f32,
     light_y: f32,
     light_z: f32,
-    power: f32,
     view_x: f32,
     view_y: f32,
     view_z: f32,
-    _pad0: f32,
+    power: f32,
+    // A Color param expands to four CONSECUTIVE f32 fields in the generated
+    // layout (no vec4 alignment), so color sits directly after `power`; the
+    // trailing pad rounds the buffer to naga's 16-byte uniform size multiple.
     color: [f32; 4],
+    _pad0: f32,
 }
 
 crate::primitive! {
@@ -369,18 +379,13 @@ mod gpu_tests {
         let power = 24.0_f32;
         let color = [0.9_f32, 0.4, 0.7, 1.0];
 
-        let hand_uniforms = BlinnUniforms {
-            light_x,
-            light_y,
-            light_z,
-            power,
-            view_x,
-            view_y,
-            view_z,
-            _pad0: 0.0,
-            color,
-        };
-        let hand_bytes = bytemuck::bytes_of(&hand_uniforms).to_vec();
+        // Hand-oracle layout (vec3 light + power, vec3 view + pad, vec4 color)
+        // — NOT `BlinnUniforms`, which follows the generated PARAMS-order
+        // layout that `run()` dispatches (the P7 fix).
+        let hand_bytes = pack_params(&[
+            light_x, light_y, light_z, power, view_x, view_y, view_z, 0.0, color[0], color[1],
+            color[2], color[3],
+        ]);
 
         let gen_bytes = pack_params(&[
             light_x, light_y, light_z, view_x, view_y, view_z, power, color[0], color[1],
