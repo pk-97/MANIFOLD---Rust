@@ -52,8 +52,8 @@ or human can read it, and it needs no external tool.
 |---|---|---|
 | BUG-248 | **gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers** | GUI FPS degradation reported after importing/deleting heavy static (non-animated) glb layers; headless import render is clean (430 MB, converges frame 4) — root cause unknown, needs in-app profile — MED |
 | BUG-247 | **gltf-import-peak-rss-residual-per-source-node-whole-file-parses-not-deduplicated** | glTF import peak RSS residual (dragon fixture: 1.45 GB measured vs ~0.6–0.7 GB predicted from the shared anim cache alone) — suspected cause: mesh/texture source nodes independently re-parse the whole file with no shared-document cache, unlike the anim cache's dedup — MED |
+| BUG-246 | **unguarded-inspector-gestures-race-full-snapshot-acceptance** | audio-gain / mod-config / trim-style drags have no `ActiveInspectorDrag` guard, so a full project snapshot accepted mid-drag (data_version bump from any concurrent Execute) stomps the in-flight value — wrong or missing undo pair on release — MED |
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
-| BUG-242 | **live-trigger-edge-rearm-hostage-to-shape-release** | dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — recall gap is algorithmic — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
 | BUG-240 | **scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture** | `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no row family has supported since the card convergence — flow-script rot, not a live-app defect — LOW |
@@ -213,25 +213,25 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 **Fix shape:** extend the `GltfAnimCache` sharing pattern (`gltf_anim_cache.rs`, `Weak`-held `HashMap<PathBuf, Weak<T>>`, background-loaded) to a per-file parsed-document cache that mesh/texture source nodes share instead of each re-parsing independently. Not attempted this session — needs its own design/profiling pass to confirm the suspected mechanism before implementing (the number above is inference from file-size arithmetic, not a measured allocation breakdown).
 
-### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
-
-**Status:** OPEN — HIGH for realtime trigger work (the single biggest live-detection quality lever measured to date; fix shape decided, needs Peter's go since it changes trigger semantics).
-
-**Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
-
-**Root cause:** `TransientEdge::advance(conditioned, 0.5)` re-arms only when the shape-conditioned envelope falls below 0.5, and the default `AudioModShape` release (120 ms) exceeds dense hit spacing (~80 ms), so the edge never re-arms between hits. Measured: `--release-ms 20` on the dumper takes generic-hit recall 0.204 → 0.673 at precision 1.000, timing 4.6 ms; sparse fixture (`kick_hat`) unchanged.
-
-**Fix shape:** decouple trigger re-arm from the modulation shape's release — give `TransientEdge` its own re-arm criterion (fixed short re-arm window ≈ the analyzer's 32 ms refractory, or hysteresis on the RAW impulse rather than the conditioned envelope) so the visual envelope can stay long while the trigger stays fast. Parameter-level stopgap: short release on trigger routes (works today, but couples visual feel to detection).
-
 ### BUG-243 (analyzer-false-fires-on-sustained-pads) — sustained pad/swell material fires transient + kick events with zero real hits — found 2026-07-18, same session
 
-**Status:** OPEN — MEDIUM (stage impact: a pad build can fire hit-triggers; measured on `self_render/sustained_pad_100bpm`, 0 truth events).
+**Status:** PARTIAL — 2026-07-18 (harness-gated tuning session, `crates/manifold-audio/src/analysis.rs`). Part A (transient median-criterion fires) FIXED: `SUPERFLUX_DELTA` 48.0 → 80.0 collapses the pad's transient fires from 6 (full) + 29 (low) to 3 + 3 (matching mid/high's pre-existing 3, which are novelty-criterion swell attacks, out of this knob's scope) — verified against {80, 100, 125, 150}, 80 is the minimal value tested and 100/125/150 measured identical. Part B (kick-ridge fires, 30 on the pad fixture) NOT FIXED — see Root cause/Fix shape below for why neither documented knob (`KICK_ABS_FLOOR`, `KICK_MIN_PEAK`) has a safe value. Net: pad total causal events 71 → 42 (target was ≤10; not met). All gates green at the new `SUPERFLUX_DELTA`: `edm_kit_128bpm` recall 0.714/precision 1.000 (≥0.70/≥0.99 target, unchanged), `kick_hat_128bpm` 0.785/1.000/0.646 (exact match to pre-change), `arp_16th_128bpm` 252 events (unchanged), `mod_harness --selftest` P3 false-fire guards held or improved (dive low 2→0, riser low 2→1; `kicks`/`busymix`/`densemix` low-band fire counts unchanged at 8/7/8, 7/8/7, 2/7/8), `cargo clippy -p manifold-audio -- -D warnings` clean, `cargo test -p manifold-audio --lib` 57 passed.
 
-**Symptom:** 41 analyzer transient fires + 28 kick-ridge fires on a 20 s pad-only fixture.
+**Symptom:** 41 analyzer transient fires + 28–30 kick-ridge fires on a 20 s pad-only fixture (measured 30 kick-ridge fires this session, consistent with the originally reported 28 within fixture/scoring noise).
 
-**Root cause (attributed per-event, `eval/odf_attribution.py`):** 26/41 transient fires are quiet-passage admissions — pad flux ~80 ODF units clears `SUPERFLUX_DELTA` (48) while the median baseline is ~0; the rest are big swell attacks passing the novelty test (candidate ~1000+ vs ref ~0). Kick-ridge fires on pads are unattributed (descending spectral motion in swells suspected).
+**Root cause (attributed per-event, `eval/odf_attribution.py` for A; `MANIFOLD_KICK_DEBUG` for B):** A — 26/41 transient fires were quiet-passage admissions, pad flux ~80 ODF units clearing the old `SUPERFLUX_DELTA` (48) while the median baseline is ~0; the rest are big swell attacks passing the novelty test (candidate ~1000+ vs ref ~0), unaffected by this fix. B — kick-ridge fires on the pad are coherent 6-hop descents (drop 10–16 bins, matching `KICK_DROP_BINS`) whose apex peaks (~86–109 raw tilted-column units) sit in the SAME magnitude range as `edm_kit`'s real kick-ridge apexes (~62–104, observed via the same debug tap on real material). Neither the absolute floor (`KICK_ABS_FLOOR`) nor the relative floor (`KICK_MIN_PEAK`) can separate them: sweeping `KICK_ABS_FLOOR` at 40/60/65/70/75/80 killed `edm_kit`'s `kick_low` (15→0) and the `kicks`/`busymix`/`densemix` selftest guards (8/7/8→0/0/0) at the same step that first touched the pad (40, the lowest tested); sweeping `KICK_MIN_PEAK` at 0.15/0.2/0.25/0.3 had ZERO effect on the pad's 30 fires even at 2.5x default, while 0.25+ started costing `densemix`'s guard.
 
-**Fix shape:** re-sweep `SUPERFLUX_DELTA` upward (P3's guard plateau ran 30–300; pad flicker sits ~80 — a value ~100–150 may silence it) with the P3 false-fire guards (dive/riser/growl) AND the recall fixtures both green; kick-ridge pad fires need their own look (possibly `KICK_ABS_FLOOR` or a sustained-energy veto). Do NOT trade recall-fixture numbers to buy this.
+**Fix shape:** Part A done via `SUPERFLUX_DELTA` (see Status). Part B needs a discriminator other than peak magnitude — the two constants swept this session are provably a dead end (see Root cause). A sustained-energy veto (the pad's ridge sits atop continuously-elevated Low-band energy, unlike a kick's transient rise from a quiet floor) or a birth-context gate (require the ridge's onset hop to itself be near a Low-band amplitude rise) are the remaining candidate shapes — neither implemented or swept this session; both are logic changes, out of this session's harness-gated-tuning-only scope.
+
+### BUG-246 (unguarded-inspector-gestures-race-full-snapshot-acceptance) — audio-gain / mod-config / trim-style drags aren't in `ActiveInspectorDrag`, so a full snapshot accepted mid-drag stomps the in-flight value — found 2026-07-18 while fixing the macro/scene undo regression (`30712691`)
+
+**Status:** OPEN — MED (pre-existing class, NOT part of the `ac96c65c` regression: these fields aren't carried in the per-tick `ModulationSnapshot`, so the race needs a `data_version` bump mid-drag — any concurrent `Execute` landing, e.g. a MIDI phantom-clip commit, which is routine on stage).
+
+**Symptom:** while dragging an audio-gain / mod-shape / step-amount / crossover / trim slider, a full project snapshot acceptance (`app_render.rs` ~line 808) replaces `local_project`; the restore at ~817 only covers `ActiveInspectorDrag` variants (MasterOpacity, LedBrightness, LayerOpacity, Param, Macro, SceneParam). Unguarded drags visibly snap back mid-gesture, and the commit handler's re-read of `new_val` from `local_project` produces a wrong or skipped undo command (same mechanism the macro fix's red test proves).
+
+**Root cause:** the commit handlers derive `new_val` by re-reading a project that concurrent snapshot acceptance can rewrite; only guarded gesture kinds are restored.
+
+**Fix shape:** either add guard variants for the remaining gesture families (mechanical, follows the Macro/SceneParam precedent in `30712691`), or the class-level version: commit handlers carry the gesture's final value instead of re-reading `local_project`. The two new dispatch tests in `inspector.rs` (`macro_drag_survives_a_mid_gesture_modulation_snapshot`, `scene_row_drag_survives_a_full_snapshot_replacement`) are the template for proving each family.
 
 ### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
@@ -252,7 +252,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause:** popover fields are seeded-at-open UI state with no membership in the per-frame value-sync plane (`sync_card_values` family).
 
 **Fix shape:** include the popover's non-focused fields in the per-frame value sync (skip the actively-edited field, same drag-guard convention `sync_card_values` documents), or resync on a mapping-version bump.
-
 
 ### BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no family has supported since C-P1a, and none supports at all as of C-P1d — found 2026-07-18 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d closing session, re-verifying BUG-236's two flows
 
@@ -1321,6 +1320,16 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+
+### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
+
+**Status:** FIXED 2026-07-18 (same evening; Peter approved). `TransientEdge` now advances on the sensitivity-scaled RAW impulse (no attack/release smoothing) in both consumers — `live_trigger.rs` clip triggers and `modulation.rs` trigger-gates; the conditioned envelope is unchanged for meters/modulation. Measured at DEFAULT shape: edm_kit generic-hit recall 0.204 → 0.714 @ P 1.000; kick_hat byte-identical (0.785/1.000/0.646); 617 unit tests green. Known cost, accepted deliberately: sustained_pad trigger fires 46 → 71 — the envelope was MASKING the analyzer's pad false fires; the trigger layer is now faithful, so BUG-243 (the analyzer-level pad fix) is the sole remaining owner of that symptom.
+
+**Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
+
+**Root cause:** `TransientEdge::advance(conditioned, 0.5)` re-arms only when the shape-conditioned envelope falls below 0.5, and the default `AudioModShape` release (120 ms) exceeds dense hit spacing (~80 ms), so the edge never re-arms between hits. Measured: `--release-ms 20` on the dumper takes generic-hit recall 0.204 → 0.673 at precision 1.000, timing 4.6 ms; sparse fixture (`kick_hat`) unchanged.
+
+**Fix shape:** decouple trigger re-arm from the modulation shape's release — give `TransientEdge` its own re-arm criterion (fixed short re-arm window ≈ the analyzer's 32 ms refractory, or hysteresis on the RAW impulse rather than the conditioned envelope) so the visual envelope can stay long while the trigger stays fast. Parameter-level stopgap: short release on trigger routes (works today, but couples visual feel to detection).
 
 ### BUG-238 (scene-setup-camera-world-light-eye-toggle-reads-as-dead) — the Scene Setup outliner's dimmed eye glyph on Camera/World/Light rows reads as a broken button, not a disabled one — found 2026-07-17, Peter live-testing the dock ("The params and visibility buttons for all of these cameras, world, lights, etc don't work either. They do nothing currently.")
 

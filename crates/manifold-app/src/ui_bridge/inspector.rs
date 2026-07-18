@@ -539,13 +539,24 @@ pub(super) fn dispatch_inspector(
         PanelAction::MacroSnapshot(idx) => {
             let idx = *idx;
             if idx < manifold_core::macro_bank::MACRO_COUNT {
-                *drag_snapshot = Some(project.settings.macro_bank.slots[idx].value);
+                let value = project.settings.macro_bank.slots[idx].value;
+                *drag_snapshot = Some(value);
+                // Macros ride in every ModulationSnapshot block, so the drag
+                // must be guarded or the per-tick apply stomps it (undo-race
+                // regression, 2026-07-18).
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Macro { idx, value });
             }
             DispatchResult::handled()
         }
         PanelAction::MacroChanged(idx, val) => {
             let idx = *idx;
             let val = *val;
+            if let Some(crate::app::ActiveInspectorDrag::Macro { idx: di, value }) =
+                active_inspector_drag
+                && *di == idx
+            {
+                *value = val;
+            }
             manifold_core::macro_bank::MacroBank::apply_macro(project, idx, val);
             ContentCommand::send(
                 content_tx,
@@ -566,6 +577,7 @@ pub(super) fn dispatch_inspector(
                     }
                 }
             }
+            *active_inspector_drag = None;
             DispatchResult::handled()
         }
         PanelAction::MacroReset(idx) => {
@@ -1170,17 +1182,22 @@ pub(super) fn dispatch_inspector(
             // exposed slot on the generator's `PresetInstance` — resolve it
             // through the scene panel's per-frame id map FIRST; a miss falls
             // through to the existing exposed-param path below unchanged.
-            if let Some((addr, val)) = ui.scene_setup_panel.resolve_scene_param(param_id)
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            if let Some((_, val)) = ui.scene_setup_panel.resolve_scene_param(param_id)
+                && let Some((addr, target, catalog_default)) = resolve_scene_write(
+                    ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
+                )
             {
                 *drag_snapshot = Some(val);
-                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
+                // NOT the `Param` variant: a scene row's `param_id` is
+                // synthesized, so `Param`'s manifest `set_param` restore
+                // would be a silent no-op — the guard must hold the row's
+                // real write address (undo-race fix, 2026-07-18).
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::SceneParam {
                     target,
-                    param_id: param_id.clone(),
+                    addr,
+                    catalog_default: Box::new(catalog_default),
                     value: val,
                 });
-                let _ = addr; // address itself isn't needed for the snapshot step
                 return DispatchResult::handled();
             }
             if let Some(target) =
@@ -1239,7 +1256,9 @@ pub(super) fn dispatch_inspector(
                 )
                 .with_scope(addr.scope_path.clone());
                 cmd.execute(project);
-                if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) = active_inspector_drag {
+                if let Some(crate::app::ActiveInspectorDrag::SceneParam { value, .. }) =
+                    active_inspector_drag
+                {
                     *value = *val;
                 }
                 let addr2 = addr.clone();
@@ -3672,6 +3691,91 @@ mod scene_card_convergence_tests {
         fn drain(&self) -> Vec<ContentCommand> {
             self.content_rx.try_iter().collect()
         }
+    }
+
+    /// Undo-race repro (param-feed regression, 2026-07-18): since
+    /// `ac96c65c` the content thread ships a `ModulationSnapshot` EVERY
+    /// tick and `app_render.rs` applies it to `local_project`
+    /// unconditionally (only overlay drags gate it). The restore guard
+    /// (`ActiveInspectorDrag`) has no Macro variant, so a stale snapshot
+    /// landing mid-drag stomps the in-flight value back to pre-drag; the
+    /// commit handler then sees old == new and emits NO undo command.
+    #[test]
+    fn macro_drag_survives_a_mid_gesture_modulation_snapshot() {
+        let mut project = Project::default();
+        project.settings.macro_bank.slots[0].value = 0.2;
+
+        // The content thread's view is still pre-drag when it captures.
+        let mut stale = crate::content_state::ModulationSnapshot::empty();
+        stale.capture_into(&project);
+
+        let mut h = Harness::new(None);
+        h.dispatch(&PanelAction::MacroSnapshot(0), &mut project);
+        h.dispatch(&PanelAction::MacroChanged(0, 0.8), &mut project);
+        h.drain();
+
+        // What the UI frame drain now does every tick (app_render.rs ~line
+        // 868): apply the snapshot, then restore only the guarded drag kinds.
+        stale.apply(&mut project);
+        if let Some(ref drag) = h.active_inspector_drag {
+            drag.apply(&mut project);
+        }
+
+        h.dispatch(&PanelAction::MacroCommit(0), &mut project);
+        let cmds = h.drain();
+        assert!(
+            cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
+            "a completed macro drag must produce an undo-tracked command; got {} commands",
+            cmds.len()
+        );
+    }
+
+    /// Same race, scene-row flavor: a full project snapshot accepted
+    /// mid-drag (data_version bump from any concurrent Execute — MIDI
+    /// phantom commit, another gesture landing) replaces `local_project`
+    /// wholesale; the guard's restore must reach the row's REAL write
+    /// address (`SceneParam` variant), because the old `Param` restore was
+    /// a silent no-op for synthesized scene ids.
+    #[test]
+    fn scene_row_drag_survives_a_full_snapshot_replacement() {
+        let (mut project, layer_id) = scene_layer_project();
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
+        let target = manifold_ui::GraphParamTarget::Generator;
+        let before = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
+
+        // The content thread's stale full snapshot, captured pre-drag.
+        let stale = project.clone();
+
+        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
+        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), before + 0.3), &mut project);
+        h.drain();
+
+        // Simulate app_render's snapshot acceptance mid-drag: replace the
+        // project, then restore the guarded drag (app_render.rs ~line 817).
+        project = stale;
+        if let Some(ref drag) = h.active_inspector_drag {
+            drag.apply(&mut project);
+        }
+
+        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+        let cmds = h.drain();
+        let mut execs: Vec<_> = cmds
+            .into_iter()
+            .filter_map(|c| match c {
+                ContentCommand::Execute(cmd) => Some(cmd),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(execs.len(), 1, "the commit must survive the snapshot stomp as ONE undo unit");
+        let cmd = &mut execs[0];
+        cmd.execute(&mut project);
+        let after_execute = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
+        assert!((after_execute - (before + 0.3)).abs() < 1e-4, "commit lands the dragged value");
+        cmd.undo(&mut project);
+        let after_undo = density_node_and_value(&fog_density_addr(&project, &layer_id)).1;
+        assert!((after_undo - before).abs() < 1e-4, "undo restores the pre-drag value");
     }
 
     /// Gate 2 (undo-granularity): `ParamSnapshot` → 3× `ParamChanged` →
