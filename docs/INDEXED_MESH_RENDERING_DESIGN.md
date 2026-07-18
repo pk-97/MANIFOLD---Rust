@@ -1,11 +1,21 @@
 # Indexed Mesh Rendering (R4) — kill the ~2.9× vertex amplification at the draw boundary
 
-**Status:** APPROVED 2026-07-18 (Fable, with Peter in the room; K3 medium consulted on GPU
-specifics). Execution authorized starting with P0. Supersedes the deferred R4 stub in
-`RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` §Deferred (which framed R4 as a graph-wide re-index;
-this design rejects that framing — see D1). **P0 is a proof-of-concept gate that MUST pass (a real
-multi-ms drop, measured back-to-back with the app closed) before P1+ proceed — if P0 fails, STOP
-and surface, do not build the rest.**
+**Status:** CLOSED — P0 STOPPED 2026-07-18 (Fable design + K3 P0 implementation lane). **Indexing
+is not the lever; do not revive R4 without new profiling evidence.** P0 built the render-boundary
+index (encoder `drawIndexedPrimitives` + `render_scene` index cache + a non-vacuous parity test,
+K3 branch `feat/r4-p0-poc` `4343429d`, NOT landed) and measured on `MeshAudio (AO off, light
+mesh)` at 4K, back-to-back: **baseline p50 34.06ms → P0 33.25ms, ~0.8ms.** The index provably
+engaged (3.9×–5.3× vertex collapse on all six flower meshes, exceeding the ~2.9× prediction), so
+the null result is real: **this render is not vertex-fetch-bound.** The "vertex-bound" premise
+came from a 4K-vs-1440p A/B that was run under GPU contention (app open) — a contaminated
+measurement, the root error. Prime remaining suspect for the residual: fragment shading (PBR +
+shadow-map sampling at 4K) or draw/encode overhead — needs a clean profile (app closed) to
+attribute. The P0 branch is kept for reference; recommend NOT landing (0.8ms is not worth the
+permanent draw-path complexity + D1's rebuild-the-discarded-index debt).
+
+_Original approved framing, kept for the record:_ APPROVED 2026-07-18. Supersedes the deferred R4
+stub in `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` §Deferred (which framed R4 as a graph-wide
+re-index; this design rejected that — see D1). P0 was a proof-of-concept STOP gate; it did its job.
 
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 before any phase.
 

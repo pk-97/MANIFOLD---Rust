@@ -549,15 +549,15 @@ freshness test.
 8. No phase waits on A4 or SCENE_SETUP_PANEL; serial landing in one worktree slot (D9/D10).
 
 ## §. Deferred
-- **R4 — indexed mesh rendering** (kill the 3.84× vertex amplification; `Array` index port,
-  `draw_indexed` in manifold-gpu, reconciliation over every flat-layout-assuming mesh consumer).
-  Revive: own Fable/Opus design session — the trigger has now fired. **P5's final re-measure
-  (2026-07-17, AMG GT3, fully-landed tree) records the residual main-pass share as ~100% of
-  render_scene's own GPU time** — ~9.45ms @3840×2160 GPU p50, ~5.73ms @1920×1080 GPU p50 — because
-  every other pass (shadow, IBL) is now gated to zero on a static scene, confirmed by a profiled run
-  showing a single unlabeled `node.render_scene` pass row at both resolutions (no earlier forecast
-  language remains; this is the measured number, not a prediction). Revival is due: schedule the
-  design session. The supervised-session requirement (D1, D2) is unchanged.
+- **R4 — indexed mesh rendering — CLOSED, NOT the lever (2026-07-18).** The revival happened
+  (`INDEXED_MESH_RENDERING_DESIGN.md`, render-boundary framing, not the graph-wide re-index this
+  entry assumed) and its P0 proof-of-concept **STOPPED**: the index provably engaged (3.9×–5.3×
+  vertex collapse on the flower scans) yet p50 barely moved (34.06 → 33.25ms, ~0.8ms) on
+  `MeshAudio (AO off, light mesh)` @4K. This render is **not vertex-fetch-bound** — the earlier
+  "main-pass vertex share still matters" premise rested on a 4K-vs-1440p A/B run under GPU
+  contention (contaminated). Do not revive R4 without new, clean profiling that attributes the
+  residual to vertex fetch. Prime suspect now: fragment shading (PBR + shadow-map sampling at 4K)
+  or draw/encode overhead — see `INDEXED_MESH_RENDERING_DESIGN.md` Status.
 - **R6 — GPU culling.** Revive: multi-GLB merged scenes routine (SCENE_SETUP_PANEL P4 shipped)
   AND P5 shows main-pass draw cost dominating; needs graph-side AABB infra that doesn't exist.
 - **Project-mode unmatched-span label breakdown** (mirror of P0's import-mode change). Revive:

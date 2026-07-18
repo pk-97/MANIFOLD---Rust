@@ -82,8 +82,12 @@ The aggressive cut with a normal bake is where the bigger geometry win lives, un
 
 Static-scene shadow caching and IBL gating landed 2026-07-17 (BUG-189 + BUG-197,
 `RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md` P0–P5) — shadow maps and env maps for a static scene
-no longer re-render every frame. The named next engine lever is **indexed-mesh rendering** (R4,
-deferred there): if `render_scene` isn't using the index buffer it processes ~3× the vertices.
+no longer re-render every frame. **Indexed-mesh rendering (R4) was tried and CLOSED 2026-07-18**
+(`INDEXED_MESH_RENDERING_DESIGN.md`): the index engaged (3.9×–5.3× vertex collapse) but p50 barely
+moved (~0.8ms), proving this render is NOT vertex-bound. Don't re-try mesh/vertex reduction as a
+perf lever here. The residual bottleneck is unattributed — prime suspects are fragment shading
+(PBR + shadow-map sampling at 4K) or draw/encode overhead; a clean app-closed profile is the
+honest next step.
 
 ## Editing a `.manifold` safely (mechanics)
 
