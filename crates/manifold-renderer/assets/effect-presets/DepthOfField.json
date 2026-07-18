@@ -488,7 +488,7 @@
               },
               "softness": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.85
               }
             },
             "title": "Tilt-Shift Mask"
@@ -568,7 +568,7 @@
               },
               "softness": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.85
               }
             },
             "title": "Radial Mask"
@@ -1006,7 +1006,7 @@
               },
               "max_radius": {
                 "type": "Float",
-                "value": 6.0
+                "value": 16.0
               },
               "quality": {
                 "type": "Enum",
@@ -1031,7 +1031,7 @@
               },
               "max_radius": {
                 "type": "Float",
-                "value": 6.0
+                "value": 16.0
               },
               "quality": {
                 "type": "Enum",
