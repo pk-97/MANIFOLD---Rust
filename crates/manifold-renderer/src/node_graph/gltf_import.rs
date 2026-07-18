@@ -966,7 +966,23 @@ fn build_object_group(
             pose_node.params.insert("rotation_tracks".to_string(), table(rotation_rows));
             pose_node.params.insert("scale_tracks".to_string(), table(scale_rows));
             pose_node.params.insert("clip_durations".to_string(), table(clip_durations_rows));
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: additive — the Tables
+            // above are still emitted this phase (P2 deletes them), but
+            // `path`/`skin_index` are also stamped now so `run()` samples
+            // from the shared `gltf_anim_cache` instead.
+            pose_node
+                .params
+                .insert("skin_index".to_string(), int(obj_skin.skin_index as i32));
             group_nodes.push(pose_node);
+            string_bindings.push(StringBindingDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                label: "Model File".to_string(),
+                default_value: path_str.to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new(&pose_node_id),
+                    param: "path".to_string(),
+                },
+            });
             animation_card_controls(
                 &mut card_params,
                 &mut card_bindings,

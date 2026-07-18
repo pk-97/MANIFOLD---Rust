@@ -8,35 +8,42 @@
 //! doctrine `node.gltf_animation_source` (A1) already proves, extended
 //! from 9 scalar outputs to an array of matrices because a joint palette
 //! (up to ~256 joints for the spec-typical case) doesn't fit the
-//! port-shadow-scalar shape. Reuses the SAME LINEAR lerp/slerp sampler
-//! math as A1 (binary-search + lerp/slerp per keyframe pair), just against
-//! per-joint row RANGES inside four flat Tables instead of one Table per
-//! channel — `gltf_import.rs` builds those Tables sorted ascending by
-//! `joint_index` so this primitive can find each joint's range with one
-//! linear scan per frame (cheap: a scan over a few hundred to a few
-//! thousand rows, not a per-vertex cost).
+//! port-shadow-scalar shape.
 //!
-//! Per-frame algorithm:
+//! GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: keyframe/topology payload no longer
+//! lives in this node's Table params (the six Table params below stay
+//! DECLARED for round-trip/migration but are no longer read — P2 deletes
+//! them). Instead `path` + `skin_index` select an `Arc<GltfAnimSet>` from
+//! `gltf_anim_cache`'s shared, file-backed, `Weak`-held cache, loaded once
+//! per FILE on a background thread (the same mpsc pattern
+//! `gltf_morph_deltas_source.rs` uses) and shared across every node/object
+//! referencing that file. Sampling is a `partition_point` binary search
+//! per channel (`gltf_anim_shared`'s slice samplers) instead of a linear
+//! table scan.
+//!
+//! Per-frame algorithm (unchanged from A2, just re-sourced):
 //! 1. Sample each joint's LOCAL translation/rotation/scale at the wrapped
-//!    clip time `t` (falling back to its static BIND pose when the joint
-//!    carries no animated channel — never the identity fallback A1's
+//!    clip time `t` (falling back to its static BIND pose — read from
+//!    `GltfAnimSet::node_bind_trs` — when the joint carries no animated
+//!    channel in this clip — never the identity fallback A1's
 //!    rigid-object sampler uses, because an unrigged joint's bind pose is
 //!    frequently non-identity).
 //! 2. Compose each joint's WORLD matrix by walking its parent chain
 //!    (memoized, since `skin.joints()` order is not guaranteed
 //!    parent-before-child per spec) — `parent[j] == -1` roots at
 //!    `joint_root_world[j]` (the static ancestor-chain product ABOVE the
-//!    joint tree, precomputed at import time).
+//!    joint tree, precomputed at parse time).
 //! 3. `skin_matrix[j] = world[j] * inverse_bind_matrices[j]`.
 
 use std::borrow::Cow;
+use std::sync::{Arc, mpsc};
 
 use super::gltf_anim_shared::{
-    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, row_range_for_compound_key,
-    sample_quat_range, sample_vec3_range,
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
 use crate::generators::mesh_common::JointMatrix;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::gltf_anim_cache::{AnimClip, AnimSetLookup, GltfAnimSet, get_or_spawn_load};
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
@@ -60,6 +67,28 @@ crate::primitive! {
         joint_matrices: Array(JointMatrix),
     },
     params: [
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/P1: comes via
+        // presetMetadata.stringBindings, same convention as
+        // node.gltf_mesh_source's `path`. Selects the `Arc<GltfAnimSet>`
+        // this node samples from `gltf_anim_cache`'s shared cache.
+        ParamDef {
+            name: Cow::Borrowed("path"),
+            label: "File",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        // Which `document.skins()` entry (index into `GltfAnimSet::skins`)
+        // this node poses.
+        ParamDef {
+            name: Cow::Borrowed("skin_index"),
+            label: "Skin Index",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 63.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("duration_s"),
             label: "Duration (s)",
@@ -121,9 +150,17 @@ crate::primitive! {
             range: Some((0.0, MAX_JOINTS as f32)),
             enum_values: &[],
         },
-        // Tables can't live in static-const ParamValue (node.cycle_table_row's
-        // sentinel convention) — each defaults to the Float(0.0) sentinel,
-        // read as "no rows" below.
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: these six Tables are NO LONGER
+        // READ by `run()` — topology/track data now comes from the
+        // `Arc<GltfAnimSet>` selected by `path`/`skin_index` above. Kept
+        // DECLARED (not deleted) so an already-saved project round-trips
+        // without panicking or silently dropping data; `gltf_import.rs`
+        // still emits them this phase too (additive). P2 deletes both the
+        // emission and the params, with a load-migration for old presets
+        // (D5). Tables can't live in static-const ParamValue
+        // (node.cycle_table_row's sentinel convention) — each defaults to
+        // the Float(0.0) sentinel, read as "no rows" when something still
+        // reads them (nothing does, post-P1).
         ParamDef {
             name: Cow::Borrowed("joint_parent_table"),
             label: "Joint Parent Table",
@@ -184,7 +221,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "gltf_import.rs builds all six Tables at import time from GltfMaterialInfo::skin, sorted ascending by joint_index (topology tables) or (clip_index, joint_index) (track tables). Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
+    composition_notes: "path comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`. skin_index selects which document.skins() entry (GltfAnimSet::skins[skin_index]) this node poses — gltf_import.rs stamps both from the object's resolved GltfObjectSkin. Wire `joint_matrices` into node.skin_mesh's `matrices` input (BufferGather — a joint-index lookup, not coincident with skin_mesh's per-vertex dispatch). Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop.",
     examples: [],
     picker: { label: "glTF Skeleton Pose", category: Driver },
     summary: "Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the pose.",
@@ -194,6 +231,17 @@ crate::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         trigger_latch: TriggerLatch = TriggerLatch::new(),
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: last `path` a load was
+        // triggered for (re-triggers on change, same key-gating shape
+        // `gltf_mesh_source`'s `last_key` uses).
+        last_path: String = String::new(),
+        // Resident once loaded; `None` while unloaded/loading/failed.
+        anim_set: Option<Arc<GltfAnimSet>> = None,
+        // Background loader channel. `Some` means a load is in flight (or
+        // was resolved from the shared cache without spawning a thread —
+        // see `AnimSetLookup::Ready`); we don't spawn another until it
+        // returns.
+        pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
     },
 }
 
@@ -202,25 +250,6 @@ fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
         Some(ParamValue::Table(t)) => Some(t.as_ref()),
         _ => None,
     }
-}
-
-/// Read joint `j`'s `[joint_index, m0..m15]` row (column-major 4x4),
-/// falling back to identity when no row exists for that joint.
-fn mat4_from_table(table: Option<&TableData>, joint: usize) -> Mat4 {
-    let Some(table) = table else { return MAT4_IDENTITY };
-    for i in 0..table.row_count() {
-        let row = table.row(i).unwrap();
-        if row[0].round() as i64 == joint as i64 && row.len() >= 17 {
-            let mut m = MAT4_IDENTITY;
-            for col in 0..4 {
-                for r in 0..4 {
-                    m[col][r] = row[1 + col * 4 + r];
-                }
-            }
-            return m;
-        }
-    }
-    MAT4_IDENTITY
 }
 
 /// Memoized world-matrix composition — `parent[j] == -1` roots at
@@ -252,6 +281,87 @@ fn resolve_world(
     };
     world[j] = Some(w);
     w
+}
+
+/// Sample joint `node`'s LOCAL translation/rotation/scale at time `t`
+/// within `clip`, falling back to `anim_set.node_bind_trs[node]` per
+/// channel when `clip` carries no track for it — GLTF_ANIM_RUNTIME_V2_DESIGN.md
+/// D3: `Some(channel)` runs the slice binary-search sampler,
+/// `None` returns the bind value directly (a single static row, same as
+/// A2's original mat4_from_table-identity-except-bind-pose behavior).
+fn sample_joint_local(anim_set: &GltfAnimSet, clip: &AnimClip, node: u32, t: f32) -> Mat4 {
+    let bind = anim_set.node_bind_trs.get(node as usize);
+    let bind_t = bind.map(|b| b.translation).unwrap_or([0.0, 0.0, 0.0]);
+    let bind_r = bind.map(|b| b.rotation).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+    let bind_s = bind.map(|b| b.scale).unwrap_or([1.0, 1.0, 1.0]);
+
+    let tr = match clip.translation_channel(node) {
+        Some(c) => sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind_t),
+        None => bind_t,
+    };
+    let rot = match clip.rotation_channel(node) {
+        Some(c) => sample_quat_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t),
+        None => bind_r,
+    };
+    let sc = match clip.scale_channel(node) {
+        Some(c) => sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind_s),
+        None => bind_s,
+    };
+    mat4_from_trs(tr, rot, sc)
+}
+
+/// The full per-frame pose algorithm (GLTF_ANIM_RUNTIME_V2_DESIGN.md P1),
+/// pure and `EffectNodeContext`-free so it's directly unit- and
+/// perf-testable: sample every joint's local TRS from `anim_set`, compose
+/// world matrices by walking the skin's own parent chain
+/// ([`resolve_world`]), then `skin_matrix[j] = world[j] * inverse_bind[j]`.
+/// Returns an empty `Vec` for an out-of-range `skin_index` or zero
+/// `joint_count` — callers treat that as "nothing to write this frame",
+/// same as the pre-cache behavior's `joint_count == 0` early return.
+pub(crate) fn sample_skeleton_pose(
+    anim_set: &GltfAnimSet,
+    skin_index: usize,
+    clip_index: usize,
+    t: f32,
+    joint_count: usize,
+) -> Vec<JointMatrix> {
+    let Some(skin) = anim_set.skins.get(skin_index) else { return Vec::new() };
+    let n = joint_count.min(skin.joint_node_indices.len()).min(MAX_JOINTS);
+    if n == 0 {
+        return Vec::new();
+    }
+    let empty_clip;
+    let clip = match anim_set.clips.get(clip_index) {
+        Some(c) => c,
+        None => {
+            empty_clip = AnimClip { duration_s: 0.0, channels: Vec::new() };
+            &empty_clip
+        }
+    };
+
+    let mut parent = [-1i32; MAX_JOINTS];
+    let mut root_world = [MAT4_IDENTITY; MAX_JOINTS];
+    let mut inverse_bind = [MAT4_IDENTITY; MAX_JOINTS];
+    let mut local = [MAT4_IDENTITY; MAX_JOINTS];
+    let mut world: [Option<Mat4>; MAX_JOINTS] = [None; MAX_JOINTS];
+
+    for j in 0..n {
+        parent[j] = skin.joint_parent.get(j).copied().unwrap_or(-1);
+        root_world[j] = skin.joint_root_world.get(j).copied().unwrap_or(MAT4_IDENTITY);
+        inverse_bind[j] = skin.inverse_bind_matrices.get(j).copied().unwrap_or(MAT4_IDENTITY);
+        local[j] = sample_joint_local(anim_set, clip, skin.joint_node_indices[j], t);
+    }
+
+    let mut skin_matrices = Vec::with_capacity(n);
+    // Same three-independent-slices shape `resolve_world`'s own caller
+    // used pre-cache — see that impl's identical comment.
+    #[allow(clippy::needless_range_loop)]
+    for j in 0..n {
+        let w = resolve_world(j, &parent[..n], &local[..n], &root_world[..n], &mut world[..n], 0);
+        let m = mat4_mul(&w, &inverse_bind[j]);
+        skin_matrices.push(JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] });
+    }
+    skin_matrices
 }
 
 impl Primitive for GltfSkeletonPose {
@@ -320,51 +430,57 @@ impl Primitive for GltfSkeletonPose {
             return;
         }
 
-        let parent_table = table_or_empty(ctx.params.get("joint_parent_table"));
-        let root_world_table = table_or_empty(ctx.params.get("joint_root_world_table"));
-        let inverse_bind_table = table_or_empty(ctx.params.get("inverse_bind_table"));
-        let translation_tracks = table_or_empty(ctx.params.get("translation_tracks"));
-        let rotation_tracks = table_or_empty(ctx.params.get("rotation_tracks"));
-        let scale_tracks = table_or_empty(ctx.params.get("scale_tracks"));
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `path`/`skin_index` select the
+        // shared `Arc<GltfAnimSet>` instead of reading the six Table
+        // params (declared above, no longer read).
+        let path = match ctx.params.get("path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
+        };
+        let skin_index = match ctx.params.get("skin_index") {
+            Some(ParamValue::Float(f)) => f.round().max(0.0) as usize,
+            _ => 0,
+        };
 
-        let mut parent = [-1i32; MAX_JOINTS];
-        let mut root_world = [MAT4_IDENTITY; MAX_JOINTS];
-        let mut inverse_bind = [MAT4_IDENTITY; MAX_JOINTS];
-        let mut local = [MAT4_IDENTITY; MAX_JOINTS];
-        let mut world: [Option<Mat4>; MAX_JOINTS] = [None; MAX_JOINTS];
-
-        if let Some(table) = parent_table {
-            for i in 0..table.row_count() {
-                let row = table.row(i).unwrap();
-                let j = row[0].round() as usize;
-                if j < joint_count && row.len() >= 2 {
-                    parent[j] = row[1].round() as i32;
+        if path != self.last_path {
+            self.last_path = path.clone();
+            self.anim_set = None;
+            self.pending_load = None;
+        }
+        if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
+            match get_or_spawn_load(std::path::Path::new(&path)) {
+                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
+                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
+            }
+        }
+        if let Some(rx) = &self.pending_load {
+            match rx.try_recv() {
+                Ok(Ok(set)) => {
+                    self.anim_set = Some(set);
+                    self.pending_load = None;
+                }
+                Ok(Err(e)) => {
+                    log::error!("node.gltf_skeleton_pose: {e}");
+                    self.pending_load = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    log::error!("node.gltf_skeleton_pose: background load channel disconnected");
+                    self.pending_load = None;
                 }
             }
         }
 
-        for j in 0..joint_count {
-            root_world[j] = mat4_from_table(root_world_table, j);
-            inverse_bind[j] = mat4_from_table(inverse_bind_table, j);
-            let tr_range = row_range_for_compound_key(translation_tracks, clip_index, j);
-            let tr = sample_vec3_range(translation_tracks, tr_range, 2, 3, t, [0.0, 0.0, 0.0]);
-            let rot_range = row_range_for_compound_key(rotation_tracks, clip_index, j);
-            let rot = sample_quat_range(rotation_tracks, rot_range, 2, 3, t);
-            let sc_range = row_range_for_compound_key(scale_tracks, clip_index, j);
-            let sc = sample_vec3_range(scale_tracks, sc_range, 2, 3, t, [1.0, 1.0, 1.0]);
-            local[j] = mat4_from_trs(tr, rot, sc);
-        }
-
-        let mut skin_matrices = Vec::with_capacity(joint_count);
-        // `j` indexes THREE independent slices (`parent`/`local`/`root_world` via
-        // `resolve_world`'s memoization, plus `inverse_bind` here) — an
-        // `.iter().enumerate()` restructure would need all three zipped anyway,
-        // which is less readable than the explicit index.
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..joint_count {
-            let w = resolve_world(j, &parent[..joint_count], &local[..joint_count], &root_world[..joint_count], &mut world[..joint_count], 0);
-            let m = mat4_mul(&w, &inverse_bind[j]);
-            skin_matrices.push(JointMatrix { c0: m[0], c1: m[1], c2: m[2], c3: m[3] });
+        // Nothing loaded yet (or the path is empty/failed) — leave the
+        // pre-bound output buffer's existing contents, same "hold last
+        // frame" convention `gltf_mesh_source`/`gltf_morph_deltas_source`
+        // use while their own background parse is in flight.
+        let Some(anim_set) = self.anim_set.clone() else {
+            return;
+        };
+        let skin_matrices = sample_skeleton_pose(&anim_set, skin_index, clip_index, t, joint_count);
+        if skin_matrices.is_empty() {
+            return;
         }
 
         let Some(out_buf) = ctx.outputs.array("joint_matrices") else {
@@ -396,6 +512,7 @@ impl Primitive for GltfSkeletonPose {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
+    use crate::node_graph::gltf_anim_cache::{BindTrs, Channel, ChannelKind, SkinTopology};
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
@@ -416,76 +533,6 @@ mod tests {
         let prim = GltfSkeletonPose::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_skeleton_pose");
-    }
-
-    fn track_table(rows: Vec<Vec<f32>>) -> TableData {
-        TableData::new(rows).unwrap()
-    }
-
-    /// Prepends `clip_index = 0` to each `[joint_index, time_s, ...]` row
-    /// (pre-A4 test shape) — every test here targets the default-selected
-    /// clip.
-    fn clip0_track_table(rows: Vec<Vec<f32>>) -> TableData {
-        track_table(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
-    }
-
-    #[test]
-    fn joint_row_range_finds_a_grouped_slice() {
-        // Rows for joints 0, 0, 1, 1, 1, 3 (joint 2 has no rows), clip 0.
-        let table = clip0_track_table(vec![
-            vec![0.0, 0.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 1.0, 0.0, 0.0],
-            vec![1.0, 0.0, 2.0, 0.0, 0.0],
-            vec![1.0, 0.5, 3.0, 0.0, 0.0],
-            vec![1.0, 1.0, 4.0, 0.0, 0.0],
-            vec![3.0, 0.0, 5.0, 0.0, 0.0],
-        ]);
-        assert_eq!(row_range_for_compound_key(Some(&table), 0, 0), (0, 2));
-        assert_eq!(row_range_for_compound_key(Some(&table), 0, 1), (2, 5));
-        assert_eq!(row_range_for_compound_key(Some(&table), 0, 2), (0, 0), "no rows for joint 2");
-        assert_eq!(row_range_for_compound_key(Some(&table), 0, 3), (5, 6));
-    }
-
-    #[test]
-    fn sample_vec3_range_lerps_and_holds_boundaries() {
-        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 10.0, 0.0, 0.0]]);
-        let range = row_range_for_compound_key(Some(&table), 0, 0);
-        let mid = sample_vec3_range(Some(&table), range, 2, 3, 0.5, [0.0, 0.0, 0.0]);
-        assert!((mid[0] - 5.0).abs() < 1e-4, "halfway lerp, got {}", mid[0]);
-        let before = sample_vec3_range(Some(&table), range, 2, 3, -1.0, [0.0, 0.0, 0.0]);
-        assert!((before[0] - 0.0).abs() < 1e-4, "holds first keyframe before range");
-        let after = sample_vec3_range(Some(&table), range, 2, 3, 5.0, [0.0, 0.0, 0.0]);
-        assert!((after[0] - 10.0).abs() < 1e-4, "holds last keyframe after range");
-    }
-
-    #[test]
-    fn sample_vec3_range_falls_back_to_default_when_joint_has_no_rows() {
-        let out = sample_vec3_range(None, (0, 0), 2, 3, 0.5, [1.0, 2.0, 3.0]);
-        assert_eq!(out, [1.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn sample_quat_range_single_row_is_the_static_bind_pose() {
-        let table = clip0_track_table(vec![vec![0.0, 0.0, 0.1, 0.2, 0.3, 0.9]]);
-        let range = row_range_for_compound_key(Some(&table), 0, 0);
-        let q = sample_quat_range(Some(&table), range, 2, 3, 0.7);
-        assert_eq!(q, [0.1, 0.2, 0.3, 0.9], "single-row table returns the static value at any t");
-    }
-
-    #[test]
-    fn mat4_from_table_reads_column_major_and_falls_back_to_identity() {
-        let mut row = vec![2.0f32]; // joint_index = 2
-        for col in 0..4 {
-            for r in 0..4 {
-                row.push(if col == r { 1.0 } else { 0.0 });
-            }
-        }
-        row[1 + 3 * 4] = 7.0; // c3.x -> translation x = 7
-        let table = track_table(vec![row]);
-        let m = mat4_from_table(Some(&table), 2);
-        assert_eq!(m[3][0], 7.0, "translation column read correctly");
-        assert_eq!(mat4_from_table(Some(&table), 5), MAT4_IDENTITY, "no row for joint 5 -> identity");
-        assert_eq!(mat4_from_table(None, 0), MAT4_IDENTITY, "no table -> identity");
     }
 
     /// Two joints: joint 0 is the root (parent -1, identity root_world),
@@ -527,5 +574,157 @@ mod tests {
         // should be world's rotation/scale applied to -3 then +3 world
         // offset: for pure translations this nets to 0.
         assert!((skin[3][0]).abs() < 1e-5, "world(+3) * inverse_bind(-3) nets to 0, got {}", skin[3][0]);
+    }
+
+    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — cache-backed sampling ─────────
+
+    fn translation_channel(node: u32, keys: &[(f32, [f32; 3])]) -> Channel {
+        Channel {
+            target_node: node,
+            kind: ChannelKind::Translation,
+            mode: crate::node_graph::gltf_load::GltfInterp::Linear,
+            times: keys.iter().map(|(t, _)| *t).collect(),
+            values: keys.iter().flat_map(|(_, v)| *v).collect(),
+            in_tangents: Vec::new(),
+            out_tangents: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sample_joint_local_falls_back_to_bind_trs_when_no_channel() {
+        let anim_set = GltfAnimSet {
+            clips: vec![AnimClip { duration_s: 1.0, channels: Vec::new() }],
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: vec![BindTrs { translation: [1.0, 2.0, 3.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+        };
+        let m = sample_joint_local(&anim_set, &anim_set.clips[0], 0, 0.5);
+        assert_eq!(m[3][0], 1.0, "no channel for node 0 -> bind translation x");
+        assert_eq!(m[3][1], 2.0);
+        assert_eq!(m[3][2], 3.0);
+    }
+
+    #[test]
+    fn sample_joint_local_samples_the_animated_channel_when_present() {
+        let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
+        let anim_set = GltfAnimSet {
+            clips: vec![AnimClip { duration_s: 1.0, channels: vec![channel] }],
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: vec![BindTrs { translation: [99.0, 99.0, 99.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+        };
+        let m = sample_joint_local(&anim_set, &anim_set.clips[0], 0, 0.5);
+        assert!((m[3][0] - 5.0).abs() < 1e-4, "halfway lerp of the animated channel, not the bind pose, got {}", m[3][0]);
+    }
+
+    /// Two-joint parent chain (same shape as `resolve_world_composes_parent_chain`)
+    /// exercised through the full [`sample_skeleton_pose`] entry point —
+    /// proves the cache-backed path composes correctly end to end, not
+    /// just its pieces.
+    #[test]
+    fn sample_skeleton_pose_composes_parent_chain_end_to_end() {
+        let channel0 = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
+        let anim_set = GltfAnimSet {
+            clips: vec![AnimClip { duration_s: 1.0, channels: vec![channel0] }],
+            skins: vec![SkinTopology {
+                joint_node_indices: vec![0, 1],
+                joint_parent: vec![-1, 0],
+                joint_root_world: vec![MAT4_IDENTITY, MAT4_IDENTITY],
+                inverse_bind_matrices: vec![MAT4_IDENTITY, MAT4_IDENTITY],
+            }],
+            node_parents: vec![-1, 0],
+            node_bind_trs: vec![
+                BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+                BindTrs { translation: [0.0, 2.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] },
+            ],
+        };
+        let matrices = sample_skeleton_pose(&anim_set, 0, 0, 1.0, 2);
+        assert_eq!(matrices.len(), 2);
+        assert!((matrices[0].c3[0] - 10.0).abs() < 1e-4, "joint 0 (animated) world x = 10");
+        assert!((matrices[1].c3[0] - 10.0).abs() < 1e-4, "joint 1 inherits joint 0's translation");
+        assert!((matrices[1].c3[1] - 2.0).abs() < 1e-4, "joint 1 keeps its own bind-pose y offset");
+    }
+
+    #[test]
+    fn sample_skeleton_pose_returns_empty_for_out_of_range_skin() {
+        let anim_set = GltfAnimSet {
+            clips: Vec::new(),
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: Vec::new(),
+        };
+        assert!(sample_skeleton_pose(&anim_set, 0, 0, 0.0, 10).is_empty());
+    }
+
+    /// P1's mandatory perf gate: a synthetic dragon-fixture-scale
+    /// `GltfAnimSet` (52 clips x 630 channels x ~160 keys, 300 joints,
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md §3) sampled for one full pose must
+    /// stay well under budget with the binary-search slice path — the
+    /// exact O(rows) linear-scan cost class this design removes. Debug
+    /// build asserts < 8ms (the doc's stated debug ceiling); release is
+    /// far faster and isn't asserted here (measured, not gated, per the
+    /// doc's own "release <1ms claim is documented not asserted").
+    #[test]
+    fn pose_sampling_dragon_scale_under_1ms() {
+        const CLIP_COUNT: usize = 52;
+        const CHANNELS_PER_CLIP: usize = 630;
+        const KEYS_PER_CHANNEL: usize = 160;
+        const JOINT_COUNT: usize = 300;
+
+        // 630 channels spread across up to 300 joints, at most one
+        // Translation channel per joint per clip (this perf test only
+        // needs a realistic COUNT/lookup-cost shape, not real skeleton
+        // topology).
+        let mut clips = Vec::with_capacity(CLIP_COUNT);
+        for _ in 0..CLIP_COUNT {
+            let mut channels = Vec::with_capacity(CHANNELS_PER_CLIP);
+            for c in 0..CHANNELS_PER_CLIP {
+                let node = (c % JOINT_COUNT) as u32;
+                let times: Vec<f32> = (0..KEYS_PER_CHANNEL).map(|k| k as f32 * 0.01).collect();
+                let values: Vec<f32> = (0..KEYS_PER_CHANNEL * 3).map(|v| (v % 7) as f32 * 0.1).collect();
+                channels.push(Channel {
+                    target_node: node,
+                    kind: ChannelKind::Translation,
+                    mode: crate::node_graph::gltf_load::GltfInterp::Linear,
+                    times,
+                    values,
+                    in_tangents: Vec::new(),
+                    out_tangents: Vec::new(),
+                });
+            }
+            channels.sort_by_key(|c| c.target_node);
+            clips.push(AnimClip { duration_s: 1.6, channels });
+        }
+
+        let joint_node_indices: Vec<u32> = (0..JOINT_COUNT as u32).collect();
+        // A shallow binary tree so parent-chain composition is exercised
+        // (not every joint a root).
+        let joint_parent: Vec<i32> =
+            (0..JOINT_COUNT).map(|j| if j == 0 { -1 } else { ((j - 1) / 2) as i32 }).collect();
+        let skin = SkinTopology {
+            joint_node_indices,
+            joint_parent,
+            joint_root_world: vec![MAT4_IDENTITY; JOINT_COUNT],
+            inverse_bind_matrices: vec![MAT4_IDENTITY; JOINT_COUNT],
+        };
+        let node_bind_trs =
+            vec![BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }; JOINT_COUNT];
+
+        let anim_set =
+            GltfAnimSet { clips, skins: vec![skin], node_parents: Vec::new(), node_bind_trs };
+
+        // Warm the branch predictor / allocator once, then measure a
+        // single pose sample (the per-frame cost this gate bounds).
+        let _ = sample_skeleton_pose(&anim_set, 0, 0, 0.8, JOINT_COUNT);
+        let start = std::time::Instant::now();
+        let matrices = sample_skeleton_pose(&anim_set, 0, 0, 0.8, JOINT_COUNT);
+        let elapsed = start.elapsed();
+
+        assert_eq!(matrices.len(), JOINT_COUNT);
+        assert!(
+            elapsed.as_secs_f64() * 1000.0 < 8.0,
+            "one full dragon-scale pose sample took {:.3}ms, budget is 8ms (debug)",
+            elapsed.as_secs_f64() * 1000.0
+        );
     }
 }

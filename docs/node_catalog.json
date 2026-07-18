@@ -8252,6 +8252,22 @@
       ],
       "params": [
         {
+          "default": "0",
+          "label": "File",
+          "name": "path",
+          "type": "string"
+        },
+        {
+          "default": "0",
+          "label": "Skin Index",
+          "name": "skin_index",
+          "range": [
+            "0",
+            "63"
+          ],
+          "type": "int"
+        },
+        {
           "default": "1",
           "label": "Duration (s)",
           "name": "duration_s",

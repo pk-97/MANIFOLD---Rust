@@ -83,9 +83,16 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
 /// `extensionsRequired` against `MANIFOLD_SUPPORTED_EXTENSIONS`, so an asset
 /// that lists a genuinely unsupported extension still fails — with OUR
 /// error naming it, not the crate's generic "Unsupported extension".
-pub(crate) fn import_glb(
+/// The document+buffer half of [`import_glb`] — parse, re-validate, gate
+/// `extensionsRequired`, and resolve buffers, but stop short of image
+/// decode. GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `gltf_anim_cache.rs`'s loader
+/// needs the document and buffers (to read animation/skin accessors) but
+/// never touches a texture, so routing it through the full `import_glb`
+/// would decode every image on a thread whose only job is keyframe data —
+/// wasted work, and a second reason to keep exactly one parse entry point.
+pub(crate) fn parse_document_and_buffers(
     path: &std::path::Path,
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(&bytes)
@@ -128,6 +135,15 @@ pub(crate) fn import_glb(
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let buffers = gltf::import_buffers(&document, Some(base), blob)
         .map_err(|e| format!("{}: buffer import failed: {e}", path.display()))?;
+
+    Ok((document, buffers))
+}
+
+pub(crate) fn import_glb(
+    path: &std::path::Path,
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+    let (document, buffers) = parse_document_and_buffers(path)?;
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let images = import_images_with_webp(&document, base, &buffers)
         .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
 
@@ -1370,7 +1386,7 @@ pub(crate) struct GltfImportSummary {
 /// tables' trailing `mode` column (0/1/2 — `node_graph::primitives::
 /// gltf_anim_shared`'s `Interp`) — IMPORT_ANYTHING_WAVE_DESIGN.md W2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum GltfInterp {
+pub enum GltfInterp {
     #[default]
     Linear,
     Step,
@@ -1521,7 +1537,7 @@ pub(crate) struct GltfObjectAnimation {
 /// LINEAR-only (A3 scope, unchanged by W2) — a non-LINEAR weights channel
 /// still lands in `skipped_channels`, same as an unreadable weights
 /// accessor (a length that doesn't divide evenly by the keyframe count).
-fn parse_animations(
+pub(crate) fn parse_animations(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
 ) -> Vec<GltfAnimationInfo> {
@@ -1785,7 +1801,7 @@ pub(crate) struct GltfSkinInfo {
 
 /// Every node's parent, indexed by node index (`None` = root). Built once
 /// per document parse — O(N) over the node tree.
-fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> {
+pub(crate) fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> {
     let mut parent_of: Vec<Option<usize>> = vec![None; document.nodes().len()];
     for node in document.nodes() {
         for child in node.children() {
@@ -1820,7 +1836,7 @@ fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: 
 /// Parse every `document.skins()` entry, indexed by glTF skin index. A
 /// skin with no `inverseBindMatrices` accessor (spec-legal — implies
 /// identity per joint) falls back to `MAT4_IDENTITY` for every joint.
-fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<GltfSkinInfo> {
+pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<GltfSkinInfo> {
     let parent_of = build_parent_map(document);
     document
         .skins()

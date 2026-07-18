@@ -13,6 +13,7 @@
 //! that has real correctness coupling.
 
 use crate::node_graph::effect_node::FrameTime;
+use crate::node_graph::gltf_load::GltfInterp;
 use crate::node_graph::parameters::TableData;
 
 /// How `progress` maps into `[0, 1]` past the wrap point. Applies uniformly
@@ -419,6 +420,125 @@ pub(crate) fn sample_scalar_range(
     a + (b - a) * f
 }
 
+// ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D3 — slice-based samplers ─────────────
+// Same interpolation math as `sample_vec3_range`/`sample_quat_range`
+// above (LINEAR lerp/slerp, STEP hold, CUBICSPLINE Hermite), retargeted
+// from `TableData` rows to flat `&[f32]` slices (`gltf_anim_cache::
+// Channel`'s storage) so a lookup is `partition_point` + O(1) indexing
+// instead of a table row read. `values`/`in_tangents`/`out_tangents` are
+// flat SoA: `values[i*stride..i*stride+stride]` is keyframe `i`.
+
+/// Binary-search `times` for the bracketing keyframe pair around `t`,
+/// returning `(lo, hi)` indices (`lo == hi` only when `times.len() == 1`).
+/// Callers must have already handled `times.is_empty()` and the
+/// before-first/after-last boundary holds.
+fn bracket_slice(times: &[f32], t: f32) -> (usize, usize) {
+    let n = times.len();
+    if n <= 1 {
+        return (0, 0);
+    }
+    // First index whose time is > t; the bracketing pair is (hi-1, hi).
+    let hi = times.partition_point(|&tt| tt <= t).clamp(1, n - 1);
+    (hi - 1, hi)
+}
+
+/// Slice equivalent of [`sample_vec3_range`] — same LINEAR/STEP/CUBICSPLINE
+/// behavior, `values`/tangents stride-3 flat SoA instead of table columns.
+pub(crate) fn sample_vec3_slice(
+    times: &[f32],
+    values: &[f32],
+    mode: GltfInterp,
+    in_tangents: &[f32],
+    out_tangents: &[f32],
+    t: f32,
+    default: [f32; 3],
+) -> [f32; 3] {
+    let n = times.len();
+    if n == 0 {
+        return default;
+    }
+    let get = |i: usize| -> [f32; 3] { [values[i * 3], values[i * 3 + 1], values[i * 3 + 2]] };
+    if n == 1 {
+        return get(0);
+    }
+    if t <= times[0] {
+        return get(0);
+    }
+    if t >= times[n - 1] {
+        return get(n - 1);
+    }
+    let (lo, hi) = bracket_slice(times, t);
+    let (t0, t1) = (times[lo], times[hi]);
+    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
+    match mode {
+        GltfInterp::Step => get(lo),
+        GltfInterp::CubicSpline => {
+            let p0 = get(lo);
+            let p1 = get(hi);
+            let m0 = [out_tangents[lo * 3], out_tangents[lo * 3 + 1], out_tangents[lo * 3 + 2]];
+            let m1 = [in_tangents[hi * 3], in_tangents[hi * 3 + 1], in_tangents[hi * 3 + 2]];
+            hermite(p0, m0, p1, m1, f, t1 - t0)
+        }
+        GltfInterp::Linear => {
+            let (a, b) = (get(lo), get(hi));
+            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
+        }
+    }
+}
+
+/// Slice equivalent of [`sample_quat_range`] — same LINEAR (slerp) /STEP/
+/// CUBICSPLINE (Hermite, renormalized) behavior, stride-4 flat SoA.
+pub(crate) fn sample_quat_slice(
+    times: &[f32],
+    values: &[f32],
+    mode: GltfInterp,
+    in_tangents: &[f32],
+    out_tangents: &[f32],
+    t: f32,
+) -> [f32; 4] {
+    let default = [0.0, 0.0, 0.0, 1.0];
+    let n = times.len();
+    if n == 0 {
+        return default;
+    }
+    let get = |i: usize| -> [f32; 4] {
+        [values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]]
+    };
+    if n == 1 {
+        return get(0);
+    }
+    if t <= times[0] {
+        return get(0);
+    }
+    if t >= times[n - 1] {
+        return get(n - 1);
+    }
+    let (lo, hi) = bracket_slice(times, t);
+    let (t0, t1) = (times[lo], times[hi]);
+    let f = if (t1 - t0).abs() > 1e-9 { (t - t0) / (t1 - t0) } else { 0.0 };
+    match mode {
+        GltfInterp::Step => get(lo),
+        GltfInterp::CubicSpline => {
+            let p0 = get(lo);
+            let p1 = get(hi);
+            let m0 = [
+                out_tangents[lo * 4],
+                out_tangents[lo * 4 + 1],
+                out_tangents[lo * 4 + 2],
+                out_tangents[lo * 4 + 3],
+            ];
+            let m1 = [
+                in_tangents[hi * 4],
+                in_tangents[hi * 4 + 1],
+                in_tangents[hi * 4 + 2],
+                in_tangents[hi * 4 + 3],
+            ];
+            normalize_quat(hermite(p0, m0, p1, m1, f, t1 - t0))
+        }
+        GltfInterp::Linear => slerp(get(lo), get(hi), f),
+    }
+}
+
 fn slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let dot0 = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
     let (b, dot) = if dot0 < 0.0 { ([-b[0], -b[1], -b[2], -b[3]], -dot0) } else { (b, dot0) };
@@ -631,6 +751,100 @@ mod tests {
         .unwrap();
         let range = row_range_for_key(Some(&table), 0);
         let q = sample_quat_range(Some(&table), range, 1, 2, 0.5);
+        let len_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+        assert!((len_sq - 1.0).abs() < 1e-4, "Hermite quat blend must be renormalized, got {q:?}");
+    }
+
+    // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md P1 — slice samplers ────────────────
+    // Same fixtures as the table-based tests above, re-expressed as flat
+    // slices — proves the slice path is value-identical to the table path
+    // it's replacing (D3).
+
+    #[test]
+    fn sample_vec3_slice_lerps_and_holds_boundaries() {
+        let times = [0.0f32, 1.0];
+        let values = [0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0];
+        let mid = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], 0.5, [0.0; 3]);
+        assert!((mid[0] - 5.0).abs() < 1e-4, "halfway lerp, got {}", mid[0]);
+        let before = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], -1.0, [0.0; 3]);
+        assert!((before[0] - 0.0).abs() < 1e-4, "holds first keyframe before range");
+        let after = sample_vec3_slice(&times, &values, GltfInterp::Linear, &[], &[], 5.0, [0.0; 3]);
+        assert!((after[0] - 10.0).abs() < 1e-4, "holds last keyframe after range");
+    }
+
+    #[test]
+    fn sample_vec3_slice_falls_back_to_default_when_empty() {
+        let out = sample_vec3_slice(&[], &[], GltfInterp::Linear, &[], &[], 0.5, [1.0, 2.0, 3.0]);
+        assert_eq!(out, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn slice_step_holds_the_lower_keyframe_value() {
+        let times = [0.0f32, 0.5, 1.0, 1.5];
+        let values = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let at_025 = sample_vec3_slice(&times, &values, GltfInterp::Step, &[], &[], 0.25, [9.0; 3]);
+        assert!(
+            (at_025[0] - 0.0).abs() < 1e-4 && (at_025[1] - 0.0).abs() < 1e-4,
+            "STEP at t=0.25 must hold keyframe0's (0,0,0), got {at_025:?}"
+        );
+        let at_06 = sample_vec3_slice(&times, &values, GltfInterp::Step, &[], &[], 0.6, [9.0; 3]);
+        assert!(
+            (at_06[0] - 1.0).abs() < 1e-4 && (at_06[1] - 0.0).abs() < 1e-4,
+            "STEP at t=0.6 must hold keyframe1's (1,0,0), got {at_06:?}"
+        );
+    }
+
+    #[test]
+    fn slice_cubicspline_with_zero_tangents_hermite_blends_the_bracketing_values() {
+        let times = [0.0f32, 0.5, 1.0, 1.5];
+        let values = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let zero_tangents = [0.0f32; 12];
+        let at_025 = sample_vec3_slice(
+            &times,
+            &values,
+            GltfInterp::CubicSpline,
+            &zero_tangents,
+            &zero_tangents,
+            0.25,
+            [9.0; 3],
+        );
+        assert!(
+            (at_025[0] - 0.5).abs() < 1e-4 && (at_025[1] - 0.0).abs() < 1e-4,
+            "CUBICSPLINE (zero tangents) at t=0.25 must equal the smoothstep blend (0.5,0,0), \
+             got {at_025:?}"
+        );
+    }
+
+    #[test]
+    fn slice_quat_single_keyframe_is_the_static_bind_pose() {
+        let times = [0.0f32];
+        let values = [0.1f32, 0.2, 0.3, 0.9];
+        let q = sample_quat_slice(&times, &values, GltfInterp::Linear, &[], &[], 0.7);
+        assert_eq!(q, [0.1, 0.2, 0.3, 0.9], "single-keyframe slice returns the static value at any t");
+    }
+
+    #[test]
+    fn slice_cubicspline_quat_hermite_result_is_renormalized() {
+        let times = [0.0f32, 1.0];
+        let values = [
+            0.0f32,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        let zero_tangents = [0.0f32; 8];
+        let q = sample_quat_slice(
+            &times,
+            &values,
+            GltfInterp::CubicSpline,
+            &zero_tangents,
+            &zero_tangents,
+            0.5,
+        );
         let len_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
         assert!((len_sq - 1.0).abs() < 1e-4, "Hermite quat blend must be renormalized, got {q:?}");
     }
