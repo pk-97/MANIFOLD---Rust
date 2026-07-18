@@ -4,11 +4,30 @@
 //!
 //! GLTF_ANIMATION_DESIGN.md A1 (D1): "animating a rigid node is animating
 //! params" — this node does no scene-graph work itself; it is a pure
-//! CPU sampler that turns three optional `Table` params (one keyframe
-//! track each for translation / rotation / scale, authored at import
-//! time by `gltf_import.rs` from `gltf_load::GltfObjectAnimation`) into
-//! the nine `pos_x/y/z, rot_x/y/z, scale_x/y/z` scalars, wired straight
-//! into an object's `node.transform_3d`.
+//! CPU sampler that turns keyframe channels into the nine `pos_x/y/z,
+//! rot_x/y/z, scale_x/y/z` scalars, wired straight into an object's
+//! `node.transform_3d`.
+//!
+//! GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: keyframe payload no longer lives in
+//! this node's Table params (the pre-P2 `translation_track`/`rotation_
+//! track`/`scale_track` Tables are DELETED, not just unread — see the
+//! phase brief's D5 migration for the pre-P2-preset path). Instead `path`
+//! plus THREE per-channel node selectors — `translation_node`/
+//! `rotation_node`/`scale_node` — pick each channel out of an
+//! `Arc<GltfAnimSet>` from `gltf_anim_cache`'s shared, file-backed,
+//! `Weak`-held cache (the SAME cache `node.gltf_skeleton_pose` reads, one
+//! entry per FILE, shared across every node/object referencing it). THREE
+//! selectors, not one: `BoxAnimated.glb` — this design's own canonical A1
+//! fixture — animates translation on node 0 (an ancestor) and rotation on
+//! node 2 (the mesh node itself), two DIFFERENT physical nodes for the
+//! SAME object (`gltf_load::GltfObjectAnimation`'s `translation_node`/
+//! `rotation_node`/`scale_node` fields, each independently `Option<usize>`
+//! since a channel may not be animated at all). A single shared selector
+//! silently samples the wrong node's data for whichever channel isn't at
+//! that node — this was caught by the P2 gate's own visual re-render of
+//! `BoxAnimated`, not assumed away. Sampling is a `partition_point` binary
+//! search per channel (`gltf_anim_shared`'s slice samplers) instead of a
+//! linear table scan.
 //!
 //! `progress` is port-shadowed like every other control-rate input in
 //! this catalog: wire an `node.lfo` (Saw) or a fader for direct control,
@@ -20,30 +39,36 @@
 //! out-of-range value (an LFO edge, a scrub past the end) continues
 //! smoothly into the next cycle instead of freezing at the boundary.
 //!
-//! LINEAR interpolation only (A1 scope, per the glTF spec's own
-//! keyframe semantics): translation/scale lerp between the bracketing
-//! keyframes, rotation slerps its quaternion pair then converts to the
+//! LINEAR/STEP/CUBICSPLINE interpolation (whatever `gltf_anim_cache::
+//! Channel::mode` carries): translation/scale lerp (or hold, or Hermite)
+//! between the bracketing keyframes, rotation slerps (or holds, or
+//! Hermite-blends+renormalizes) its quaternion pair then converts to the
 //! XYZ Euler triple that reproduces the SAME rotation through
 //! `render_scene::model_matrix`'s exact `Rz(z) · Ry_used(y) · Rx(x)`
 //! composition (see [`quat_to_render_scene_euler`]). A channel absent
-//! from the clip (its Table param left at the `Float(0.0)` sentinel)
-//! passes through as the static neutral default — 0 for position/
-//! rotation, 1 for scale — never fabricated motion.
+//! from the selected clip falls back to ITS OWN node selector's static
+//! BIND pose (`GltfAnimSet::node_bind_trs`, the SAME never-identity-by-
+//! default fallback `node.gltf_skeleton_pose`'s `sample_joint_local`
+//! uses) — never fabricated motion. Nothing loaded yet (no `path`, or the
+//! background load hasn't resolved) holds the output slots' existing
+//! contents, the same convention `gltf_mesh_source`/`gltf_skeleton_pose`
+//! use.
 
 use std::borrow::Cow;
+use std::sync::{Arc, mpsc};
 
 use super::gltf_anim_shared::{
-    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, row_range_for_key,
-    sample_quat_range, sample_vec3_range,
+    LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::gltf_anim_cache::{AnimSetLookup, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: GltfAnimationSource,
     type_id: "node.gltf_animation_source",
-    purpose: "Samples a parsed glTF TRS keyframe clip (translation/rotation/scale Tables authored at import time) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR interpolation only (A1 scope): lerp for translation/scale, slerp+quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the clip (Table left at its sentinel) passes through as the static neutral default (0 pos/rot, 1 scale).",
+    purpose: "Samples a parsed glTF TRS keyframe clip (read from the shared gltf_anim_cache, selected by path + per-channel translation_node/rotation_node/scale_node) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR/STEP/CUBICSPLINE interpolation (whatever the channel carries): lerp/hold/Hermite for translation/scale, slerp/hold/Hermite+renormalize then quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the selected clip falls back to its own node selector's static bind pose, never a fabricated identity. Three independent node selectors (not one) because glTF assets legitimately split TRS channels across different ancestor nodes for one object (BoxAnimated.glb: translation on an ancestor, rotation on the mesh node).",
     inputs: {
         progress: ScalarF32 optional,
         clip_index: ScalarF32 optional,
@@ -61,6 +86,51 @@ crate::primitive! {
         scale_z: ScalarF32,
     },
     params: [
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md D1/P2: comes via
+        // presetMetadata.stringBindings, same convention as
+        // node.gltf_mesh_source's/node.gltf_skeleton_pose's `path`.
+        // Selects the `Arc<GltfAnimSet>` this node samples from
+        // `gltf_anim_cache`'s shared cache.
+        ParamDef {
+            name: Cow::Borrowed("path"),
+            label: "File",
+            ty: ParamType::String,
+            default: ParamValue::Float(0.0), // String default supplied via stringBindings; this slot is never read.
+            range: None,
+            enum_values: &[],
+        },
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: one node-index selector PER
+        // CHANNEL — see the module doc comment for why a single shared
+        // selector is wrong (BoxAnimated.glb). `-1` (the default) means
+        // "this object's channel is never animated in any clip" — the
+        // sampler emits the static neutral default (0 pos/rot, 1 scale)
+        // for it directly rather than attempting a bind-pose lookup.
+        // Stamped by gltf_import.rs from `GltfObjectAnimation::
+        // translation_node`/`rotation_node`/`scale_node`.
+        ParamDef {
+            name: Cow::Borrowed("translation_node"),
+            label: "Translation Node",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 100_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("rotation_node"),
+            label: "Rotation Node",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 100_000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("scale_node"),
+            label: "Scale Node",
+            ty: ParamType::Int,
+            default: ParamValue::Float(-1.0),
+            range: Some((-1.0, 100_000.0)),
+            enum_values: &[],
+        },
         ParamDef {
             name: Cow::Borrowed("duration_s"),
             label: "Duration (s)",
@@ -82,7 +152,9 @@ crate::primitive! {
             label: "Clip",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            range: Some((0.0, 31.0)),
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D6: follows the file, not an
+            // arbitrary A4-era cap.
+            range: Some((0.0, 255.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -157,41 +229,9 @@ crate::primitive! {
             range: Some((-1000.0, 1000.0)),
             enum_values: &[],
         },
-        ParamDef {
-            name: Cow::Borrowed("translation_track"),
-            label: "Translation Track",
-            ty: ParamType::Table,
-            // Tables can't live in static-const ParamValue — see
-            // node.cycle_table_row's identical sentinel convention. Rows
-            // are [clip_index, time_s, x, y, z] (A4: clip_index prepended
-            // for D4 multi-clip selection), grouped ascending by
-            // clip_index, ascending time within a clip. Absent (sentinel)
-            // means "this channel isn't animated in any clip".
-            default: ParamValue::Float(0.0),
-            range: None,
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("rotation_track"),
-            label: "Rotation Track",
-            ty: ParamType::Table,
-            // Rows are [clip_index, time_s, x, y, z, w] (quaternion).
-            default: ParamValue::Float(0.0),
-            range: None,
-            enum_values: &[],
-        },
-        ParamDef {
-            name: Cow::Borrowed("scale_track"),
-            label: "Scale Track",
-            ty: ParamType::Table,
-            // Rows are [clip_index, time_s, x, y, z].
-            default: ParamValue::Float(0.0),
-            range: None,
-            enum_values: &[],
-        },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire `pos_x`..`scale_z` into a node.transform_3d's same-named input ports (its nine params are already port-shadowed — see docs/GLTF_ANIMATION_DESIGN.md A1). Tables are authored by gltf_import.rs at import time, one row per glTF keyframe; JSON shape matches node.cycle_table_row's Table convention. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop, or any 0..1 scrub source.",
+    composition_notes: "Wire `pos_x`..`scale_z` into a node.transform_3d's same-named input ports (its nine params are already port-shadowed — see docs/GLTF_ANIMATION_DESIGN.md A1). `path` comes via presetMetadata.stringBindings, same convention as node.gltf_mesh_source's `path`; `translation_node`/`rotation_node`/`scale_node` each independently select which scene node that ONE channel samples (gltf_import.rs stamps all four from GltfObjectAnimation) — `-1` means that channel is never animated for this object. Unwired `progress` follows the default beat-drive; wire node.lfo (Saw) for a performer-controlled loop, or any 0..1 scrub source.",
     examples: [],
     picker: { label: "glTF Animation Source", category: Driver },
     summary: "Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loop it on the beat.",
@@ -201,6 +241,11 @@ crate::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         trigger_latch: TriggerLatch = TriggerLatch::new(),
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: same key-gated background-load
+        // shape node.gltf_skeleton_pose's P1 rewire introduced.
+        last_path: String = String::new(),
+        anim_set: Option<Arc<GltfAnimSet>> = None,
+        pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
     },
 }
 
@@ -260,9 +305,67 @@ pub(crate) fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
     [rx, ry, rz]
 }
 
+fn table_or_empty(v: Option<&ParamValue>) -> Option<&TableData> {
+    match v {
+        Some(ParamValue::Table(t)) => Some(t.as_ref()),
+        _ => None,
+    }
+}
+
+/// Sample each channel's LOCAL translation/rotation/scale at time `t`
+/// within `clip` (looked up from `anim_set`), each against its OWN node
+/// selector — see the module doc comment for why translation/rotation/
+/// scale can legitimately come from three DIFFERENT scene nodes for one
+/// object (`BoxAnimated.glb`). A `< 0` node (the "never animated"
+/// sentinel) skips the bind-pose lookup entirely and returns the static
+/// neutral default (0 pos/rot, 1 scale) directly. Otherwise falls back to
+/// `anim_set.node_bind_trs[node]` when `clip` carries no track for that
+/// node — the SAME never-fabricated-identity fallback
+/// `gltf_skeleton_pose::sample_joint_local` uses; `clip: None` (an
+/// out-of-range `clip_index`) samples every present-node channel from its
+/// bind pose, same as a clip with no channels for that node at all. Pure
+/// and `EffectNodeContext`-free so it's directly unit-testable.
+pub(crate) fn sample_rigid_local(
+    anim_set: &GltfAnimSet,
+    clip: Option<&crate::node_graph::gltf_anim_cache::AnimClip>,
+    translation_node: i32,
+    rotation_node: i32,
+    scale_node: i32,
+    t: f32,
+) -> ([f32; 3], [f32; 4], [f32; 3]) {
+    let tr = if translation_node < 0 {
+        [0.0, 0.0, 0.0]
+    } else {
+        let node = translation_node as u32;
+        let bind = anim_set.node_bind_trs.get(node as usize).map(|b| b.translation).unwrap_or([0.0; 3]);
+        clip.and_then(|c| c.translation_channel(node))
+            .map(|c| sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind))
+            .unwrap_or(bind)
+    };
+    let rot = if rotation_node < 0 {
+        [0.0, 0.0, 0.0, 1.0]
+    } else {
+        let node = rotation_node as u32;
+        let bind = anim_set.node_bind_trs.get(node as usize).map(|b| b.rotation).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        clip.and_then(|c| c.rotation_channel(node))
+            .map(|c| sample_quat_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t))
+            .unwrap_or(bind)
+    };
+    let sc = if scale_node < 0 {
+        [1.0, 1.0, 1.0]
+    } else {
+        let node = scale_node as u32;
+        let bind = anim_set.node_bind_trs.get(node as usize).map(|b| b.scale).unwrap_or([1.0; 3]);
+        clip.and_then(|c| c.scale_channel(node))
+            .map(|c| sample_vec3_slice(&c.times, &c.values, c.mode, &c.in_tangents, &c.out_tangents, t, bind))
+            .unwrap_or(bind)
+    };
+    (tr, rot, sc)
+}
+
 impl Primitive for GltfAnimationSource {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let duration_s = match ctx.params.get("duration_s") {
+        let duration_s_param = match ctx.params.get("duration_s") {
             Some(ParamValue::Float(f)) => f.max(1e-6),
             _ => 1.0,
         };
@@ -289,11 +392,70 @@ impl Primitive for GltfAnimationSource {
             .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
         self.trigger_latch.update(trigger_count, ctx.time.beats.0);
 
-        let clip_durations = match ctx.params.get("clip_durations") {
-            Some(ParamValue::Table(t)) => Some(t.as_ref()),
-            _ => None,
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `path` selects the shared
+        // `Arc<GltfAnimSet>` — same key-gated background-load shape
+        // node.gltf_skeleton_pose's P1 rewire introduced. Moved BEFORE
+        // duration_s/progress so a resident clip's own `AnimClip::
+        // duration_s` can drive playback speed. Each channel's OWN node
+        // selector (see the module doc comment for why there are three,
+        // not one) is read at sample time below.
+        let path = match ctx.params.get("path") {
+            Some(ParamValue::String(s)) => s.as_str().to_owned(),
+            _ => String::new(),
         };
-        let duration_s = clip_duration(clip_durations, clip_index, duration_s);
+        let node_param = |name: &str| -> i32 {
+            match ctx.params.get(name) {
+                Some(ParamValue::Float(f)) => f.round() as i32,
+                _ => -1,
+            }
+        };
+        let translation_node = node_param("translation_node");
+        let rotation_node = node_param("rotation_node");
+        let scale_node = node_param("scale_node");
+
+        if path != self.last_path {
+            self.last_path = path.clone();
+            self.anim_set = None;
+            self.pending_load = None;
+        }
+        if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
+            match get_or_spawn_load(std::path::Path::new(&path)) {
+                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
+                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
+            }
+        }
+        if let Some(rx) = &self.pending_load {
+            match rx.try_recv() {
+                Ok(Ok(set)) => {
+                    self.anim_set = Some(set);
+                    self.pending_load = None;
+                }
+                Ok(Err(e)) => {
+                    log::error!("node.gltf_animation_source: {e}");
+                    self.pending_load = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    log::error!("node.gltf_animation_source: background load channel disconnected");
+                    self.pending_load = None;
+                }
+            }
+        }
+
+        // Nothing loaded yet (or path empty/failed) — hold the output
+        // slots' existing contents, same convention
+        // `gltf_mesh_source`/`gltf_skeleton_pose` use.
+        let Some(anim_set) = self.anim_set.clone() else {
+            return;
+        };
+
+        let duration_s = match anim_set.clips.get(clip_index) {
+            Some(c) => c.duration_s,
+            None => {
+                let clip_durations = table_or_empty(ctx.params.get("clip_durations"));
+                clip_duration(clip_durations, clip_index, duration_s_param)
+            }
+        };
 
         let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
         let progress = resolve_progress(
@@ -311,13 +473,10 @@ impl Primitive for GltfAnimationSource {
             ctx.params.get("recenter_y").and_then(ParamValue::as_scalar).unwrap_or(0.0),
             ctx.params.get("recenter_z").and_then(ParamValue::as_scalar).unwrap_or(0.0),
         ];
-        let translation_track = match ctx.params.get("translation_track") {
-            Some(ParamValue::Table(t)) => Some(t.as_ref()),
-            _ => None,
-        };
-        let translation_range = row_range_for_key(translation_track, clip_index);
-        let sampled_pos =
-            sample_vec3_range(translation_track, translation_range, 1, 2, t, [0.0, 0.0, 0.0]);
+
+        let clip = anim_set.clips.get(clip_index);
+        let (sampled_pos, rot_quat, scale) =
+            sample_rigid_local(&anim_set, clip, translation_node, rotation_node, scale_node, t);
         // Composed here, not left to the port-shadow at transform_3d — see
         // `recenter_x`'s doc comment.
         let pos = [
@@ -325,18 +484,6 @@ impl Primitive for GltfAnimationSource {
             sampled_pos[1] + recenter[1],
             sampled_pos[2] + recenter[2],
         ];
-        let scale_track = match ctx.params.get("scale_track") {
-            Some(ParamValue::Table(t)) => Some(t.as_ref()),
-            _ => None,
-        };
-        let scale_range = row_range_for_key(scale_track, clip_index);
-        let scale = sample_vec3_range(scale_track, scale_range, 1, 2, t, [1.0, 1.0, 1.0]);
-        let rotation_track = match ctx.params.get("rotation_track") {
-            Some(ParamValue::Table(t)) => Some(t.as_ref()),
-            _ => None,
-        };
-        let rotation_range = row_range_for_key(rotation_track, clip_index);
-        let rot_quat = sample_quat_range(rotation_track, rotation_range, 1, 2, t);
         let rot = quat_to_render_scene_euler(rot_quat);
 
         ctx.outputs.set_scalar("pos_x", ParamValue::Float(pos[0]));
@@ -368,7 +515,6 @@ mod tests {
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::TableData;
     use crate::node_graph::ports::{PortType, ScalarType};
     use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
@@ -407,10 +553,59 @@ mod tests {
         assert_eq!(node.type_id().as_str(), "node.gltf_animation_source");
     }
 
-    /// Runs the primitive with the given params and wired `progress`
-    /// (`None` = unwired, default beat-drive), returning the nine
-    /// outputs in declaration order.
+    fn translation_channel(node: u32, keys: &[(f32, [f32; 3])]) -> crate::node_graph::gltf_anim_cache::Channel {
+        crate::node_graph::gltf_anim_cache::Channel {
+            target_node: node,
+            kind: crate::node_graph::gltf_anim_cache::ChannelKind::Translation,
+            mode: crate::node_graph::gltf_load::GltfInterp::Linear,
+            times: keys.iter().map(|(t, _)| *t).collect(),
+            values: keys.iter().flat_map(|(_, v)| *v).collect(),
+            in_tangents: Vec::new(),
+            out_tangents: Vec::new(),
+        }
+    }
+
+    fn rotation_channel(node: u32, keys: &[(f32, [f32; 4])]) -> crate::node_graph::gltf_anim_cache::Channel {
+        crate::node_graph::gltf_anim_cache::Channel {
+            target_node: node,
+            kind: crate::node_graph::gltf_anim_cache::ChannelKind::Rotation,
+            mode: crate::node_graph::gltf_load::GltfInterp::Linear,
+            times: keys.iter().map(|(t, _)| *t).collect(),
+            values: keys.iter().flat_map(|(_, v)| *v).collect(),
+            in_tangents: Vec::new(),
+            out_tangents: Vec::new(),
+        }
+    }
+
+    /// A single-clip `GltfAnimSet` with the given channels on node 0 and a
+    /// generous `node_bind_trs` table (identity/1.0 for every node up to
+    /// `node_count`) — the fixture shape every synthetic-cache test below
+    /// shares.
+    fn anim_set_one_clip(channels: Vec<crate::node_graph::gltf_anim_cache::Channel>, duration_s: f32, node_count: usize) -> GltfAnimSet {
+        GltfAnimSet {
+            clips: vec![crate::node_graph::gltf_anim_cache::AnimClip { duration_s, channels }],
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: vec![
+                crate::node_graph::gltf_anim_cache::BindTrs {
+                    translation: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                };
+                node_count
+            ],
+        }
+    }
+
+    /// Runs the primitive with a pre-loaded `anim_set` (bypassing the
+    /// background-load machinery entirely — same technique
+    /// `gltf_skeleton_pose`'s pure-fn tests use one level down, applied
+    /// here at the `Primitive::run` level since this node's port surface
+    /// IS the thing under test), the given params, and wired `progress`
+    /// (`None` = unwired, default beat-drive). Returns the nine outputs in
+    /// declaration order.
     fn run_with(
+        anim_set: Option<GltfAnimSet>,
         overrides: &[(&'static str, ParamValue)],
         wired_progress: Option<f32>,
         time: FrameTime,
@@ -429,6 +624,13 @@ mod tests {
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
         params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
+        // Every fixture channel in this test module targets node 0 —
+        // stamp all three selectors to 0 by default so a test that only
+        // cares about e.g. translation doesn't have to restate the other
+        // two just to keep them out of the `-1` "never animated" sentinel.
+        params.insert(Cow::Borrowed("translation_node"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("rotation_node"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("scale_node"), ParamValue::Float(0.0));
         for (name, value) in overrides {
             params.insert(Cow::Borrowed(*name), value.clone());
         }
@@ -441,6 +643,13 @@ mod tests {
         }
 
         let mut prim = GltfAnimationSource::new();
+        // Bypass the background loader entirely: `path` param is left
+        // unset (defaults to "" via ctx.params.get returning None), which
+        // matches `last_path`'s own `String::new()` default, so `run()`'s
+        // `path != self.last_path` check never fires and never resets
+        // this pre-seeded `anim_set`.
+        prim.anim_set = anim_set.map(Arc::new);
+
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
@@ -471,63 +680,56 @@ mod tests {
         for (i, (_, slot)) in out_slots.iter().enumerate() {
             result[i] = match backend.scalar(*slot) {
                 Some(ParamValue::Float(f)) => f,
+                None => 0.0, // unwritten slot (no anim_set loaded) — MockBackend's zero-init default.
                 other => panic!("expected Float on {}, got {other:?}", out_names[i]),
             };
         }
         result
     }
 
-    /// `rows` are `[time_s, x, y, z]` (pre-A4 shape); prepends `clip_index =
-    /// 0` — every test here targets the default-selected clip.
-    fn translation_table(rows: Vec<[f32; 4]>) -> ParamValue {
-        ParamValue::Table(Arc::new(
-            TableData::new(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
-                .unwrap(),
-        ))
-    }
-
-    /// `rows` are `[time_s, x, y, z, w]` (pre-A4 shape); prepends
-    /// `clip_index = 0`.
-    fn rotation_table(rows: Vec<[f32; 5]>) -> ParamValue {
-        ParamValue::Table(Arc::new(
-            TableData::new(rows.into_iter().map(|r| [0.0].into_iter().chain(r).collect()).collect())
-                .unwrap(),
-        ))
+    #[test]
+    fn no_anim_set_loaded_holds_the_outputs_pre_existing_contents() {
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: before a background load
+        // resolves (or with no `path` at all), `run()` returns without
+        // writing ANY output — a fresh slot's own zero-init, never a
+        // fabricated "scale defaults to 1" write.
+        let out = run_with(None, &[], Some(0.5), frame_time(0.0, 0.0));
+        assert_eq!(out, [0.0; 9], "no anim_set resident -> no writes -> zero-init slots");
     }
 
     #[test]
-    fn unwired_channels_pass_through_static_neutral_defaults() {
-        let out = run_with(&[], Some(0.5), frame_time(0.0, 0.0));
-        assert_eq!(&out[0..6], &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "pos/rot default to 0");
-        assert_eq!(&out[6..9], &[1.0, 1.0, 1.0], "scale defaults to 1");
+    fn clip_with_no_channels_for_this_node_falls_back_to_bind_pose() {
+        // An anim_set IS resident, but its one clip has zero channels for
+        // node 0 (`target_node` default) — the SAME never-fabricated
+        // bind-pose fallback `gltf_skeleton_pose::sample_joint_local`
+        // proves, ported to the rigid path.
+        let anim_set = anim_set_one_clip(Vec::new(), 1.0, 1);
+        let out = run_with(Some(anim_set), &[], Some(0.5), frame_time(0.0, 0.0));
+        assert_eq!(&out[0..6], &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "pos/rot bind default to 0");
+        assert_eq!(&out[6..9], &[1.0, 1.0, 1.0], "scale bind defaults to 1");
     }
 
     #[test]
-    fn translation_track_lerps_between_bracketing_keyframes() {
-        let table = translation_table(vec![[0.0, 0.0, 0.0, 0.0], [1.0, 10.0, 0.0, 0.0]]);
-        // duration_s = 1.0 (default), progress = 0.5 -> t = 0.5 -> halfway.
-        let out = run_with(&[("translation_track", table)], Some(0.5), frame_time(0.0, 0.0));
+    fn translation_channel_lerps_between_bracketing_keyframes() {
+        let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])]);
+        let anim_set = anim_set_one_clip(vec![channel], 1.0, 1);
+        // duration_s comes from the resident clip (1.0), progress = 0.5 ->
+        // t = 0.5 -> halfway.
+        let out = run_with(Some(anim_set), &[], Some(0.5), frame_time(0.0, 0.0));
         assert!((out[0] - 5.0).abs() < 1e-4, "pos_x should be halfway lerped, got {}", out[0]);
     }
 
     #[test]
-    fn translation_track_holds_boundary_values_outside_its_time_range() {
-        // Keyframes only span [1.0, 2.0]; duration_s = 4.0 so progress=0
-        // (t=0) is before the first keyframe and progress=0.99 (t=3.96)
-        // is after the last — both must hold the boundary value, not
-        // extrapolate or wrap within the table itself.
-        let table = translation_table(vec![[1.0, 5.0, 0.0, 0.0], [2.0, 9.0, 0.0, 0.0]]);
-        let before = run_with(
-            &[("translation_track", table.clone()), ("duration_s", ParamValue::Float(4.0))],
-            Some(0.0),
-            frame_time(0.0, 0.0),
-        );
+    fn translation_channel_holds_boundary_values_outside_its_time_range() {
+        // Keyframes only span [1.0, 2.0]; duration_s = 4.0 (the clip's own,
+        // from the cache) so progress=0 (t=0) is before the first keyframe
+        // and progress=0.99 (t=3.96) is after the last — both must hold
+        // the boundary value, not extrapolate.
+        let channel = translation_channel(0, &[(1.0, [5.0, 0.0, 0.0]), (2.0, [9.0, 0.0, 0.0])]);
+        let anim_set = anim_set_one_clip(vec![channel], 4.0, 1);
+        let before = run_with(Some(anim_set.clone()), &[], Some(0.0), frame_time(0.0, 0.0));
         assert!((before[0] - 5.0).abs() < 1e-4, "before first keyframe holds it, got {}", before[0]);
-        let after = run_with(
-            &[("translation_track", table), ("duration_s", ParamValue::Float(4.0))],
-            Some(0.99),
-            frame_time(0.0, 0.0),
-        );
+        let after = run_with(Some(anim_set), &[], Some(0.99), frame_time(0.0, 0.0));
         assert!((after[0] - 9.0).abs() < 1e-4, "after last keyframe holds it, got {}", after[0]);
     }
 
@@ -538,10 +740,10 @@ mod tests {
         // the sampler uses rem_euclid, not clamp(0,1). If it clamped,
         // -0.01 would pin to t=0 (start-of-clip value) instead of
         // wrapping to ~0.99 (near-end-of-clip value).
-        let table = translation_table(vec![[0.0, 0.0, 0.0, 0.0], [1.0, 100.0, 0.0, 0.0]]);
-        let wrapped_negative =
-            run_with(&[("translation_track", table.clone())], Some(-0.01), frame_time(0.0, 0.0));
-        let plain_99 = run_with(&[("translation_track", table.clone())], Some(0.99), frame_time(0.0, 0.0));
+        let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [100.0, 0.0, 0.0])]);
+        let anim_set = anim_set_one_clip(vec![channel], 1.0, 1);
+        let wrapped_negative = run_with(Some(anim_set.clone()), &[], Some(-0.01), frame_time(0.0, 0.0));
+        let plain_99 = run_with(Some(anim_set.clone()), &[], Some(0.99), frame_time(0.0, 0.0));
         assert!(
             (wrapped_negative[0] - plain_99[0]).abs() < 1e-3,
             "progress=-0.01 must wrap to ~0.99, not clamp to 0: got {} vs {}",
@@ -549,8 +751,8 @@ mod tests {
             plain_99[0]
         );
 
-        let wrapped_over = run_with(&[("translation_track", table.clone())], Some(1.01), frame_time(0.0, 0.0));
-        let plain_01 = run_with(&[("translation_track", table)], Some(0.01), frame_time(0.0, 0.0));
+        let wrapped_over = run_with(Some(anim_set.clone()), &[], Some(1.01), frame_time(0.0, 0.0));
+        let plain_01 = run_with(Some(anim_set), &[], Some(0.01), frame_time(0.0, 0.0));
         assert!(
             (wrapped_over[0] - plain_01[0]).abs() < 1e-3,
             "progress=1.01 must wrap to ~0.01, not clamp to 1: got {} vs {}",
@@ -560,13 +762,13 @@ mod tests {
     }
 
     #[test]
-    fn rotation_track_slerps_and_holds_boundaries() {
+    fn rotation_channel_slerps_and_holds_boundaries() {
         // 90-degree rotation about Z: quat(0,0,sin(45deg),cos(45deg)).
         let half = (std::f32::consts::FRAC_PI_4).sin();
         let cos_half = (std::f32::consts::FRAC_PI_4).cos();
-        let table =
-            rotation_table(vec![[0.0, 0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, half, cos_half]]);
-        let out = run_with(&[("rotation_track", table)], Some(0.0), frame_time(0.0, 0.0));
+        let channel = rotation_channel(0, &[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, half, cos_half])]);
+        let anim_set = anim_set_one_clip(vec![channel], 1.0, 1);
+        let out = run_with(Some(anim_set), &[], Some(0.0), frame_time(0.0, 0.0));
         assert!(
             out[3].abs() < 1e-4 && out[4].abs() < 1e-4 && out[5].abs() < 1e-4,
             "identity quaternion should decode to zero Euler, got {:?}",
@@ -576,11 +778,12 @@ mod tests {
 
     #[test]
     fn unwired_progress_follows_default_beat_drive() {
-        // duration_s=1.0, rate=1.0. At 120 BPM (beats=2*seconds implied
-        // by the fallback ratio) progress = beats / (duration_s * 2.0).
-        // beats=1.0 -> progress=0.5 -> t=0.5.
-        let table = translation_table(vec![[0.0, 0.0, 0.0, 0.0], [1.0, 8.0, 0.0, 0.0]]);
-        let out = run_with(&[("translation_track", table)], None, frame_time(1.0, 0.5));
+        // duration_s=1.0 (the clip's own), rate=1.0. At 120 BPM
+        // (beats=2*seconds implied by the fallback ratio) progress =
+        // beats / (duration_s * 2.0). beats=1.0 -> progress=0.5 -> t=0.5.
+        let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [8.0, 0.0, 0.0])]);
+        let anim_set = anim_set_one_clip(vec![channel], 1.0, 1);
+        let out = run_with(Some(anim_set), &[], None, frame_time(1.0, 0.5));
         assert!((out[0] - 4.0).abs() < 1e-3, "expected halfway through the clip, got {}", out[0]);
     }
 
@@ -744,16 +947,21 @@ mod tests {
             g.set_param(lfo, "rate", ParamValue::Enum(0)).unwrap(); // "1/1" — one cycle per beat
             g.set_param(lfo, "shape", ParamValue::Enum(2)).unwrap(); // Saw
 
-            let anim = g.add_node(Box::new(GltfAnimationSource::new()));
-            g.set_param(anim, "duration_s", ParamValue::Float(1.0)).unwrap();
+            let mut anim_prim = GltfAnimationSource::new();
             // Bounce shape matching BoxAnimated.glb's real translation
-            // track: 0 -> peak -> peak (hold) -> back to 0.
-            let table = translation_table(vec![
-                [0.0, 0.0, 2.52, 0.0],
-                [0.4, 0.0, 2.52, 0.0],
-                [1.0, 0.0, 0.0, 0.0],
-            ]);
-            g.set_param(anim, "translation_track", table).unwrap();
+            // track: 0 -> peak -> peak (hold) -> back to 0. Pre-seeded
+            // directly onto the primitive (bypassing the background
+            // loader — same technique `run_with` uses) since this test
+            // drives a real compiled Graph/Executor, not `run_with`'s
+            // single-node harness.
+            let channel = translation_channel(
+                0,
+                &[(0.0, [0.0, 2.52, 0.0]), (0.4, [0.0, 2.52, 0.0]), (1.0, [0.0, 0.0, 0.0])],
+            );
+            anim_prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1)));
+            let anim = g.add_node(Box::new(anim_prim));
+            g.set_param(anim, "duration_s", ParamValue::Float(1.0)).unwrap();
+            g.set_param(anim, "translation_node", ParamValue::Float(0.0)).unwrap();
             g.connect((lfo, "out"), (anim, "progress")).unwrap();
 
             let sink = g.add_node(Box::new(Capture {
@@ -802,13 +1010,14 @@ mod tests {
     /// test style rather than `run_with`'s fresh-instance-per-call shape.
     #[test]
     fn trigger_count_edge_retriggers_the_clip_from_zero_within_one_frame() {
-        let table = translation_table(vec![[0.0, 0.0, 0.0, 0.0], [1.0, 100.0, 0.0, 0.0]]);
+        let channel = translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [100.0, 0.0, 0.0])]);
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
         params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
-        params.insert(Cow::Borrowed("translation_track"), table);
+        params.insert(Cow::Borrowed("translation_node"), ParamValue::Float(0.0));
 
         let mut prim = GltfAnimationSource::new();
+        prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1)));
         let run_frame = |prim: &mut GltfAnimationSource, trigger: f32, time: FrameTime| -> f32 {
             let mut backend = MockBackend::new();
             let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, (0, 0));
@@ -863,33 +1072,40 @@ mod tests {
     }
 
     #[test]
-    fn clip_index_selects_between_independent_clip_tracks() {
-        let mut params = ParamValues::default();
-        params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
-        params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
-        // Clip 0: 0 -> 10. Clip 1: 0 -> -10. Same time range, opposite sign.
-        let table = ParamValue::Table(Arc::new(
-            TableData::new(vec![
-                vec![0.0, 0.0, 0.0, 0.0, 0.0],
-                vec![0.0, 1.0, 10.0, 0.0, 0.0],
-                vec![1.0, 0.0, 0.0, 0.0, 0.0],
-                vec![1.0, 1.0, -10.0, 0.0, 0.0],
-            ])
-            .unwrap(),
-        ));
-        params.insert(Cow::Borrowed("translation_track"), table);
+    fn clip_index_selects_between_independent_clips() {
+        // Clip 0: 0 -> 10. Clip 1: 0 -> -10. Same time range, opposite sign
+        // — two SEPARATE `AnimClip`s in the same `GltfAnimSet`, both
+        // carrying a channel for node 0.
+        let clip0 = crate::node_graph::gltf_anim_cache::AnimClip {
+            duration_s: 1.0,
+            channels: vec![translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [10.0, 0.0, 0.0])])],
+        };
+        let clip1 = crate::node_graph::gltf_anim_cache::AnimClip {
+            duration_s: 1.0,
+            channels: vec![translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [-10.0, 0.0, 0.0])])],
+        };
+        let anim_set = GltfAnimSet {
+            clips: vec![clip0, clip1],
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: vec![crate::node_graph::gltf_anim_cache::BindTrs {
+                translation: [0.0; 3],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            }],
+        };
 
-        let out_clip0 = run_with_params(&params, 0.0, Some(0.5), frame_time(0.0, 0.0));
-        let out_clip1 = run_with_params(&params, 1.0, Some(0.5), frame_time(0.0, 0.0));
+        let out_clip0 = run_with_clip(anim_set.clone(), 0.0, Some(0.5), frame_time(0.0, 0.0));
+        let out_clip1 = run_with_clip(anim_set, 1.0, Some(0.5), frame_time(0.0, 0.0));
         assert!((out_clip0 - 5.0).abs() < 1e-3, "clip 0 halfway: got {out_clip0}");
         assert!((out_clip1 - -5.0).abs() < 1e-3, "clip 1 halfway: got {out_clip1}");
     }
 
-    /// Runs a single frame with a wired `clip_index` and `progress`, sharing
-    /// `run_with`'s output-plumbing shape but taking pre-built `params`
-    /// directly (the `clip_index_selects_...` test needs a `Table` param it
-    /// builds itself, not one of `run_with`'s named overrides).
-    fn run_with_params(params: &ParamValues, clip_index: f32, progress: Option<f32>, time: FrameTime) -> f32 {
+    /// Runs a single frame with a pre-loaded `anim_set` and a wired
+    /// `clip_index`/`progress`, sharing `run_with`'s bypass-the-loader
+    /// technique but returning just `pos_x` (the `clip_index_selects_...`
+    /// test only needs one scalar to prove clip selection).
+    fn run_with_clip(anim_set: GltfAnimSet, clip_index: f32, progress: Option<f32>, time: FrameTime) -> f32 {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, (0, 0));
         let clip_slot = backend.acquire(ResourceId(1), PortType::Scalar(ScalarType::F32), None, (0, 0));
@@ -902,6 +1118,10 @@ mod tests {
             wire_slots.push(("progress", progress_slot));
         }
         let out_slots = [("pos_x", out_slot)];
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("translation_node"), ParamValue::Float(0.0));
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
@@ -922,7 +1142,8 @@ mod tests {
             &mut object_scratch,
         );
         let mut prim = GltfAnimationSource::new();
-        let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);
+        prim.anim_set = Some(Arc::new(anim_set));
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
         Primitive::run(&mut prim, &mut ctx);
         for (slot, value) in scalar_scratch.drain(..) {
             backend.set_scalar(slot, value);

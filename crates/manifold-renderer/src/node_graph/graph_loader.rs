@@ -286,6 +286,155 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
     changed.then_some(owned)
 }
 
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D5: a project/preset saved before P2
+/// baked keyframe/topology payload straight into the three glTF sampler
+/// nodes' Table params (`node.gltf_skeleton_pose`'s six tables,
+/// `node.gltf_animation_source`'s `translation_track`/`rotation_track`/
+/// `scale_track`, `node.gltf_morph_weights`' `weight_tracks`). This strips
+/// those dead Tables and stamps a `path` stringBinding from the SAME
+/// group's sibling `node.gltf_mesh_source`/`node.gltf_skinned_mesh_source`
+/// node, when one resolves — so the sampler reads from the shared
+/// `gltf_anim_cache` instead. `target_node`/`skin_index` are NOT
+/// recoverable from the old flat Tables (they never recorded which glTF
+/// scene-node index the baked values came from) — the migration leaves
+/// them at their existing default (0 unless the def already carries a
+/// stamped value, the P1-era case for `skeleton_pose`'s `skin_index`),
+/// documented residual limitation for a genuinely pre-P2 multi-object
+/// asset, never silently wrong for the common single-object-per-group
+/// case the importer has always produced. A node whose sibling path can't
+/// be resolved keeps its tables — inert but present, per the round-trip
+/// corollary (never a silent drop, never a parallel sampling path reading
+/// old tables) — and one warning names it. Idempotent: a def carrying none
+/// of the old table keys is untouched (`false`, no clone). Same
+/// single-choke-point placement as `migrate_def_type_ids` — every loader
+/// converges on `instantiate_def`.
+fn migrate_gltf_anim_v2(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+
+    const POSE_KEYS: &[&str] = &[
+        "joint_parent_table",
+        "joint_root_world_table",
+        "inverse_bind_table",
+        "translation_tracks",
+        "rotation_tracks",
+        "scale_tracks",
+    ];
+    const ANIM_KEYS: &[&str] = &["translation_track", "rotation_track", "scale_track"];
+    const MORPH_KEYS: &[&str] = &["weight_tracks"];
+
+    fn old_table_keys(type_id: &str) -> Option<&'static [&'static str]> {
+        match type_id {
+            "node.gltf_skeleton_pose" => Some(POSE_KEYS),
+            "node.gltf_animation_source" => Some(ANIM_KEYS),
+            "node.gltf_morph_weights" => Some(MORPH_KEYS),
+            _ => None,
+        }
+    }
+
+    // node_id -> path default, for every stringBinding that already
+    // targets SOME node's `path` param (sampler nodes stamped by P1+, and
+    // every mesh-source-family node the importer has always stamped).
+    let existing_paths: ahash::AHashMap<String, String> = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| {
+            m.string_bindings
+                .iter()
+                .filter_map(|b| match &b.target {
+                    BindingTarget::Node { node_id, param } if param == "path" => {
+                        Some((node_id.as_str().to_string(), b.default_value.clone()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Recurse scope-by-scope (top-level `def.nodes`, then each group body —
+    // same "structurally identical at any depth" shape
+    // `scene_object_migration::migrate_scope` uses): within one scope, a
+    // mesh-source-family sibling's resolved path is this scope's fallback
+    // for every sampler node in it that doesn't already have its own.
+    #[allow(clippy::too_many_arguments)]
+    fn migrate_scope(
+        nodes: &mut [EffectGraphNode],
+        existing_paths: &ahash::AHashMap<String, String>,
+        can_add_binding: bool,
+        new_bindings: &mut Vec<(String, String)>,
+        changed: &mut bool,
+        warnings: &mut Vec<String>,
+    ) {
+        let sibling_path: Option<&String> = nodes
+            .iter()
+            .find(|n| matches!(n.type_id.as_str(), "node.gltf_mesh_source" | "node.gltf_skinned_mesh_source"))
+            .and_then(|n| existing_paths.get(n.node_id.as_str()));
+
+        for n in nodes.iter_mut() {
+            if let Some(keys) = old_table_keys(&n.type_id) {
+                let carries_old = keys.iter().any(|k| n.params.contains_key(*k));
+                if carries_old {
+                    let node_id = n.node_id.as_str().to_string();
+                    let own_path = existing_paths.get(&node_id);
+                    // A NEW binding (the sibling-fallback case) can only be
+                    // applied when `def.preset_metadata` exists to hold it
+                    // — a per-instance override without metadata (see
+                    // `PresetMetadata`'s doc comment) has nowhere to put
+                    // one, so stripping the tables there would leave the
+                    // node with neither payload nor a path. Own-path
+                    // (already stamped, P1+) never needs a new binding.
+                    let path = own_path.or(if can_add_binding { sibling_path } else { None });
+                    match path {
+                        Some(p) => {
+                            for k in keys {
+                                n.params.remove(*k);
+                            }
+                            if own_path.is_none() {
+                                new_bindings.push((node_id, p.clone()));
+                            }
+                            *changed = true;
+                        }
+                        None => warnings.push(format!(
+                            "{node_id} ({}): no sibling mesh-source path resolved — keyframe \
+                             tables kept inert, not stripped",
+                            n.type_id
+                        )),
+                    }
+                }
+            }
+            if let Some(group) = &mut n.group {
+                migrate_scope(&mut group.nodes, existing_paths, can_add_binding, new_bindings, changed, warnings);
+            }
+        }
+    }
+
+    let mut changed = false;
+    let mut new_bindings = Vec::new();
+    let mut warnings = Vec::new();
+    let can_add_binding = def.preset_metadata.is_some();
+    migrate_scope(&mut def.nodes, &existing_paths, can_add_binding, &mut new_bindings, &mut changed, &mut warnings);
+
+    for w in &warnings {
+        log::warn!("gltf_anim_v2 migration: {w}");
+    }
+    if !new_bindings.is_empty()
+        && let Some(meta) = def.preset_metadata.as_mut()
+    {
+        for (node_id, path) in new_bindings {
+            meta.string_bindings.push(manifold_core::effect_graph_def::StringBindingDef {
+                id: format!("gltf_anim_v2_migrated_path_{node_id}"),
+                label: "Model File".to_string(),
+                default_value: path,
+                target: BindingTarget::Node {
+                    node_id: manifold_core::NodeId::new(&node_id),
+                    param: "path".to_string(),
+                },
+            });
+        }
+    }
+
+    changed
+}
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -349,6 +498,15 @@ pub fn instantiate_def(
     } else {
         def
     };
+
+    // GLTF_ANIM_RUNTIME_V2_DESIGN.md D5/P2: same single-choke-point
+    // placement — strips pre-P2 keyframe/topology Tables off the three
+    // glTF sampler node types, stamping `path` from a sibling mesh-source
+    // when resolvable. Order-independent relative to the two migrations
+    // above (disjoint node types/params); placed after both for the same
+    // "every migration converges here" reason.
+    let mut gltf_anim_migrated = def.clone();
+    let def = if migrate_gltf_anim_v2(&mut gltf_anim_migrated) { &gltf_anim_migrated } else { def };
 
     // Fold any node groups before anything else runs. After this the def
     // contains no `group` nodes, so every path below — the boundary scan,
@@ -1872,6 +2030,128 @@ mod tests {
             .expect("old id present, migration must produce Some");
         assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
         assert!(migrated.nodes[0].params.is_empty());
+    }
+
+    // ── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2/D5 — old-shape sampler migration ──
+
+    fn minimal_preset_metadata() -> manifold_core::effect_graph_def::PresetMetadata {
+        manifold_core::effect_graph_def::PresetMetadata {
+            id: manifold_core::PresetTypeId::new("test.migration_fixture"),
+            display_name: "Migration Fixture".to_string(),
+            category: "Spatial".to_string(),
+            osc_prefix: "migration_fixture".to_string(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        }
+    }
+
+    fn old_table(rows: usize) -> manifold_core::effect_graph_def::SerializedParamValue {
+        manifold_core::effect_graph_def::SerializedParamValue::Table {
+            rows: (0..rows).map(|_| vec![0.0]).collect(),
+        }
+    }
+
+    /// D5's core round trip: a pre-P2 rigid `node.gltf_animation_source`
+    /// (old `translation_track`/`rotation_track` Tables, no `path`) sits
+    /// alongside its sibling `node.gltf_mesh_source` INSIDE one group —
+    /// the importer's own group-per-object shape. Migration must strip the
+    /// old Tables, stamp a NEW `path` stringBinding pointing at the
+    /// sibling's own resolved path, and stay idempotent on a second pass.
+    #[test]
+    fn migrate_gltf_anim_v2_strips_tables_and_stamps_sibling_path() {
+        let mut mesh = bare_node(100, "node.gltf_mesh_source");
+        mesh.node_id = manifold_core::NodeId::new("mesh_0");
+        let mut anim = bare_node(101, "node.gltf_animation_source");
+        anim.node_id = manifold_core::NodeId::new("anim_0");
+        anim.params.insert("translation_track".to_string(), old_table(2));
+        anim.params.insert("rotation_track".to_string(), old_table(2));
+
+        let mut group = bare_node(0, manifold_core::effect_graph_def::GROUP_TYPE_ID);
+        group.group = Some(Box::new(manifold_core::effect_graph_def::GroupDef {
+            interface: manifold_core::effect_graph_def::GroupInterface {
+                inputs: vec![],
+                outputs: vec![],
+                params: vec![],
+            },
+            nodes: vec![mesh, anim],
+            wires: vec![],
+            tint: None,
+        }));
+
+        let mut meta = minimal_preset_metadata();
+        meta.string_bindings.push(manifold_core::effect_graph_def::StringBindingDef {
+            id: "modelFile".to_string(),
+            label: "Model File".to_string(),
+            default_value: "/fixtures/old_shape.glb".to_string(),
+            target: manifold_core::effect_graph_def::BindingTarget::Node {
+                node_id: manifold_core::NodeId::new("mesh_0"),
+                param: "path".to_string(),
+            },
+        });
+
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: Some(meta),
+            nodes: vec![group],
+            wires: vec![],
+        };
+
+        assert!(migrate_gltf_anim_v2(&mut def), "old-shape tables present -> migration must report changed");
+
+        let inner = &def.nodes[0].group.as_ref().unwrap().nodes[1];
+        assert_eq!(inner.type_id, "node.gltf_animation_source");
+        assert!(!inner.params.contains_key("translation_track"), "old table must be stripped");
+        assert!(!inner.params.contains_key("rotation_track"), "old table must be stripped");
+
+        let anim_path_binding = def
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .string_bindings
+            .iter()
+            .find(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if node_id.as_str() == "anim_0" && param == "path"))
+            .expect("a NEW path stringBinding must be stamped for the sampler node");
+        assert_eq!(anim_path_binding.default_value, "/fixtures/old_shape.glb");
+
+        // Idempotence: a second pass over the already-migrated def is a no-op.
+        assert!(!migrate_gltf_anim_v2(&mut def), "already-migrated def must report unchanged");
+    }
+
+    /// D5's inert-but-present branch: no sibling mesh-source path resolves
+    /// (no `node.gltf_mesh_source`/`node.gltf_skinned_mesh_source` in
+    /// scope) — the old Tables must survive UNTOUCHED, never a silent
+    /// drop, and the function still reports `changed = false` (nothing was
+    /// actually mutated).
+    #[test]
+    fn migrate_gltf_anim_v2_leaves_unresolvable_node_inert() {
+        let mut anim = bare_node(0, "node.gltf_animation_source");
+        anim.node_id = manifold_core::NodeId::new("anim_orphan");
+        anim.params.insert("translation_track".to_string(), old_table(1));
+
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: Some(minimal_preset_metadata()),
+            nodes: vec![anim],
+            wires: vec![],
+        };
+
+        assert!(!migrate_gltf_anim_v2(&mut def), "no sibling path resolvable -> nothing changed");
+        assert!(
+            def.nodes[0].params.contains_key("translation_track"),
+            "unresolvable node's tables must stay inert, never dropped"
+        );
     }
 
     /// (a, continued) The same fixture through the real `instantiate_def`

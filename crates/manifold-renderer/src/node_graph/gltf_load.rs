@@ -83,9 +83,16 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
 /// `extensionsRequired` against `MANIFOLD_SUPPORTED_EXTENSIONS`, so an asset
 /// that lists a genuinely unsupported extension still fails — with OUR
 /// error naming it, not the crate's generic "Unsupported extension".
-pub(crate) fn import_glb(
+/// The document+buffer half of [`import_glb`] — parse, re-validate, gate
+/// `extensionsRequired`, and resolve buffers, but stop short of image
+/// decode. GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `gltf_anim_cache.rs`'s loader
+/// needs the document and buffers (to read animation/skin accessors) but
+/// never touches a texture, so routing it through the full `import_glb`
+/// would decode every image on a thread whose only job is keyframe data —
+/// wasted work, and a second reason to keep exactly one parse entry point.
+pub(crate) fn parse_document_and_buffers(
     path: &std::path::Path,
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(&bytes)
@@ -128,6 +135,15 @@ pub(crate) fn import_glb(
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let buffers = gltf::import_buffers(&document, Some(base), blob)
         .map_err(|e| format!("{}: buffer import failed: {e}", path.display()))?;
+
+    Ok((document, buffers))
+}
+
+pub(crate) fn import_glb(
+    path: &std::path::Path,
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), String> {
+    let (document, buffers) = parse_document_and_buffers(path)?;
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let images = import_images_with_webp(&document, base, &buffers)
         .map_err(|e| format!("{}: image import failed: {e}", path.display()))?;
 
@@ -1164,6 +1180,14 @@ pub(crate) struct GltfMaterialInfo {
     /// multi-node case. BUG-207: resolved for the synthetic
     /// default-material entry too (see `animations` above).
     pub morph: Option<GltfObjectMorph>,
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): this object's resolved
+    /// node-slot rigid-animation topology — see
+    /// [`GltfObjectRigidMultiNode`]'s doc for the two cases that set it.
+    /// `None` for a static, single-ancestor-animated single-node, or
+    /// skinned object. Mutually exclusive with `skin` (a skinned object
+    /// never also gets a node-slot palette) but independent of
+    /// `animations` (always empty when this is `Some`).
+    pub rigid_multi_node: Option<GltfObjectRigidMultiNode>,
     /// BUG-221: this object's OWN world-space bounding-box center — distinct
     /// from `GltfImportSummary::bbox_min/max`'s SCENE-WIDE center, which is
     /// the ONE value every object was previously recentered by (correct for
@@ -1370,7 +1394,7 @@ pub(crate) struct GltfImportSummary {
 /// tables' trailing `mode` column (0/1/2 — `node_graph::primitives::
 /// gltf_anim_shared`'s `Interp`) — IMPORT_ANYTHING_WAVE_DESIGN.md W2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum GltfInterp {
+pub enum GltfInterp {
     #[default]
     Linear,
     Step,
@@ -1386,13 +1410,6 @@ impl GltfInterp {
         }
     }
 
-    pub(crate) fn to_f32(self) -> f32 {
-        match self {
-            GltfInterp::Linear => 0.0,
-            GltfInterp::Step => 1.0,
-            GltfInterp::CubicSpline => 2.0,
-        }
-    }
 }
 
 /// One keyframe track (glTF `translation`/`scale` channel), any of the
@@ -1424,28 +1441,6 @@ pub(crate) struct QuatTrack {
     pub out_tangents: Vec<[f32; 4]>,
 }
 
-impl Vec3Track {
-    /// Keyframe `i`'s (in-tangent, out-tangent) — real values for
-    /// CUBICSPLINE, zero (unused by the LINEAR/STEP sampler) otherwise.
-    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 3], [f32; 3]) {
-        if self.mode == GltfInterp::CubicSpline {
-            (self.in_tangents[i], self.out_tangents[i])
-        } else {
-            ([0.0; 3], [0.0; 3])
-        }
-    }
-}
-
-impl QuatTrack {
-    /// Same as [`Vec3Track::tangents_at`] for a quaternion track.
-    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 4], [f32; 4]) {
-        if self.mode == GltfInterp::CubicSpline {
-            (self.in_tangents[i], self.out_tangents[i])
-        } else {
-            ([0.0; 4], [0.0; 4])
-        }
-    }
-}
 
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
 /// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
@@ -1512,6 +1507,22 @@ pub(crate) struct GltfObjectAnimation {
     pub translation: Option<Vec3Track>,
     pub rotation: Option<QuatTrack>,
     pub scale: Option<Vec3Track>,
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the scene-node index EACH
+    /// channel's track came from — one per channel, NOT a single
+    /// object-wide node. Confirmed load-bearing by `BoxAnimated.glb`
+    /// itself (the design's own canonical A1 fixture): its translation
+    /// channel targets node 0 (an ancestor), its rotation channel targets
+    /// node 2 (the mesh node) — two DIFFERENT physical nodes for the SAME
+    /// object, not a rare edge case. `None` when that channel isn't
+    /// animated at all (mirrors the sibling `Option<Vec3Track/QuatTrack>`
+    /// field). Stamped onto `node.gltf_animation_source`'s `translation_
+    /// node`/`rotation_node`/`scale_node` params so each channel samples
+    /// from its OWN correct entry in the shared, file-keyed `GltfAnimSet`
+    /// (whose `Channel`s are keyed by node index) instead of a per-object
+    /// baked Table.
+    pub translation_node: Option<usize>,
+    pub rotation_node: Option<usize>,
+    pub scale_node: Option<usize>,
 }
 
 /// Parse every `document.animations()` entry into its per-node TRS
@@ -1521,7 +1532,7 @@ pub(crate) struct GltfObjectAnimation {
 /// LINEAR-only (A3 scope, unchanged by W2) — a non-LINEAR weights channel
 /// still lands in `skipped_channels`, same as an unreadable weights
 /// accessor (a length that doesn't divide evenly by the keyframe count).
-fn parse_animations(
+pub(crate) fn parse_animations(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
 ) -> Vec<GltfAnimationInfo> {
@@ -1680,52 +1691,49 @@ fn collect_mesh_node_chains(document: &gltf::Document) -> Vec<(usize, Vec<usize>
 /// ONE animation clip's per-node map, `node_anims`) into a single
 /// resolved [`GltfObjectAnimation`] for the material this chain's leaf
 /// mesh belongs to. `None` when no chain node carries any TRS channel
-/// (the object is static). A channel duplicated across more than one
-/// chain node — composing two independently-animated ancestors into one
-/// TRS is genuinely out of A1's scope, never attempted — is reported via
-/// `report` and the object is left un-animated for that channel rather
-/// than silently combined or guessed at.
+/// (the object is static). GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): a
+/// channel duplicated across more than one chain node — composing two
+/// independently-animated ancestors into one TRS track isn't generally
+/// valid — sets `*ambiguous = true` instead of reporting-and-dropping;
+/// the caller ([`resolve_animations_for_key`]) discards this function's
+/// whole return value in that case and instead resolves the object as a
+/// 1-slot [`GltfObjectRigidMultiNode`], whose whole-hierarchy matrix
+/// composition handles any number of animated ancestors correctly.
 fn resolve_object_animation(
     chain: &[usize],
     node_anims: &std::collections::BTreeMap<usize, GltfNodeAnimation>,
-    report: &mut Vec<String>,
+    ambiguous: &mut bool,
 ) -> Option<GltfObjectAnimation> {
     let mut translation: Option<Vec3Track> = None;
     let mut rotation: Option<QuatTrack> = None;
     let mut scale: Option<Vec3Track> = None;
+    let mut translation_node: Option<usize> = None;
+    let mut rotation_node: Option<usize> = None;
+    let mut scale_node: Option<usize> = None;
     for &node_index in chain {
         let Some(na) = node_anims.get(&node_index) else { continue };
         if let Some(t) = &na.translation {
             if translation.is_some() {
-                report.push(format!(
-                    "node {node_index}: translation animated on more than one ancestor in this \
-                     object's chain — composing multiple animated ancestors is out of A1 scope, \
-                     this channel is left static"
-                ));
+                *ambiguous = true;
             } else {
                 translation = Some(t.clone());
+                translation_node = Some(node_index);
             }
         }
         if let Some(r) = &na.rotation {
             if rotation.is_some() {
-                report.push(format!(
-                    "node {node_index}: rotation animated on more than one ancestor in this \
-                     object's chain — composing multiple animated ancestors is out of A1 scope, \
-                     this channel is left static"
-                ));
+                *ambiguous = true;
             } else {
                 rotation = Some(r.clone());
+                rotation_node = Some(node_index);
             }
         }
         if let Some(s) = &na.scale {
             if scale.is_some() {
-                report.push(format!(
-                    "node {node_index}: scale animated on more than one ancestor in this \
-                     object's chain — composing multiple animated ancestors is out of A1 scope, \
-                     this channel is left static"
-                ));
+                *ambiguous = true;
             } else {
                 scale = Some(s.clone());
+                scale_node = Some(node_index);
             }
         }
     }
@@ -1741,7 +1749,15 @@ fn resolve_object_animation(
     .into_iter()
     .flatten()
     .fold(0.0f32, f32::max);
-    Some(GltfObjectAnimation { duration_s, translation, rotation, scale })
+    Some(GltfObjectAnimation {
+        duration_s,
+        translation,
+        rotation,
+        scale,
+        translation_node,
+        rotation_node,
+        scale_node,
+    })
 }
 
 // ─── GLTF_ANIMATION_DESIGN.md A2 — skinning (D2) ───────────────────────
@@ -1771,21 +1787,16 @@ pub(crate) struct GltfSkinInfo {
     /// applied here, never a crash.
     pub joint_root_world: Vec<Mat4>,
     pub inverse_bind_matrices: Vec<Mat4>,
-    /// Each joint's static BIND-pose local TRS (`node.transform().decomposed()`),
-    /// the fallback `node.gltf_skeleton_pose` uses for any joint this
-    /// animation clip doesn't touch — never the identity default A1's
-    /// rigid-object sampler uses, because an unanimated joint's bind pose
-    /// is very often NOT the identity (a resting arm bend, a T-pose
-    /// offset) and skinning (unlike A1's baked-static-transform objects)
-    /// never gets that offset from anywhere else.
-    pub joint_bind_translation: Vec<[f32; 3]>,
-    pub joint_bind_rotation: Vec<[f32; 4]>,
-    pub joint_bind_scale: Vec<[f32; 3]>,
+    // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the per-joint bind-TRS fields that
+    // used to live here (`joint_bind_translation`/`_rotation`/`_scale`)
+    // are DELETED — deduped into `GltfAnimSet::node_bind_trs` (P1, indexed
+    // by whole-scene node index rather than duplicated per-skin), which
+    // `gltf_skeleton_pose::sample_joint_local` now reads exclusively.
 }
 
 /// Every node's parent, indexed by node index (`None` = root). Built once
 /// per document parse — O(N) over the node tree.
-fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> {
+pub(crate) fn build_parent_map(document: &gltf::Document) -> Vec<Option<usize>> {
     let mut parent_of: Vec<Option<usize>> = vec![None; document.nodes().len()];
     for node in document.nodes() {
         for child in node.children() {
@@ -1820,7 +1831,7 @@ fn static_world_matrix(document: &gltf::Document, node_index: usize, parent_of: 
 /// Parse every `document.skins()` entry, indexed by glTF skin index. A
 /// skin with no `inverseBindMatrices` accessor (spec-legal — implies
 /// identity per joint) falls back to `MAT4_IDENTITY` for every joint.
-fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<GltfSkinInfo> {
+pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<GltfSkinInfo> {
     let parent_of = build_parent_map(document);
     document
         .skins()
@@ -1833,9 +1844,6 @@ fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec
                 .collect();
             let mut joint_parent = Vec::with_capacity(joint_node_indices.len());
             let mut joint_root_world = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_translation = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_rotation = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_scale = Vec::with_capacity(joint_node_indices.len());
             for &node_idx in &joint_node_indices {
                 let parent_node = parent_of.get(node_idx).copied().flatten();
                 match parent_node.and_then(|p| joint_position.get(&p)) {
@@ -1852,28 +1860,13 @@ fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec
                         joint_root_world.push(root_world);
                     }
                 }
-                let node = document.nodes().nth(node_idx);
-                let (t, r, s) = node
-                    .map(|n| n.transform().decomposed())
-                    .unwrap_or(([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]));
-                joint_bind_translation.push(t);
-                joint_bind_rotation.push(r);
-                joint_bind_scale.push(s);
             }
             let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let inverse_bind_matrices: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
                 Some(it) => it.collect(),
                 None => vec![MAT4_IDENTITY; joint_node_indices.len()],
             };
-            GltfSkinInfo {
-                joint_node_indices,
-                joint_parent,
-                joint_root_world,
-                inverse_bind_matrices,
-                joint_bind_translation,
-                joint_bind_rotation,
-                joint_bind_scale,
-            }
+            GltfSkinInfo { joint_node_indices, joint_parent, joint_root_world, inverse_bind_matrices }
         })
         .collect()
 }
@@ -1887,6 +1880,61 @@ fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec
 pub(crate) struct GltfObjectSkin {
     pub skin_index: u32,
     pub info: GltfSkinInfo,
+}
+
+// ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) — rigid multi-node via the
+// node-slot palette ──────────────────────────────────────────────────
+
+/// This render object's (= one material's) resolved node-slot topology —
+/// the sorted scene-node indices contributing its geometry, slot order =
+/// list order (slot `i` = `slot_nodes[i]`). Set when EITHER (a) more than
+/// one mesh-owning node contributes this material's geometry, at least one
+/// animated in some clip, none skinned (the `:2492` case this design
+/// deletes), OR (b) exactly one contributing node whose ancestor chain
+/// animates the SAME TRS channel on more than one ancestor (the `:1700`
+/// case — composing multiple animated ancestors into one TRS track isn't
+/// generally valid, but the whole-hierarchy node-slot palette composes
+/// them correctly via matrix multiplication regardless of how many
+/// ancestors are animated, so a 1-slot palette subsumes it). `None` for a
+/// static or single-ancestor-animated single-node object (those keep the
+/// existing `GltfObjectAnimation` TRS-track path) or a skinned object.
+/// `gltf_import.rs` wires this the same way as `GltfObjectSkin` — through
+/// `node.gltf_skinned_mesh_source` (its `material_index` selector already
+/// finds these SAME nodes at runtime, sorted the same way — see
+/// `find_material_contributing_nodes`) + `node.skin_mesh`, with
+/// `node.gltf_skeleton_pose` in node-slot mode (`skin_index == -2`) instead
+/// of skin mode.
+#[derive(Debug, Clone)]
+pub(crate) struct GltfObjectRigidMultiNode {
+    pub slot_nodes: Vec<u32>,
+}
+
+/// Every scene-node index (ascending) whose mesh has at least one
+/// primitive matching `material_index` — the SAME grouping
+/// `gltf_import_summary`'s `nodes_by_material` computes, re-derived here
+/// so `node.gltf_skinned_mesh_source`'s runtime loader ([`load_gltf_skinned_mesh`]'s
+/// D4 fallback) assigns the IDENTICAL slot order the importer stamped into
+/// `node.gltf_skeleton_pose`'s `node_slots` Table param, without needing
+/// import-time state plumbed into a per-frame primitive.
+pub(crate) fn find_material_contributing_nodes(
+    document: &gltf::Document,
+    material_index: u32,
+) -> Vec<usize> {
+    fn walk(node: &gltf::Node, material_index: u32, out: &mut std::collections::BTreeSet<usize>) {
+        if let Some(mesh) = node.mesh()
+            && mesh.primitives().any(|p| primitive_material_matches(p.material().index(), material_index))
+        {
+            out.insert(node.index());
+        }
+        for child in node.children() {
+            walk(&child, material_index, out);
+        }
+    }
+    let mut set = std::collections::BTreeSet::new();
+    for node in resolve_import_nodes(document) {
+        walk(&node, material_index, &mut set);
+    }
+    set.into_iter().collect()
 }
 
 // ─── GLTF_ANIMATION_DESIGN.md A3 — morph targets ───────────────────────
@@ -2022,11 +2070,104 @@ fn find_skinned_node_for_material<'a>(
     None
 }
 
-/// Load a `.glb`'s skinned geometry for `material_index`'s sole
-/// contributing node — the same single-node-per-material scope boundary
-/// A1 uses for rigid animation. `gltf_import.rs` only calls this when
-/// exactly one mesh-owning node with a `skin()` contributes that
-/// material.
+/// Flatten `slot_nodes`' primitives (filtered to `material_index`) into a
+/// triangle-list `MeshVertex` buffer plus coincident per-vertex
+/// joints/weights, GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): LOCAL space per
+/// contributing node (no node-transform applied — exactly [`flatten_skinned_node`]'s
+/// convention, since D4's rigid palette positions every vertex entirely via
+/// its slot's `node.skin_mesh` matrix, same as real skinning). Every vertex
+/// gets `joints = [slot, 0, 0, 0]`, `weights = [1, 0, 0, 0]` — 100% rigid
+/// weight on its OWN contributing node's slot, never blended across slots
+/// (unlike real skinning, D4 objects have no authored JOINTS_0/WEIGHTS_0 to
+/// read — every vertex belongs to exactly the one node that emitted it).
+/// `slot_nodes` order fixes slot assignment; callers must derive it from
+/// [`find_material_contributing_nodes`] so the vertex data and the pose
+/// node's `node_slots` topology agree on which slot is which scene node.
+fn flatten_rigid_multi_node(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    slot_nodes: &[usize],
+    material_index: u32,
+) -> Result<SkinnedMeshData, String> {
+    let mut verts = Vec::new();
+    let mut joints = Vec::new();
+    let mut weights = Vec::new();
+    for (slot, &node_index) in slot_nodes.iter().enumerate() {
+        let node = document
+            .nodes()
+            .nth(node_index)
+            .ok_or_else(|| format!("node {node_index} out of range"))?;
+        let Some(mesh) = node.mesh() else { continue };
+        for primitive in mesh.primitives() {
+            if !primitive_material_matches(primitive.material().index(), material_index) {
+                continue;
+            }
+            if primitive.mode() != gltf::mesh::Mode::Triangles {
+                return Err(format!(
+                    "primitive uses non-Triangles mode {:?} — unsupported by node.skin_mesh import",
+                    primitive.mode()
+                ));
+            }
+            let reader = primitive.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
+            let positions: Vec<[f32; 3]> = reader
+                .read_positions()
+                .ok_or_else(|| "rigid multi-node primitive missing required POSITION accessor".to_string())?
+                .collect();
+            let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|it| it.collect());
+            let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|it| it.into_f32().collect());
+            let indices: Vec<u32> = match reader.read_indices() {
+                Some(idx) => idx.into_u32().collect(),
+                None => (0..positions.len() as u32).collect(),
+            };
+            for tri in indices.chunks_exact(3) {
+                let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+                if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+                    return Err(format!(
+                        "triangle index ({i0}, {i1}, {i2}) out of range for {} positions",
+                        positions.len()
+                    ));
+                }
+                let p0 = positions[i0];
+                let p1 = positions[i1];
+                let p2 = positions[i2];
+                let face_normal = normalize3(cross3(sub3(p1, p0), sub3(p2, p0)));
+                for &i in &[i0, i1, i2] {
+                    let normal = normals.as_ref().map_or(face_normal, |ns| ns[i]);
+                    let uv = uvs.as_ref().map_or([0.0, 0.0], |u| u[i]);
+                    verts.push(MeshVertex {
+                        position: positions[i],
+                        _pad0: 0.0,
+                        normal,
+                        _pad1: 0.0,
+                        uv,
+                        _pad2: [0.0, 0.0],
+                    });
+                    joints.push([slot as f32, 0.0, 0.0, 0.0]);
+                    weights.push([1.0, 0.0, 0.0, 0.0]);
+                }
+            }
+        }
+    }
+    if verts.is_empty() {
+        return Err(format!(
+            "rigid multi-node object (material {}) contributed no geometry across {} node(s)",
+            material_label(material_index),
+            slot_nodes.len()
+        ));
+    }
+    Ok((verts, joints, weights))
+}
+
+/// Load a `.glb`'s skinned OR (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4, P3)
+/// rigid-multi-node-palette geometry for `material_index`. Tries the
+/// single skinned contributing node first (A2's original scope,
+/// unchanged); when none is found, falls back to D4's node-slot palette
+/// across every contributing node ([`find_material_contributing_nodes`]) —
+/// `gltf_import.rs` only reaches this fallback when
+/// `GltfMaterialInfo::rigid_multi_node` resolved (either the multi-node
+/// case or the single-node-ambiguous-ancestor case, both of which this
+/// same runtime node-enumeration reproduces identically to the import-time
+/// resolution, so slot order always agrees).
 pub(crate) fn load_gltf_skinned_mesh(
     path: &std::path::Path,
     material_index: u32,
@@ -2036,6 +2177,10 @@ pub(crate) fn load_gltf_skinned_mesh(
         if let Some(found) = find_skinned_node_for_material(&node, material_index) {
             return flatten_skinned_node(&found, &buffers, material_index);
         }
+    }
+    let slot_nodes = find_material_contributing_nodes(&document, material_index);
+    if !slot_nodes.is_empty() {
+        return flatten_rigid_multi_node(&document, &buffers, &slot_nodes, material_index);
     }
     Err(format!(
         "{}: no skinned mesh-owning node found contributing {}",
@@ -2470,35 +2615,55 @@ fn resolve_morph_for_key(
 /// Resolve `key`'s animation clips — same `Some`/`None` key convention as
 /// [`resolve_skin_for_key`] (BUG-207): every clip resolved against the
 /// contributing node's full ancestor chain, once per clip (A4/D4).
+///
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): returns `(per_clip_animations,
+/// rigid_multi_node)` — the second slot is `Some` (and the first always
+/// empty) whenever this object needs the node-slot palette instead of the
+/// single-node TRS-track path: geometry contributed by MORE THAN ONE
+/// mesh-owning node with at least one animated in some clip and NONE
+/// skinned (deletes the old `:2492` left-static bail), or exactly one
+/// contributing node whose ancestor chain animates the same TRS channel on
+/// more than one ancestor in any clip (deletes the old `:1700` per-channel
+/// drop — see [`resolve_object_animation`]'s `ambiguous` doc).
 #[allow(clippy::too_many_arguments)]
 fn resolve_animations_for_key(
     nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
     chain_by_node: &std::collections::BTreeMap<usize, Vec<usize>>,
     node_anims_by_clip: &[std::collections::BTreeMap<usize, GltfNodeAnimation>],
     any_clip_animated_nodes: &std::collections::BTreeSet<usize>,
+    document: &gltf::Document,
     key: Option<usize>,
-    label: &str,
-    animation_report_lines: &mut Vec<String>,
-) -> Vec<Option<GltfObjectAnimation>> {
+) -> (Vec<Option<GltfObjectAnimation>>, Option<GltfObjectRigidMultiNode>) {
     match nodes_by_material.get(&key) {
         Some(nodes) if nodes.len() == 1 => {
             let node_index = *nodes.iter().next().unwrap();
             let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
-            node_anims_by_clip
+            let mut ambiguous = false;
+            let per_clip: Vec<Option<GltfObjectAnimation>> = node_anims_by_clip
                 .iter()
-                .map(|node_anims| resolve_object_animation(&chain, node_anims, animation_report_lines))
-                .collect()
+                .map(|node_anims| resolve_object_animation(&chain, node_anims, &mut ambiguous))
+                .collect();
+            if ambiguous {
+                (Vec::new(), Some(GltfObjectRigidMultiNode { slot_nodes: vec![node_index as u32] }))
+            } else {
+                (per_clip, None)
+            }
         }
         Some(nodes) if nodes.len() > 1 && any_clip_animated_nodes.iter().any(|n| nodes.contains(n)) => {
-            animation_report_lines.push(format!(
-                "{label}: geometry contributed by {} nodes, at least \
-                 one of which is animated in some clip — multi-node-per-material \
-                 animation is out of scope, this object is left static",
-                nodes.len()
-            ));
-            Vec::new()
+            let any_skinned = nodes
+                .iter()
+                .any(|n| document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false));
+            if any_skinned {
+                // resolve_skin_for_key already reports this combination
+                // ("multi-node-per-material skinning is out of A2 scope")
+                // — a skinned node mixed into a multi-node material object
+                // stays that bail, not D4's node-slot palette.
+                (Vec::new(), None)
+            } else {
+                (Vec::new(), Some(GltfObjectRigidMultiNode { slot_nodes: nodes.iter().map(|&n| n as u32).collect() }))
+            }
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), None),
     }
 }
 
@@ -2601,15 +2766,21 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             // the default-material entry built below (BUG-207).
             let material_key = Some(material_index as usize);
             let label = material_label(material_index);
-            let animations: Vec<Option<GltfObjectAnimation>> = resolve_animations_for_key(
+            let (animations, rigid_multi_node) = resolve_animations_for_key(
                 &nodes_by_material,
                 &chain_by_node,
                 &node_anims_by_clip,
                 &any_clip_animated_nodes,
+                &document,
                 material_key,
-                &label,
-                &mut animation_report_lines,
             );
+            if let Some(rmn) = &rigid_multi_node {
+                animation_report_lines.push(format!(
+                    "{label}: rigid animation composed across {} nodes via the node-slot \
+                     palette (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4)",
+                    rmn.slot_nodes.len()
+                ));
+            }
             // A2 (D2): resolve this material's skin the same way — exactly
             // one contributing node, and that node carries a `skin()`.
             let skin = resolve_skin_for_key(
@@ -2967,6 +3138,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
                 animations,
                 skin,
                 morph,
+                rigid_multi_node,
                 own_center,
             })
         })
@@ -3004,15 +3176,21 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             &default_label,
             &mut animation_report_lines,
         );
-        let default_animations = resolve_animations_for_key(
+        let (default_animations, default_rigid_multi_node) = resolve_animations_for_key(
             &nodes_by_material,
             &chain_by_node,
             &node_anims_by_clip,
             &any_clip_animated_nodes,
+            &document,
             None,
-            &default_label,
-            &mut animation_report_lines,
         );
+        if let Some(rmn) = &default_rigid_multi_node {
+            animation_report_lines.push(format!(
+                "{default_label}: rigid animation composed across {} nodes via the \
+                 node-slot palette (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4)",
+                rmn.slot_nodes.len()
+            ));
+        }
         materials.push(GltfMaterialInfo {
             material_index: DEFAULT_MATERIAL_SENTINEL,
             name: None,
@@ -3077,6 +3255,7 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
             animations: default_animations,
             skin: default_skin,
             morph: default_morph,
+            rigid_multi_node: default_rigid_multi_node,
             own_center: default_own_center,
         });
     }
@@ -3270,7 +3449,6 @@ mod animation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// CPU-only, fast — not gated behind `#[ignore]`. Guards the
     /// file-missing case (no fixture in a checkout without

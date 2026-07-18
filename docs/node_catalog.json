@@ -7796,6 +7796,42 @@
       ],
       "params": [
         {
+          "default": "0",
+          "label": "File",
+          "name": "path",
+          "type": "string"
+        },
+        {
+          "default": "-1",
+          "label": "Translation Node",
+          "name": "translation_node",
+          "range": [
+            "-1",
+            "100000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Rotation Node",
+          "name": "rotation_node",
+          "range": [
+            "-1",
+            "100000"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Scale Node",
+          "name": "scale_node",
+          "range": [
+            "-1",
+            "100000"
+          ],
+          "type": "int"
+        },
+        {
           "default": "1",
           "label": "Duration (s)",
           "name": "duration_s",
@@ -7821,7 +7857,7 @@
           "name": "clip_index",
           "range": [
             "0",
-            "31"
+            "255"
           ],
           "type": "int"
         },
@@ -7885,27 +7921,9 @@
             "1000"
           ],
           "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Translation Track",
-          "name": "translation_track",
-          "type": "table"
-        },
-        {
-          "default": "0",
-          "label": "Rotation Track",
-          "name": "rotation_track",
-          "type": "table"
-        },
-        {
-          "default": "0",
-          "label": "Scale Track",
-          "name": "scale_track",
-          "type": "table"
         }
       ],
-      "purpose": "Samples a parsed glTF TRS keyframe clip (translation/rotation/scale Tables authored at import time) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR interpolation only (A1 scope): lerp for translation/scale, slerp+quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the clip (Table left at its sentinel) passes through as the static neutral default (0 pos/rot, 1 scale).",
+      "purpose": "Samples a parsed glTF TRS keyframe clip (read from the shared gltf_anim_cache, selected by path + per-channel translation_node/rotation_node/scale_node) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR/STEP/CUBICSPLINE interpolation (whatever the channel carries): lerp/hold/Hermite for translation/scale, slerp/hold/Hermite+renormalize then quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the selected clip falls back to its own node selector's static bind pose, never a fabricated identity. Three independent node selectors (not one) because glTF assets legitimately split TRS channels across different ancestor nodes for one object (BoxAnimated.glb: translation on an ancestor, rotation on the mesh node).",
       "role": "Source",
       "stratum": "driver",
       "summary": "Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loop it on the beat.",
@@ -8133,6 +8151,22 @@
       ],
       "params": [
         {
+          "default": "0",
+          "label": "File",
+          "name": "path",
+          "type": "string"
+        },
+        {
+          "default": "0",
+          "label": "Target Node",
+          "name": "target_node",
+          "range": [
+            "0",
+            "100000"
+          ],
+          "type": "int"
+        },
+        {
           "default": "1",
           "label": "Duration (s)",
           "name": "duration_s",
@@ -8158,7 +8192,7 @@
           "name": "clip_index",
           "range": [
             "0",
-            "31"
+            "255"
           ],
           "type": "int"
         },
@@ -8205,12 +8239,12 @@
         },
         {
           "default": "0",
-          "label": "Weight Tracks",
-          "name": "weight_tracks",
+          "label": "Static Weights",
+          "name": "static_weights",
           "type": "table"
         }
       ],
-      "purpose": "Samples a parsed glTF object's per-target morph-weight keyframe tracks (or static authored weight, for an unanimated target) at a live `progress` (0..1) and emits the current per-target weight vector as Array(f32), one weight per target in target order. Wire the output straight into node.morph_targets_blend's `weights` input. LINEAR interpolation only (A1/A2/A3 scope). `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source/node.gltf_skeleton_pose: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping.",
+      "purpose": "Samples a parsed glTF object's per-target morph-weight keyframe channel (read from the shared gltf_anim_cache, selected by path+target_node) at a live `progress` (0..1) and emits the current per-target weight vector as Array(f32), one weight per target in target order. Wire the output straight into node.morph_targets_blend's `weights` input. LINEAR interpolation only (A1/A2/A3 scope, unchanged). `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source/node.gltf_skeleton_pose: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping. A target absent from the selected clip falls back to its authored static_weights[i], never a fabricated 0.0.",
       "role": "Source",
       "stratum": "driver",
       "summary": "Samples an imported glTF asset's morph-target weight animation and outputs the per-target weight vector a Morph Targets Blend node needs. Wire progress to a beat or LFO to animate the blend.",
@@ -8252,6 +8286,28 @@
       ],
       "params": [
         {
+          "default": "0",
+          "label": "File",
+          "name": "path",
+          "type": "string"
+        },
+        {
+          "default": "0",
+          "label": "Skin Index",
+          "name": "skin_index",
+          "range": [
+            "-2",
+            "63"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Node Slots",
+          "name": "node_slots",
+          "type": "table"
+        },
+        {
           "default": "1",
           "label": "Duration (s)",
           "name": "duration_s",
@@ -8277,7 +8333,7 @@
           "name": "clip_index",
           "range": [
             "0",
-            "31"
+            "255"
           ],
           "type": "int"
         },
