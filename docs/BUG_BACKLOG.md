@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-246 | **unguarded-inspector-gestures-race-full-snapshot-acceptance** | audio-gain / mod-config / trim-style drags have no `ActiveInspectorDrag` guard, so a full project snapshot accepted mid-drag (data_version bump from any concurrent Execute) stomps the in-flight value — wrong or missing undo pair on release — MED |
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
@@ -197,6 +198,16 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause (attributed per-event, `eval/odf_attribution.py`):** 26/41 transient fires are quiet-passage admissions — pad flux ~80 ODF units clears `SUPERFLUX_DELTA` (48) while the median baseline is ~0; the rest are big swell attacks passing the novelty test (candidate ~1000+ vs ref ~0). Kick-ridge fires on pads are unattributed (descending spectral motion in swells suspected).
 
 **Fix shape:** re-sweep `SUPERFLUX_DELTA` upward (P3's guard plateau ran 30–300; pad flicker sits ~80 — a value ~100–150 may silence it) with the P3 false-fire guards (dive/riser/growl) AND the recall fixtures both green; kick-ridge pad fires need their own look (possibly `KICK_ABS_FLOOR` or a sustained-energy veto). Do NOT trade recall-fixture numbers to buy this.
+
+### BUG-246 (unguarded-inspector-gestures-race-full-snapshot-acceptance) — audio-gain / mod-config / trim-style drags aren't in `ActiveInspectorDrag`, so a full snapshot accepted mid-drag stomps the in-flight value — found 2026-07-18 while fixing the macro/scene undo regression (`30712691`)
+
+**Status:** OPEN — MED (pre-existing class, NOT part of the `ac96c65c` regression: these fields aren't carried in the per-tick `ModulationSnapshot`, so the race needs a `data_version` bump mid-drag — any concurrent `Execute` landing, e.g. a MIDI phantom-clip commit, which is routine on stage).
+
+**Symptom:** while dragging an audio-gain / mod-shape / step-amount / crossover / trim slider, a full project snapshot acceptance (`app_render.rs` ~line 808) replaces `local_project`; the restore at ~817 only covers `ActiveInspectorDrag` variants (MasterOpacity, LedBrightness, LayerOpacity, Param, Macro, SceneParam). Unguarded drags visibly snap back mid-gesture, and the commit handler's re-read of `new_val` from `local_project` produces a wrong or skipped undo command (same mechanism the macro fix's red test proves).
+
+**Root cause:** the commit handlers derive `new_val` by re-reading a project that concurrent snapshot acceptance can rewrite; only guarded gesture kinds are restored.
+
+**Fix shape:** either add guard variants for the remaining gesture families (mechanical, follows the Macro/SceneParam precedent in `30712691`), or the class-level version: commit handlers carry the gesture's final value instead of re-reading `local_project`. The two new dispatch tests in `inspector.rs` (`macro_drag_survives_a_mid_gesture_modulation_snapshot`, `scene_row_drag_survives_a_full_snapshot_replacement`) are the template for proving each family.
 
 ### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
