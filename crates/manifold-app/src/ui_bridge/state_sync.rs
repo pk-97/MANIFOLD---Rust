@@ -1601,6 +1601,36 @@ pub fn sync_inspector_data(
                             // `scoped_row` gets a correct lit state for free,
                             // not just the rows P3a actually wires a mod
                             // button onto.
+                            // Bound-row value override (importer-camera fix,
+                            // 2026-07-18): a row whose inner (node, param) is
+                            // covered by a card/user binding LIVES in the
+                            // binding's instance slot — the write path edits
+                            // that slot (inspector.rs `scene_bound_slot`), so
+                            // the displayed value must read it too, or the
+                            // panel shows the def's stale import default.
+                            let hoisted_gen_inst = l.gen_params();
+                            let display_value = |node_doc_id: u32, param_id: &str, fallback: f32| {
+                                hoisted_gen_inst
+                                    .and_then(|inst| {
+                                        // Instance graph first; a TRACKING
+                                        // instance (graph: None — fresh
+                                        // imports) resolves via the same
+                                        // effective def the VM was built on.
+                                        let id = inst
+                                            .binding_id_for_node_param(node_doc_id, param_id)
+                                            .or_else(|| {
+                                                manifold_core::effects::binding_id_for_node_param_in(
+                                                    def.as_ref()?,
+                                                    node_doc_id,
+                                                    param_id,
+                                                )
+                                            })?;
+                                        inst.params
+                                            .contains(id.as_str())
+                                            .then(|| inst.get_base_param(id.as_str()))
+                                    })
+                                    .unwrap_or(fallback)
+                            };
                             let row = |node_doc_id: u32,
                                        param_id: &str,
                                        value: f32,
@@ -1608,7 +1638,7 @@ pub fn sync_inspector_data(
                                        min: f32,
                                        max: f32| RowValue {
                                 addr: RowAddr::root(node_doc_id, param_id),
-                                value,
+                                value: display_value(node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -1629,7 +1659,7 @@ pub fn sync_inspector_data(
                                               min: f32,
                                               max: f32| RowValue {
                                 addr: RowAddr { scope_path, node_doc_id, param_id: param_id.to_string() },
-                                value,
+                                value: display_value(node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -1656,6 +1686,7 @@ pub fn sync_inspector_data(
                             let mrow = |node_doc_id: u32, param_key: &str, v: RowValue| ModulatedRow {
                                 modulation: Box::new(scene_row_modulation(
                                     gen_inst,
+                                    def.as_ref(),
                                     node_doc_id,
                                     param_key,
                                     automation_latched,
@@ -1863,6 +1894,7 @@ pub fn sync_inspector_data(
                                                             &m.params,
                                                             &m.driven,
                                                             gen_inst,
+                                                            def.as_ref(),
                                                             automation_latched,
                                                         ),
                                                     })
@@ -2708,11 +2740,22 @@ pub(crate) fn lookup_param_mod_for_id(
 /// modulation, not an error" contract as `inst = None`.
 pub(crate) fn scene_row_modulation(
     inst: Option<&PresetInstance>,
+    effective_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     node_doc_id: u32,
     param_key: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> manifold_ui::panels::scene_setup_panel::RowModulation {
-    let real_id = inst.and_then(|i| i.binding_id_for_node_param(node_doc_id, param_key));
+    // Instance graph first; a TRACKING instance (graph: None — fresh
+    // imports) resolves against the effective catalog def instead.
+    let real_id = inst
+        .and_then(|i| i.binding_id_for_node_param(node_doc_id, param_key))
+        .or_else(|| {
+            manifold_core::effects::binding_id_for_node_param_in(
+                effective_def?,
+                node_doc_id,
+                param_key,
+            )
+        });
     match real_id {
         Some(id) => row_modulation_for_id(inst, &id, automation_latched),
         None => manifold_ui::panels::scene_setup_panel::RowModulation::default(),
@@ -3761,6 +3804,7 @@ fn modifier_param_rows(
     params: &std::collections::BTreeMap<String, f32>,
     driven: &std::collections::HashSet<String>,
     gen_inst: Option<&PresetInstance>,
+    effective_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
     use manifold_ui::panels::scene_setup_panel::{
@@ -3772,6 +3816,7 @@ fn modifier_param_rows(
     let mrow = |param_key: &str, v: RowValue| ModulatedRow {
         modulation: Box::new(scene_row_modulation(
             gen_inst,
+            effective_def,
             node_doc_id,
             param_key,
             automation_latched,

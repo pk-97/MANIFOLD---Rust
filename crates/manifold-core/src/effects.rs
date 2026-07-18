@@ -334,6 +334,51 @@ fn one() -> f32 {
 ///
 /// Identity inputs (`invert = false`, `curve = Linear`, `scale = 1`,
 /// `offset = 0`) return `value` unchanged.
+/// Def-level half of [`PresetInstance::binding_id_for_node_param`]: the
+/// REAL binding id (`inst.params` key) for the inner-graph param
+/// `(node_doc_id, param_key)` in `def`, if any binding — bundled or
+/// user-added — targets it. Free function so callers holding the EFFECTIVE
+/// def (the catalog default an instance TRACKS when its own `graph` is
+/// `None`, e.g. every freshly imported model layer) can resolve bound rows
+/// too — see the method's doc for the tracking-instance trap. Node
+/// identity follows the expose command's own convention: the node's stable
+/// id, falling back to the handle-minted id when the stable id is empty.
+pub fn binding_id_for_node_param_in(
+    def: &crate::effect_graph_def::EffectGraphDef,
+    node_doc_id: u32,
+    param_key: &str,
+) -> Option<String> {
+    use crate::effect_graph_def::{BindingTarget, EffectGraphNode};
+    fn find_node(nodes: &[EffectGraphNode], doc_id: u32) -> Option<&EffectGraphNode> {
+        for n in nodes {
+            if n.id == doc_id {
+                return Some(n);
+            }
+            if let Some(group) = &n.group
+                && let Some(found) = find_node(&group.nodes, doc_id)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let node = find_node(&def.nodes, node_doc_id)?;
+    let identity = if node.node_id.is_empty() {
+        let handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+        crate::NodeId::new(handle.as_str())
+    } else {
+        node.node_id.clone()
+    };
+    let meta = def.preset_metadata.as_ref()?;
+    meta.bindings
+        .iter()
+        .find(|b| match &b.target {
+            BindingTarget::Node { node_id, param } => *node_id == identity && param == param_key,
+            BindingTarget::Composite { .. } => false,
+        })
+        .map(|b| b.id.clone())
+}
+
 pub fn apply_card_reshape(
     value: f32,
     min: f32,
@@ -1922,39 +1967,13 @@ impl PresetInstance {
     /// binding's `node_id` against the node's stable id, falling back to
     /// the handle-minted id when the stable id is empty (bundled nodes).
     /// Returns `None` when the param isn't exposed (no binding yet).
+    /// **Instance-graph only:** an instance that still TRACKS its catalog
+    /// preset (`graph: None` — every freshly imported model layer) resolves
+    /// nothing here; callers holding the effective def must fall back to
+    /// [`binding_id_for_node_param_in`] with it, or bound rows on tracking
+    /// instances silently miss (the importer-camera deadness, 2026-07-18).
     pub fn binding_id_for_node_param(&self, node_doc_id: u32, param_key: &str) -> Option<String> {
-        use crate::effect_graph_def::{BindingTarget, EffectGraphNode};
-        fn find_node(nodes: &[EffectGraphNode], doc_id: u32) -> Option<&EffectGraphNode> {
-            for n in nodes {
-                if n.id == doc_id {
-                    return Some(n);
-                }
-                if let Some(group) = &n.group
-                    && let Some(found) = find_node(&group.nodes, doc_id)
-                {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        let def = self.graph.as_ref()?;
-        let node = find_node(&def.nodes, node_doc_id)?;
-        let identity = if node.node_id.is_empty() {
-            let handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
-            crate::NodeId::new(handle.as_str())
-        } else {
-            node.node_id.clone()
-        };
-        let meta = def.preset_metadata.as_ref()?;
-        meta.bindings
-            .iter()
-            .find(|b| match &b.target {
-                BindingTarget::Node { node_id, param } => {
-                    *node_id == identity && param == param_key
-                }
-                BindingTarget::Composite { .. } => false,
-            })
-            .map(|b| b.id.clone())
+        binding_id_for_node_param_in(self.graph.as_ref()?, node_doc_id, param_key)
     }
 
     /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
