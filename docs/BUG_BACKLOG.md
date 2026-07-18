@@ -50,6 +50,10 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-249 | **scene-panel-modulation-is-decorative-synth-pids-never-resolve-at-runtime** | scene-row D/E/A buttons + all drawer configs store drivers/envelopes/audio-mods keyed by the synthesized `scene.{doc_id}.{param}` id on the generator `PresetInstance`; the modulation runtime only applies to `inst.params` entries, which never contain synth ids — the UI reads armed-state back by the same id, so it looks armed while nothing modulates — HIGH |
+| BUG-250 | **scene-panel-enum-value-cells-dead-after-convergence-removed-enum-click-path** | clicking Cast Shadows / Shadow Softness / Light Mode / Axis value cells dispatches nothing — C-P1c/d deleted the `SceneSetupEnumClicked` producers (the click-to-dropdown/cycle mechanism) and `value_labels` is display-only formatting; track-drag is now the only way to change an enum — MED-HIGH |
+| BUG-251 | **scene-and-audio-dock-scroll-inverted-vs-every-other-surface** | `scene_setup_panel.rs:3863` / `audio_setup_panel.rs:567` negate the wheel delta before `apply_scroll_delta`; inspector/browser pass the identical `dy` straight — both docks scroll backwards — MED |
+| BUG-252 | **eight-scene-flow-scripts-dead-at-step-2-on-stale-outliner-assert** | 8 scene flows fail their step-2 `Query(text="Outliner")` assert (header renamed "Objects"), so their button coverage (eye toggle, cast-shadows, softness dropdown, type-in, fog-undo, light drag) silently never ran at the convergence landing — the rot that let BUG-249/250 ship green — MED |
 | BUG-248 | **gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers** | GUI FPS degradation reported after importing/deleting heavy static (non-animated) glb layers; headless import render is clean (430 MB, converges frame 4) — root cause unknown, needs in-app profile — MED |
 | BUG-247 | **gltf-import-peak-rss-residual-per-source-node-whole-file-parses-not-deduplicated** | glTF import peak RSS residual (dragon fixture: 1.45 GB measured vs ~0.6–0.7 GB predicted from the shared anim cache alone) — suspected cause: mesh/texture source nodes independently re-parse the whole file with no shared-document cache, unlike the anim cache's dedup — MED |
 | BUG-246 | **unguarded-inspector-gestures-race-full-snapshot-acceptance** | audio-gain / mod-config / trim-style drags have no `ActiveInspectorDrag` guard, so a full project snapshot accepted mid-drag (data_version bump from any concurrent Execute) stomps the in-flight value — wrong or missing undo pair on release — MED |
@@ -190,6 +194,44 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-249 (scene-panel-modulation-is-decorative-synth-pids-never-resolve-at-runtime) — every modulation affordance on scene panel rows arms state that the runtime silently drops — found 2026-07-18, scene-panel audit after Peter's "modulation not working" report
+
+**Status:** OPEN — HIGH. This is the "modulation not working" half of the 2026-07-18 scene-panel mess report. It shipped green because BUG-234/BUG-239 made modulation unobservable in every flow-script gate — the landing report itself notes the drawer claims were only proven at dispatch level.
+
+**Symptom:** clicking a scene row's D/E/A button opens the drawer, shows the armed color, and persists a driver/envelope/audio-mod — but nothing on screen ever modulates, for any family (World/Object/Light/Camera/Modifier).
+
+**Root cause (traced end-to-end):** scene rows are keyed by synthesized ids (`synth_world_param_id` → `scene.{node_doc_id}.{param_key}`, `scene_setup_panel.rs:816`). Only THREE actions get the id_map interception that translates a synth id into a real `SetGraphNodeParamCommand` write (`ui_bridge/inspector.rs:1185/1248/1314` — ParamChanged/ParamSnapshot/ParamCommit). `DriverToggle` (inspector.rs:1372), `EnvelopeToggle`, `AudioModToggle`, `DriverConfig`, and every `AudioModSet*` fall through to the shared card path, which stores the modulation on the generator `PresetInstance` keyed by the synth id — and captures a garbage `base_value` via `inst.get_param(synth_id)` on a param that doesn't exist. At runtime, `modulation.rs` applies drivers/envelopes/audio-mods only via `inst.params.get_mut(param_id)` (lines 109/213/533+); synth ids are never in `inst.params`, so evaluation silently no-ops. Meanwhile `state_sync.rs`'s `row_modulation_for_id` reads armed-state back by the same synth id (state_sync.rs:1654-1660), so the UI confirms the arm it just stored — a closed loop that never touches the render.
+
+**Fix shape:** root fix, not per-action patching: scene-row modulation must target a param the runtime can resolve. Either (a) route ALL card-shaped actions through the scene id_map and store scene-row modulation against the real inner-node address (needs a driver/envelope/audio-mod runtime that can write `RowAddr`-shaped targets — the same write path `SetGraphNodeParamCommand` uses), or (b) make arming a scene row's modulation first materialize a REAL exposed instance param bound to the inner node (the existing `SceneSetupExposeParam` mechanism) and hang the driver off that. (b) reuses the entire existing modulation runtime unchanged and is the shape the design's "same widgets, same systems" directive implies. Blocked-on-nothing; needs a design call on (a) vs (b).
+
+### BUG-250 (scene-panel-enum-value-cells-dead-after-convergence-removed-enum-click-path) — enum rows lost their click interaction in C-P1c/d — found 2026-07-18, same audit
+
+**Status:** OPEN — MED-HIGH.
+
+**Symptom:** clicking the value cell of any enum row (Light's Cast Shadows On/Off, Shadow Softness Hard/Soft/VerySoft/Contact, Light Mode, Modifier Axis X/Y/Z) dispatches no action and changes nothing — verified headless: a name-targeted click on `scene_setup.light.cast_shadows_value` emits zero PanelActions. The only way to change an enum is to drag the row's slider track.
+
+**Root cause:** the P4/D9 mechanism for enum interaction was `PanelAction::SceneSetupEnumClicked` (click value → dropdown/cycle). C-P1c/d moved enum rows onto the card core's `value_labels` path and deleted every `SceneSetupEnumClicked` producer — the landing report flags the variant as "dead weight" cleanup, not realizing the producers WERE the interaction. `value_labels` in the shared card core is display-only (`format_param_value`, `param_slider_shared.rs:838`); `match_param_row_click` has no variant for a value-cell click, and the card's type-in path explicitly excludes `value_labels` params (`param_card.rs:1085`). So the regression is inherent to the conversion, not a wiring miss.
+
+**Fix shape:** give the shared card core a real enum-cell interaction (click cycles a 2-state, 3+ opens the dropdown — the behavior SCENE_OBJECT_AND_PANEL_V2 D9 committed to), emitting through the existing ParamSnapshot/Changed/Commit trio so the scene id_map interception and undo granularity come free — and so the inspector card's own `value_labels` params gain the same affordance. Do NOT resurrect `SceneSetupEnumClicked` (bespoke, panel-only — the convergence was right to kill it, wrong to replace it with nothing).
+
+### BUG-251 (scene-and-audio-dock-scroll-inverted-vs-every-other-surface) — both docks negate the shared wheel delta — found 2026-07-18, same audit
+
+**Status:** OPEN — MED (one-line fix × 2, plus a look at why no gate caught it).
+
+**Symptom:** mouse-wheel/trackpad scroll in the Scene Setup and Audio Setup docks moves content in the opposite direction from the inspector, browser, and every other scrolling surface.
+
+**Root cause:** `window_input.rs` hands the same normalized `dy` to every consumer. Inspector: `apply_scroll_delta(delta)` (inspector.rs:953). Scene dock: `handle_scroll` negates — `apply_scroll_delta(-delta)` (`scene_setup_panel.rs:3863`); `audio_setup_panel.rs:567` has the identical negation (BUG-199's fix apparently copied the wrong sign convention and the scene panel copied the audio panel).
+
+**Fix shape:** drop both negations; add a shared-direction assertion or a flow that scrolls two surfaces and compares offsets so a third panel can't re-introduce it.
+
+### BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale-outliner-assert) — most scene-panel flow coverage silently never ran at the convergence landing — found 2026-07-18, same audit
+
+**Status:** OPEN — MED (verification infra; the vehicle by which BUG-249/250 shipped "green").
+
+**Symptom:** 8 of the 21 scene flow scripts (`add-fog-drag`, `eye-toggle`, `fog-undo-removes-fog`, `heldout-merge-snapshot`, `light-cast-shadows-toggle`, `light-intensity-drag`, `numeric-typein-box`, `shadow-softness-dropdown`) fail at step 2 on `Assert Query(text="Outliner")` — the header was renamed "Objects" — so every later step (the actual button under test) never executes. The landing fixed the three scripts in its own gate list and left the rest dead. `scene-setup-empty-states.json` is additionally broken at step 0 (expects a "PLASMA" layer the `gltfscene` fixture doesn't have). With the assert patched, `eye-toggle` (9/9), `fog-undo` (17/17), `numeric-typein-box` (8/8), `heldout-merge` (3/3) pass; `cast-shadows-toggle` and `shadow-softness-dropdown` fail for the real reason (BUG-250); `add-fog-drag`/`light-intensity-drag` fail only their final displayed-value assert (BUG-239 class, dispatch verified). BUG-240 (scrub-fine) is one instance of this same rot, already logged.
+
+**Fix shape:** sweep all scene flows to the "Objects" header + a fixture that satisfies empty-states; then a meta-gate: a landing that claims flow re-verification must run EVERY `scene-*` flow, or a nightly/pre-landing runner that executes the whole `scripts/ui-flows/` directory and fails on any script that can no longer reach its last step.
 
 ### BUG-248 (gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers) — GUI FPS degradation reported after importing/deleting heavy STATIC (non-animated) glb layers; headless import render is clean — found 2026-07-18 during GLTF_ANIM_RUNTIME_V2_DESIGN.md P4 acceptance
 
