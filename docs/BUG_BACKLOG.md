@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-248 | **gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers** | GUI FPS degradation reported after importing/deleting heavy static (non-animated) glb layers; headless import render is clean (430 MB, converges frame 4) — root cause unknown, needs in-app profile — MED |
+| BUG-247 | **gltf-import-peak-rss-residual-per-source-node-whole-file-parses-not-deduplicated** | glTF import peak RSS residual (dragon fixture: 1.45 GB measured vs ~0.6–0.7 GB predicted from the shared anim cache alone) — suspected cause: mesh/texture source nodes independently re-parse the whole file with no shared-document cache, unlike the anim cache's dedup — MED |
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
 | BUG-242 | **live-trigger-edge-rearm-hostage-to-shape-release** | dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — recall gap is algorithmic — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
@@ -188,6 +190,28 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-248 (gui-fps-degradation-persists-after-deleting-heavy-static-glb-layers) — GUI FPS degradation reported after importing/deleting heavy STATIC (non-animated) glb layers; headless import render is clean — found 2026-07-18 during GLTF_ANIM_RUNTIME_V2_DESIGN.md P4 acceptance
+
+**Status:** OPEN — symptom reported by Peter with `apricot_blossom_cluster_lod.glb`. Root cause unknown.
+
+**Symptom:** deleting a heavy static (non-animated) glb layer in the live app leaves GUI FPS degraded — the degradation persists past the delete, not just present while the layer is loaded.
+
+**Root cause:** unknown; headless import render of the same asset is clean (`render-import`, `/usr/bin/time -l`: 399,851,520 bytes / 0.40 GB peak RSS, converges frame 4, matches its own 430 MB baseline, no regression from anim-v2 work) — so the degradation is not visible in a headless import+converge measurement and needs an in-app profile to attribute.
+
+**Suspects:** texture/buffer pool retention past layer delete (no eviction, or eviction keyed wrong); project-resolution render cost unrelated to the deleted layer; UI-thread-side retained state (undo snapshot, param card cache) not released on delete.
+
+**Fix shape:** needs an in-app repro + profile (Instruments or the app's own `--profile` per-node breakdown) to attribute before any fix is proposed — not attempted this session (out of scope for a measurement-only P4).
+
+### BUG-247 (gltf-import-peak-rss-residual-per-source-node-whole-file-parses-not-deduplicated) — glTF import peak RSS residual: mesh/texture source nodes independently re-parse the whole file — found 2026-07-18 during GLTF_ANIM_RUNTIME_V2_DESIGN.md P4 acceptance measurement
+
+**Status:** OPEN — MED. Not blocking GLTF_ANIM_RUNTIME_V2_DESIGN.md's landing (the class that design targets — payload-in-def, per-object table duplication, delete-doesn't-free — is fixed; this is a different, smaller, previously-deferred class).
+
+**Symptom:** the dragon fixture (`drogon__game_of_thrones_dragon/scene.gltf`, ~121 MB combined JSON+bin) measures 1.42–1.46 GB peak RSS post-anim-v2 (`/usr/bin/time -l` "maximum resident set size", 4 runs at different `--time` values) where the shared `GltfAnimCache` alone (D2, one `Arc<GltfAnimSet>` per file) would predict roughly 0.6–0.7 GB (baseline-floor ~0.4 GB from the blossom control + a modest anim-payload share).
+
+**Root cause (suspected, unproven — not profiled this session):** each of `gltf_mesh_source`/`gltf_skinned_mesh_source`/`gltf_texture_source` background-parses the FULL file independently and concurrently on its own thread (the same `pending_load`/background-thread pattern D2 uses for the anim cache, but without D2's shared-cache dedup) — for the dragon's 2 objects × however many source nodes wire to the same file, that's N independent whole-file parses of a 121 MB document instead of one shared parse. GLTF_ANIM_RUNTIME_V2_DESIGN.md's own Deferred section named this class explicitly ("Mesh/texture payload dedup across objects — mesh sources are correctly gated; trigger: a measured mesh-side memory problem") and this measurement is that trigger firing.
+
+**Fix shape:** extend the `GltfAnimCache` sharing pattern (`gltf_anim_cache.rs`, `Weak`-held `HashMap<PathBuf, Weak<T>>`, background-loaded) to a per-file parsed-document cache that mesh/texture source nodes share instead of each re-parsing independently. Not attempted this session — needs its own design/profiling pass to confirm the suspected mechanism before implementing (the number above is inference from file-size arithmetic, not a measured allocation breakdown).
 
 ### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
 
@@ -452,6 +476,8 @@ Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF r
 **Root cause (found):** `row_range_for_compound_key` and `mat4_from_table` (`crates/manifold-renderer/src/node_graph/primitives/gltf_anim_shared.rs` + `gltf_skeleton_pose.rs`) each do a full **O(n) linear scan over the entire track table from index 0**, called once per joint (18× for BrainStem's skeleton) across three track tables (translation/rotation/scale) plus two topology tables (root_world/inverse_bind), every single frame — for data that is STATIC after import: the row range for a given (clip_index, joint) pair never changes frame-to-frame, only the sampled time `t` within that range does. This is O(joint_count × total_track_rows) repeated work that should be O(joint_count) with a one-time O(total_track_rows) precompute, multiplied by 59 concurrent skinned-object instances × 2 passes/frame.
 
 **Fix shape (not attempted — exceeds this lane's "obvious and small, <~50 lines" bar):** cache each joint's `(start, end)` row range per (clip_index, joint) pair in `GltfSkeletonPose`'s `extra_fields` (a `Vec<(usize,usize)>` per track table, indexed by joint, keyed on `clip_index`), computed once on first `run()` after a clip_index/table change instead of re-scanning every frame. Requires: (a) cache invalidation logic (clip_index change, or the tables themselves changing — they come from `ctx.params`, static post-import in practice but not provably so from inside this primitive), (b) updating `mat4_from_table`'s two topology-table lookups similarly (small tables, ~18 rows, likely NOT the bottleneck — verify before caching those too, since they add cache-invalidation surface for probably-negligible gain), (c) a GPU parity test proving byte-identical output before/after caching kicks in (same shape as this file's existing `frame2_matches_frame1_on_static_asset` pattern in the sibling `gltf_skinned_mesh_source.rs`). This is real, scoped work for next wave — not a guess-and-patch job.
+
+**Note 2026-07-18 (GLTF_ANIM_RUNTIME_V2_DESIGN.md P4):** `lane/gltf-anim-v2` replaced this bug's own root cause — the O(n) per-frame linear scan over `row_range_for_compound_key`/`mat4_from_table` table rows — with binary search over a shared, file-backed, flat-slice cache (D3); `row_range_for_key`/`row_range_for_compound_key` are deleted on that branch. The 370ms/20ms figures above were measured on the pre-anim-v2 table-scan architecture and have NOT been re-measured against it — no in-app BrainStem hot-path number exists post-anim-v2 yet (only a `render-import` import+convergence measurement, 0.55 GB / 0.69s, which is not the same oracle as this bug's `skinned_import_hot_path_stays_under_20ms_per_frame` harness). Re-measure with that harness once anim-v2 lands before closing or updating this bug's Status.
 
 ### BUG-188 (meshprimitivemodes-non-triangle-primitive-blanks-whole-object) — a mesh mixing POINTS/LINES/LINE_STRIP/LINE_LOOP/TRIANGLE_STRIP/TRIANGLE_FAN alongside TRIANGLES renders fully black instead of drawing at least the TRIANGLES primitives — found 2026-07-16 during GLB_CONFORMANCE_DESIGN.md G-P7 sidecar-fetch sweep
 **Status:** OPEN — found while wiring `MeshPrimitiveModes` (Khronos glTF-Sample-Assets) into the conformance manifest; xfail'd as `xfail:BUG-188` rather than blocking.
