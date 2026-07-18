@@ -691,8 +691,10 @@ impl AbletonBridge {
     /// 60 Hz signal without adding perceptible latency to fast knob moves
     /// (the filter's adaptive cutoff lets fast input through near-instantly).
     ///
-    /// Returns `true` if any values were written (so the content thread can
-    /// flag `modulation_active` and send a UI update this frame).
+    /// Returns `true` if any values were written. Since the always-on
+    /// ModulationSnapshot send (param-feed unification), the content thread
+    /// no longer consults this — the snapshot ships every tick regardless.
+    /// Kept for tests and future callers that want the dirty signal.
     pub fn apply(&mut self, project: &mut Project, now: f64) -> bool {
         // 1. Drain inbound raw values into the per-source filter targets.
         {
