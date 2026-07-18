@@ -672,8 +672,10 @@ pub(super) fn dispatch_project(
 /// `SceneSetupExposeParam` to read the node's stable `node_id`/`handle`
 /// before constructing `ToggleNodeParamExposeCommand`, which (unlike every
 /// other fourth-surface command in this file) needs that identity as a
-/// constructor argument rather than resolving it internally.
-fn find_node_by_scope<'a>(
+/// constructor argument rather than resolving it internally. BUG-249:
+/// `pub(crate)` so `inspector.rs`'s scene modulation redirect can resolve
+/// the same identity when it materializes an exposure on first arm.
+pub(crate) fn find_node_by_scope<'a>(
     def: &'a manifold_core::effect_graph_def::EffectGraphDef,
     scope_path: &[u32],
     node_doc_id: u32,
