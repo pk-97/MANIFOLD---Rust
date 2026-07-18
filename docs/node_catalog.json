@@ -8296,10 +8296,16 @@
           "label": "Skin Index",
           "name": "skin_index",
           "range": [
-            "0",
+            "-2",
             "63"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Node Slots",
+          "name": "node_slots",
+          "type": "table"
         },
         {
           "default": "1",

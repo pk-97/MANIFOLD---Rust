@@ -257,6 +257,45 @@ fn skeleton_pose_clip_durations(
     (clip_durations_rows, fallback_duration_s)
 }
 
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): [`skeleton_pose_clip_durations`]'s
+/// sibling for the node-slot rigid palette — same shape (`[clip_index,
+/// duration_s]` rows + a fallback), keyed off `slot_nodes` directly rather
+/// than a skin's own joint list. Like that function, this is only a
+/// transient PRE-LOAD fallback (the primitive's own `AnimClip::duration_s`,
+/// computed from every channel in the resident clip once the shared cache
+/// loads, wins immediately after — see `gltf_skeleton_pose.rs`'s `run()`)
+/// — it doesn't need to walk ancestors to be correct, only to be a
+/// reasonable UI default before that happens.
+fn rigid_multi_node_clip_durations(
+    slot_nodes: &[u32],
+    node_anims_by_clip: &[std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>],
+) -> (Vec<Vec<f32>>, f32) {
+    let empty_anims = std::collections::BTreeMap::new();
+    let clip_count = node_anims_by_clip.len().max(1);
+    let mut clip_durations_rows = Vec::with_capacity(clip_count);
+    let mut fallback_duration_s = 1e-3;
+
+    for c in 0..clip_count {
+        let node_anims = node_anims_by_clip.get(c).unwrap_or(&empty_anims);
+        let mut duration_s: f32 = 0.0;
+        for &node_index in slot_nodes {
+            let Some(anim) = node_anims.get(&(node_index as usize)) else { continue };
+            let last = |t: &[f32]| t.last().copied().unwrap_or(0.0);
+            duration_s = duration_s
+                .max(anim.translation.as_ref().map(|t| last(&t.times)).unwrap_or(0.0))
+                .max(anim.rotation.as_ref().map(|r| last(&r.times)).unwrap_or(0.0))
+                .max(anim.scale.as_ref().map(|s| last(&s.times)).unwrap_or(0.0));
+        }
+        let duration_s = duration_s.max(1e-3);
+        clip_durations_rows.push(vec![c as f32, duration_s]);
+        if c == 0 {
+            fallback_duration_s = duration_s;
+        }
+    }
+
+    (clip_durations_rows, fallback_duration_s)
+}
+
 /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: replaces the P1-era
 /// `build_morph_weight_table`, which built a `weight_tracks` keyframe
 /// Table — payload now lives in the shared `gltf_anim_cache`. The importer
@@ -828,6 +867,92 @@ fn build_object_group(
                 "{group_name}: skinned (glTF skin index {}, {joint_count} joints) — \
                  node.gltf_skinned_mesh_source + node.gltf_skeleton_pose + node.skin_mesh",
                 obj_skin.skin_index
+            ));
+            Some(skinmesh_id)
+        } else if let Some(rmn) = &m.rigid_multi_node {
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): rigid multi-node
+            // objects route through the SAME node.gltf_skinned_mesh_source
+            // + node.gltf_skeleton_pose + node.skin_mesh trio a real skin
+            // uses — `load_gltf_skinned_mesh`'s D4 fallback
+            // (`find_material_contributing_nodes`) re-derives the IDENTICAL
+            // slot order at runtime, so the `node_slots` Table stamped on
+            // the pose node below always agrees with the vertex source's
+            // own per-vertex slot indices without a shared import-time
+            // handle.
+            let rigid_src = {
+                let mut n = plain_node(
+                    mesh_id,
+                    &mesh_node_id,
+                    "node.gltf_skinned_mesh_source",
+                    &mesh_node_id,
+                );
+                let rigid_material_param = if m.material_index == gltf_load::DEFAULT_MATERIAL_SENTINEL {
+                    gltf_load::DEFAULT_MATERIAL_MESH_PARAM
+                } else {
+                    m.material_index as i32
+                };
+                n.params
+                    .insert("material_index".to_string(), int(rigid_material_param));
+                n.params
+                    .insert("max_capacity".to_string(), int(m.vertex_count.max(1) as i32));
+                n.params
+                    .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
+                n.params
+                    .insert("source_bbox_radius".to_string(), float(bbox_radius));
+                n
+            };
+            group_nodes.push(rigid_src);
+
+            let pose_node_id = format!("pose_{k}");
+            let pose_id = fresh_id();
+            let joint_count = rmn.slot_nodes.len() as u32;
+            let (clip_durations_rows, duration_s) =
+                rigid_multi_node_clip_durations(&rmn.slot_nodes, node_anims_by_clip);
+            let mut pose_node =
+                plain_node(pose_id, &pose_node_id, "node.gltf_skeleton_pose", &pose_node_id);
+            pose_node.params.insert("joint_count".to_string(), int(joint_count as i32));
+            pose_node.params.insert("duration_s".to_string(), float(duration_s));
+            pose_node.params.insert("clip_durations".to_string(), table(clip_durations_rows));
+            // D4: `-2` sentinel selects node-slot mode over a real skin;
+            // `node_slots` rows are `[scene_node_index]`, row i = slot i.
+            pose_node.params.insert("skin_index".to_string(), int(-2));
+            let node_slots_rows: Vec<Vec<f32>> =
+                rmn.slot_nodes.iter().map(|&n| vec![n as f32]).collect();
+            pose_node.params.insert("node_slots".to_string(), table(node_slots_rows));
+            group_nodes.push(pose_node);
+            string_bindings.push(StringBindingDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                label: "Model File".to_string(),
+                default_value: path_str.to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new(&pose_node_id),
+                    param: "path".to_string(),
+                },
+            });
+            animation_card_controls(
+                &mut card_params,
+                &mut card_bindings,
+                &pose_node_id,
+                &pose_node_id,
+                &group_name,
+                node_anims_by_clip.len().max(1) as u32,
+            );
+
+            let skinmesh_node_id = format!("skinmesh_{k}");
+            let skinmesh_id = fresh_id();
+            let mut skinmesh_node =
+                plain_node(skinmesh_id, &skinmesh_node_id, "node.skin_mesh", &skinmesh_node_id);
+            skinmesh_node.params.insert("joint_count".to_string(), int(joint_count as i32));
+            group_nodes.push(skinmesh_node);
+
+            group_wires.push(wire(mesh_id, "joints", skinmesh_id, "joints"));
+            group_wires.push(wire(mesh_id, "weights", skinmesh_id, "weights"));
+            group_wires.push(wire(pose_id, "joint_matrices", skinmesh_id, "matrices"));
+            report_lines.push(format!(
+                "{group_name}: rigid animation composed across {joint_count} nodes via the \
+                 node-slot palette (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4) — \
+                 node.gltf_skinned_mesh_source + node.gltf_skeleton_pose (node-slot mode) + \
+                 node.skin_mesh",
             ));
             Some(skinmesh_id)
         } else {
@@ -3572,6 +3697,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            rigid_multi_node: None,
             own_center: [0.0, 0.0, 0.0],
         };
         let summary = GltfImportSummary {
@@ -3814,6 +3940,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            rigid_multi_node: None,
             own_center: [0.0, 0.0, 0.0],
         }
     }
@@ -5562,6 +5689,7 @@ mod tests {
             animations: Vec::new(),
             skin: None,
             morph: None,
+            rigid_multi_node: None,
             own_center: [0.0, 0.0, 0.0],
         };
         let summary = GltfImportSummary {
@@ -6552,6 +6680,80 @@ mod tests {
                         phases[i], phases[j]
                     );
                 }
+            }
+        }
+    }
+
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) gate: a HELD-OUT multi-node
+    /// rigid-animated fixture — `CesiumMilkTruck.glb` — must render four
+    /// pairwise-distinct poses through the full import path, proving the
+    /// node-slot palette (not a fixture-shaped special case). This asset
+    /// was NEVER inspected or developed against while building D4; it was
+    /// found by running the real `gltf_import_summary` resolver over
+    /// every khronos fixture and grepping its own new report line
+    /// ("rigid animation composed across N nodes via the node-slot
+    /// palette") for a hit — `CesiumMilkTruck.glb` material 0 resolves to
+    /// exactly 2 contributing nodes (the truck body/frame plus a wheel
+    /// group), at least one animated (the wheel spin), neither skinned —
+    /// the textbook D4 shape. `BoxAnimated.glb`'s own four-phase gate
+    /// (`box_animated_four_phase_pngs_are_visibly_distinct`, unchanged by
+    /// this phase) stays the single-node regression proof: its translation/
+    /// rotation split across ONE mesh node + ONE ancestor is
+    /// non-ambiguous, so it still resolves through the pre-D4
+    /// `GltfObjectAnimation` TRS-track path, not the node-slot palette —
+    /// D4 only reroutes the genuinely multi-node or ambiguous-ancestor
+    /// cases.
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
+        let (w, h) = (256u32, 256u32);
+        let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/goldens");
+        std::fs::create_dir_all(&out_dir).expect("create goldens dir");
+
+        let asset = "CesiumMilkTruck.glb";
+        let path = khronos_fixture_path(asset);
+        if !path.exists() {
+            eprintln!(
+                "rigid_multi_node_held_out_fixture_renders_four_distinct_poses: \
+                 fixture not found at {}, skipping",
+                path.display()
+            );
+            return;
+        }
+        let (def, report) = assemble_import_graph(&path).expect("assemble CesiumMilkTruck import");
+        assert!(
+            report.report_lines.iter().any(|line| line.contains("rigid animation composed across")),
+            "CesiumMilkTruck.glb must resolve at least one object through the D4 node-slot \
+             palette — if this fails, the fixture no longer exercises the case this test gates \
+             (report: {:?})",
+            report.report_lines
+        );
+        let duration_s = skeleton_pose_duration_s_or_static(&def);
+        assert!(duration_s > 0.0, "node-slot object must resolve a positive clip duration");
+
+        let phases = [0.0f32, 0.25, 0.5, 0.75];
+        let mut frames = Vec::new();
+        for &p in &phases {
+            let (def, _report) = assemble_import_graph(&path).expect("assemble CesiumMilkTruck import");
+            frames.push(render_skinned_import_at_progress(def, w, h, p, duration_s));
+        }
+
+        for (p, rgba) in phases.iter().zip(frames.iter()) {
+            let out_path =
+                out_dir.join(format!("cesium_milk_truck_rigid_p{:03}.png", (p * 100.0).round() as u32));
+            image::save_buffer(&out_path, rgba, w, h, image::ExtendedColorType::Rgba8)
+                .unwrap_or_else(|e| panic!("save {}: {e}", out_path.display()));
+        }
+
+        for i in 0..frames.len() {
+            for j in (i + 1)..frames.len() {
+                assert_ne!(
+                    frames[i], frames[j],
+                    "{asset}: progress {} and progress {} rendered byte-identical frames — the \
+                     node-slot palette isn't animating",
+                    phases[i], phases[j]
+                );
             }
         }
     }

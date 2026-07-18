@@ -214,13 +214,11 @@ pub struct GltfAnimSet {
     /// Index == `document.skins()` index.
     pub skins: Vec<SkinTopology>,
     /// Whole-scene node hierarchy, index == glTF node index; `-1` = root.
-    // Not yet read: `node.gltf_skeleton_pose` (P1) composes only WITHIN a
-    // skin's own joint list via `SkinTopology::joint_parent`. This field
-    // exists for P3 (GLTF_ANIM_RUNTIME_V2_DESIGN.md D4) — rigid
-    // multi-node objects' whole-hierarchy parent-chain composition, which
-    // has no per-skin joint list to walk instead. Un-suppress when P3
-    // wires the node-slot pose source against it.
-    #[allow(dead_code)]
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): read by
+    /// `gltf_skeleton_pose::resolve_world_whole_scene` — the node-slot
+    /// rigid palette's whole-hierarchy parent-chain composition, which has
+    /// no per-skin joint list to walk instead (unlike `SkinTopology::joint_parent`,
+    /// used only within a skin's own joint list).
     pub node_parents: Vec<i32>,
     /// Whole-scene per-node bind TRS, index == glTF node index.
     pub node_bind_trs: Vec<BindTrs>,
