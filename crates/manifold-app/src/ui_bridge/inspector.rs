@@ -2707,6 +2707,22 @@ pub(super) fn dispatch_inspector(
             {
                 let mn = *min;
                 let mx = *max;
+                // Guard the in-flight range against a concurrent snapshot swap
+                // (BUG-246): restored via ActiveInspectorDrag::Trim::apply.
+                // Ableton needs its resolved mapping target; driver/audio don't.
+                let ableton_target = matches!(kind, TrimKind::Ableton)
+                    .then(|| {
+                        ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                    })
+                    .flatten();
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Trim {
+                    kind: *kind,
+                    target: target.clone(),
+                    ableton_target,
+                    param_id: param_id.clone(),
+                    min: mn,
+                    max: mx,
+                });
                 match kind {
                     TrimKind::Driver => {
                         graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {
@@ -4127,6 +4143,73 @@ mod scene_card_convergence_tests {
             cmds.iter().any(|c| matches!(c, ContentCommand::Execute(_))),
             "a completed macro drag must produce an undo-tracked command; got {} commands",
             cmds.len()
+        );
+    }
+
+    /// BUG-246 (trim family): while a modulation trim handle is dragged with
+    /// playback running, a full snapshot is accepted every frame
+    /// (`app_render.rs` ~808 replaces `local_project`, then the unguarded
+    /// per-frame `sync_inspector_data` at ~3373 reconfigures cards from it).
+    /// Before the `Trim` variant, `drag.apply` had no arm for trim, so the
+    /// in-flight `[min,max]` reverted to the snapshot's stale range every
+    /// frame — the handle jumped/vanished mid-gesture. The restore must write
+    /// the dragged range back through the driver's `trim_min/trim_max`, the
+    /// same store `TrimChanged`'s driver dual-edit uses.
+    #[test]
+    fn driver_trim_range_survives_a_mid_gesture_snapshot() {
+        use crate::app::ActiveInspectorDrag;
+        let (mut project, layer_id) = scene_layer_project();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let pid: manifold_core::effects::ParamId = std::borrow::Cow::Owned("density".to_string());
+
+        // Arm a driver carrying the user's in-flight trim range (0.3..0.9).
+        project.with_preset_graph_mut(&target, |inst| {
+            inst.drivers = Some(vec![ParameterDriver {
+                param_id: pid.clone(),
+                beat_division: manifold_core::types::BeatDivision::Quarter,
+                waveform: manifold_core::types::DriverWaveform::Sine,
+                enabled: true,
+                phase: 0.0,
+                base_value: 0.0,
+                trim_min: 0.3,
+                trim_max: 0.9,
+                reversed: false,
+                free_period_beats: None,
+                legacy_param_index: None,
+                is_paused_by_user: false,
+            }]);
+        });
+
+        // The content thread's stale snapshot: same driver, DEFAULT trim.
+        let mut stale = project.clone();
+        stale.with_preset_graph_mut(&target, |inst| {
+            if let Some(ds) = inst.drivers.as_mut() {
+                ds[0].trim_min = 0.0;
+                ds[0].trim_max = 1.0;
+            }
+        });
+
+        // app_render mid-drag: local_project := stale, then restore the drag.
+        let drag = ActiveInspectorDrag::Trim {
+            kind: manifold_ui::panels::TrimKind::Driver,
+            target: target.clone(),
+            ableton_target: None,
+            param_id: pid.clone(),
+            min: 0.3,
+            max: 0.9,
+        };
+        let mut local = stale;
+        drag.apply(&mut local);
+
+        let (mn, mx) = local
+            .with_preset_graph_mut(&target, |inst| {
+                let d = &inst.drivers.as_ref().unwrap()[0];
+                (d.trim_min, d.trim_max)
+            })
+            .expect("generator instance resolves");
+        assert!(
+            (mn - 0.3).abs() < 1e-6 && (mx - 0.9).abs() < 1e-6,
+            "trim range must survive the snapshot stomp; got ({mn}, {mx}) instead of (0.3, 0.9)"
         );
     }
 
