@@ -19,8 +19,14 @@
 //! beat-based refractory of its own — it only has to avoid re-firing on the
 //! *same* impulse's decay. It does that with a per-config [`TransientEdge`]:
 //! fire on the rising edge above the fixed 0.5 threshold, then re-arm only
-//! once the shaped signal falls back below `0.5 * REARM_RATIO`. Tempo-
-//! independent and pure. (§8, 2026-07-07: the edge itself moved to
+//! once the level falls back below `0.5 * REARM_RATIO`. Tempo-
+//! independent and pure. **BUG-242 (2026-07-18):** the edge reads the
+//! sensitivity-scaled RAW signal, not the shape-conditioned envelope — a
+//! shape's attack/release smoothing (release defaults to 120 ms) used to gate
+//! `advance()` too, so a second onset landing inside the first one's decay
+//! tail never re-armed the edge, deafening triggers on dense material. The
+//! conditioned signal remains the fire-meter's source of truth; only the edge
+//! decoupled. (§8, 2026-07-07: the edge itself moved to
 //! `manifold_core::audio_trigger::TransientEdge` so the param-trigger
 //! evaluator could share it; P2, 2026-07-10: this module's own state moved
 //! from send×band keys to layer×index keys when clip triggers became
@@ -138,6 +144,10 @@ impl LiveTriggerState {
                 };
                 let raw = cfg.source.feature.extract(features);
                 let follower = self.armed.entry((layer.layer_id.clone(), idx)).or_default();
+                // BUG-242: `prev_raw` before `condition()` mutates it — the
+                // edge level below needs the pre-tick value to recompute the
+                // sensitivity-scaled raw signal for edge detection.
+                let prev_raw_before_condition = follower.prev_raw;
                 // Edge-detect the pre-range-map `conditioned` signal — the
                 // exact same split the trigger-gate arm in
                 // `modulation::evaluate_instance_audio_mods` uses (never the
@@ -150,6 +160,23 @@ impl LiveTriggerState {
                     &mut follower.smoothed,
                     &mut follower.prev_raw,
                 );
+                // BUG-242: the edge advances on the sensitivity-scaled RAW
+                // signal, not `conditioned` — the shape's attack/release
+                // envelope (release defaults to 120 ms) otherwise smears two
+                // onsets that land inside one impulse's decay tail into a
+                // single fire, deafening triggers on dense material (measured
+                // recall 0.204 vs 0.673 achievable on a 128bpm kit). Same
+                // sensitivity/rate-of-change step `AudioModShape::condition`'s
+                // `target` computes internally (manifold-core's
+                // `audio_mod.rs`) — reused verbatim, not reinvented.
+                // `conditioned` above is untouched and still drives the
+                // fire-meter push below.
+                let edge_level = if cfg.shape.rate_of_change {
+                    let rate = (raw - prev_raw_before_condition) / dt_s.max(1e-4);
+                    (0.5 + rate * cfg.shape.sensitivity).clamp(0.0, 1.0)
+                } else {
+                    (raw * cfg.shape.sensitivity).clamp(0.0, 1.0)
+                };
                 // D6 (P3c, BUG-082's fix): capture the same shaped signal the
                 // edge check below reads, keyed on the owning layer + this
                 // config's index — the drawer meter shows exactly what
@@ -161,7 +188,7 @@ impl LiveTriggerState {
                     fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
                     conditioned,
                 );
-                if fire_enabled && follower.edge.advance(conditioned, 0.5) {
+                if fire_enabled && follower.edge.advance(edge_level, 0.5) {
                     fires.push(FireRequest {
                         target_layer: layer.layer_id.clone(),
                         one_shot_beats: cfg.one_shot_beats,
@@ -244,6 +271,59 @@ mod tests {
 
         // Next onset fires again.
         assert_eq!(state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(), 1);
+    }
+
+    #[test]
+    fn two_impulses_80ms_apart_both_fire_with_default_shape_release() {
+        // BUG-242: with the DEFAULT shape (release_ms = 120, untouched),
+        // two onsets landing ~80ms apart — well inside the release tail —
+        // must both fire. Before the fix, `TransientEdge::advance` read the
+        // shape-CONDITIONED envelope, which was still decaying above the
+        // 0.5 * REARM_RATIO re-arm floor 80ms after the first onset (a
+        // 120ms release hasn't cleared that floor by then), so the second
+        // onset never re-armed the edge. After the fix the edge reads the
+        // sensitivity-scaled RAW signal, which drops straight back to 0 the
+        // tick after each onset (mirroring the upstream transient
+        // detector's own decaying-impulse-per-onset shape), clearing the
+        // re-arm floor immediately.
+        let send = AudioSend::new("Kick");
+        let send_id = send.id.clone();
+        let mut setup = AudioSetup::default();
+        setup.sends.push(send);
+
+        let mut layer = Layer::new("Kick".to_string(), LayerType::Video, 0);
+        let mut cfg = LayerClipTrigger::new(AudioModSource {
+            send_id,
+            feature: AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        });
+        cfg.enabled = true;
+        // shape stays at AudioModShape::default() — sensitivity 1.0, attack
+        // 5ms, release 120ms — the out-of-the-box configuration BUG-242 was
+        // measured on.
+        layer.clip_triggers.push(cfg);
+        let layers = vec![layer];
+
+        let mut state = LiveTriggerState::default();
+        let hot = snapshot_with_transient(AudioBand::Full, 0.9);
+        let cold = snapshot_with_transient(AudioBand::Full, 0.0);
+
+        assert_eq!(
+            state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(),
+            1,
+            "first onset must fire"
+        );
+
+        // ~80ms of quiet at 60fps (5 * 16.67ms ~= 83ms) — inside the 120ms
+        // release tail, exactly the BUG-242 scenario.
+        for _ in 0..5 {
+            state.evaluate(&cold, &setup, &layers, DT, &mut FireMeterCapture::default());
+        }
+
+        assert_eq!(
+            state.evaluate(&hot, &setup, &layers, DT, &mut FireMeterCapture::default()).len(),
+            1,
+            "second onset ~80ms later, inside the shape's 120ms release tail, must still fire (BUG-242)"
+        );
     }
 
     #[test]
