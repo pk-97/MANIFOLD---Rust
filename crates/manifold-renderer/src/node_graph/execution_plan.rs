@@ -503,7 +503,6 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                 let key = (node_id, output_port.name.clone());
                 let wires = consumers_by_output.get(&key)?;
                 if wants_fp32_intermediate(graph, wires) {
-                    eprintln!("[fp32-promote] {:?} {}", node_id, output_port.name); // TEMP DEBUG
                     Some(manifold_gpu::GpuTextureFormat::Rgba32Float)
                 } else {
                     None

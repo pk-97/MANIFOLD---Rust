@@ -583,8 +583,7 @@ struct RelightParamWrite {
 impl RelightParamWrite {
     fn apply(&self, graph: &mut Graph, params: &RelightParams) {
         let value = self.field.get(params) * self.scale;
-        let r = graph.set_param(self.target_inst, &self.target_param, ParamValue::Float(value));
-        eprintln!("[debug] write {:?}.{} = {} (field {:?}) -> {:?}", self.target_inst, self.target_param, value, self.field, r);
+        let _ = graph.set_param(self.target_inst, &self.target_param, ParamValue::Float(value));
     }
 }
 
@@ -725,45 +724,32 @@ fn build_relight_writes(
     if !relight {
         return Vec::new();
     }
-    eprintln!("[debug] build_relight_writes: card_prefix={card_prefix}, fused_retarget keys={}", fused_retarget.len());
-    for ((k1,k2),(v1,v2)) in fused_retarget.iter().take(20) {
-        eprintln!("[debug]   retarget {k1}.{k2} -> {v1}.{v2}");
-    }
     let mut writes = Vec::new();
     for field in RelightField::ALL {
         for target in crate::node_graph::relight::relight_field_targets(*field) {
             let handle = format!("{card_prefix}{}", target.node_handle);
             let param = target.param_name;
-            eprintln!("[debug]   looking for {handle}.{param}");
             if let Some((fused_node_id, fused_field)) =
                 fused_retarget.get(&(handle.clone(), param.to_string()))
             {
-                eprintln!("[debug]     found fused {fused_node_id}.{fused_field}");
                 if let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == fused_node_id) {
-                    eprintln!("[debug]     mapped to inst {inst:?}");
                     writes.push(RelightParamWrite {
                         field: *field,
                         target_inst: *inst,
                         target_param: fused_field.clone(),
                         scale: target.scale,
                     });
-                } else {
-                    eprintln!("[debug]     NOT in node_map");
                 }
             } else if let Some((_, inst)) = handles.iter().find(|(h, _)| h == &handle) {
-                eprintln!("[debug]     found handle inst {inst:?}");
                 writes.push(RelightParamWrite {
                     field: *field,
                     target_inst: *inst,
                     target_param: param.to_string(),
                     scale: target.scale,
                 });
-            } else {
-                eprintln!("[debug]     MISSING");
             }
         }
     }
-    eprintln!("[debug] produced {} writes", writes.len());
     writes
 }
 
@@ -7111,183 +7097,6 @@ mod chain_fusion_tests {
     /// per-frame; the unfused path splices the template with live values at
     /// build time. Both must land on the same pixels.
     #[cfg(feature = "gpu-proofs")]
-    // TEMP DEBUG (remove before landing): one fused-vs-unfused comparison for
-    // a single knob config; prints divergence instead of asserting.
-    #[allow(clippy::too_many_arguments)] // temp debug helper, deleted before landing
-    fn run_bisect_config(
-        cfg_name: &str,
-        fx: &PresetInstance,
-        primitives: &PrimitiveRegistry,
-        device: &manifold_gpu::GpuDevice,
-        input: &manifold_gpu::GpuTexture,
-        pc: &PresetContext,
-        w: u32,
-        h: u32,
-    ) {
-        let mut fused = PresetRuntime::try_build(
-            std::slice::from_ref(fx), &[], primitives, device, None, w, h, None, None,
-        )
-        .expect("fused build");
-        let mut unfused = PresetRuntime::try_build(
-            std::slice::from_ref(fx), &[], primitives, device, None, w, h, Some(&fx.id), None,
-        )
-        .expect("unfused build");
-        run_once(&mut fused, device, input, std::slice::from_ref(fx), pc);
-        run_once(&mut unfused, device, input, std::slice::from_ref(fx), pc);
-        run_once(&mut fused, device, input, std::slice::from_ref(fx), pc);
-        run_once(&mut unfused, device, input, std::slice::from_ref(fx), pc);
-        let differ = TextureDiff::new(device);
-        let r = differ.compare(
-            device,
-            fused.output_texture().unwrap(),
-            unfused.output_texture().unwrap(),
-            1.0e-2,
-            3.0e-2,
-        );
-        eprintln!(
-            "[bisect] {cfg_name}: max_abs={} over={}/{}",
-            r.max_abs,
-            r.over_count,
-            w * h
-        );
-        if cfg_name == "defaults" {
-            // Diff the materialized blurred-height checkpoint shared by both
-            // graphs (rl_height_blur_v) to localize which side diverges.
-            fused.executor.set_dump_all(true);
-            unfused.executor.set_dump_all(true);
-            run_once(&mut fused, &device, &input, std::slice::from_ref(&fx), &pc);
-            run_once(&mut unfused, &device, &input, std::slice::from_ref(&fx), &pc);
-            let find = |rt: &PresetRuntime, want: &str| -> Option<manifold_gpu::GpuTexture> {
-                let dumps = rt.executor.dump_resources();
-                for (nid, port, _res, tex) in dumps {
-                    let handle = rt
-                        .graph
-                        .nodes()
-                        .find(|n| n.id == *nid)
-                        .map(|n| n.node_id.to_string())
-                        .unwrap_or_default();
-                    if handle.contains(want) {
-                        eprintln!("[chk] found {want} as {nid:?}.{port}");
-                        return tex.clone();
-                    }
-                }
-                None
-            };
-            for want in ["rl_height_blur_v", "rl_height_blur_h", "rl_ao", "rl_ao_blur_h"] {
-                if let (Some(a), Some(b)) = (find(&fused, want), find(&unfused, want)) {
-                    let d = TextureDiff::new(&device);
-                    let r = d.compare(&device, &a, &b, 1.0e-2, 3.0e-2);
-                    eprintln!("[chk] {want}: max_abs={} over={}", r.max_abs, r.over_count);
-                }
-            }
-            // Aliasing probe: is the noise node's dumped output literally the
-            // base mix output (same contents)?
-            {
-                let noise = find(&unfused, "rl_dither_noise");
-                let base = unfused.executor.dump_resources().iter().find_map(|(nid, port, _r, tex)| {
-                    let handle = unfused
-                        .graph
-                        .nodes()
-                        .find(|n| n.id == *nid)
-                        .map(|n| n.node_id.to_string())
-                        .unwrap_or_default();
-                    (handle == "mix" && *port == "out").then(|| tex.clone()).flatten()
-                });
-                if let (Some(a), Some(b)) = (noise, base) {
-                    let d = TextureDiff::new(&device);
-                    let r = d.compare(&device, &a, &b, 1.0e-2, 3.0e-2);
-                    eprintln!("[chk] noise_vs_base: max_abs={} over={}", r.max_abs, r.over_count);
-                }
-            }
-            // Height tap itself: fused region_0.dst_1 vs unfused rl_height_dithered.
-            let find_port = |rt: &PresetRuntime, want: &str, port_want: &str| -> Option<manifold_gpu::GpuTexture> {
-                rt.executor.dump_resources().iter().find_map(|(nid, port, _res, tex)| {
-                    let handle = rt
-                        .graph
-                        .nodes()
-                        .find(|n| n.id == *nid)
-                        .map(|n| n.node_id.to_string())
-                        .unwrap_or_default();
-                    (handle.contains(want) && *port == port_want).then(|| tex.clone()).flatten()
-                })
-            };
-            if let (Some(a), Some(b)) = (
-                find_port(&fused, "fused_region_0", "dst_1"),
-                find_port(&unfused, "rl_height_dithered", "out"),
-            ) {
-                let d = TextureDiff::new(&device);
-                let r = d.compare(&device, &a, &b, 1.0e-2, 3.0e-2);
-                eprintln!("[chk] height_tap: max_abs={} over={}", r.max_abs, r.over_count);
-                for n in unfused.graph.nodes() {
-                    let hname = n.node_id.to_string();
-                    if hname.contains("rl_height_gray") || hname.contains("rl_height_dithered") || hname.contains("rl_dither") {
-                        eprintln!("[chk] unfused {hname}: {:?}", n.params);
-                        if let Some(tex) = find_port(&unfused, &hname, "out") {
-                            let _ = std::fs::write(
-                                format!("/tmp/p7_{hname}.png"),
-                                crate::headless_readback::readback_to_srgb_png(&device, &tex, w, h),
-                            );
-                        }
-                    }
-                }
-                let _ = std::fs::write(
-                    "/tmp/p7_height_fused.png",
-                    crate::headless_readback::readback_to_srgb_png(&device, &a, w, h),
-                );
-                let _ = std::fs::write(
-                    "/tmp/p7_height_unfused.png",
-                    crate::headless_readback::readback_to_srgb_png(&device, &b, w, h),
-                );
-            }
-        }
-        if cfg_name == "defaults" {
-            for g in [("fused", &fused), ("unfused", &unfused)] {
-                for n in g.1.graph.nodes() {
-                    eprintln!("[wiring:{}] {:?} = {} ({})", g.0, n.id, n.node_id, n.node.type_id().as_str());
-                }
-                for wire in g.1.graph.wires() {
-                    eprintln!(
-                        "[wiring:{}] {:?}.{} -> {:?}.{}",
-                        g.0, wire.from.0, wire.from.1, wire.to.0, wire.to.1
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn relight_bisect_configs() {
-        let device = crate::test_device();
-        let primitives = PrimitiveRegistry::with_builtin();
-        let (w, h) = (256u32, 256u32);
-        let input = gradient_input(&device, w, h);
-        let pc = ctx(w, h);
-        let mut fx = make_default(PresetTypeId::MIRROR);
-        set_param(&mut fx, "amount", 1.0);
-        fx.relight = true;
-        {
-            let mut fx_off = fx.clone();
-            fx_off.relight = false;
-            run_bisect_config("relight_off", &fx_off, &primitives, &device, &input, &pc, w, h);
-        }
-        let configs: &[(&str, fn(&mut manifold_core::effects::RelightParams))] = &[
-            ("defaults", |_| {}),
-            ("ao=0", |p| p.ao_intensity = 0.0),
-            ("relief=0", |p| p.relief = 0.0),
-            ("shadow_soft=0", |p| p.shadow_softness = 0.0),
-            ("gain=1", |p| p.gain = 1.0),
-            ("light=0,0", |p| {
-                p.light_x = 0.0;
-                p.light_y = 0.0;
-            }),
-        ];
-        for (cfg_name, apply) in configs {
-            let mut fx = fx.clone();
-            apply(&mut fx.relight_params);
-            run_bisect_config(cfg_name, &fx, &primitives, &device, &input, &pc, w, h);
-        }
-    }
-
     #[test]
     fn relight_on_fused_matches_unfused_on_probe_graphs() {
         let device = crate::test_device();
@@ -7308,23 +7117,11 @@ mod chain_fusion_tests {
             )
             .expect("fused relight-on chain builds");
             assert!(!fused.pending_segments);
-            assert!(!fused.pending_segments);
             let fused_kernel_count = fused
                 .graph
                 .nodes()
                 .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
                 .count();
-            for n in fused.graph.nodes() {
-                if n.node.type_id().as_str() == "node.wgsl_compute" {
-                    if let Some(src) = n.node.wgsl_source() {
-                        eprintln!("[debug] fused node {:?} wgsl (first 80 lines):", n.id);
-                        for (i, line) in src.lines().enumerate().take(600) {
-                            eprintln!("[debug] {i:03}: {line}");
-                        }
-                        eprintln!("[debug] ...");
-                    }
-                }
-            }
             assert!(
                 fused_kernel_count >= 1,
                 "{probe:?}: relight-on card must use at least one fused kernel"
@@ -7352,16 +7149,6 @@ mod chain_fusion_tests {
             run_once(&mut fused, &device, &input, std::slice::from_ref(&fx), &pc);
             run_once(&mut unfused, &device, &input, std::slice::from_ref(&fx), &pc);
 
-            // TEMP DEBUG (remove before landing): dump both outputs for a look.
-            let tag = format!("{probe:?}").replace(['(', ')'], "_");
-            let _ = std::fs::write(
-                format!("/tmp/p7_{tag}_fused.png"),
-                crate::headless_readback::readback_to_srgb_png(&device, fused.output_texture().unwrap(), w, h),
-            );
-            let _ = std::fs::write(
-                format!("/tmp/p7_{tag}_unfused.png"),
-                crate::headless_readback::readback_to_srgb_png(&device, unfused.output_texture().unwrap(), w, h),
-            );
             let differ = TextureDiff::new(&device);
             let r = differ.compare(
                 &device,
@@ -7526,9 +7313,20 @@ mod chain_fusion_tests {
             .nodes()
             .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
             .count();
+        // The relight template cannot collapse to a single kernel — its blur
+        // pair and GTAO are gather/camera cut points — so the strict claim is:
+        // the segment path ran (one segment view, per-card path not taken),
+        // the template's nodes are present, and BOTH template stretches fused
+        // (the base+height region and the shading region).
         assert!(
-            fused_kernels >= 1,
-            "mixed relight-on/off segment must use at least one fused kernel"
+            fused_kernels >= 2,
+            "mixed relight-on/off segment must fuse both template regions, got {fused_kernels}"
+        );
+        assert!(
+            cg.graph.nodes().any(|n| {
+                crate::node_graph::relight::is_relight_node_id(n.node_id.as_str())
+            }),
+            "relight template nodes must be present in the fused segment graph"
         );
     }
 

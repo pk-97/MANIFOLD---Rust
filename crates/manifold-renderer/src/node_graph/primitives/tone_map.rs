@@ -37,12 +37,17 @@ pub const TONE_MAP_MODES: &[&str] = &["SDR", "PQ", "EDR", "EDR Passthrough"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// Field order MUST match the PARAMS declaration order — the runtime pipeline
+// is the codegen-generated kernel, whose uniform layout is derived from
+// PARAMS in order. (Same drift class as the node.shininess "weird tints" bug
+// fixed in P7, 2026-07-18: this struct had mode/curve after the nit fields
+// while PARAMS declare curve/mode second and third.)
 struct ToneMapUniforms {
     exposure: f32,
+    curve: u32,
+    mode: u32,
     paper_white: f32,
     max_nits: f32,
-    mode: u32,
-    curve: u32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -255,7 +260,7 @@ mod gpu_tests {
         GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
     };
 
-    use super::{ToneMap, ToneMapUniforms};
+    use super::ToneMap;
     use crate::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
@@ -372,17 +377,16 @@ mod gpu_tests {
                 let paper_white = 203.0_f32;
                 let max_nits = 1000.0_f32;
 
-                let hand_uniforms = ToneMapUniforms {
-                    exposure,
-                    paper_white,
-                    max_nits,
-                    mode,
-                    curve,
-                    _pad0: 0.0,
-                    _pad1: 0.0,
-                    _pad2: 0.0,
-                };
-                let hand_bytes = bytemuck::bytes_of(&hand_uniforms).to_vec();
+                // Hand-oracle layout (exposure, paper_white, max_nits, mode,
+                // curve) — NOT `ToneMapUniforms`, which now follows the
+                // generated PARAMS-order layout `run()` dispatches (P7 fix).
+                let mut hand_bytes = Vec::new();
+                hand_bytes.extend_from_slice(&exposure.to_le_bytes());
+                hand_bytes.extend_from_slice(&paper_white.to_le_bytes());
+                hand_bytes.extend_from_slice(&max_nits.to_le_bytes());
+                hand_bytes.extend_from_slice(&mode.to_le_bytes());
+                hand_bytes.extend_from_slice(&curve.to_le_bytes());
+                hand_bytes.extend_from_slice(&[0u8; 12]); // pad 5 words to 8
 
                 // The generated `Params` struct follows PARAMS declaration
                 // order (exposure, curve, mode, paper_white, max_nits), which

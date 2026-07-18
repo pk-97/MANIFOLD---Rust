@@ -1363,6 +1363,16 @@ clean).
 
 ## Fixed
 
+### BUG-253 (shininess-and-tone-map-uniform-order-drift-weird-tints) — hand-packed uniform structs disagree with the codegen kernel's PARAMS-order layout — found 2026-07-18 by the P7 fused-vs-unfused relight parity test; matches Peter's live "weird tints with 3D Shading" report
+
+**Status:** FIXED 2026-07-18 (P7 lane, `lane/depth-relight-p7-impl`). `BlinnUniforms` reordered to PARAMS order AND its color moved to the generated layout's offset (four consecutive f32 after `power`, no vec4 alignment pad); `ToneMapUniforms` reordered (curve/mode were after the nit fields). Hand-oracle WGSL kernels unchanged — the gpu_tests now pack hand-layout bytes explicitly instead of reusing the Rust struct. All 155 codegen-path atoms audited by script for the same drift: these two were the only real hits (gradient_ramp flagged but false-positive — Table params lay out specially). Proven by the P7 parity test going green at strict tolerances and both atoms' generated-vs-hand gpu_tests.
+
+**Symptom:** `node.shininess` (used by the 3D Shading relight template's specular, tinted by source) rendered with scrambled uniforms — the kernel read view=(48,0,0) and power=1.0 — producing broad wrong-colored specular: the "sometimes things get weird tints" report. `node.tone_map` similarly read curve/mode from the wrong words, so non-default curve/mode combinations selected the wrong transfer.
+
+**Root cause:** these atoms' `run()` dispatches the codegen-generated kernel (`standalone_for_spec`) but packs uniforms via a hand-written `#[repr(C)]` struct whose field order matched the *old hand kernel*, not the generated PARAMS-order layout. The per-primitive parity tests never caught it because they pack per-kernel bytes independently of the Rust struct — the struct itself was untested.
+
+**Class guard:** the audit script is one-shot; a durable meta-test (assert each `*Uniforms` struct field order == PARAMS order for standalone_for_spec dispatchers) needs source-level reflection we don't have — the real class kill is packing uniforms from ParamDefs generically (param-storage territory). Logged here so the next uniform-struct author greps this entry.
+
 ### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
 
 **Status:** FIXED 2026-07-18 (same evening; Peter approved). `TransientEdge` now advances on the sensitivity-scaled RAW impulse (no attack/release smoothing) in both consumers — `live_trigger.rs` clip triggers and `modulation.rs` trigger-gates; the conditioned envelope is unchanged for meters/modulation. Measured at DEFAULT shape: edm_kit generic-hit recall 0.204 → 0.714 @ P 1.000; kick_hat byte-identical (0.785/1.000/0.646); 617 unit tests green. Known cost, accepted deliberately: sustained_pad trigger fires 46 → 71 — the envelope was MASKING the analyzer's pad false fires; the trigger layer is now faithful, so BUG-243 (the analyzer-level pad fix) is the sole remaining owner of that symptom.

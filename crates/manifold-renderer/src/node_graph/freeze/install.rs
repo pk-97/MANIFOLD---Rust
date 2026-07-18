@@ -339,6 +339,8 @@ thread_local! {
 pub(crate) fn fused_effect_cache_len_for_test() -> usize {
     FUSED_EFFECT_CACHE.with(|c| c.borrow().len())
 }
+
+/// On-demand fused view for ANY effect shape, keyed by the def's structural
 /// content. Cache hit → return; miss → compile (blocking, content thread),
 /// cache, return. `base` supplies the canonical outer bindings + skip mode —
 /// for an edited def these still address inner nodes by stable NodeId, and the
