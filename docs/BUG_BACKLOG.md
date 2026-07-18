@@ -207,7 +207,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-250 (scene-panel-enum-value-cells-dead-after-convergence-removed-enum-click-path) — enum rows lost their click interaction in C-P1c/d — found 2026-07-18, same audit
 
-**Status:** OPEN — MED-HIGH.
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`311bfb2a` + `d28bfff4`) — enum click dispatch restored; follow-up root fixes: value_text INTERACTIVE flag, scene writes target panel's own layer, enum/int/bool reads. 15/16 scene flows green; `scene-setup-empty-states.json` stale (PLASMA/NOISE FIELD layers not in gltfscene fixture) — retarget or retire.
 
 **Symptom:** clicking the value cell of any enum row (Light's Cast Shadows On/Off, Shadow Softness Hard/Soft/VerySoft/Contact, Light Mode, Modifier Axis X/Y/Z) dispatches no action and changes nothing — verified headless: a name-targeted click on `scene_setup.light.cast_shadows_value` emits zero PanelActions. The only way to change an enum is to drag the row's slider track.
 
@@ -217,7 +217,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-251 (scene-and-audio-dock-scroll-inverted-vs-every-other-surface) — both docks negate the shared wheel delta — found 2026-07-18, same audit
 
-**Status:** OPEN — MED (one-line fix × 2, plus a look at why no gate caught it).
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`ea812c24`).
 
 **Symptom:** mouse-wheel/trackpad scroll in the Scene Setup and Audio Setup docks moves content in the opposite direction from the inspector, browser, and every other scrolling surface.
 
@@ -227,7 +227,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale-outliner-assert) — most scene-panel flow coverage silently never ran at the convergence landing — found 2026-07-18, same audit
 
-**Status:** OPEN — MED (verification infra; the vehicle by which BUG-249/250 shipped "green").
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`f101a585` + flow retargets in `d28bfff4`); `scene-setup-empty-states.json` remains stale (wrong fixture).
 
 **Symptom:** 8 of the 21 scene flow scripts (`add-fog-drag`, `eye-toggle`, `fog-undo-removes-fog`, `heldout-merge-snapshot`, `light-cast-shadows-toggle`, `light-intensity-drag`, `numeric-typein-box`, `shadow-softness-dropdown`) fail at step 2 on `Assert Query(text="Outliner")` — the header was renamed "Objects" — so every later step (the actual button under test) never executes. The landing fixed the three scripts in its own gate list and left the rest dead. `scene-setup-empty-states.json` is additionally broken at step 0 (expects a "PLASMA" layer the `gltfscene` fixture doesn't have). With the assert patched, `eye-toggle` (9/9), `fog-undo` (17/17), `numeric-typein-box` (8/8), `heldout-merge` (3/3) pass; `cast-shadows-toggle` and `shadow-softness-dropdown` fail for the real reason (BUG-250); `add-fog-drag`/`light-intensity-drag` fail only their final displayed-value assert (BUG-239 class, dispatch verified). BUG-240 (scrub-fine) is one instance of this same rot, already logged.
 
@@ -453,7 +453,7 @@ Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF r
 
 ### BUG-214 (ext-mesh-gpu-instancing-missing-from-supported-extensions-allowlist) — `EXT_mesh_gpu_instancing` is fully implemented but absent from `MANIFOLD_SUPPORTED_EXTENSIONS` — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
 
-**Status:** OPEN — LOW (latent; no local or real-world asset has yet marked this extension `extensionsRequired`, so the false-reject has not actually fired).
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
 
 **Symptom (would-be):** an asset that lists `EXT_mesh_gpu_instancing` under `extensionsRequired` (spec-legal — an exporter may mark it required when the asset's geometry depends on the instance transforms to exist at all) is rejected at import with "unsupported extension (MANIFOLD does not import this extension)" — even though MANIFOLD fully parses and renders this extension (`gltf_load.rs:278-394`, instance transform composition via `mat4_mul`, non-`F32` accessor and sparse-accessor guards, buffer-bounds checks).
 
@@ -463,7 +463,7 @@ Worst-case detail dump (`feel_the_vibration_174bpm`, all 15 predictions, ADTOF r
 
 ### BUG-213 (no-report-line-for-unimplemented-optional-material-extensions) — MANIFOLD never reads `document.extensions_used()`, so any unimplemented *optional* extension silently degrades with no report line — found 2026-07-17, IMPORT_ANYTHING_WAVE Lane W6 extension roadmap audit
 
-**Status:** OPEN — MED (violates `docs/IMPORT_ANYTHING_WAVE_DESIGN.md`'s product bar: "never wrong, never silent" for unsupported-but-loadable content).
+**Status:** FIXED 2026-07-18 on `lane/bug-sweep-250-252` (`a1963ffa`).
 
 **Symptom:** an asset carrying `KHR_materials_diffuse_transmission` (4 Khronos assets: `DiffuseTransmissionPlant/Teacup/Test.glb`, `ScatteringSkull.glb`, currently `xfail:diffuse-transmission-deferred`) imports and renders as a plain opaque material — correct in that nothing crashes or looks broken, but the user gets no indication the translucency effect they authored is missing. The same silent-degrade will recur for any future ratified extension MANIFOLD doesn't implement yet, since nothing currently detects it.
 
