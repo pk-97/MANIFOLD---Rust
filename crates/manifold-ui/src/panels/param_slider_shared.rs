@@ -828,6 +828,50 @@ pub(crate) fn reposition_trim_bars(
 
 // ── Shared helper functions ─────────────────────────────────────
 
+/// BUG-250: the click-to-change action set for an enum (`value_labels`)
+/// row's value cell — the behavior SCENE_OBJECT_AND_PANEL_V2 D9 committed
+/// to, restored in the shared card core after C-P1c/d deleted the bespoke
+/// producers. A 2-label row cycles to the next value through the
+/// `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio (one undo unit; the
+/// scene id_map interception comes free); a 3+-label row opens the shared
+/// dropdown via [`PanelAction::ParamEnumDropdown`]. `current_value` is the
+/// row's base value, `min` the param's range minimum (enum index = value −
+/// min, same encoding as [`format_param_value`]).
+pub(crate) fn enum_value_cell_actions(
+    target: crate::panels::GraphParamTarget,
+    param_id: manifold_foundation::ParamId,
+    labels: &[String],
+    current_value: f32,
+    min: f32,
+    cell_node_id: NodeId,
+) -> Vec<crate::panels::PanelAction> {
+    use crate::panels::PanelAction;
+    let count = labels.len();
+    if count == 0 {
+        return Vec::new();
+    }
+    let current_index =
+        ((current_value - min).round() as i32).clamp(0, count as i32 - 1) as usize;
+    if count <= 2 {
+        let next = (current_index + 1) % count;
+        let new_value = min + next as f32;
+        vec![
+            PanelAction::ParamSnapshot(target, param_id.clone()),
+            PanelAction::ParamChanged(target, param_id.clone(), new_value),
+            PanelAction::ParamCommit(target, param_id),
+        ]
+    } else {
+        vec![PanelAction::ParamEnumDropdown {
+            target,
+            param_id,
+            labels: labels.to_vec(),
+            current_index: current_index as u32,
+            cell_node_id,
+        }]
+    }
+}
+
+
 pub(crate) fn format_param_value(
     val: f32,
     min: f32,
@@ -2699,6 +2743,12 @@ pub(crate) enum RowClick {
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
     LabelCopy(usize),
+    /// BUG-250: a click on an enum (`value_labels`) row's value cell
+    /// (`SliderNodeIds.value_text`). Only matched when the param carries
+    /// value labels — a numeric row's value cell stays double-click-to-type
+    /// and single-click-inert. The caller maps this through
+    /// [`enum_value_cell_actions`].
+    EnumValueCell(usize),
 }
 
 /// Match a clicked node id against a parameter row's interactive elements,
@@ -2843,6 +2893,20 @@ pub(crate) fn match_param_row_click(
                 return Some(RowClick::AudioSelectTriggerMode(pi, f));
             }
             return Some(RowClick::AudioSelectTriggerMode(pi, f));
+        }
+    }
+
+    // Enum value cell (BUG-250): single click on a `value_labels` row's
+    // value text — the click-to-change interaction C-P1c/d lost.
+    for (pi, slider) in slider_ids.iter().enumerate() {
+        if let Some(ids) = slider
+            && ids.value_text == id
+            && param_info
+                .get(pi)
+                .and_then(|p| p.value_labels.as_ref())
+                .is_some()
+        {
+            return Some(RowClick::EnumValueCell(pi));
         }
     }
 

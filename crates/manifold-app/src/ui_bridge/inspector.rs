@@ -1367,6 +1367,67 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
+        // BUG-250: an enum dropdown pick — one atomic write, one undo unit,
+        // no drag. Scene rows route through `resolve_scene_write` +
+        // `SetGraphNodeParamCommand` (`with_previous` seeded from the
+        // pre-pick value, same as `ParamCommit`); real card params take
+        // `ParamToggle`'s read-old/write-new `ChangeGraphParamCommand`
+        // shape. Both sides write the UI project locally for immediate
+        // re-render, exactly as `ParamChanged`/`ParamToggle` already do.
+        PanelAction::ParamEnumSet(gpt, param_id, new_val) => {
+            if let Some((addr, target, catalog_default)) = resolve_scene_write(
+                ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
+            ) {
+                let old_val = read_scene_node_param(project, &target, &addr);
+                if let Some(old_val) = old_val
+                    && (old_val - *new_val).abs() > f32::EPSILON
+                {
+                    let mut live = SetGraphNodeParamCommand::new(
+                        target.clone(),
+                        addr.node_doc_id,
+                        addr.param_id.clone(),
+                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
+                        catalog_default.clone(),
+                    )
+                    .with_scope(addr.scope_path.clone());
+                    live.execute(project);
+                    let cmd = SetGraphNodeParamCommand::new(
+                        target,
+                        addr.node_doc_id,
+                        addr.param_id.clone(),
+                        manifold_core::effect_graph_def::SerializedParamValue::Float { value: *new_val },
+                        catalog_default,
+                    )
+                    .with_scope(addr.scope_path.clone())
+                    .with_previous(Some(manifold_core::effect_graph_def::SerializedParamValue::Float {
+                        value: old_val,
+                    }));
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+                return DispatchResult::handled();
+            }
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let old_val = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.params
+                            .contains(param_id.as_ref())
+                            .then(|| inst.get_base_param(param_id.as_ref()))
+                    })
+                    .flatten();
+                if let Some(old_val) = old_val
+                    && (old_val - *new_val).abs() > f32::EPSILON
+                {
+                    project.with_preset_graph_mut(&target, |inst| {
+                        inst.set_base_param(param_id.as_ref(), *new_val);
+                    });
+                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, *new_val);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::handled()
+        }
 
         // ── Effect modulation ──────────────────────────────────────
         PanelAction::DriverToggle(gpt, param_id) => {

@@ -2824,6 +2824,36 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
+            // BUG-250: the shared card row core's enum value-cell click
+            // (3+ labels) — same overlay as `SceneSetupEnumClicked`, but
+            // generic over `GraphParamTarget` + `ParamId` so inspector card
+            // rows and scene rows share the one path. Each item dispatches
+            // `ParamEnumSet` (the Snapshot/Changed/Commit trio in one
+            // action — one undo unit, no new mutation path).
+            PanelAction::ParamEnumDropdown {
+                target,
+                param_id,
+                labels,
+                current_index,
+                cell_node_id,
+            } => {
+                let cell_trigger = self.tree.get_bounds(*cell_node_id);
+                let items: Vec<DropdownItem> = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| {
+                        DropdownItem::new(label)
+                            .with_check(i as u32 == *current_index)
+                            .with_action(PanelAction::ParamEnumSet(
+                                *target,
+                                param_id.clone(),
+                                i as f32,
+                            ))
+                    })
+                    .collect();
+                self.open_dropdown_typed(items, cell_trigger);
+                true
+            }
             // SCENE_PANEL_UX_DESIGN.md UX-P2, D6: the "+ Add Modifier"
             // button opens the shared dropdown listing the SAME curated
             // vocabulary the old 7-chip grid did — each item dispatches the

@@ -32,7 +32,7 @@ use super::drawer::DrawerIds;
 use super::param_card::{ParamInfo, RowGeometry};
 use super::param_slider_shared::{
     AbletonConfigIds, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab, ParamModState,
-    RowClick, TrimHandleIds, build_param_row, match_param_row_click,
+    RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions, match_param_row_click,
 };
 
 // ── Stable keys ──
@@ -1397,8 +1397,46 @@ impl SceneCardState {
         self.id_map.clear();
     }
 
+    /// Whether `node_id` is an enum (`value_labels`) row's value-text cell
+    /// on this card — single click cycles/opens the dropdown (BUG-250), so
+    /// double-click must NOT open the numeric type-in on the same cell.
+    fn is_enum_value_cell(&self, node_id: NodeId) -> bool {
+        self.slider_ids.iter().enumerate().any(|(pi, s)| {
+            s.as_ref().is_some_and(|ids| ids.value_text == node_id)
+                && self
+                    .param_info
+                    .get(pi)
+                    .and_then(|p| p.value_labels.as_ref())
+                    .is_some()
+        })
+    }
+
     fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
         self.param_info[i].param_id.clone()
+    }
+
+    /// BUG-250: map a [`RowClick::EnumValueCell`] hit to the shared
+    /// cycle-or-dropdown action set (`enum_value_cell_actions`), targeting
+    /// the layer's generator like every other scene-row card action. The
+    /// current value comes from this pass's `id_map` snapshot (D1: rebuilt
+    /// every build, never stale); the cell node id anchors the dropdown
+    /// under the row's own value text.
+    fn enum_value_cell_action(&self, i: usize, clicked: NodeId) -> Vec<PanelAction> {
+        let info = &self.param_info[i];
+        let labels = info.value_labels.clone().unwrap_or_default();
+        let pid = self.pid_at(i);
+        let value = self
+            .id_map
+            .get(&pid)
+            .map(|(_, v)| *v)
+            .unwrap_or(info.default);
+        let cell = self
+            .slider_ids
+            .get(i)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.value_text)
+            .unwrap_or(clicked);
+        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.min, cell)
     }
 
     fn focus_mod_tab(&mut self, i: usize, tab: ModTab) {
@@ -4088,6 +4126,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.world_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.world_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.world_card.mod_tab_hit(*node_id) {
                         self.world_card.focus_mod_tab(pi, tab);
@@ -4150,6 +4191,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.object_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.object_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.object_card.mod_tab_hit(*node_id) {
                         self.object_card.focus_mod_tab(pi, tab);
@@ -4212,6 +4256,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.light_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.light_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.light_card.mod_tab_hit(*node_id) {
                         self.light_card.focus_mod_tab(pi, tab);
@@ -4274,6 +4321,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.camera_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.camera_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.camera_card.mod_tab_hit(*node_id) {
                         self.camera_card.focus_mod_tab(pi, tab);
@@ -4336,6 +4386,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.modifier_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.modifier_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.modifier_card.mod_tab_hit(*node_id) {
                         self.modifier_card.focus_mod_tab(pi, tab);
@@ -4405,6 +4458,7 @@ impl ScenePanel {
                         .or_else(|| self.modifier_row_value_for_value_text(*node_id));
                     if let Some(row_value) = row_value
                         && !row_value.driven
+                        && !self.is_enum_value_cell(*node_id)
                         && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
                     {
                         return (
@@ -4680,6 +4734,21 @@ impl ScenePanel {
 
     fn owns_node(&self, node_id: NodeId) -> bool {
         node_id == self.bg_id
+    }
+
+    /// BUG-250: fan the enum-cell test out across all five family cards —
+    /// the DoubleClick type-in arm skips these cells (their single click
+    /// cycles/opens the dropdown instead).
+    fn is_enum_value_cell(&self, node_id: NodeId) -> bool {
+        [
+            &self.world_card,
+            &self.object_card,
+            &self.light_card,
+            &self.camera_card,
+            &self.modifier_card,
+        ]
+        .into_iter()
+        .any(|c| c.is_enum_value_cell(node_id))
     }
 
     /// C-P1a: `world_card`'s per-row value-text cell, for the DoubleClick
@@ -6543,11 +6612,16 @@ mod tests {
             let mut tree = UITree::new();
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-            let slider_ids: Vec<crate::slider::SliderNodeIds> =
-                panel.modifier_card.slider_ids.iter().filter_map(|ids| *ids).collect();
+            let slider_ids: Vec<(usize, crate::slider::SliderNodeIds)> = panel
+                .modifier_card
+                .slider_ids
+                .iter()
+                .enumerate()
+                .filter_map(|(pi, ids)| ids.map(|ids| (pi, ids)))
+                .collect();
             assert!(!slider_ids.is_empty(), "azalea fixture must exercise at least one modifier card slider");
 
-            for ids in slider_ids {
+            for (pi, ids) in slider_ids {
                 let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
                     node_id: ids.track,
                     pos: Vec2::new(ids.track_rect.x, 0.0),
@@ -6556,16 +6630,53 @@ mod tests {
                 assert!(drag_consumed, "track {:?} must be drag-armable", ids.track);
                 panel.handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::ZERO });
 
-                let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
-                    node_id: ids.value_text,
-                    pos: Vec2::ZERO,
-                    modifiers: crate::input::Modifiers::default(),
-                });
-                assert!(typein_consumed, "value cell {:?} must also open type-in (registration parity)", ids.value_text);
-                assert!(
-                    matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
-                    "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
-                );
+                let is_enum = panel
+                    .modifier_card
+                    .param_info
+                    .get(pi)
+                    .and_then(|p| p.value_labels.as_ref())
+                    .is_some();
+                if is_enum {
+                    // BUG-250: an enum cell's click-to-change is single-click
+                    // cycle/dropdown; double-click must NOT open the numeric
+                    // type-in (registration parity is drag + enum-click).
+                    let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(
+                        !matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                        "enum cell {ids:?} must not open numeric type-in, got {actions:?}"
+                    );
+                    let _ = typein_consumed;
+
+                    let (click_consumed, actions) = panel.handle_event(&UIEvent::Click {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(click_consumed, "enum value cell {:?} must dispatch on click", ids.value_text);
+                    assert!(
+                        matches!(
+                            actions.as_slice(),
+                            [PanelAction::ParamSnapshot(..), PanelAction::ParamChanged(..), PanelAction::ParamCommit(..)]
+                                | [PanelAction::ParamEnumDropdown { .. }]
+                        ),
+                        "enum click must cycle (trio) or open the dropdown, got {actions:?}"
+                    );
+                } else {
+                    let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(typein_consumed, "value cell {:?} must also open type-in (registration parity)", ids.value_text);
+                    assert!(
+                        matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                        "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
+                    );
+                }
             }
         }
     }

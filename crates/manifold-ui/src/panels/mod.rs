@@ -554,6 +554,26 @@ pub enum PanelAction {
     ParamSnapshot(GraphParamTarget, ParamId),
     ParamChanged(GraphParamTarget, ParamId, f32),
     ParamCommit(GraphParamTarget, ParamId),
+    /// BUG-250: click on an enum (`value_labels`) row's value cell with 3+
+    /// labels opens the shared `panels::dropdown` overlay — items = the
+    /// row's label set anchored under the cell (`cell_node_id`, same
+    /// resolve-at-open convention as `SceneSetupEnumClicked`), checked at
+    /// `current_index`, each item dispatching [`ParamEnumSet`]. Emitted by
+    /// the shared card row core (`enum_value_cell_actions`), so scene rows
+    /// (synthesized pids) and inspector card rows (real pids) share the one
+    /// path; a 2-label row cycles instead and never emits this.
+    ParamEnumDropdown {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        labels: Vec<String>,
+        current_index: u32,
+        cell_node_id: crate::node::NodeId,
+    },
+    /// BUG-250: one atomic enum write (a dropdown pick). Dispatch runs the
+    /// existing `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio in
+    /// sequence, so the scene id_map interception and the one-undo-unit
+    /// granularity come free — no new mutation path.
+    ParamEnumSet(GraphParamTarget, ParamId, f32),
     /// Toggle a boolean (`isToggle`) param's ON/OFF button — a 0↔1 flip.
     /// Was `GenParamToggle(ParamId)` (generator-only); joined the unified
     /// group (§8.4 P3b) once effect cards gained the same toggle-row
