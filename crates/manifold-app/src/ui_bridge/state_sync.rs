@@ -862,6 +862,65 @@ pub fn push_state(
 
     // Sync effect card values (master, layer, clip)
     sync_card_values(ui, project, active_layer);
+
+    // Sync Scene Setup row values (same per-frame value plane, dock rows)
+    sync_scene_row_values(ui, project);
+}
+
+/// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
+/// sibling of [`sync_card_values`]: push each built row's CURRENT value from
+/// `project` (the layer's generator graph def, instance override or bundled
+/// default) onto the already-built panel, so rows track OSC / command /
+/// other-window writes between structural syncs instead of freezing. Driven
+/// (wire-fed) rows update through the value-label handle the driven branch
+/// now keeps; non-driven rows update their card slider. Same drag safety as
+/// `sync_card_values`: the actively-dragged field is restored into
+/// `local_project` upstream of every call, so this writes the user's own
+/// value straight back. No-op while the panel is closed or not Live.
+pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
+    use manifold_ui::panels::scene_setup_panel::RowAddr;
+
+    if !ui.scene_setup_panel.is_open() {
+        return;
+    }
+    let Some(layer_id) = ui.scene_setup_panel.live_layer_id() else {
+        return;
+    };
+    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
+        return;
+    };
+    let gen_type = layer.generator_type().clone();
+    let bundled = manifold_renderer::node_graph::bundled_preset_def(&gen_type);
+    let def = layer.generator_graph().or(bundled);
+    let Some(def) = def else { return };
+
+    // Resolve a row's address to its current numeric value in the def. A row
+    // whose param has no override entry (still at catalog default) resolves
+    // to `None` — the panel keeps the built text, which came from the same
+    // catalog default; a value only changes via a write that lifts the
+    // override.
+    let resolve = |addr: &RowAddr| -> Option<f32> {
+        let mut nodes = &def.nodes;
+        for scope_id in &addr.scope_path {
+            nodes = &nodes.iter().find(|n| n.id == *scope_id)?.group.as_ref()?.nodes;
+        }
+        let node = nodes.iter().find(|n| n.id == addr.node_doc_id)?;
+        match node.params.get(addr.param_id.as_str())? {
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value } => Some(*value),
+            manifold_core::effect_graph_def::SerializedParamValue::Int { value } => {
+                Some(*value as f32)
+            }
+            manifold_core::effect_graph_def::SerializedParamValue::Enum { value } => {
+                Some(*value as f32)
+            }
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value } => {
+                Some(if *value { 1.0 } else { 0.0 })
+            }
+            _ => None,
+        }
+    };
+
+    ui.scene_setup_panel.sync_row_values(&mut ui.tree, &resolve);
 }
 
 /// Push per-frame card VALUES (slider fill + readout, enabled toggle, card
@@ -3391,6 +3450,154 @@ mod sync_card_values_tests {
         // No "stale text is gone" assertion: "0.50" legitimately appears on
         // other widgets (e.g. mapping trim fields seeded from the same
         // default), so disappearance is not a sound oracle here.
+    }
+}
+
+#[cfg(test)]
+mod sync_scene_row_values_tests {
+    //! The scene-row twin of `sync_card_values_tests`: a fog-density value
+    //! changed in the (UI-local) project after the panel was built must reach
+    //! the row's on-tree text through `sync_scene_row_values` alone — no
+    //! structural re-sync, no rebuild — for BOTH row shapes (a live slider
+    //! row and a driven read-only label row).
+    use super::*;
+    use manifold_ui::panels::scene_setup_panel::{
+        AtmosphereRowVm, CameraRowVm, EnvironmentRowVm, ModulatedRow, RowAddr, RowModulation,
+        RowValue, SceneSetupState, SceneSetupVm,
+    };
+
+    /// A SceneStarter generator layer + the bundled def's fog node id and
+    /// current fog_density value — same fixture family as `project.rs`'s
+    /// `scene_layer_project`.
+    fn scene_project() -> (Project, manifold_core::LayerId, u32, f32) {
+        use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, SceneVm};
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Scene",
+            LayerType::Generator,
+            PresetTypeId::from_string("SceneStarter".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let def = manifold_renderer::node_graph::bundled_preset_def(
+            &project.timeline.layers[idx].generator_type().clone(),
+        )
+        .expect("SceneStarter is a bundled preset");
+        let vm = SceneVm::from_def(def).expect("SceneStarter resolves as a scene");
+        let AtmosphereVm::Wired(a) = vm.atmosphere else {
+            panic!("SceneStarter's atmosphere must be Wired");
+        };
+        (project, layer_id, a.density_addr.node_doc_id, a.density_value)
+    }
+
+    /// Open + build the panel with a Live VM whose fog-density row is either
+    /// live (slider) or driven (read-only label).
+    fn build_panel(ui: &mut UIRoot, layer_id: &manifold_core::LayerId, node_doc_id: u32, value: f32, driven: bool) {
+        let row = |v: f32| ModulatedRow {
+            value: RowValue {
+                addr: RowAddr::root(node_doc_id, "fog_density"),
+                value: v,
+                min: 0.0,
+                max: 1.0,
+                driven,
+                exposed: false,
+            },
+            modulation: Box::new(RowModulation::default()),
+        };
+        ui.scene_setup_panel.open();
+        ui.scene_setup_panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
+            layer_id: layer_id.clone(),
+            scene_name: "Scene".to_string(),
+            multiple_scenes: false,
+            object_count: 0,
+            light_count: 0,
+            shadow_caster_count: 0,
+            scene_root_node_id: 0,
+            environment: EnvironmentRowVm::None,
+            atmosphere: AtmosphereRowVm::Wired { density: row(value), height_falloff: row(value) },
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
+            objects: Vec::new(),
+            lights: Vec::new(),
+            camera: CameraRowVm::None,
+        })));
+        // Same region wrapper the real dock build uses (`ui_root.rs`'s
+        // scene_setup block) — a root-parented build outside a region panics
+        // by design (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4).
+        let dock = manifold_ui::Rect::new(0.0, 0.0, 400.0, 800.0);
+        let region = ui.tree.begin_region(
+            dock,
+            manifold_ui::ZTier::Base,
+            "scene_setup",
+            manifold_ui::UIFlags::empty(),
+        );
+        let start = ui.tree.count();
+        ui.scene_setup_panel.build_docked(&mut ui.tree, dock);
+        ui.tree.end_region(region, start);
+    }
+
+    fn tree_has_text(ui: &UIRoot, needle: &str) -> bool {
+        ui.tree.nodes().iter().any(|n| n.text.as_deref() == Some(needle))
+    }
+
+    /// Write `value` into the layer's own instance def (lifting the override
+    /// from the bundled default) — the same place a scene-row command write
+    /// lands.
+    fn write_fog_density(project: &mut Project, layer_id: &manifold_core::LayerId, node_doc_id: u32, value: f32) {
+        let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id.as_str()).unwrap();
+        let gen_type = layer.generator_type().clone();
+        let gp = layer.gen_params_or_init();
+        let def = gp.graph.get_or_insert_with(|| {
+            manifold_renderer::node_graph::bundled_preset_def(&gen_type)
+                .expect("SceneStarter is a bundled preset")
+                .clone()
+        });
+        def.nodes
+            .iter_mut()
+            .find(|n| n.id == node_doc_id)
+            .expect("fog node")
+            .params
+            .insert(
+                "fog_density".to_string(),
+                manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+            );
+    }
+
+    #[test]
+    fn project_write_reaches_live_slider_row_via_sync_scene_row_values() {
+        let (mut project, layer_id, node_doc_id, value) = scene_project();
+        let mut ui = UIRoot::new();
+        build_panel(&mut ui, &layer_id, node_doc_id, value, false);
+        assert!(
+            tree_has_text(&ui, &format!("{value:.2}")),
+            "baseline: the built slider row must show the pre-change value"
+        );
+
+        write_fog_density(&mut project, &layer_id, node_doc_id, 0.66);
+        sync_scene_row_values(&mut ui, &project);
+
+        assert!(
+            tree_has_text(&ui, "0.66"),
+            "sync_scene_row_values must push the new value onto the built slider row"
+        );
+    }
+
+    #[test]
+    fn project_write_reaches_driven_label_row_via_sync_scene_row_values() {
+        let (mut project, layer_id, node_doc_id, value) = scene_project();
+        let mut ui = UIRoot::new();
+        build_panel(&mut ui, &layer_id, node_doc_id, value, true);
+        assert!(
+            tree_has_text(&ui, &format!("{value:.2} (driven)")),
+            "baseline: the built driven row must show the pre-change value"
+        );
+
+        write_fog_density(&mut project, &layer_id, node_doc_id, 0.66);
+        sync_scene_row_values(&mut ui, &project);
+
+        assert!(
+            tree_has_text(&ui, "0.66 (driven)"),
+            "sync_scene_row_values must push the new value onto the driven row's label"
+        );
     }
 }
 
