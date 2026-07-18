@@ -283,6 +283,39 @@ fn resolve_scene_write(
     Some((addr, target, catalog_default))
 }
 
+/// BUG-249's sibling for plain VALUE writes (root fix, 2026-07-18): a scene
+/// row whose inner (node, param) is covered by a card/user binding must edit
+/// the BINDING's instance slot, never the def. A def write on a bound param
+/// is structurally dead — the chain rebuild re-seeds the binding's value
+/// over it, and the per-frame apply loop wins the tug-of-war whenever the
+/// outer slot moves — which is exactly why the glb importer's camera
+/// (`cam_orbit`/`cam_tilt`/… card bindings onto `node.orbit_camera`) never
+/// responded to the Scene Setup panel. Routing the write through the slot
+/// makes the panel and the perform card two views of ONE value, the same
+/// resolution `resolve_mod_target` already applies to modulation.
+fn scene_bound_slot(
+    project: &mut Project,
+    target: &manifold_core::GraphTarget,
+    addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
+    catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> Option<manifold_core::effects::ParamId> {
+    project
+        .with_preset_graph_mut(target, |inst| {
+            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
+        })
+        .flatten()
+        // Tracking instance (`graph: None` — every freshly imported layer):
+        // resolve against the catalog def it tracks instead.
+        .or_else(|| {
+            manifold_core::effects::binding_id_for_node_param_in(
+                catalog_default,
+                addr.node_doc_id,
+                &addr.param_id,
+            )
+        })
+        .map(manifold_core::effects::ParamId::from)
+}
+
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a/C-P1b: descend into
 /// `nodes` at `scope` (a path of group-node ids from the document root),
 /// same recursive walk as `manifold-editing::commands::graph`'s private
@@ -389,7 +422,18 @@ fn resolve_mod_target(
         .with_preset_graph_mut(&target, |inst| {
             inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
         })
-        .flatten();
+        .flatten()
+        // Tracking instance (graph: None — fresh imports): the bundled
+        // binding lives on the catalog def; without this fallback the arm
+        // below would materialize a DUPLICATE user exposure for an
+        // already-bound param.
+        .or_else(|| {
+            manifold_core::effects::binding_id_for_node_param_in(
+                &catalog_default,
+                addr.node_doc_id,
+                &addr.param_id,
+            )
+        });
     if let Some(id) = existing {
         return Some((target, manifold_core::effects::ParamId::from(id)));
     }
@@ -1335,6 +1379,27 @@ pub(super) fn dispatch_inspector(
                     ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
                 )
             {
+                // Bound row (see `scene_bound_slot`): the drag edits the
+                // binding's instance slot, so snapshot THAT value and hold
+                // the real exposed id — the `Param` drag guard restores
+                // through the manifest, which is exactly right here.
+                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
+                    let slot_val = project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.params
+                                .contains(pid.as_ref())
+                                .then(|| inst.get_base_param(pid.as_ref()))
+                        })
+                        .flatten()
+                        .unwrap_or(val);
+                    *drag_snapshot = Some(slot_val);
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Param {
+                        target,
+                        param_id: pid,
+                        value: slot_val,
+                    });
+                    return DispatchResult::handled();
+                }
                 *drag_snapshot = Some(val);
                 // NOT the `Param` variant: a scene row's `param_id` is
                 // synthesized, so `Param`'s manifest `set_param` restore
@@ -1395,6 +1460,29 @@ pub(super) fn dispatch_inspector(
             if let Some((addr, target, catalog_default)) =
                 resolve_scene_write(ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection)
             {
+                // Bound row → live-write the instance slot, mirroring the
+                // exposed-param motion path below (see `scene_bound_slot`).
+                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
+                    project.with_preset_graph_mut(&target, |inst| {
+                        inst.set_base_param(pid.as_ref(), *val);
+                    });
+                    if let Some(crate::app::ActiveInspectorDrag::Param { value, .. }) =
+                        active_inspector_drag
+                    {
+                        *value = *val;
+                    }
+                    let v = *val;
+                    let t = target.clone();
+                    ContentCommand::send(
+                        content_tx,
+                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            p.with_preset_graph_mut(&t, |inst| {
+                                inst.set_base_param(pid.as_ref(), v);
+                            });
+                        })),
+                    );
+                    return DispatchResult::handled();
+                }
                 let mut cmd = SetGraphNodeParamCommand::new(
                     target.clone(),
                     addr.node_doc_id,
@@ -1463,6 +1551,25 @@ pub(super) fn dispatch_inspector(
                     ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
                 )
             {
+                // Bound row → the drag moved the instance slot; commit the
+                // same `ChangeGraphParamCommand` an exposed card commit uses.
+                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
+                    let new_val = project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.params
+                                .contains(pid.as_ref())
+                                .then(|| inst.get_base_param(pid.as_ref()))
+                        })
+                        .flatten();
+                    if let Some(new_val) = new_val
+                        && (old_val - new_val).abs() > f32::EPSILON
+                    {
+                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, new_val);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    *active_inspector_drag = None;
+                    return DispatchResult::handled();
+                }
                 let new_val = read_scene_node_param(project, &target, &addr);
                 if let Some(new_val) = new_val
                     && (old_val - new_val).abs() > f32::EPSILON
@@ -1526,6 +1633,27 @@ pub(super) fn dispatch_inspector(
             if let Some((addr, target, catalog_default)) = resolve_scene_write(
                 ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
             ) {
+                // Bound row → one atomic slot write + one undo unit, the
+                // exposed-param `ParamToggle` shape (see `scene_bound_slot`).
+                if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
+                    let old_val = project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.params
+                                .contains(pid.as_ref())
+                                .then(|| inst.get_base_param(pid.as_ref()))
+                        })
+                        .flatten();
+                    if let Some(old_val) = old_val
+                        && (old_val - *new_val).abs() > f32::EPSILON
+                    {
+                        project.with_preset_graph_mut(&target, |inst| {
+                            inst.set_base_param(pid.as_ref(), *new_val);
+                        });
+                        let cmd = ChangeGraphParamCommand::new(target, pid, old_val, *new_val);
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    return DispatchResult::handled();
+                }
                 // `read_scene_node_param` only sees STORED params — a def
                 // node omits keys still at their declared default (an
                 // untouched light has no `shadow_softness` key at all), so
@@ -4054,6 +4182,7 @@ mod scene_card_convergence_tests {
         // the row address to the real binding and sees the armed driver.
         let row = crate::ui_bridge::state_sync::scene_row_modulation(
             Some(inst),
+            None,
             node_doc_id,
             "fog_density",
             &[],
@@ -4746,5 +4875,98 @@ mod scene_card_convergence_tests {
             }
             other => panic!("expected a Float orbit in the root-scoped instance def, got {other:?}"),
         }
+    }
+
+    /// Root-fix regression (2026-07-18, Peter: "cameras … don't work from
+    /// the scene controls"): the glb importer card-binds its camera
+    /// (`cam_orbit` → `camera.orbit`), and a def write on a BOUND param is
+    /// structurally dead — the chain rebuild re-seeds the binding's value
+    /// over it. A Scene Setup camera drag on an imported layer must
+    /// therefore edit the binding's INSTANCE SLOT (`cam_orbit`), the same
+    /// value the perform card drives, and never the def node param.
+    #[test]
+    fn imported_scene_camera_drag_writes_the_bound_card_slot_not_the_def() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
+        let (def, _report) =
+            manifold_renderer::node_graph::gltf_import::assemble_import_graph(&fixture)
+                .expect("assemble azalea");
+        let camera_node_doc_id = match SceneVm::from_def(&def).expect("import resolves as a scene").camera {
+            manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
+            other => panic!("importer camera must be Orbit, got {other:?}"),
+        };
+
+        // Install exactly the way `finish_import_model` does: embedded
+        // preset + overlay first (so `init_defaults` seeds `cam_orbit`),
+        // then the production layer command.
+        let mut project = Project::default();
+        let embedded = manifold_core::project::EmbeddedPreset {
+            kind: manifold_core::preset_def::PresetKind::Generator,
+            def,
+            origin: manifold_core::project::EmbeddedOrigin::Saved,
+        };
+        project.upsert_embedded_preset(embedded.clone());
+        crate::project_io::install_project_preset_overlay(&project);
+        let mut layer_cmd = manifold_editing::commands::layer::ImportModelLayerCommand::new(
+            "Azalea".to_string(),
+            embedded,
+            0,
+            None,
+        );
+        layer_cmd.execute(&mut project);
+        let layer_id = layer_cmd.inserted_layer_id().expect("layer inserted");
+
+        let mut h = Harness::new(Some(layer_id.clone()));
+        h.ui.scene_setup_panel.open();
+        h.ui.scene_setup_panel
+            .set_selection(layer_id.clone(), manifold_ui::panels::scene_setup_panel::SceneSelection::Camera);
+        let layer_idx = project.timeline.find_layer_index_by_id(&layer_id).unwrap();
+        super::super::state_sync::sync_inspector_data(&mut h.ui, &project, Some(layer_idx), &manifold_ui::UIState::new(), &[]);
+        let mut tree = manifold_ui::tree::UITree::new();
+        let dock = manifold_ui::node::Rect::new(0.0, 0.0, 400.0, 800.0);
+        let region = tree.begin_region(dock, manifold_ui::ZTier::Base, "scene_setup_test", manifold_ui::node::UIFlags::empty());
+        let start = tree.count();
+        h.ui.scene_setup_panel.build_docked(&mut tree, dock);
+        tree.end_region(region, start);
+
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(camera_node_doc_id, "orbit");
+        let target = manifold_ui::GraphParamTarget::Generator;
+        let new_orbit = 1.9_f32;
+
+        h.dispatch(&PanelAction::ParamSnapshot(target, pid.clone()), &mut project);
+        h.dispatch(&PanelAction::ParamChanged(target, pid.clone(), new_orbit), &mut project);
+        h.drain();
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst = layer.gen_params().expect("imported layer carries a PresetInstance");
+        assert!(
+            inst.params.contains("cam_orbit"),
+            "importer metadata must expose the cam_orbit slot"
+        );
+        assert!(
+            (inst.get_base_param("cam_orbit") - new_orbit).abs() < 1e-4,
+            "the drag must move the BOUND card slot (cam_orbit), got {}",
+            inst.get_base_param("cam_orbit")
+        );
+        // The def node param must be untouched — the slot is the one value.
+        let def_untouched = layer
+            .generator_graph()
+            .and_then(|d| d.nodes.iter().find(|n| n.id == camera_node_doc_id))
+            .and_then(|n| n.params.get("orbit"))
+            .is_none_or(|v| !matches!(v, SerializedParamValue::Float { value } if (value - new_orbit).abs() < 1e-4));
+        assert!(def_untouched, "a bound row's write must never land in the def");
+
+        h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+        let ContentCommand::Execute(mut cmd) = h.drain().into_iter().next().expect("commit dispatches") else {
+            panic!("expected an undo-tracked Execute commit");
+        };
+        cmd.execute(&mut project);
+        cmd.undo(&mut project);
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let restored = layer.gen_params().unwrap().get_base_param("cam_orbit");
+        assert!(
+            (restored - new_orbit).abs() > 1e-4,
+            "undo must restore the pre-drag slot value, still at {restored}"
+        );
     }
 }

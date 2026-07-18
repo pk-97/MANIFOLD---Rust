@@ -423,22 +423,26 @@ fn card_binding(
     }
 }
 
-/// GLTF_ANIMATION_DESIGN.md A4: perform-UI exposure for an animated
-/// object's clip clock — Rate (the scrub/speed gesture; `progress` stays
-/// wire-only, see the phase brief's Deviation note), Clip (D4 selector),
-/// Loop Mode, Retrigger. Pushed into the SAME `card_params`/`card_bindings`
-/// vectors every other outer-card knob uses; `node_id` is whichever of
-/// `node.gltf_animation_source` / `node.gltf_skeleton_pose` /
-/// `node.gltf_morph_weights` owns this clip. `clip_count` sizes the Clip
-/// knob's range (0 when unknown treated as 1, so a single-clip object still
-/// gets a valid, if inert, 0..0 range rather than an empty one).
-fn animation_card_controls(
+/// GLTF_ANIMATION_DESIGN.md A4, revised 2026-07-18 (Peter): ONE set of
+/// animation card knobs per glb, not one per animated object. Clips are
+/// file-level in glTF — every `node.gltf_animation_source` /
+/// `node.gltf_skeleton_pose` / `node.gltf_morph_weights` in one import
+/// indexes the same clip list — so Rate / Clip / Loop Mode / Retrigger are
+/// a single linked control that fans out to every animation clock in the
+/// file (the binding apply loop resolves by `source_id`, so N bindings
+/// sharing one card param is the same supported shape as Lissajous's
+/// `clip_trigger`). This fn pushes only the four shared PARAMS;
+/// [`animation_card_bindings`] pushes the four per-node bindings each
+/// animated object contributes. `clip_count` sizes the Clip knob's range
+/// (0 when unknown treated as 1, so a single-clip file still gets a valid,
+/// if inert, 0..0 range rather than an empty one); `clip_labels` (clip
+/// names from the file, padded/defaulted by the caller) label its detents.
+fn animation_card_params(
     card_params: &mut Vec<ParamSpecDef>,
-    card_bindings: &mut Vec<BindingDef>,
     id_prefix: &str,
-    node_id: &str,
     section: &str,
     clip_count: u32,
+    clip_labels: Vec<String>,
 ) {
     let base = ParamSpecDef {
         id: String::new(),
@@ -468,7 +472,6 @@ fn animation_card_controls(
         default_value: 1.0,
         ..base.clone()
     });
-    card_bindings.push(card_binding(&format!("{id_prefix}_rate"), "Rate", 1.0, node_id, "rate", 1.0));
 
     card_params.push(ParamSpecDef {
         id: format!("{id_prefix}_clip"),
@@ -477,17 +480,8 @@ fn animation_card_controls(
         max: (clip_count.max(1) - 1) as f32,
         default_value: 0.0,
         whole_numbers: true,
+        value_labels: clip_labels,
         ..base.clone()
-    });
-    card_bindings.push(BindingDef {
-        id: format!("{id_prefix}_clip"),
-        label: "Clip".to_string(),
-        default_value: 0.0,
-        target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "clip_index".to_string() },
-        convert: manifold_core::effects::ParamConvert::IntRound,
-        user_added: false,
-        scale: 1.0,
-        offset: 0.0,
     });
 
     card_params.push(ParamSpecDef {
@@ -500,16 +494,6 @@ fn animation_card_controls(
         value_labels: LOOP_MODES.iter().map(|s| s.to_string()).collect(),
         ..base.clone()
     });
-    card_bindings.push(BindingDef {
-        id: format!("{id_prefix}_loop_mode"),
-        label: "Loop Mode".to_string(),
-        default_value: 0.0,
-        target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "loop_mode".to_string() },
-        convert: manifold_core::effects::ParamConvert::EnumRound,
-        user_added: false,
-        scale: 1.0,
-        offset: 0.0,
-    });
 
     card_params.push(ParamSpecDef {
         id: format!("{id_prefix}_retrigger"),
@@ -520,6 +504,54 @@ fn animation_card_controls(
         whole_numbers: true,
         is_trigger: true,
         ..base
+    });
+}
+
+/// Detent labels for the per-glb Clip knob: the file's clip names where
+/// present, `"Clip N"` otherwise. Empty when the file has no clips at all
+/// (the knob's 0..0 range needs no labels).
+fn clip_labels(animations: &[gltf_load::GltfAnimationInfo]) -> Vec<String> {
+    animations
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            a.name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Clip {}", i + 1))
+        })
+        .collect()
+}
+
+/// The fan-out half of [`animation_card_params`]: the four bindings wiring
+/// ONE animation-clock node (`node.gltf_animation_source` /
+/// `node.gltf_skeleton_pose` / `node.gltf_morph_weights`) to the shared
+/// per-glb card knobs. Every animated object in an import pushes one of
+/// these sets against the SAME `{id_prefix}_*` source ids, so the whole
+/// file's clocks move together from one card section.
+fn animation_card_bindings(card_bindings: &mut Vec<BindingDef>, id_prefix: &str, node_id: &str) {
+    card_bindings.push(card_binding(&format!("{id_prefix}_rate"), "Rate", 1.0, node_id, "rate", 1.0));
+    card_bindings.push(BindingDef {
+        id: format!("{id_prefix}_clip"),
+        label: "Clip".to_string(),
+        default_value: 0.0,
+        target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "clip_index".to_string() },
+        convert: manifold_core::effects::ParamConvert::IntRound,
+        user_added: false,
+        scale: 1.0,
+        offset: 0.0,
+    });
+    card_bindings.push(BindingDef {
+        id: format!("{id_prefix}_loop_mode"),
+        label: "Loop Mode".to_string(),
+        default_value: 0.0,
+        target: BindingTarget::Node { node_id: NodeId::new(node_id), param: "loop_mode".to_string() },
+        convert: manifold_core::effects::ParamConvert::EnumRound,
+        user_added: false,
+        scale: 1.0,
+        offset: 0.0,
     });
     card_bindings.push(BindingDef {
         id: format!("{id_prefix}_retrigger"),
@@ -661,6 +693,10 @@ struct ObjectGroupOutput {
     string_bindings: Vec<StringBindingDef>,
     report_lines: Vec<String>,
     textures_wired: usize,
+    /// True when this object contributed animation-clock bindings against
+    /// the caller's shared `anim_prefix` — the caller pushes the four
+    /// per-glb card PARAMS (one "Animation" section) iff any object did.
+    animated: bool,
 }
 
 /// Build ONE object's group (mesh source + material + optional skin/morph/
@@ -692,8 +728,13 @@ fn build_object_group(
     // header and a future merge's scale-sanity have a real per-node provenance
     // fact to read instead of BUG-195's orbit-camera proxy.
     bbox_radius: f32,
+    // The shared per-glb animation card id prefix (see
+    // `animation_card_params`) — "anim" for a fresh import; the merge path
+    // uniquifies against the target scene's existing card ids.
+    anim_prefix: &str,
 ) -> ObjectGroupOutput {
     let k = local_k;
+    let mut animated = false;
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
     let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut string_bindings: Vec<StringBindingDef> = Vec::new();
@@ -838,14 +879,8 @@ fn build_object_group(
                     param: "path".to_string(),
                 },
             });
-            animation_card_controls(
-                &mut card_params,
-                &mut card_bindings,
-                &pose_node_id,
-                &pose_node_id,
-                &group_name,
-                node_anims_by_clip.len().max(1) as u32,
-            );
+            animation_card_bindings(&mut card_bindings, anim_prefix, &pose_node_id);
+            animated = true;
 
             let skinmesh_node_id = format!("skinmesh_{k}");
             let skinmesh_id = fresh_id();
@@ -929,14 +964,8 @@ fn build_object_group(
                     param: "path".to_string(),
                 },
             });
-            animation_card_controls(
-                &mut card_params,
-                &mut card_bindings,
-                &pose_node_id,
-                &pose_node_id,
-                &group_name,
-                node_anims_by_clip.len().max(1) as u32,
-            );
+            animation_card_bindings(&mut card_bindings, anim_prefix, &pose_node_id);
+            animated = true;
 
             let skinmesh_node_id = format!("skinmesh_{k}");
             let skinmesh_id = fresh_id();
@@ -1048,14 +1077,8 @@ fn build_object_group(
                     param: "path".to_string(),
                 },
             });
-            animation_card_controls(
-                &mut card_params,
-                &mut card_bindings,
-                &weights_node_id,
-                &weights_node_id,
-                &group_name,
-                node_anims_by_clip.len().max(1) as u32,
-            );
+            animation_card_bindings(&mut card_bindings, anim_prefix, &weights_node_id);
+            animated = true;
 
             let deltas_node_id = format!("morphdeltas_{k}");
             let deltas_id = fresh_id();
@@ -1554,14 +1577,8 @@ fn build_object_group(
                     param: "path".to_string(),
                 },
             });
-            animation_card_controls(
-                &mut card_params,
-                &mut card_bindings,
-                &anim_node_id,
-                &anim_node_id,
-                &group_name,
-                m.animations.len().max(1) as u32,
-            );
+            animation_card_bindings(&mut card_bindings, anim_prefix, &anim_node_id);
+            animated = true;
             for port in
                 ["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z"]
             {
@@ -1968,6 +1985,7 @@ fn build_object_group(
         string_bindings,
         report_lines,
         textures_wired,
+        animated,
     }
 }
 
@@ -2260,6 +2278,7 @@ fn build_import_graph(
     let mut card_params: Vec<ParamSpecDef> = Vec::new();
     let mut card_bindings: Vec<BindingDef> = Vec::new();
     let mut textures_wired = 0usize;
+    let mut any_animated = false;
     // D9 doctrine — see `ImportReport::report_lines`.
     let mut report_lines: Vec<String> = Vec::new();
 
@@ -2289,6 +2308,7 @@ fn build_import_graph(
             &mut used_group_names,
             &mut fresh_id,
             radius,
+            "anim",
         );
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
@@ -2297,6 +2317,24 @@ fn build_import_graph(
         string_bindings.append(&mut out.string_bindings);
         report_lines.append(&mut out.report_lines);
         textures_wired += out.textures_wired;
+        any_animated |= out.animated;
+    }
+
+    // One "Animation" section per glb (Peter, 2026-07-18): clips are
+    // file-level, so Rate/Clip/Loop/Retrigger are a single linked control
+    // fanning out to every animation clock the loop above bound. Prepended
+    // so the section leads the card, ahead of the per-object sections.
+    if any_animated {
+        let mut anim_params = Vec::new();
+        animation_card_params(
+            &mut anim_params,
+            "anim",
+            "Animation",
+            summary.animations.len().max(1) as u32,
+            clip_labels(&summary.animations),
+        );
+        anim_params.append(&mut card_params);
+        card_params = anim_params;
     }
 
     nodes.push(render_node);
@@ -2913,6 +2951,27 @@ fn merge_import_into_graph(
     let mut new_card_bindings = Vec::new();
     let mut new_string_bindings = Vec::new();
     let mut report_lines = Vec::new();
+    let mut any_animated = false;
+
+    // Per-glb animation section (see `animation_card_params`): each merged
+    // file gets its OWN linked Rate/Clip/Loop/Retrigger set, so the card id
+    // prefix must not collide with the target scene's existing sections
+    // ("anim" from the original import, or an earlier merge's "anim2"…).
+    let existing_card_ids: std::collections::HashSet<&str> = def
+        .preset_metadata
+        .as_ref()
+        .map(|m| m.params.iter().map(|p| p.id.as_str()).collect())
+        .unwrap_or_default();
+    let anim_prefix = {
+        let mut n = 1usize;
+        loop {
+            let candidate = if n == 1 { "anim".to_string() } else { format!("anim{n}") };
+            if !existing_card_ids.contains(format!("{candidate}_rate").as_str()) {
+                break candidate;
+            }
+            n += 1;
+        }
+    };
 
     for (local_k, m) in materials.iter().enumerate() {
         let port_index = existing_objects as usize + local_k;
@@ -2927,6 +2986,7 @@ fn merge_import_into_graph(
             &mut used_group_names,
             &mut fresh_id,
             incoming_radius,
+            &anim_prefix,
         );
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
@@ -2959,6 +3019,28 @@ fn merge_import_into_graph(
         new_card_bindings.append(&mut out.card_bindings);
         new_string_bindings.append(&mut out.string_bindings);
         report_lines.append(&mut out.report_lines);
+        any_animated |= out.animated;
+    }
+
+    if any_animated {
+        // Section named after the file so a scene holding several animated
+        // glbs reads as one linked control per model, not one anonymous
+        // "Animation" pile.
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "ImportedModel".to_string());
+        let section = format!("Animation — {}", sanitize_identifier(&stem));
+        let mut anim_params = Vec::new();
+        animation_card_params(
+            &mut anim_params,
+            &anim_prefix,
+            &section,
+            summary.animations.len().max(1) as u32,
+            clip_labels(&summary.animations),
+        );
+        anim_params.append(&mut new_card_params);
+        new_card_params = anim_params;
     }
 
     if let Some(scale) = normalize_scale {
@@ -5142,6 +5224,102 @@ mod tests {
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_def(def, &registry, None)
             .expect("import graph with an animated object must build through PresetRuntime::from_def");
+    }
+
+    /// Peter 2026-07-18: animation is a PER-GLB linked control — clips are
+    /// file-level in glTF, so a multi-object animated import gets ONE
+    /// "Animation" card section (Rate/Clip/Loop Mode/Retrigger) whose
+    /// bindings fan out to every animation clock in the file, never one
+    /// section per object.
+    #[test]
+    fn animation_cards_are_one_linked_section_per_glb() {
+        use super::gltf_load::{GltfAnimationInfo, GltfObjectAnimation, Vec3Track};
+
+        let track = |node: usize| GltfObjectAnimation {
+            duration_s: 2.0,
+            translation: Some(Vec3Track {
+                times: vec![0.0, 1.0],
+                values: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],
+                ..Default::default()
+            }),
+            rotation: None,
+            scale: None,
+            translation_node: Some(node),
+            rotation_node: None,
+            scale_node: None,
+        };
+        let mut a = full_material(0, "Inner", 1000);
+        a.animations = vec![Some(track(0))];
+        let mut b = full_material(1, "Outer", 500);
+        b.animations = vec![Some(track(1))];
+
+        let summary = GltfImportSummary {
+            materials: vec![a, b],
+            bbox_min: [-1.0, -1.0, -1.0],
+            bbox_max: [1.0, 1.0, 1.0],
+            camera_count: 0,
+            default_material_vertex_count: 0,
+            animations: vec![GltfAnimationInfo {
+                name: Some("Walk".to_string()),
+                nodes: Vec::new(),
+                skipped_channels: Vec::new(),
+            }],
+            animation_report_lines: Vec::new(),
+            extension_report_lines: Vec::new(),
+        };
+        let path = std::path::Path::new("/tmp/synthetic_shared_anim_cards.glb");
+        let (def, _report) = build_import_graph(&summary, path).expect("build graph");
+        let meta = def.preset_metadata.as_ref().expect("preset metadata");
+
+        // Exactly ONE shared param set, leading the card, in one section.
+        for (i, id) in ["anim_rate", "anim_clip", "anim_loop_mode", "anim_retrigger"].iter().enumerate() {
+            let hits: Vec<_> = meta.params.iter().filter(|p| p.id == *id).collect();
+            assert_eq!(hits.len(), 1, "{id} must appear exactly once");
+            assert_eq!(hits[0].section.as_deref(), Some("Animation"));
+            assert_eq!(meta.params[i].id, *id, "Animation section leads the card");
+        }
+        assert!(
+            !meta.params.iter().any(|p| p.name == "Rate" && p.id != "anim_rate"),
+            "no per-object Rate knobs remain"
+        );
+        let clip = meta.params.iter().find(|p| p.id == "anim_clip").unwrap();
+        assert_eq!(clip.value_labels, vec!["Walk".to_string()], "clip detents use file clip names");
+
+        // Fan-out: BOTH objects' animation clocks bind to the shared knobs.
+        let rate_bindings: Vec<_> = meta.bindings.iter().filter(|bd| bd.id == "anim_rate").collect();
+        assert_eq!(rate_bindings.len(), 2, "one rate binding per animation clock");
+        let targets: std::collections::HashSet<_> = rate_bindings
+            .iter()
+            .map(|bd| match &bd.target {
+                BindingTarget::Node { node_id, .. } => node_id.as_str().to_string(),
+                other => panic!("unexpected target {other:?}"),
+            })
+            .collect();
+        assert_eq!(targets.len(), 2, "the two bindings target distinct nodes");
+
+        // The fan-out shape must be lint-legal end to end.
+        use crate::node_graph::persistence::EffectGraphDefExt;
+        let registry = PrimitiveRegistry::with_builtin();
+        let graph = def.clone().into_graph(&registry).expect("import graph must build");
+        let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+        assert!(errors.is_empty(), "card lints must accept the shared-anim import: {errors:?}");
+
+        // Merging the SAME animated file into this scene must mint its own
+        // linked section under a fresh prefix — never collide with "anim_*".
+        let plan = merge_import_into_graph(&def, &summary, path).expect("merge plan");
+        let merged_rate: Vec<_> =
+            plan.new_card_params.iter().filter(|p| p.id == "anim2_rate").collect();
+        assert_eq!(merged_rate.len(), 1, "merge uniquifies the shared anim prefix");
+        assert_eq!(
+            merged_rate[0].section.as_deref(),
+            Some("Animation — synthetic_shared_anim_cards"),
+            "merged section is named after the file"
+        );
+        assert_eq!(
+            plan.new_card_bindings.iter().filter(|bd| bd.id == "anim2_rate").count(),
+            2,
+            "merged bindings fan out under the fresh prefix"
+        );
     }
 
     /// BUG-204 regression: the A4 Retrigger card param is `is_trigger`
