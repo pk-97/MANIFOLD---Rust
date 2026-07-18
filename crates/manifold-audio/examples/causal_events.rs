@@ -151,6 +151,7 @@ fn main() {
     let mut an = StreamingSendAnalyzer::new(sr, DEFAULT_LOW_HZ, DEFAULT_MID_HZ);
     let hop = an.hop().max(1);
     let dt = hop as f32 / sr as f32;
+    eprintln!("HOPDBG hop_samples={hop} sample_rate={sr}");
 
     // One send; one layer per route, each holding one enabled default-shape
     // clip trigger — the layer id maps a FireRequest back to its band kind.

@@ -57,12 +57,13 @@ CLASSES = ("kick", "snare", "hat", "perc")
 # transients_low AND transients_full AND kick_low within a few ms of each
 # other — the live rig launches one clip per route, by design). For a
 # generic-HIT measurement those co-fires are one hit, so the union stream is
-# cluster-merged at the analyzer's own onset refractory (~106 ms — the value
-# `manifold-playback/src/live_trigger.rs`'s module doc cites for the
-# upstream detector): a cluster starts when the gap since the previous event
-# exceeds it, and the hit time is the cluster's FIRST event (the earliest =
-# the live latency). This merges scoring-side only; the dump is untouched.
-CAUSAL_CLUSTER_REFRACTORY_SEC = 0.106
+# cluster-merged at the analyzer's own onset refractory (6 hops x 5.33 ms
+# = 32 ms — ONSET_REFRACTORY_HOPS in manifold-audio/src/analysis.rs; the
+# original 106 ms here over-merged 3x and collapsed distinct hits on dense
+# material, understating recall — corrected 2026-07-18): a cluster starts
+# when the gap since the previous event exceeds it, and the hit time is the
+# cluster's FIRST event (the earliest = the live latency). Scoring-side only.
+CAUSAL_CLUSTER_REFRACTORY_SEC = 0.032
 
 # Same pitch->class folding bakeoff_b1._build_edm_kit_track uses for
 # self_render MIDI truth.

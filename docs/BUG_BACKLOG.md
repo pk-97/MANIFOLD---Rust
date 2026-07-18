@@ -50,6 +50,8 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
+| BUG-242 | **live-trigger-edge-rearm-hostage-to-shape-release** | dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — recall gap is algorithmic — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
 | BUG-240 | **scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture** | `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no row family has supported since the card convergence — flow-script rot, not a live-app defect — LOW |
@@ -186,6 +188,26 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
+
+**Status:** OPEN — HIGH for realtime trigger work (the single biggest live-detection quality lever measured to date; fix shape decided, needs Peter's go since it changes trigger semantics).
+
+**Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
+
+**Root cause:** `TransientEdge::advance(conditioned, 0.5)` re-arms only when the shape-conditioned envelope falls below 0.5, and the default `AudioModShape` release (120 ms) exceeds dense hit spacing (~80 ms), so the edge never re-arms between hits. Measured: `--release-ms 20` on the dumper takes generic-hit recall 0.204 → 0.673 at precision 1.000, timing 4.6 ms; sparse fixture (`kick_hat`) unchanged.
+
+**Fix shape:** decouple trigger re-arm from the modulation shape's release — give `TransientEdge` its own re-arm criterion (fixed short re-arm window ≈ the analyzer's 32 ms refractory, or hysteresis on the RAW impulse rather than the conditioned envelope) so the visual envelope can stay long while the trigger stays fast. Parameter-level stopgap: short release on trigger routes (works today, but couples visual feel to detection).
+
+### BUG-243 (analyzer-false-fires-on-sustained-pads) — sustained pad/swell material fires transient + kick events with zero real hits — found 2026-07-18, same session
+
+**Status:** OPEN — MEDIUM (stage impact: a pad build can fire hit-triggers; measured on `self_render/sustained_pad_100bpm`, 0 truth events).
+
+**Symptom:** 41 analyzer transient fires + 28 kick-ridge fires on a 20 s pad-only fixture.
+
+**Root cause (attributed per-event, `eval/odf_attribution.py`):** 26/41 transient fires are quiet-passage admissions — pad flux ~80 ODF units clears `SUPERFLUX_DELTA` (48) while the median baseline is ~0; the rest are big swell attacks passing the novelty test (candidate ~1000+ vs ref ~0). Kick-ridge fires on pads are unattributed (descending spectral motion in swells suspected).
+
+**Fix shape:** re-sweep `SUPERFLUX_DELTA` upward (P3's guard plateau ran 30–300; pad flicker sits ~80 — a value ~100–150 may silence it) with the P3 false-fire guards (dive/riser/growl) AND the recall fixtures both green; kick-ridge pad fires need their own look (possibly `KICK_ABS_FLOOR` or a sustained-energy veto). Do NOT trade recall-fixture numbers to buy this.
 
 ### BUG-244 (graph-canvas-apply-live-values-skips-non-numeric-param-kinds) — the editor canvas's per-frame live-value overlay only updates scalar params; enum/color/vec/table on-face values stay frozen until a `graph_version` bump — found 2026-07-18, param-desync campaign lane B (K3 readers lane)
 
