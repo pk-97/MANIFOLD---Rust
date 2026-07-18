@@ -181,7 +181,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-242 (live-trigger-edge-rearm-hostage-to-shape-release) — dense-material trigger recall collapses because edge re-arm depends on the visual envelope release — found 2026-07-18, causal-detection diagnosis session
 
-**Status:** OPEN — HIGH for realtime trigger work (the single biggest live-detection quality lever measured to date; fix shape decided, needs Peter's go since it changes trigger semantics).
+**Status:** FIXED 2026-07-18 (same evening; Peter approved). `TransientEdge` now advances on the sensitivity-scaled RAW impulse (no attack/release smoothing) in both consumers — `live_trigger.rs` clip triggers and `modulation.rs` trigger-gates; the conditioned envelope is unchanged for meters/modulation. Measured at DEFAULT shape: edm_kit generic-hit recall 0.204 → 0.714 @ P 1.000; kick_hat byte-identical (0.785/1.000/0.646); 617 unit tests green. Known cost, accepted deliberately: sustained_pad trigger fires 46 → 71 — the envelope was MASKING the analyzer's pad false fires; the trigger layer is now faithful, so BUG-243 (the analyzer-level pad fix) is the sole remaining owner of that symptom.
 
 **Symptom:** on dense material (`self_render/edm_kit_128bpm`, 196 truth hits) the causal trigger path fires only ~21% of hits at the default trigger shape, despite the SuperFlux analyzer firing on 194/196 (99%) at the detection level (proven via `MANIFOLD_ODF_DEBUG` attribution, landed `726d81b4`).
 
@@ -191,7 +191,7 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ### BUG-243 (analyzer-false-fires-on-sustained-pads) — sustained pad/swell material fires transient + kick events with zero real hits — found 2026-07-18, same session
 
-**Status:** OPEN — MEDIUM (stage impact: a pad build can fire hit-triggers; measured on `self_render/sustained_pad_100bpm`, 0 truth events).
+**Status:** OPEN — HIGH (raised from MEDIUM 2026-07-18: BUG-242's fix removed the envelope smoothing that was accidentally masking these at the trigger layer — pad-driven trigger routes now see the analyzer's false fires directly, 71 trigger fires on the pad fixture. This bug is now the sole owner of the pad-chatter symptom).
 
 **Symptom:** 41 analyzer transient fires + 28 kick-ridge fires on a 20 s pad-only fixture.
 

@@ -57,6 +57,15 @@ pub const REARM_RATIO: f32 = 0.6;
 /// flag (D4) so both the clip-trigger evaluator (keyed by send×band) and the
 /// `ParameterAudioMod` trigger-gate evaluator (keyed by mod, §9 U1) share one
 /// implementation.
+///
+/// **BUG-242 (2026-07-18):** both callers advance this on the
+/// sensitivity-scaled RAW feature value, never the shape-conditioned
+/// (attack/release-smoothed) envelope — `AudioModShape::condition`'s
+/// attack/release stage exists to make the *displayed/modulation* signal feel
+/// like an instrument, but gating `advance()` on it meant a shape's release
+/// (120 ms default) controlled how fast the edge could re-arm, so a second
+/// onset landing inside the first one's decay tail never fired. `level` here
+/// is that decoupled, unsmoothed signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransientEdge {
     armed: bool,

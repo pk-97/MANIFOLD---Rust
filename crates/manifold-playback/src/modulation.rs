@@ -536,13 +536,20 @@ fn evaluate_instance_audio_mods(
         };
         let raw = m.source.feature.extract(features);
         let shape = m.shape;
+        // BUG-242: `m.prev_raw` before `condition()` mutates it — the
+        // trigger-gate arm below needs the pre-tick value to recompute the
+        // sensitivity-scaled raw level for edge detection.
+        let prev_raw_before_condition = m.prev_raw;
         // `conditioned` is the pre-range-map signal (sensitivity, smoothing,
-        // invert, curve) — edge detection (trigger-gate/trigger/Step/Random
-        // fire arms below) reads THIS, never the range-mapped `out_norm`, so
-        // the trim handles never distort whether/when a mod fires (BUG:
-        // range_min >= 0.5 fired once and never re-armed; range_max <= 0.5
-        // never fired at all). `out_norm` stays the range-mapped value for
-        // Continuous, which is exactly what the range map is for.
+        // invert, curve) — edge detection (trigger/Step/Random fire arms
+        // below) reads THIS, never the range-mapped `out_norm`, so the trim
+        // handles never distort whether/when a mod fires (BUG: range_min >=
+        // 0.5 fired once and never re-armed; range_max <= 0.5 never fired at
+        // all). `out_norm` stays the range-mapped value for Continuous, which
+        // is exactly what the range map is for. The `is_trigger_gate` arm
+        // below is the one exception (BUG-242): it edge-detects the
+        // sensitivity-scaled RAW level instead, decoupled from this
+        // envelope, so a shape's release can't swallow a second onset.
         let conditioned = shape.condition(raw, dt_s, &mut m.smoothed, &mut m.prev_raw);
         let out_norm = shape.map_range(conditioned);
 
@@ -565,10 +572,23 @@ fn evaluate_instance_audio_mods(
             // fire pushes a pulse for the renderer's `audio_count` instead of
             // a monotonic count. Mode gates only whether the pulse EMITS, not
             // whether the edge advances, so switching mode live never leaves
-            // the armed flag out of sync with the audio signal. Detection
-            // runs on `conditioned` (pre-range-map) so trim handles never
-            // distort firing.
-            if m.trigger_edge.advance(conditioned, 0.5)
+            // the armed flag out of sync with the audio signal.
+            //
+            // BUG-242: detection runs on the sensitivity-scaled RAW level,
+            // not `conditioned` — the shape's attack/release envelope
+            // (release defaults to 120 ms) otherwise gates how fast the edge
+            // can re-arm, deafening dense material. Same sensitivity/
+            // rate-of-change step `AudioModShape::condition`'s `target`
+            // computes internally (manifold-core's `audio_mod.rs`); trim
+            // handles (range_min/range_max) still never distort firing since
+            // this is pre-range-map either way.
+            let edge_level = if shape.rate_of_change {
+                let rate = (raw - prev_raw_before_condition) / dt_s.max(1e-4);
+                (0.5 + rate * shape.sensitivity).clamp(0.0, 1.0)
+            } else {
+                (raw * shape.sensitivity).clamp(0.0, 1.0)
+            };
+            if m.trigger_edge.advance(edge_level, 0.5)
                 && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
             {
                 pulses.push(TriggerPulse { layer_id: layer_id.clone() });
