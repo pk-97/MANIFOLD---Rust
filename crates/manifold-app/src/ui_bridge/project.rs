@@ -260,6 +260,45 @@ pub(super) fn dispatch_project(
         PanelAction::SceneSetupParamChanged(layer_id, scope_path, node_doc_id, param_id, value) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                // Bound param → edit the binding's instance slot, never the
+                // def (see inspector.rs `scene_bound_slot` for the full
+                // rationale — a def write on a bound param is re-seeded
+                // over on rebuild, the importer-camera deadness).
+                let bound = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.binding_id_for_node_param(*node_doc_id, param_id)
+                    })
+                    .flatten()
+                    // Tracking instance (graph: None — fresh imports).
+                    .or_else(|| {
+                        manifold_core::effects::binding_id_for_node_param_in(
+                            &default,
+                            *node_doc_id,
+                            param_id,
+                        )
+                    });
+                if let Some(id) = bound {
+                    let pid = manifold_core::effects::ParamId::from(id);
+                    let old_val = project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.params
+                                .contains(pid.as_ref())
+                                .then(|| inst.get_base_param(pid.as_ref()))
+                        })
+                        .flatten();
+                    if let Some(old_val) = old_val
+                        && (old_val - *value).abs() > f32::EPSILON
+                    {
+                        project.with_preset_graph_mut(&target, |inst| {
+                            inst.set_base_param(pid.as_ref(), *value);
+                        });
+                        let cmd = manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+                            target, pid, old_val, *value,
+                        );
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    return DispatchResult::handled();
+                }
                 let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
                     target,
                     *node_doc_id,
@@ -672,8 +711,10 @@ pub(super) fn dispatch_project(
 /// `SceneSetupExposeParam` to read the node's stable `node_id`/`handle`
 /// before constructing `ToggleNodeParamExposeCommand`, which (unlike every
 /// other fourth-surface command in this file) needs that identity as a
-/// constructor argument rather than resolving it internally.
-fn find_node_by_scope<'a>(
+/// constructor argument rather than resolving it internally. BUG-249:
+/// `pub(crate)` so `inspector.rs`'s scene modulation redirect can resolve
+/// the same identity when it materializes an exposure on first arm.
+pub(crate) fn find_node_by_scope<'a>(
     def: &'a manifold_core::effect_graph_def::EffectGraphDef,
     scope_path: &[u32],
     node_doc_id: u32,

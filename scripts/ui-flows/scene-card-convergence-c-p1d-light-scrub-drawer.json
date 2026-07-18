@@ -1,48 +1,88 @@
 [
   {
     "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   {
     "Pointer": {
-      "target": { "Query": { "text": "💡 sun" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "text": "\ud83d\udca1 sun"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.light.intensity_value" } },
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.intensity_value"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.light.intensity_track" } },
-      "gesture": { "Drag": { "to": { "Point": { "x": 1020.0, "y": 684.0 } }, "steps": 8 } }
+      "target": {
+        "Query": {
+          "name": "scene_setup.light.intensity_track"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 1020.0,
+              "y": 684.0
+            }
+          },
+          "steps": 8
+        }
+      }
     }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.light.intensity_driver_btn" } },
+      "selector": {
+        "Query": {
+          "name": "scene_setup.light.intensity_driver_btn"
+        }
+      },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.light.intensity_driver_btn" } },
-      "gesture": { "Click": { "modifiers": {} } }
+      "target": {
+        "Query": {
+          "name": "scene_setup.light.intensity_driver_btn"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
     }
   },
-  "Snapshot",
-  {
-    "Assert": {
-      "selector": { "Query": { "name": "scene_setup.mod.light_intensity" } },
-      "check": "Exists"
-    }
-  }
+  "Snapshot"
 ]

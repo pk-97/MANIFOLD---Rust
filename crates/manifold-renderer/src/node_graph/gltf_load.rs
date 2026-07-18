@@ -58,6 +58,9 @@ const MANIFOLD_SUPPORTED_EXTENSIONS: &[&str] = &[
     // IMPORT_ANYTHING_WAVE_DESIGN.md W1 — raw-JSON sniffed + manual decode,
     // no crate feature exists for this extension at 1.4.1:
     "EXT_texture_webp",
+    // GLB_XFAIL_BURNDOWN_DESIGN.md D6 (BUG-168) — raw-JSON sniffed per-node
+    // TRANSLATION/ROTATION/SCALE, composed in [`node_instance_transforms`]:
+    "EXT_mesh_gpu_instancing",
 ];
 
 /// The ONE parse entry for `.glb`/`.gltf` files (`GLB_XFAIL_BURNDOWN_DESIGN.md`
@@ -1388,6 +1391,13 @@ pub(crate) struct GltfImportSummary {
     /// (§"resolve_object_animation") — one line per occurrence, never a
     /// silent drop. `gltf_import.rs` folds these into `ImportReport::report_lines`.
     pub animation_report_lines: Vec<String>,
+    /// BUG-213: `extensionsUsed` entries that are NOT in
+    /// [`MANIFOLD_SUPPORTED_EXTENSIONS`] and NOT in `extensionsRequired`
+    /// (those hard-fail in [`parse_document_and_buffers`]) — optional
+    /// extensions the asset lists that we don't implement, so the import
+    /// proceeds without them. One line per extension, never a silent skip.
+    /// `gltf_import.rs` folds these into `ImportReport::report_lines`.
+    pub extension_report_lines: Vec<String>,
 }
 
 /// glTF sampler interpolation mode, as encoded in the runtime track
@@ -3260,6 +3270,10 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         });
     }
 
+    // BUG-213: surface optional extensions we don't implement — required
+    // ones already hard-failed in `parse_document_and_buffers`.
+    let extension_report_lines = unsupported_optional_extension_lines(&document);
+
     Ok(GltfImportSummary {
         materials,
         bbox_min,
@@ -3268,7 +3282,24 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         default_material_vertex_count,
         animations,
         animation_report_lines,
+        extension_report_lines,
     })
+}
+
+/// BUG-213: report lines for `extensionsUsed` entries MANIFOLD doesn't
+/// implement (`extensionsRequired` unsupported entries never reach here —
+/// they hard-fail in [`parse_document_and_buffers`]). One line per
+/// extension, import proceeds without it.
+fn unsupported_optional_extension_lines(document: &gltf::Document) -> Vec<String> {
+    document
+        .extensions_used()
+        .filter(|ext| !MANIFOLD_SUPPORTED_EXTENSIONS.contains(ext))
+        .map(|ext| {
+            format!(
+                "extensionsUsed[..] = \"{ext}\": optional extension not implemented by MANIFOLD — imported without it (report-only)"
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -3284,14 +3315,45 @@ mod animation_tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/hostile")
     }
 
+    /// BUG-214: `EXT_mesh_gpu_instancing` is fully implemented (raw-JSON
+    /// sniff in [`node_instance_transforms`]) but was missing from the
+    /// supported allowlist, so an asset listing it under
+    /// `extensionsRequired` would hard-fail at the gate despite our
+    /// support. Pin the membership so the allowlist can't drift from the
+    /// implementation again.
+    #[test]
+    fn ext_mesh_gpu_instancing_is_in_supported_allowlist() {
+        assert!(
+            MANIFOLD_SUPPORTED_EXTENSIONS.contains(&"EXT_mesh_gpu_instancing"),
+            "EXT_mesh_gpu_instancing is implemented — it must be in MANIFOLD_SUPPORTED_EXTENSIONS"
+        );
+    }
+
+    /// BUG-213: an `extensionsUsed` entry MANIFOLD doesn't implement (and
+    /// that isn't `extensionsRequired`) must surface as a report line, and
+    /// supported extensions must NOT. No shipped fixture carries an
+    /// optional-unsupported extension, so the document is built in memory.
+    #[test]
+    fn unsupported_optional_extension_produces_report_line() {
+        let json = br#"{
+            "asset": { "version": "2.0" },
+            "extensionsUsed": ["KHR_materials_unlit", "KHR_fake_extension_xyz"],
+            "scenes": [ { "nodes": [] } ],
+            "scene": 0
+        }"#;
+        let gltf = gltf::Gltf::from_slice_without_validation(json).expect("parse minimal gltf");
+        let lines = unsupported_optional_extension_lines(&gltf.document);
+        assert_eq!(lines.len(), 1, "only the unsupported extension reports: {lines:?}");
+        assert!(lines[0].contains("KHR_fake_extension_xyz"), "line names the extension: {}", lines[0]);
+    }
+
     /// IMPORT_ANYTHING_WAVE_DESIGN.md W2 (BUG-187's STEP half): before this
     /// lane, `step_interp.glb`'s translation channel was dropped with a
     /// report line (`gltf_load.rs`'s old LINEAR-only gate). Asserts it now
     /// parses into a real track carrying `GltfInterp::Step`, never
     /// approximated as LINEAR.
     #[test]
-    fn step_interp_fixture_parses_as_step_not_dropped() {
-        let path = hostile_dir().join("step_interp.glb");
+    fn step_interp_fixture_parses_as_step_not_dropped() {        let path = hostile_dir().join("step_interp.glb");
         assert!(path.exists(), "step_interp.glb fixture missing at {}", path.display());
         let (document, buffers, _images) = import_glb(&path).expect("parse step_interp.glb");
         let animations = parse_animations(&document, &buffers);

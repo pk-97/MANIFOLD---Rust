@@ -1601,6 +1601,36 @@ pub fn sync_inspector_data(
                             // `scoped_row` gets a correct lit state for free,
                             // not just the rows P3a actually wires a mod
                             // button onto.
+                            // Bound-row value override (importer-camera fix,
+                            // 2026-07-18): a row whose inner (node, param) is
+                            // covered by a card/user binding LIVES in the
+                            // binding's instance slot — the write path edits
+                            // that slot (inspector.rs `scene_bound_slot`), so
+                            // the displayed value must read it too, or the
+                            // panel shows the def's stale import default.
+                            let hoisted_gen_inst = l.gen_params();
+                            let display_value = |node_doc_id: u32, param_id: &str, fallback: f32| {
+                                hoisted_gen_inst
+                                    .and_then(|inst| {
+                                        // Instance graph first; a TRACKING
+                                        // instance (graph: None — fresh
+                                        // imports) resolves via the same
+                                        // effective def the VM was built on.
+                                        let id = inst
+                                            .binding_id_for_node_param(node_doc_id, param_id)
+                                            .or_else(|| {
+                                                manifold_core::effects::binding_id_for_node_param_in(
+                                                    def.as_ref()?,
+                                                    node_doc_id,
+                                                    param_id,
+                                                )
+                                            })?;
+                                        inst.params
+                                            .contains(id.as_str())
+                                            .then(|| inst.get_base_param(id.as_str()))
+                                    })
+                                    .unwrap_or(fallback)
+                            };
                             let row = |node_doc_id: u32,
                                        param_id: &str,
                                        value: f32,
@@ -1608,7 +1638,7 @@ pub fn sync_inspector_data(
                                        min: f32,
                                        max: f32| RowValue {
                                 addr: RowAddr::root(node_doc_id, param_id),
-                                value,
+                                value: display_value(node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -1629,7 +1659,7 @@ pub fn sync_inspector_data(
                                               min: f32,
                                               max: f32| RowValue {
                                 addr: RowAddr { scope_path, node_doc_id, param_id: param_id.to_string() },
-                                value,
+                                value: display_value(node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -1647,14 +1677,18 @@ pub fn sync_inspector_data(
                             // Same closure, same definition, just visible
                             // earlier in this block; the Environment/Fog call
                             // sites further down are unchanged.
-                            use manifold_ui::panels::scene_setup_panel::{
-                                ModulatedRow, synth_world_param_id,
-                            };
+                            use manifold_ui::panels::scene_setup_panel::ModulatedRow;
                             let gen_inst = l.gen_params();
+                            // BUG-249: modulation facts resolve through the
+                            // REAL exposed-param binding id, not the row's
+                            // synthesized scene id (which the runtime never
+                            // evaluates) — see `scene_row_modulation`.
                             let mrow = |node_doc_id: u32, param_key: &str, v: RowValue| ModulatedRow {
-                                modulation: Box::new(row_modulation_for_id(
+                                modulation: Box::new(scene_row_modulation(
                                     gen_inst,
-                                    synth_world_param_id(node_doc_id, param_key).as_ref(),
+                                    def.as_ref(),
+                                    node_doc_id,
+                                    param_key,
                                     automation_latched,
                                 )),
                                 value: v,
@@ -1860,6 +1894,7 @@ pub fn sync_inspector_data(
                                                             &m.params,
                                                             &m.driven,
                                                             gen_inst,
+                                                            def.as_ref(),
                                                             automation_latched,
                                                         ),
                                                     })
@@ -2129,7 +2164,13 @@ pub fn sync_inspector_data(
                                     AtmosphereRowVm::Wired {
                                         density: mrow(
                                             a.density_addr.node_doc_id,
-                                            "density",
+                                            // BUG-249: the GRAPH param key
+                                            // ("fog_density"), not the panel's
+                                            // curated row key ("density") —
+                                            // `scene_row_modulation` resolves
+                                            // the binding by the inner node's
+                                            // real param name.
+                                            &a.density_addr.param_id,
                                             row(
                                                 a.density_addr.node_doc_id,
                                                 &a.density_addr.param_id,
@@ -2690,6 +2731,37 @@ pub(crate) fn lookup_param_mod_for_id(
 /// layer yet, or the layer isn't a generator) returns the idle default —
 /// same "no modulation, not an error" contract `lookup_param_mod_for_id`
 /// itself has for an un-modulated param.
+/// BUG-249: the scene-row entry point — translate `(node_doc_id, param_key)`
+/// to the REAL exposed-param binding id before the modulation lookup. Scene
+/// rows used to query by their synthesized `scene.{doc}.{param}` id, which
+/// never exists on `inst.params`, so the UI read back the very arm it had
+/// stored against an id the runtime silently drops (the closed loop the bug
+/// names). An unexposed param has no binding → idle default, same "no
+/// modulation, not an error" contract as `inst = None`.
+pub(crate) fn scene_row_modulation(
+    inst: Option<&PresetInstance>,
+    effective_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    node_doc_id: u32,
+    param_key: &str,
+    automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
+) -> manifold_ui::panels::scene_setup_panel::RowModulation {
+    // Instance graph first; a TRACKING instance (graph: None — fresh
+    // imports) resolves against the effective catalog def instead.
+    let real_id = inst
+        .and_then(|i| i.binding_id_for_node_param(node_doc_id, param_key))
+        .or_else(|| {
+            manifold_core::effects::binding_id_for_node_param_in(
+                effective_def?,
+                node_doc_id,
+                param_key,
+            )
+        });
+    match real_id {
+        Some(id) => row_modulation_for_id(inst, &id, automation_latched),
+        None => manifold_ui::panels::scene_setup_panel::RowModulation::default(),
+    }
+}
+
 pub(crate) fn row_modulation_for_id(
     inst: Option<&PresetInstance>,
     param_id: &str,
@@ -3732,16 +3804,21 @@ fn modifier_param_rows(
     params: &std::collections::BTreeMap<String, f32>,
     driven: &std::collections::HashSet<String>,
     gen_inst: Option<&PresetInstance>,
+    effective_def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
 ) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierParamRowVm> {
     use manifold_ui::panels::scene_setup_panel::{
-        ModifierParamRowVm, ModulatedEnumRow, ModulatedRow, RowAddr, RowValue, synth_world_param_id,
+        ModifierParamRowVm, ModulatedEnumRow, ModulatedRow, RowAddr, RowValue,
     };
     const AXIS_LABELS: &[&str] = &["X", "Y", "Z"];
+    // BUG-249: resolve through the real exposed-param binding id, same as
+    // the transform/material/light `mrow` above.
     let mrow = |param_key: &str, v: RowValue| ModulatedRow {
-        modulation: Box::new(row_modulation_for_id(
+        modulation: Box::new(scene_row_modulation(
             gen_inst,
-            synth_world_param_id(node_doc_id, param_key).as_ref(),
+            effective_def,
+            node_doc_id,
+            param_key,
             automation_latched,
         )),
         value: v,

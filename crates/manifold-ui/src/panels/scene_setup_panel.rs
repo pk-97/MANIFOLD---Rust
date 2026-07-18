@@ -32,7 +32,7 @@ use super::drawer::DrawerIds;
 use super::param_card::{ParamInfo, RowGeometry};
 use super::param_slider_shared::{
     AbletonConfigIds, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab, ParamModState,
-    RowClick, TrimHandleIds, build_param_row, match_param_row_click,
+    RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions, match_param_row_click,
 };
 
 // ── Stable keys ──
@@ -49,7 +49,7 @@ const KEY_IMPORT_MODEL: u64 = 80_016;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
 /// Objects are a variable-length list (unlike the four fixed Environment/Fog
-/// rows above), so — like `KEY_ROW_BASE`/`row_key` — every object gets a
+/// rows above), so every object gets a
 /// private key range wide enough for its expand toggle, name, and its
 /// numeric controls (3 triplets + color + metallic + roughness) plus, as of
 /// UX-P3a, one mod-button key per exposable field.
@@ -62,49 +62,11 @@ const OBJ_KEY_STRIDE: u64 = 44;
 const OBJ_OFF_NAME: u64 = 1;
 /// BUG-193 per-row "✕" remove button, on the title row next to the name.
 const OBJ_OFF_REMOVE: u64 = 20;
-// UX-P3a: mod-button keys, one per exposable field — offsets 22..32 (11
-// slots), clear of `obj_key(row.index, OBJ_OFF_REMOVE) + 1` (the
-// properties-header Duplicate button, offset 21) and under the bumped
-// `OBJ_KEY_STRIDE` (44). C-P1b: these now key the converted card rows'
-// exposure-lane mod buttons (`object_row_mod_offset`) — the old triplet/
-// slider VALUE-cell offsets these used to sit alongside (`OBJ_OFF_POS_X`
-// etc.) are gone; the card rows' own keys come from `build_param_row`'s
-// `row_key_base` (`slot << 8`) instead.
-const OBJ_OFF_POS_X_MOD: u64 = 22;
-const OBJ_OFF_ROT_X_MOD: u64 = 25;
-const OBJ_OFF_SCALE_X_MOD: u64 = 28;
-const OBJ_OFF_METALLIC_MOD: u64 = 31;
-const OBJ_OFF_ROUGHNESS_MOD: u64 = 32;
 
 const fn obj_key(index: usize, offset: u64) -> u64 {
     OBJ_KEY_BASE + index as u64 * OBJ_KEY_STRIDE + offset
 }
 
-/// UX-P3a: stable automation name for one exposable OBJECT row's mod button
-/// — same "flat panel, no per-section container, `nth` disambiguates"
-/// convention every other automation name in this file follows. `None` for
-/// a row this phase doesn't wire a button onto (Color's per-channel cells).
-/// C-P1b: `offset` is the row's FULL, already axis-resolved
-/// `object_row_mod_offset(slot)` value (`OBJ_OFF_POS_X_MOD`, `+1`, `+2`, …
-/// each a distinct constant) — the old (base, axis) pair collapsed into one
-/// argument since `object_row_mod_offset` bakes the axis into the offset
-/// itself.
-const fn mod_button_automation_name(offset: u64) -> Option<&'static str> {
-    match offset {
-        OBJ_OFF_POS_X_MOD => Some("scene_setup.mod.pos_x"),
-        x if x == OBJ_OFF_POS_X_MOD + 1 => Some("scene_setup.mod.pos_y"),
-        x if x == OBJ_OFF_POS_X_MOD + 2 => Some("scene_setup.mod.pos_z"),
-        OBJ_OFF_ROT_X_MOD => Some("scene_setup.mod.rot_x"),
-        x if x == OBJ_OFF_ROT_X_MOD + 1 => Some("scene_setup.mod.rot_y"),
-        x if x == OBJ_OFF_ROT_X_MOD + 2 => Some("scene_setup.mod.rot_z"),
-        OBJ_OFF_SCALE_X_MOD => Some("scene_setup.mod.scale_x"),
-        x if x == OBJ_OFF_SCALE_X_MOD + 1 => Some("scene_setup.mod.scale_y"),
-        x if x == OBJ_OFF_SCALE_X_MOD + 2 => Some("scene_setup.mod.scale_z"),
-        OBJ_OFF_METALLIC_MOD => Some("scene_setup.mod.metallic"),
-        OBJ_OFF_ROUGHNESS_MOD => Some("scene_setup.mod.roughness"),
-        _ => None,
-    }
-}
 
 /// Per-light dynamic keys (P3), same convention as `obj_key`: Lights is a
 /// variable-length list, so every light gets a private key range.
@@ -128,40 +90,11 @@ const LIGHT_OFF_REMOVE: u64 = 26;
 /// `LIGHT_OFF_MODE_MINUS + 100` out-of-stride hack (see the stride comment
 /// above).
 const LIGHT_OFF_NAME: u64 = 27;
-// UX-P3b-i: mod-button keys, one per exposable field — offsets 28..38 (10
-// slots, matching the doc's "intensity/pos/aim/cast_shadows/shadow_softness/
-// light_size = 10 more slots" inventory). Mode and Color stay unexposable —
-// Mode is a structural type switch (same reasoning `mod_button_automation_name`
-// already applies to Object rows' Color, D4: display-only) and Color's
-// per-channel exposure is out of scope for the same reason.
-const LIGHT_OFF_INTENSITY_MOD: u64 = 28;
-const LIGHT_OFF_POS_X_MOD: u64 = 29;
-const LIGHT_OFF_AIM_X_MOD: u64 = 32;
-const LIGHT_OFF_CAST_SHADOWS_MOD: u64 = 35;
-const LIGHT_OFF_SHADOW_SOFTNESS_MOD: u64 = 36;
-const LIGHT_OFF_LIGHT_SIZE_MOD: u64 = 37;
 
 const fn light_key(index: usize, offset: u64) -> u64 {
     LIGHT_KEY_BASE + index as u64 * LIGHT_KEY_STRIDE + offset
 }
 
-/// UX-P3b-i: stable automation name for one exposable LIGHT row's mod
-/// button — same convention as `mod_button_automation_name` (Object rows).
-const fn light_mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
-    match (base_offset, axis) {
-        (LIGHT_OFF_INTENSITY_MOD, 0) => Some("scene_setup.mod.light_intensity"),
-        (LIGHT_OFF_POS_X_MOD, 0) => Some("scene_setup.mod.light_pos_x"),
-        (LIGHT_OFF_POS_X_MOD, 1) => Some("scene_setup.mod.light_pos_y"),
-        (LIGHT_OFF_POS_X_MOD, 2) => Some("scene_setup.mod.light_pos_z"),
-        (LIGHT_OFF_AIM_X_MOD, 0) => Some("scene_setup.mod.light_aim_x"),
-        (LIGHT_OFF_AIM_X_MOD, 1) => Some("scene_setup.mod.light_aim_y"),
-        (LIGHT_OFF_AIM_X_MOD, 2) => Some("scene_setup.mod.light_aim_z"),
-        (LIGHT_OFF_CAST_SHADOWS_MOD, 0) => Some("scene_setup.mod.light_cast_shadows"),
-        (LIGHT_OFF_SHADOW_SOFTNESS_MOD, 0) => Some("scene_setup.mod.light_shadow_softness"),
-        (LIGHT_OFF_LIGHT_SIZE_MOD, 0) => Some("scene_setup.mod.light_size"),
-        _ => None,
-    }
-}
 
 // C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the Light family's own
 // FIXED slot indices into `self.light_card` — same identity-stability
@@ -245,52 +178,7 @@ const fn light_row_driver_btn_automation_name(slot: usize) -> Option<&'static st
     }
 }
 
-/// The exposure-lane mod-button offset for a converted Light row, by slot —
-/// reuses the SAME `LIGHT_OFF_*_MOD` constants (and therefore the same
-/// `light_mod_button_automation_name` strings) the old bespoke builders
-/// already published. `None` for Mode (a structural type switch, same
-/// reasoning `object_row_mod_offset` applies to Object's Color) and Color
-/// (per-channel exposure out of scope, same as Object).
-const fn light_row_mod_offset(slot: usize) -> Option<u64> {
-    match slot {
-        LIGHT_ROW_INTENSITY => Some(LIGHT_OFF_INTENSITY_MOD),
-        LIGHT_ROW_POS_X => Some(LIGHT_OFF_POS_X_MOD),
-        LIGHT_ROW_POS_Y => Some(LIGHT_OFF_POS_X_MOD + 1),
-        LIGHT_ROW_POS_Z => Some(LIGHT_OFF_POS_X_MOD + 2),
-        LIGHT_ROW_AIM_X => Some(LIGHT_OFF_AIM_X_MOD),
-        LIGHT_ROW_AIM_Y => Some(LIGHT_OFF_AIM_X_MOD + 1),
-        LIGHT_ROW_AIM_Z => Some(LIGHT_OFF_AIM_X_MOD + 2),
-        LIGHT_ROW_CAST_SHADOWS => Some(LIGHT_OFF_CAST_SHADOWS_MOD),
-        LIGHT_ROW_SHADOW_SOFTNESS => Some(LIGHT_OFF_SHADOW_SOFTNESS_MOD),
-        LIGHT_ROW_LIGHT_SIZE => Some(LIGHT_OFF_LIGHT_SIZE_MOD),
-        _ => None,
-    }
-}
 
-/// Camera-section dynamic keys (P3). The Camera section holds exactly one
-/// row set per scene (unlike Objects/Lights), so — unlike `obj_key`/
-/// `light_key` — no per-index stride is needed; each possible field across
-/// all three camera-atom shapes gets its own fixed offset (only the ones the
-/// current `CameraRowVm` variant populates are ever built in a given frame).
-const CAMERA_KEY_BASE: u64 = 86_000;
-// UX-P3b-i: mod-button keys, one per exposable camera field — offsets
-// 39..55 (well clear of the highest value offset in use,
-// `CAMERA_OFF_LENS_EXPOSURE_MINUS + 2 == 38`). Camera has no per-index
-// stride (exactly one row set per scene), so — like the value offsets
-// above — each field gets its own fixed offset rather than a formula.
-const CAMERA_OFF_ORBIT_MOD: u64 = 39;
-const CAMERA_OFF_TILT_MOD: u64 = 40;
-const CAMERA_OFF_DISTANCE_MOD: u64 = 41;
-const CAMERA_OFF_FOV_MOD: u64 = 42;
-const CAMERA_OFF_POS_X_MOD: u64 = 43;
-const CAMERA_OFF_YAW_MOD: u64 = 46;
-const CAMERA_OFF_PITCH_MOD: u64 = 47;
-const CAMERA_OFF_ROLL_MOD: u64 = 48;
-const CAMERA_OFF_TARGET_X_MOD: u64 = 49;
-const CAMERA_OFF_LENS_FOCUS_MOD: u64 = 52;
-const CAMERA_OFF_LENS_FSTOP_MOD: u64 = 53;
-const CAMERA_OFF_LENS_SHUTTER_MOD: u64 = 54;
-const CAMERA_OFF_LENS_EXPOSURE_MOD: u64 = 55;
 
 /// D6's curated "Add modifier" vocabulary: `(display name, type_id)`, in the
 /// design's own order. Plain string literals — no `manifold-renderer`
@@ -320,16 +208,6 @@ const MODIFIER_ROW_STRIDE: u64 = 20;
 const MODIFIER_OFF_UP: u64 = 0;
 const MODIFIER_OFF_DOWN: u64 = 1;
 const MODIFIER_OFF_REMOVE: u64 = 2;
-/// UX-P3b-i: one mod-button offset per param slot (up to 4). C-P1d deleted
-/// the old stride-3 `[−] value [+]` stepper offsets that used to occupy
-/// 3..14 (the pre-convergence bespoke Numeric/Axis row builders — a row's
-/// own value cell, track, and steppers now key through `build_param_row`'s
-/// internal `(slot << 8)` scheme, not `modifier_row_key`)
-/// — this offset just needs to stay clear of `MODIFIER_OFF_UP`/`DOWN`/
-/// `REMOVE` (0..2) and fit under `MODIFIER_ROW_STRIDE`. Only `Numeric` param
-/// rows get a mod button (`ModifierParamRowVm::Axis` stays unexposable — a
-/// structural axis-selector switch, same reasoning as Light's Mode row).
-const MODIFIER_OFF_PARAM_MOD_BASE: u64 = 15;
 /// Reserved sub-range within the per-object budget for the "+ Add Modifier"
 /// button (UX-P2 D6: one control now, was 7 chips) — well clear of any real
 /// modifier stack (never more than a handful of rows).
@@ -374,17 +252,6 @@ const fn modifier_param_row_automation_name(param_slot: usize) -> Option<&'stati
     }
 }
 
-/// UX-P3b-i: stable automation name for a modifier param row's mod button,
-/// by param slot — same convention as `modifier_param_row_automation_name`.
-const fn modifier_param_mod_automation_name(param_slot: usize) -> Option<&'static str> {
-    match param_slot {
-        0 => Some("scene_setup.mod.modifier_param0"),
-        1 => Some("scene_setup.mod.modifier_param1"),
-        2 => Some("scene_setup.mod.modifier_param2"),
-        3 => Some("scene_setup.mod.modifier_param3"),
-        _ => None,
-    }
-}
 
 /// C-P1d (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): stable automation name
 /// for a modifier param row's SLIDER TRACK, by param slot — the drag target
@@ -500,33 +367,6 @@ const fn camera_row_driver_btn_automation_name(slot: usize) -> Option<&'static s
     }
 }
 
-/// The exposure-lane mod-button offset for a converted Camera row, by slot —
-/// reuses the SAME `CAMERA_OFF_*_MOD` constants (and therefore the same
-/// `camera_mod_button_automation_name` strings) the old bespoke builders
-/// already published. Every camera row this phase wires is in the doc's
-/// exposable inventory — no `None` case (unlike Light's Mode/Color).
-const fn camera_row_mod_offset(slot: usize) -> u64 {
-    match slot {
-        CAM_ROW_ORBIT => CAMERA_OFF_ORBIT_MOD,
-        CAM_ROW_TILT => CAMERA_OFF_TILT_MOD,
-        CAM_ROW_DISTANCE => CAMERA_OFF_DISTANCE_MOD,
-        CAM_ROW_POS_X => CAMERA_OFF_POS_X_MOD,
-        CAM_ROW_POS_Y => CAMERA_OFF_POS_X_MOD + 1,
-        CAM_ROW_POS_Z => CAMERA_OFF_POS_X_MOD + 2,
-        CAM_ROW_YAW => CAMERA_OFF_YAW_MOD,
-        CAM_ROW_PITCH => CAMERA_OFF_PITCH_MOD,
-        CAM_ROW_ROLL => CAMERA_OFF_ROLL_MOD,
-        CAM_ROW_TARGET_X => CAMERA_OFF_TARGET_X_MOD,
-        CAM_ROW_TARGET_Y => CAMERA_OFF_TARGET_X_MOD + 1,
-        CAM_ROW_TARGET_Z => CAMERA_OFF_TARGET_X_MOD + 2,
-        CAM_ROW_FOV => CAMERA_OFF_FOV_MOD,
-        CAM_ROW_LENS_FOCUS => CAMERA_OFF_LENS_FOCUS_MOD,
-        CAM_ROW_LENS_FSTOP => CAMERA_OFF_LENS_FSTOP_MOD,
-        CAM_ROW_LENS_SHUTTER => CAMERA_OFF_LENS_SHUTTER_MOD,
-        CAM_ROW_LENS_EXPOSURE => CAMERA_OFF_LENS_EXPOSURE_MOD,
-        _ => CAMERA_OFF_LENS_EXPOSURE_MOD, // unreachable — every slot listed above
-    }
-}
 
 /// `is_angle` for a Camera row, by slot (D10's committed degrees-display
 /// table: orbit/tilt/yaw/pitch/roll/fov_y).
@@ -534,42 +374,7 @@ const fn camera_row_is_angle(slot: usize) -> bool {
     matches!(slot, CAM_ROW_ORBIT | CAM_ROW_TILT | CAM_ROW_YAW | CAM_ROW_PITCH | CAM_ROW_ROLL | CAM_ROW_FOV)
 }
 
-/// UX-P3b-i: stable automation name for one exposable CAMERA row's mod
-/// button — same convention as `mod_button_automation_name`/
-/// `light_mod_button_automation_name`. `axis` disambiguates a triplet cell
-/// (Position/Target); numeric rows always pass `0`.
-const fn camera_mod_button_automation_name(base_offset: u64, axis: usize) -> Option<&'static str> {
-    match (base_offset, axis) {
-        (CAMERA_OFF_ORBIT_MOD, 0) => Some("scene_setup.mod.camera_orbit"),
-        (CAMERA_OFF_TILT_MOD, 0) => Some("scene_setup.mod.camera_tilt"),
-        (CAMERA_OFF_DISTANCE_MOD, 0) => Some("scene_setup.mod.camera_distance"),
-        (CAMERA_OFF_FOV_MOD, 0) => Some("scene_setup.mod.camera_fov_y"),
-        (CAMERA_OFF_POS_X_MOD, 0) => Some("scene_setup.mod.camera_pos_x"),
-        (CAMERA_OFF_POS_X_MOD, 1) => Some("scene_setup.mod.camera_pos_y"),
-        (CAMERA_OFF_POS_X_MOD, 2) => Some("scene_setup.mod.camera_pos_z"),
-        (CAMERA_OFF_YAW_MOD, 0) => Some("scene_setup.mod.camera_yaw"),
-        (CAMERA_OFF_PITCH_MOD, 0) => Some("scene_setup.mod.camera_pitch"),
-        (CAMERA_OFF_ROLL_MOD, 0) => Some("scene_setup.mod.camera_roll"),
-        (CAMERA_OFF_TARGET_X_MOD, 0) => Some("scene_setup.mod.camera_target_x"),
-        (CAMERA_OFF_TARGET_X_MOD, 1) => Some("scene_setup.mod.camera_target_y"),
-        (CAMERA_OFF_TARGET_X_MOD, 2) => Some("scene_setup.mod.camera_target_z"),
-        (CAMERA_OFF_LENS_FOCUS_MOD, 0) => Some("scene_setup.mod.camera_lens_focus_distance"),
-        (CAMERA_OFF_LENS_FSTOP_MOD, 0) => Some("scene_setup.mod.camera_lens_f_stop"),
-        (CAMERA_OFF_LENS_SHUTTER_MOD, 0) => Some("scene_setup.mod.camera_lens_shutter_angle"),
-        (CAMERA_OFF_LENS_EXPOSURE_MOD, 0) => Some("scene_setup.mod.camera_lens_exposure_ev"),
-        _ => None,
-    }
-}
 
-/// Per-row control key stride — headroom for the exposure-button key below.
-const KEY_ROW_BASE: u64 = 81_000;
-const KEY_ROW_STRIDE: u64 = 8;
-/// UX-P3a mod-button key for a fixed Environment/Fog row.
-const ROW_OFF_MOD: u64 = 3;
-
-const fn row_key(row: u64, offset: u64) -> u64 {
-    KEY_ROW_BASE + row * KEY_ROW_STRIDE + offset
-}
 // C-P1a (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): `SceneCardState`'s FIXED
 // slot indices for the four Environment/Fog rows — stable across rebuilds
 // regardless of which optional rows are present (see `SceneCardState`'s doc
@@ -595,17 +400,6 @@ const fn world_row_automation_name(slot: usize) -> Option<&'static str> {
     }
 }
 
-/// Stable automation name for one of the four fixed rows' exposure ("∿")
-/// button — same set `world_row_automation_name` covers for the value cell.
-const fn world_row_mod_automation_name(slot: usize) -> Option<&'static str> {
-    match slot {
-        WORLD_ENV_INTENSITY => Some("scene_setup.mod.env_intensity"),
-        WORLD_ENV_FILL => Some("scene_setup.mod.env_fill"),
-        WORLD_FOG_DENSITY => Some("scene_setup.mod.fog_density"),
-        WORLD_FOG_HEIGHT_FALLOFF => Some("scene_setup.mod.fog_height_falloff"),
-        _ => None,
-    }
-}
 
 /// C-P1a: stable automation name for one of the four fixed rows' SLIDER
 /// TRACK — the real card drag target (`build_param_row`'s `BitmapSlider`),
@@ -735,31 +529,6 @@ const fn object_row_driver_btn_automation_name(slot: usize) -> Option<&'static s
     }
 }
 
-/// The exposure-lane mod-button offset for a converted Object row, by slot —
-/// reuses the SAME `OBJ_OFF_*_MOD` constants (and therefore the same
-/// `mod_button_automation_name` strings) the old bespoke builders already
-/// published, so the exposure mechanism (P3a, unchanged by this design) and
-/// its flow-script selectors keep resolving unchanged. `None` for Color
-/// (the old bespoke `build_color_row` never wired an exposure button onto
-/// its per-channel cells either — `mod_button_automation_name`'s own doc
-/// comment: "`None` for a row this phase doesn't wire a button onto (Color's
-/// per-channel cells)" — preserved as-is, not a new gap this phase opens).
-const fn object_row_mod_offset(slot: usize) -> Option<u64> {
-    match slot {
-        OBJ_ROW_POS_X => Some(OBJ_OFF_POS_X_MOD),
-        OBJ_ROW_POS_Y => Some(OBJ_OFF_POS_X_MOD + 1),
-        OBJ_ROW_POS_Z => Some(OBJ_OFF_POS_X_MOD + 2),
-        OBJ_ROW_ROT_X => Some(OBJ_OFF_ROT_X_MOD),
-        OBJ_ROW_ROT_Y => Some(OBJ_OFF_ROT_X_MOD + 1),
-        OBJ_ROW_ROT_Z => Some(OBJ_OFF_ROT_X_MOD + 2),
-        OBJ_ROW_SCALE_X => Some(OBJ_OFF_SCALE_X_MOD),
-        OBJ_ROW_SCALE_Y => Some(OBJ_OFF_SCALE_X_MOD + 1),
-        OBJ_ROW_SCALE_Z => Some(OBJ_OFF_SCALE_X_MOD + 2),
-        OBJ_ROW_METALLIC => Some(OBJ_OFF_METALLIC_MOD),
-        OBJ_ROW_ROUGHNESS => Some(OBJ_OFF_ROUGHNESS_MOD),
-        _ => None,
-    }
-}
 
 const PANEL_W_MIN: f32 = 320.0;
 const TITLE_H: f32 = 26.0;
@@ -777,12 +546,6 @@ const LABEL_W: f32 = 130.0;
 /// a color chip, not a checkbox." The hairline border already existed
 /// (`border_width: 1.0` in `build_color_row`); only the size needed fixing.
 const SWATCH_W: f32 = 20.0;
-/// UX-P3a: the mod-button widget's fixed width, reserved out of every
-/// exposable row's usable width (same "reserved slot" convention as the
-/// outliner's `EyeSlot`). Square, `ROW_H` tall.
-const MOD_BTN_W: f32 = 18.0;
-/// Gap between a row's numeric controls and its mod button.
-const MOD_BTN_GAP: f32 = 3.0;
 
 /// A single editable node-param address: the exact `(scope_path,
 /// node_doc_id, param_id)` triple `SetGraphNodeParamCommand::with_scope`
@@ -1219,35 +982,6 @@ impl Default for SceneSetupState {
     }
 }
 
-/// UX-P3a click-time context for one row's mod button: everything
-/// `PanelAction::SceneSetupExposeParam` needs to build the
-/// `ToggleNodeParamExposeCommand` that exposes this inner param onto the
-/// layer's generator card, named `<ObjectName> · <ParamLabel>` (D8).
-/// `object_label`/`param_label` are the panel's OWN row-label strings
-/// (e.g. "Azalea" / "Roughness"), captured at build time — this crate can't
-/// depend on `manifold-renderer`'s `ParamDef`, same DTO-boundary convention
-/// every other transcribed label in this file already follows.
-#[derive(Clone, Debug)]
-struct ModExposeCtx {
-    addr: RowAddr,
-    object_label: String,
-    param_label: String,
-    min: f32,
-    max: f32,
-    /// The row's live value at click time — used as the appended card
-    /// binding's `default_value`. Not the primitive's TRUE declared
-    /// default (this crate has no registry access to look that up); "expose
-    /// at its current value" is the honest, defensible reading of a
-    /// first-click expose, and `default_value` is display/reset-only
-    /// downstream (never read by the modulation/automation write path).
-    value: f32,
-    /// `true` for the three `transform_3d.rot_*` params — the ONLY scene
-    /// rows stored in radians but shown in degrees (`is_degrees_param`).
-    /// Flows onto the appended binding's `is_angle` so the card slider
-    /// keeps the same degrees presentation the panel itself uses.
-    is_angle: bool,
-}
-
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a: the panel's card-shaped row
 /// state for a converted family — D2's synthesized-id map, D3's per-row
 /// modulation bookkeeping (the same node-id vectors `ParamCardPanel` keeps,
@@ -1304,6 +1038,11 @@ struct SceneCardState {
     /// falling into `with_preset_graph_mut`.
     id_map: ahash::AHashMap<manifold_foundation::ParamId, (RowAddr, f32)>,
     slider_ids: Vec<Option<crate::slider::SliderNodeIds>>,
+    /// Fixed-slot twin of `slider_ids`: the main slider's right-click reset
+    /// (`build_param_row`'s `slider_reset`), replayed into node-intent
+    /// dispatch by [`SceneCardState::register_intents`] — the same
+    /// track+RightClick→reset contract every other slider in the app has.
+    slider_resets: Vec<Option<PanelAction>>,
     /// Fixed-slot twin of `slider_ids` for DRIVEN rows: the read-only value
     /// label's sync handle. Exactly one of `slider_ids[slot]` /
     /// `driven_value_ids[slot]` is `Some` for a built row; both `None` for an
@@ -1340,6 +1079,7 @@ impl SceneCardState {
             mod_state: ParamModState::allocate(0),
             id_map: ahash::AHashMap::new(),
             slider_ids: Vec::new(),
+            slider_resets: Vec::new(),
             driven_value_ids: Vec::new(),
             row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
@@ -1375,6 +1115,7 @@ impl SceneCardState {
         self.param_info.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.slider_ids.resize(n, None);
+        self.slider_resets.resize_with(n, || None);
         self.driven_value_ids.resize_with(n, || None);
         self.row_catcher_ids.resize(n, None);
         self.driver_btn_ids.resize(n, None);
@@ -1397,8 +1138,71 @@ impl SceneCardState {
         self.id_map.clear();
     }
 
+    /// Whether `node_id` is an enum (`value_labels`) row's value-text cell
+    /// on this card — single click cycles/opens the dropdown (BUG-250), so
+    /// double-click must NOT open the numeric type-in on the same cell.
+    fn is_enum_value_cell(&self, node_id: NodeId) -> bool {
+        self.slider_ids.iter().enumerate().any(|(pi, s)| {
+            s.as_ref().is_some_and(|ids| ids.value_text == node_id)
+                && self
+                    .param_info
+                    .get(pi)
+                    .and_then(|p| p.value_labels.as_ref())
+                    .is_some()
+        })
+    }
+
     fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
         self.param_info[i].param_id.clone()
+    }
+
+    /// Replay every materialised slider's `Track + RightClick → reset` intent
+    /// — main rows plus the armed drawers' sliders (envelope Decay, audio
+    /// Amount/Attack/Release). Mirrors `ParamCardPanel::register_intents`'s
+    /// three loops; before this the scene cards built resets in
+    /// `build_param_row` and silently dropped them (right-click reset dead on
+    /// every scene row).
+    fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::slider::BitmapSlider;
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            if let (Some(ids), Some(reset)) =
+                (slider, self.slider_resets.get(pi).and_then(|r| r.as_ref()))
+            {
+                BitmapSlider::register_track_reset(ids, reset, intents);
+            }
+        }
+        for cfg in self.envelope_config_ids.iter().flatten() {
+            BitmapSlider::register_track_reset(&cfg.decay_slider, &cfg.decay_reset, intents);
+        }
+        for (dids, _) in self.audio_configs.iter().flatten() {
+            for (sl, reset) in dids.sliders.iter().zip(dids.slider_resets.iter()) {
+                BitmapSlider::register_track_reset(sl, reset, intents);
+            }
+        }
+    }
+
+    /// BUG-250: map a [`RowClick::EnumValueCell`] hit to the shared
+    /// cycle-or-dropdown action set (`enum_value_cell_actions`), targeting
+    /// the layer's generator like every other scene-row card action. The
+    /// current value comes from this pass's `id_map` snapshot (D1: rebuilt
+    /// every build, never stale); the cell node id anchors the dropdown
+    /// under the row's own value text.
+    fn enum_value_cell_action(&self, i: usize, clicked: NodeId) -> Vec<PanelAction> {
+        let info = &self.param_info[i];
+        let labels = info.value_labels.clone().unwrap_or_default();
+        let pid = self.pid_at(i);
+        let value = self
+            .id_map
+            .get(&pid)
+            .map(|(_, v)| *v)
+            .unwrap_or(info.default);
+        let cell = self
+            .slider_ids
+            .get(i)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.value_text)
+            .unwrap_or(clicked);
+        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.min, cell)
     }
 
     fn focus_mod_tab(&mut self, i: usize, tab: ModTab) {
@@ -1604,16 +1408,6 @@ pub struct ScenePanel {
     /// an unrelated `configure`, per D1 "no staleness": the drag itself
     /// still targets the layer it started on).
     drag_layer_id: Option<LayerId>,
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md): every LIVE (non-driven) mod-button
-    /// node built this frame, paired with the click-time context
-    /// `ToggleNodeParamExposeCommand` needs. One vector across every row
-    /// family (numeric/triplet/slider) — the button's meaning is uniform
-    /// regardless of which builder drew it, so one lookup covers all of
-    /// them (same "one vector, one click arm" shape as `object_value_cells`
-    /// et al.). A driven row's button is drawn dimmed and NOT pushed here
-    /// (EyeSlot's Live/Dimmed convention) — it reads as present but inert,
-    /// never absent (`feedback_no_conditionally_visible_ui`).
-    mod_button_ids: Vec<(NodeId, ModExposeCtx)>,
 }
 
 impl Default for ScenePanel {
@@ -1652,7 +1446,6 @@ impl Default for ScenePanel {
             light_name_ids: Vec::new(),
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             drag_layer_id: None,
-            mod_button_ids: Vec::new(),
         }
     }
 }
@@ -1664,6 +1457,26 @@ impl ScenePanel {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Node-intent dispatch for this panel's right-click gestures: every
+    /// card family's slider resets (main rows + armed drawers). Called from
+    /// `UIRoot::repopulate_intents` like every other intent-bearing panel —
+    /// the missing hookup was why scene-panel sliders had no right-click
+    /// reset while every other slider in the app did.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        if !self.open || !matches!(self.state, SceneSetupState::Live(_)) {
+            return;
+        }
+        for card in [
+            &self.world_card,
+            &self.object_card,
+            &self.light_card,
+            &self.camera_card,
+            &self.modifier_card,
+        ] {
+            card.register_intents(intents);
+        }
     }
 
     pub fn open(&mut self) {
@@ -1829,7 +1642,6 @@ impl ScenePanel {
         self.add_modifier_button_id = None;
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
-        self.mod_button_ids.clear();
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
         let content_top = y + PAD + TITLE_H;
@@ -2331,7 +2143,6 @@ impl ScenePanel {
         row: &ObjectKnownRow,
     ) -> f32 {
         let index = row.index;
-        let obj_label = row.name.to_string();
         // C-P1b: `object_card` regrows to its full fixed slot count every
         // time an Object's Properties body builds — mirrors
         // `build_world_properties`'s `self.world_card.resize(WORLD_ROW_COUNT)`.
@@ -2343,24 +2154,24 @@ impl ScenePanel {
         // established.
         self.object_card.resize(OBJ_ROW_COUNT);
         if let Some(t) = &row.transform {
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position X", &t.pos.0, OBJ_ROW_POS_X, "pos_x", index, &obj_label, false);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Y", &t.pos.1, OBJ_ROW_POS_Y, "pos_y", index, &obj_label, false);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Z", &t.pos.2, OBJ_ROW_POS_Z, "pos_z", index, &obj_label, false);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation X", &t.rot.0, OBJ_ROW_ROT_X, "rot_x", index, &obj_label, true);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Y", &t.rot.1, OBJ_ROW_ROT_Y, "rot_y", index, &obj_label, true);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Z", &t.rot.2, OBJ_ROW_ROT_Z, "rot_z", index, &obj_label, true);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale X", &t.scale.0, OBJ_ROW_SCALE_X, "scale_x", index, &obj_label, false);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Y", &t.scale.1, OBJ_ROW_SCALE_Y, "scale_y", index, &obj_label, false);
-            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Z", &t.scale.2, OBJ_ROW_SCALE_Z, "scale_z", index, &obj_label, false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position X", &t.pos.0, OBJ_ROW_POS_X, "pos_x", false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Y", &t.pos.1, OBJ_ROW_POS_Y, "pos_y", false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Position Z", &t.pos.2, OBJ_ROW_POS_Z, "pos_z", false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation X", &t.rot.0, OBJ_ROW_ROT_X, "rot_x", true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Y", &t.rot.1, OBJ_ROW_ROT_Y, "rot_y", true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Rotation Z", &t.rot.2, OBJ_ROW_ROT_Z, "rot_z", true);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale X", &t.scale.0, OBJ_ROW_SCALE_X, "scale_x", false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Y", &t.scale.1, OBJ_ROW_SCALE_Y, "scale_y", false);
+            cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Scale Z", &t.scale.2, OBJ_ROW_SCALE_Z, "scale_z", false);
         }
         match &row.material {
             ObjectMaterialVm::Pbr { color, metallic, roughness } => {
-                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color, index);
-                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Metallic", metallic, OBJ_ROW_METALLIC, "metallic", index, &obj_label, false);
-                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Roughness", roughness, OBJ_ROW_ROUGHNESS, "roughness", index, &obj_label, false);
+                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color);
+                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Metallic", metallic, OBJ_ROW_METALLIC, "metallic", false);
+                cy = self.build_object_card_row(tree, inner_x, inner_w, cy, "Roughness", roughness, OBJ_ROW_ROUGHNESS, "roughness", false);
             }
             ObjectMaterialVm::Other { color } => {
-                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color, index);
+                cy = self.build_object_color_rows(tree, inner_x, inner_w, cy, color);
             }
             ObjectMaterialVm::None => {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No material", label_style());
@@ -2388,7 +2199,6 @@ impl ScenePanel {
                     row.group_node_id.unwrap_or(row.object_node_id),
                     m,
                     row.modifiers.len(),
-                    &obj_label,
                     &mut slot,
                 );
             }
@@ -2462,50 +2272,48 @@ impl ScenePanel {
         mut cy: f32,
         row: &LightKnownRow,
     ) -> f32 {
-        let index = row.index;
-        let light_label = row.name.as_str();
         self.light_card.resize(LIGHT_ROW_COUNT);
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Mode", &row.mode.row, LIGHT_ROW_MODE, "mode", index, light_label,
+            tree, inner_x, inner_w, cy, "Mode", &row.mode.row, LIGHT_ROW_MODE, "mode",
             Some(&row.mode.labels),
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Color R", &row.color.0, LIGHT_ROW_COLOR_R, "color_r", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Color R", &row.color.0, LIGHT_ROW_COLOR_R, "color_r", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Color G", &row.color.1, LIGHT_ROW_COLOR_G, "color_g", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Color G", &row.color.1, LIGHT_ROW_COLOR_G, "color_g", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Color B", &row.color.2, LIGHT_ROW_COLOR_B, "color_b", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Color B", &row.color.2, LIGHT_ROW_COLOR_B, "color_b", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Intensity", &row.intensity, LIGHT_ROW_INTENSITY, "intensity", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Intensity", &row.intensity, LIGHT_ROW_INTENSITY, "intensity", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Position X", &row.pos.0, LIGHT_ROW_POS_X, "pos_x", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Position X", &row.pos.0, LIGHT_ROW_POS_X, "pos_x", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Position Y", &row.pos.1, LIGHT_ROW_POS_Y, "pos_y", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Position Y", &row.pos.1, LIGHT_ROW_POS_Y, "pos_y", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Position Z", &row.pos.2, LIGHT_ROW_POS_Z, "pos_z", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Position Z", &row.pos.2, LIGHT_ROW_POS_Z, "pos_z", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Aim X", &row.aim.0, LIGHT_ROW_AIM_X, "aim_x", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Aim X", &row.aim.0, LIGHT_ROW_AIM_X, "aim_x", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Aim Y", &row.aim.1, LIGHT_ROW_AIM_Y, "aim_y", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Aim Y", &row.aim.1, LIGHT_ROW_AIM_Y, "aim_y", None,
         );
         cy = self.build_light_card_row(
-            tree, inner_x, inner_w, cy, "Aim Z", &row.aim.2, LIGHT_ROW_AIM_Z, "aim_z", index, light_label, None,
+            tree, inner_x, inner_w, cy, "Aim Z", &row.aim.2, LIGHT_ROW_AIM_Z, "aim_z", None,
         );
         cy = self.build_light_card_row(
             tree, inner_x, inner_w, cy, "Cast Shadows", &row.cast_shadows.row, LIGHT_ROW_CAST_SHADOWS, "cast_shadows",
-            index, light_label, Some(&row.cast_shadows.labels),
+            Some(&row.cast_shadows.labels),
         );
         cy = self.build_light_card_row(
             tree, inner_x, inner_w, cy, "Shadow Softness", &row.shadow_softness.row, LIGHT_ROW_SHADOW_SOFTNESS,
-            "shadow_softness", index, light_label, Some(&row.shadow_softness.labels),
+            "shadow_softness", Some(&row.shadow_softness.labels),
         );
         cy = self.build_light_card_row(
             tree,
@@ -2516,8 +2324,6 @@ impl ScenePanel {
             &row.light_size,
             LIGHT_ROW_LIGHT_SIZE,
             "light_size",
-            index,
-            light_label,
             None,
         );
         cy + ROW_GAP
@@ -2661,12 +2467,7 @@ impl ScenePanel {
         slot: usize,
         param_key: &str,
     ) -> f32 {
-        // The exposure "∿" button keeps its own reserved lane at the row's
-        // right edge, same convention every other row family still uses —
-        // it's panel-shaped chrome (D1: the exposure MECHANISM survives
-        // unchanged), not a card widget.
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let usable_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
+        let usable_w = inner_w;
 
         if row.value.driven {
             // Driven rows stay read-only (D4 of SCENE_PANEL_UX_DESIGN.md) —
@@ -2689,11 +2490,6 @@ impl ScenePanel {
             self.world_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.world_card.param_info[slot] = placeholder_param_info();
-            self.build_expose_button(
-                tree, mod_x, cy, &row.value, "World", label, false,
-                row_key(slot as u64, ROW_OFF_MOD),
-                world_row_mod_automation_name(slot),
-            );
             return cy + ROW_H;
         }
 
@@ -2722,7 +2518,7 @@ impl ScenePanel {
         self.world_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_world_modulation(slot, &row.modulation);
 
-        let content_w = usable_w - MOD_BTN_W - MOD_BTN_GAP;
+        let content_w = usable_w;
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
         let built = build_param_row(
             tree,
@@ -2754,6 +2550,7 @@ impl ScenePanel {
         self.world_card.audio_configs[slot] = built.audio_config;
         self.world_card.mod_tab_ids[slot] = built.mod_tabs;
         self.world_card.slider_ids[slot] = built.slider;
+        self.world_card.slider_resets[slot] = Some(built.slider_reset.clone());
         self.world_card.driven_value_ids[slot] = None;
         if let Some(name) = world_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
@@ -2768,14 +2565,6 @@ impl ScenePanel {
                 tree.set_name(ids.track, name);
             }
         }
-
-        // Same reserved exposure-button lane every row family draws — sits
-        // past the card's own D/E/A buttons, at the row's far right edge.
-        self.build_expose_button(
-            tree, mod_x, cy, &row.value, "World", label, false,
-            row_key(slot as u64, ROW_OFF_MOD),
-            world_row_mod_automation_name(slot),
-        );
 
         built.new_cy
     }
@@ -2845,13 +2634,9 @@ impl ScenePanel {
         row: &ModulatedRow,
         slot: usize,
         param_key: &str,
-        index: usize,
-        object_label: &str,
         is_angle: bool,
     ) -> f32 {
-        let mod_offset = object_row_mod_offset(slot);
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let usable_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
+        let usable_w = inner_w;
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
@@ -2869,13 +2654,6 @@ impl ScenePanel {
             self.object_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.object_card.param_info[slot] = placeholder_param_info();
-            if let Some(offset) = mod_offset {
-                self.build_expose_button(
-                    tree, mod_x, cy, &row.value, object_label, label, is_angle,
-                    obj_key(index, offset),
-                    mod_button_automation_name(offset),
-                );
-            }
             return cy + ROW_H;
         }
 
@@ -2904,7 +2682,7 @@ impl ScenePanel {
         self.object_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_object_modulation(slot, &row.modulation);
 
-        let content_w = if mod_offset.is_some() { usable_w - MOD_BTN_W - MOD_BTN_GAP } else { usable_w };
+        let content_w = usable_w;
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
         let built = build_param_row(
             tree,
@@ -2936,6 +2714,7 @@ impl ScenePanel {
         self.object_card.audio_configs[slot] = built.audio_config;
         self.object_card.mod_tab_ids[slot] = built.mod_tabs;
         self.object_card.slider_ids[slot] = built.slider;
+        self.object_card.slider_resets[slot] = Some(built.slider_reset.clone());
         self.object_card.driven_value_ids[slot] = None;
         if let Some(name) = object_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
@@ -2951,21 +2730,12 @@ impl ScenePanel {
             }
         }
 
-        if let Some(offset) = mod_offset {
-            self.build_expose_button(
-                tree, mod_x, cy, &row.value, object_label, label, is_angle,
-                obj_key(index, offset),
-                mod_button_automation_name(offset),
-            );
-        }
-
         built.new_cy
     }
 
     /// C-P1b: the Color row — a live square swatch (unchanged from the old
     /// `build_color_row`'s D4 rendering — display-only, no picker) left of
-    /// three card rows, one per channel (no exposure button on any of the
-    /// three — see `object_row_mod_offset`'s doc comment).
+    /// three card rows, one per channel.
     fn build_object_color_rows(
         &mut self,
         tree: &mut UITree,
@@ -2973,7 +2743,6 @@ impl ScenePanel {
         inner_w: f32,
         cy: f32,
         triplet: &(ModulatedRow, ModulatedRow, ModulatedRow),
-        index: usize,
     ) -> f32 {
         let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let swatch_color =
@@ -2994,10 +2763,9 @@ impl ScenePanel {
         );
         let row_x = inner_x + SWATCH_W + ROW_GAP;
         let row_w = inner_w - SWATCH_W - ROW_GAP;
-        let object_label = ""; // never used — Color never wires a mod button.
-        let mut cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color R", &triplet.0, OBJ_ROW_COLOR_R, "color_r", index, object_label, false);
-        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color G", &triplet.1, OBJ_ROW_COLOR_G, "color_g", index, object_label, false);
-        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color B", &triplet.2, OBJ_ROW_COLOR_B, "color_b", index, object_label, false);
+        let mut cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color R", &triplet.0, OBJ_ROW_COLOR_R, "color_r", false);
+        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color G", &triplet.1, OBJ_ROW_COLOR_G, "color_g", false);
+        cy = self.build_object_card_row(tree, row_x, row_w, cy, "Color B", &triplet.2, OBJ_ROW_COLOR_B, "color_b", false);
         cy
     }
 
@@ -3042,61 +2810,6 @@ impl ScenePanel {
             .unwrap_or(-1);
     }
 
-    /// UX-P3a (D8/D9 of SCENE_PANEL_UX_DESIGN.md, sizing amendment): the
-    /// expose-to-card button for one exposable row — EVERY converted
-    /// family's own affordance (World/Object/Light/Camera/Modifier), not a
-    /// bespoke per-family widget (C-P1d renamed this function to drop its
-    /// old pre-convergence "mod button" name — same behavior, a name that no
-    /// longer implies a separate dialect now that every family rides it). Draws
-    /// at the row's reserved right-edge slot (`MOD_BTN_W`). A driven row
-    /// gets the dimmed, non-interactive variant and is NOT pushed into
-    /// `mod_button_ids` (EyeSlot's Live/Dimmed convention — the slot is
-    /// always drawn, never absent). `object_label`/`param_label` feed the
-    /// exposure's card name (`<ObjectName> · <ParamLabel>`, D8) — the
-    /// panel's own row-label strings, not re-derived from the primitive
-    /// registry.
-    #[allow(clippy::too_many_arguments)]
-    fn build_expose_button(
-        &mut self,
-        tree: &mut UITree,
-        x: f32,
-        cy: f32,
-        row: &RowValue,
-        object_label: &str,
-        param_label: &str,
-        is_angle: bool,
-        key: u64,
-        automation_name: Option<&'static str>,
-    ) {
-        let id = tree.add_button_keyed(
-            Some(self.content_parent),
-            x,
-            cy,
-            MOD_BTN_W,
-            ROW_H,
-            mod_btn_style(row.exposed && !row.driven),
-            "\u{223F}",
-            key,
-        );
-        if let Some(name) = automation_name {
-            tree.set_name(id, name);
-        }
-        if !row.driven {
-            self.mod_button_ids.push((
-                id,
-                ModExposeCtx {
-                    addr: row.addr.clone(),
-                    object_label: object_label.to_string(),
-                    param_label: param_label.to_string(),
-                    min: row.min,
-                    max: row.max,
-                    value: row.value,
-                    is_angle,
-                },
-            ));
-        }
-    }
-
     /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): one Light row, built
     /// through the shared card row core — the Light-family twin of
     /// `build_object_card_row`, generalized with `labels: Option<&[&str]>`
@@ -3119,13 +2832,9 @@ impl ScenePanel {
         row: &ModulatedRow,
         slot: usize,
         param_key: &str,
-        index: usize,
-        light_label: &str,
         labels: Option<&[&'static str]>,
     ) -> f32 {
-        let mod_offset = light_row_mod_offset(slot);
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let usable_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
+        let usable_w = inner_w;
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
@@ -3146,13 +2855,6 @@ impl ScenePanel {
             self.light_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.light_card.param_info[slot] = placeholder_param_info();
-            if let Some(offset) = mod_offset {
-                self.build_expose_button(
-                    tree, mod_x, cy, &row.value, light_label, label, false,
-                    light_key(index, offset),
-                    light_mod_button_automation_name(offset, 0),
-                );
-            }
             return cy + ROW_H;
         }
 
@@ -3181,7 +2883,7 @@ impl ScenePanel {
         self.light_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_light_modulation(slot, &row.modulation);
 
-        let content_w = if mod_offset.is_some() { usable_w - MOD_BTN_W - MOD_BTN_GAP } else { usable_w };
+        let content_w = usable_w;
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
         let built = build_param_row(
             tree,
@@ -3213,6 +2915,7 @@ impl ScenePanel {
         self.light_card.audio_configs[slot] = built.audio_config;
         self.light_card.mod_tab_ids[slot] = built.mod_tabs;
         self.light_card.slider_ids[slot] = built.slider;
+        self.light_card.slider_resets[slot] = Some(built.slider_reset.clone());
         self.light_card.driven_value_ids[slot] = None;
         if let Some(name) = light_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
@@ -3226,14 +2929,6 @@ impl ScenePanel {
             if let Some(name) = light_row_track_automation_name(slot) {
                 tree.set_name(ids.track, name);
             }
-        }
-
-        if let Some(offset) = mod_offset {
-            self.build_expose_button(
-                tree, mod_x, cy, &row.value, light_label, label, false,
-                light_key(index, offset),
-                light_mod_button_automation_name(offset, 0),
-            );
         }
 
         built.new_cy
@@ -3373,9 +3068,7 @@ impl ScenePanel {
         param_key: &str,
     ) -> f32 {
         let is_angle = camera_row_is_angle(slot);
-        let mod_offset = camera_row_mod_offset(slot);
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let usable_w = inner_w - MOD_BTN_W - MOD_BTN_GAP;
+        let usable_w = inner_w;
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
@@ -3393,11 +3086,6 @@ impl ScenePanel {
             self.camera_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.camera_card.param_info[slot] = placeholder_param_info();
-            self.build_expose_button(
-                tree, mod_x, cy, &row.value, "Camera", label, is_angle,
-                CAMERA_KEY_BASE + mod_offset,
-                camera_mod_button_automation_name(mod_offset, 0),
-            );
             return cy + ROW_H;
         }
 
@@ -3426,7 +3114,7 @@ impl ScenePanel {
         self.camera_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_camera_modulation(slot, &row.modulation);
 
-        let content_w = usable_w - MOD_BTN_W - MOD_BTN_GAP;
+        let content_w = usable_w;
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
         let built = build_param_row(
             tree,
@@ -3458,6 +3146,7 @@ impl ScenePanel {
         self.camera_card.audio_configs[slot] = built.audio_config;
         self.camera_card.mod_tab_ids[slot] = built.mod_tabs;
         self.camera_card.slider_ids[slot] = built.slider;
+        self.camera_card.slider_resets[slot] = Some(built.slider_reset.clone());
         self.camera_card.driven_value_ids[slot] = None;
         if let Some(name) = camera_row_driver_btn_automation_name(slot) {
             tree.set_name(built.driver_btn, name);
@@ -3472,12 +3161,6 @@ impl ScenePanel {
                 tree.set_name(ids.track, name);
             }
         }
-
-        self.build_expose_button(
-            tree, mod_x, cy, &row.value, "Camera", label, is_angle,
-            CAMERA_KEY_BASE + mod_offset,
-            camera_mod_button_automation_name(mod_offset, 0),
-        );
 
         built.new_cy
     }
@@ -3536,12 +3219,7 @@ impl ScenePanel {
     /// selected object's TOTAL modifier-param-row count for this frame and
     /// threads the same cursor across every modifier in the stack, so each
     /// param row gets its own stable-for-this-frame array slot regardless
-    /// of which modifier it belongs to. UX-P3b-i: `object_label` (the
-    /// owning object's name — modifiers live inside an object's own group,
-    /// so the mod-button's exposure card name follows the same
-    /// `<ObjectName> · <ParamLabel>` convention every other exposable row
-    /// uses, not a modifier-scoped identity) threads down to
-    /// `build_modifier_card_row`.
+    /// of which modifier it belongs to.
     #[allow(clippy::too_many_arguments)]
     fn build_modifier_row(
         &mut self,
@@ -3553,7 +3231,6 @@ impl ScenePanel {
         group_node_id: u32,
         m: &ModifierKnownRow,
         mod_count: usize,
-        object_label: &str,
         slot: &mut usize,
     ) -> f32 {
         let name_w = inner_w - STEP_W * 3.0;
@@ -3612,15 +3289,13 @@ impl ScenePanel {
                 ModifierParamRowVm::Numeric { label, row } => {
                     let param_key = row.value.addr.param_id.clone();
                     self.build_modifier_card_row(
-                        tree, param_x, param_w, cy, label, row, this_slot, &param_key, param_slot,
-                        object_index, m.index, object_label, &format!("{} {label}", m.display_name), None,
+                        tree, param_x, param_w, cy, label, row, this_slot, &param_key, param_slot, None,
                     )
                 }
                 ModifierParamRowVm::Axis { label, row } => {
                     let param_key = row.row.value.addr.param_id.clone();
                     self.build_modifier_card_row(
-                        tree, param_x, param_w, cy, label, &row.row, this_slot, &param_key, param_slot,
-                        object_index, m.index, object_label, "", Some(&row.labels),
+                        tree, param_x, param_w, cy, label, &row.row, this_slot, &param_key, param_slot, Some(&row.labels),
                     )
                 }
             };
@@ -3656,15 +3331,9 @@ impl ScenePanel {
         slot: usize,
         param_key: &str,
         param_slot: usize,
-        object_index: usize,
-        modifier_index: usize,
-        object_label: &str,
-        mod_param_label: &str,
         labels: Option<&[&'static str]>,
     ) -> f32 {
-        let mod_offset = labels.is_none().then_some(MODIFIER_OFF_PARAM_MOD_BASE + param_slot as u64);
-        let mod_x = inner_x + inner_w - MOD_BTN_W;
-        let usable_w = if mod_offset.is_some() { inner_w - MOD_BTN_W - MOD_BTN_GAP } else { inner_w };
+        let usable_w = inner_w;
 
         if row.value.driven {
             tree.add_label(Some(self.content_parent), inner_x, cy, LABEL_W, ROW_H, label, label_style());
@@ -3685,13 +3354,6 @@ impl ScenePanel {
             self.modifier_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
             self.modifier_card.param_info[slot] = placeholder_param_info();
-            if let Some(offset) = mod_offset {
-                self.build_expose_button(
-                    tree, mod_x, cy, &row.value, object_label, mod_param_label, false,
-                    modifier_row_key(object_index, modifier_index, offset),
-                    modifier_param_mod_automation_name(param_slot),
-                );
-            }
             return cy + ROW_H;
         }
 
@@ -3720,7 +3382,7 @@ impl ScenePanel {
         self.modifier_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_modifier_modulation(slot, &row.modulation);
 
-        let content_w = if mod_offset.is_some() { usable_w - MOD_BTN_W - MOD_BTN_GAP } else { usable_w };
+        let content_w = usable_w;
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(content_w, false);
         let built = build_param_row(
             tree,
@@ -3761,6 +3423,7 @@ impl ScenePanel {
         self.modifier_card.audio_configs[slot] = built.audio_config;
         self.modifier_card.mod_tab_ids[slot] = built.mod_tabs;
         self.modifier_card.slider_ids[slot] = built.slider;
+        self.modifier_card.slider_resets[slot] = Some(built.slider_reset.clone());
         self.modifier_card.driven_value_ids[slot] = None;
         if let Some(name) = modifier_param_driver_btn_automation_name(param_slot) {
             tree.set_name(built.driver_btn, name);
@@ -3774,14 +3437,6 @@ impl ScenePanel {
             if let Some(name) = modifier_param_track_automation_name(param_slot) {
                 tree.set_name(ids.track, name);
             }
-        }
-
-        if let Some(offset) = mod_offset {
-            self.build_expose_button(
-                tree, mod_x, cy, &row.value, object_label, mod_param_label, false,
-                modifier_row_key(object_index, modifier_index, offset),
-                modifier_param_mod_automation_name(param_slot),
-            );
         }
 
         built.new_cy
@@ -3860,7 +3515,7 @@ impl ScenePanel {
 
     /// Mouse-wheel scroll for the docked body.
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        self.scroll.apply_scroll_delta(-delta)
+        self.scroll.apply_scroll_delta(delta)
     }
 
     /// Whether a point lands inside the panel's own rect — for the app's
@@ -4088,6 +3743,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.world_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.world_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.world_card.mod_tab_hit(*node_id) {
                         self.world_card.focus_mod_tab(pi, tab);
@@ -4150,6 +3808,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.object_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.object_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.object_card.mod_tab_hit(*node_id) {
                         self.object_card.focus_mod_tab(pi, tab);
@@ -4212,6 +3873,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.light_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.light_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.light_card.mod_tab_hit(*node_id) {
                         self.light_card.focus_mod_tab(pi, tab);
@@ -4274,6 +3938,9 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.camera_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.camera_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.camera_card.mod_tab_hit(*node_id) {
                         self.camera_card.focus_mod_tab(pi, tab);
@@ -4336,27 +4003,13 @@ impl ScenePanel {
                                 vec![PanelAction::AudioModSetWrap(target, self.modifier_card.pid_at(pi), w)]
                             }
                             RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::EnumValueCell(pi) => {
+                                self.modifier_card.enum_value_cell_action(pi, *node_id)
+                            }
                         });
                     } else if let Some((pi, tab)) = self.modifier_card.mod_tab_hit(*node_id) {
                         self.modifier_card.focus_mod_tab(pi, tab);
                         actions.push(PanelAction::ModConfigTabChanged);
-                    } else if let Some((_, ctx)) = self.mod_button_ids.iter().find(|(id, _)| *id == *node_id) {
-                        // UX-P3a: the panel always emits — a re-click on an
-                        // already-exposed row is a harmless duplicate the
-                        // app dispatch handler no-ops on (see
-                        // `PanelAction::SceneSetupExposeParam`'s doc).
-                        actions.push(PanelAction::SceneSetupExposeParam {
-                            layer_id: vm.layer_id.clone(),
-                            scope_path: ctx.addr.scope_path.clone(),
-                            node_doc_id: ctx.addr.node_doc_id,
-                            param_id: ctx.addr.param_id.clone(),
-                            object_label: ctx.object_label.clone(),
-                            param_label: ctx.param_label.clone(),
-                            min: ctx.min,
-                            max: ctx.max,
-                            default_value: ctx.value,
-                            is_angle: ctx.is_angle,
-                        });
                     }
                 }
                 match &self.state {
@@ -4405,6 +4058,7 @@ impl ScenePanel {
                         .or_else(|| self.modifier_row_value_for_value_text(*node_id));
                     if let Some(row_value) = row_value
                         && !row_value.driven
+                        && !self.is_enum_value_cell(*node_id)
                         && intent == Some(crate::value_cell::ValueCellIntent::EditValue)
                     {
                         return (
@@ -4682,6 +4336,21 @@ impl ScenePanel {
         node_id == self.bg_id
     }
 
+    /// BUG-250: fan the enum-cell test out across all five family cards —
+    /// the DoubleClick type-in arm skips these cells (their single click
+    /// cycles/opens the dropdown instead).
+    fn is_enum_value_cell(&self, node_id: NodeId) -> bool {
+        [
+            &self.world_card,
+            &self.object_card,
+            &self.light_card,
+            &self.camera_card,
+            &self.modifier_card,
+        ]
+        .into_iter()
+        .any(|c| c.is_enum_value_cell(node_id))
+    }
+
     /// C-P1a: `world_card`'s per-row value-text cell, for the DoubleClick
     /// type-in gesture — mirrors the metallic/roughness slider lookup just
     /// above it (same `SliderNodeIds.value_text` contract), reading the
@@ -4870,21 +4539,6 @@ fn scrollbar_style() -> ScrollbarStyle {
 
 fn btn_style() -> UIStyle {
     UIStyle { font_size: color::FONT_LABEL, ..crate::chrome::components::segment_style(false) }
-}
-
-/// UX-P3a mod button (D8/D9): the SAME `state_button_skinned` skin every
-/// T/∿/A drawer-tab button uses (`param_slider_shared::de_btn_style`), lit
-/// with the SAME accent `param_card.rs`'s Driver tab uses
-/// (`DRIVER_ACTIVE_C32`) — one button, not the full strip (no drawer opens
-/// in THIS panel this phase — D9's row+drawer reuse is UX-P3b), so the
-/// strip degenerates to a single "make this modulatable" glyph that lights
-/// the moment the param is exposed on the card. A driven row passes
-/// `active: false` regardless of `exposed` — its slot is reserved (EyeSlot's
-/// Live/Dimmed convention: present, never absent) but `build_expose_button`
-/// never pushes it into `mod_button_ids`, so it isn't a click target even
-/// though it renders the same "off" skin an unexposed-but-live row does.
-fn mod_btn_style(active: bool) -> UIStyle {
-    crate::panels::param_slider_shared::de_btn_style(active, color::DRIVER_ACTIVE_C32)
 }
 
 fn label_style() -> UIStyle {
@@ -5860,185 +5514,6 @@ mod tests {
         ));
     }
 
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): clicking an
-    /// unexposed row's mod button emits `SceneSetupExposeParam` named
-    /// `<ObjectName> · <ParamLabel>` — proven on the Roughness card row,
-    /// the flagship performer-gesture surface D8's own text names. A second
-    /// click on the SAME (now still-unexposed,
-    /// since this panel never mutates `RowValue` itself) button emits the
-    /// SAME action again — the panel's one-way "always emit, app no-ops"
-    /// contract (see the action's own doc comment).
-    #[test]
-    fn mod_button_click_emits_expose_param_named_object_and_param() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(!panel.mod_button_ids.is_empty(), "at least one exposable row must be built");
-
-        let (roughness_id, ctx) = panel
-            .mod_button_ids
-            .iter()
-            .find(|(_, ctx)| ctx.param_label == "Roughness")
-            .expect("Metallic/Roughness sliders are mod-button rows");
-        assert_eq!(ctx.object_label, "Azalea");
-        assert_eq!(ctx.addr.param_id, "roughness");
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: *roughness_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        });
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        match &actions[0] {
-            PanelAction::SceneSetupExposeParam { layer_id, param_id, object_label, param_label, .. } => {
-                assert_eq!(*layer_id, LayerId::new("layer-1"));
-                assert_eq!(param_id, "roughness");
-                assert_eq!(object_label, "Azalea");
-                assert_eq!(param_label, "Roughness");
-            }
-            other => panic!("expected SceneSetupExposeParam, got {other:?}"),
-        }
-    }
-
-    /// A driven triplet cell (e.g. a wire-shadowed transform axis) still
-    /// draws its mod-button slot (EyeSlot's reserved-but-dimmed convention)
-    /// but does NOT register a click target — `mod_button_ids` has no entry
-    /// for it, so a click there is a no-op, never an exposure of a param
-    /// that's already receiving a wire from somewhere else.
-    #[test]
-    fn driven_row_mod_button_is_reserved_but_not_clickable() {
-        let mut vm = azalea_shaped_vm();
-        let SceneSetupVm { objects, .. } = &mut vm;
-        let ObjectRowVm::Known(obj) = &mut objects[0] else { panic!("Azalea must be Known") };
-        obj.transform.as_mut().unwrap().pos.0.value.driven = true;
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(
-            !panel.mod_button_ids.iter().any(|(_, ctx)| ctx.param_label == "Position X"),
-            "a driven row's mod button must not be a click target"
-        );
-    }
-
-    /// UX-P3b-i: the same mod-button parity as
-    /// `mod_button_click_emits_expose_param_named_object_and_param`, proven
-    /// on a LIGHT row (`build_light_card_row`'s Intensity field, C-P1c) — the
-    /// family this phase adds. `Sun` is the azalea fixture's own light name
-    /// (`azalea_shaped_vm`'s `LightKnownRow.name`).
-    #[test]
-    fn light_mod_button_click_emits_expose_param_named_light_and_param() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        let (intensity_id, ctx) = panel
-            .mod_button_ids
-            .iter()
-            .find(|(_, ctx)| ctx.object_label == "Sun" && ctx.param_label == "Intensity")
-            .expect("the light's Intensity row must be a mod-button row");
-        assert_eq!(ctx.addr.param_id, "intensity");
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: *intensity_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        });
-        assert!(consumed);
-        match &actions[..] {
-            [PanelAction::SceneSetupExposeParam { object_label, param_label, param_id, .. }] => {
-                assert_eq!(object_label, "Sun");
-                assert_eq!(param_label, "Intensity");
-                assert_eq!(param_id, "intensity");
-            }
-            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
-        }
-    }
-
-    /// UX-P3b-i: mod-button parity on a CAMERA row (`build_camera_card_row`'s
-    /// Orbit field, C-P1c, the azalea fixture's `OrbitCameraRowVm`) — `object_label`
-    /// is the fixed `"Camera"` string (no per-instance camera name exists).
-    #[test]
-    fn camera_mod_button_click_emits_expose_param_named_camera_and_param() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        let (orbit_id, ctx) = panel
-            .mod_button_ids
-            .iter()
-            .find(|(_, ctx)| ctx.object_label == "Camera" && ctx.param_label == "Orbit")
-            .expect("the camera's Orbit row must be a mod-button row");
-        assert_eq!(ctx.addr.param_id, "orbit");
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: *orbit_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        });
-        assert!(consumed);
-        match &actions[..] {
-            [PanelAction::SceneSetupExposeParam { object_label, param_label, .. }] => {
-                assert_eq!(object_label, "Camera");
-                assert_eq!(param_label, "Orbit");
-            }
-            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
-        }
-    }
-
-    /// UX-P3b-i: mod-button parity on a MODIFIER param row
-    /// (`build_modifier_card_row`'s "Angle" slot on the azalea fixture's
-    /// Bend modifier) — `object_label` is the OWNING OBJECT's name ("Azalea"),
-    /// and `param_label` is disambiguated by the modifier's own display name
-    /// ("Bend Angle"), not a bare "Angle" that would collide across modifiers.
-    #[test]
-    fn modifier_mod_button_click_emits_expose_param_named_object_and_modifier_param() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        // azalea_shaped_vm's default selection already targets the Azalea object.
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        let (angle_id, ctx) = panel
-            .mod_button_ids
-            .iter()
-            .find(|(_, ctx)| ctx.object_label == "Azalea" && ctx.param_label == "Bend Angle")
-            .expect("the Bend modifier's Angle row must be a mod-button row");
-        assert_eq!(ctx.addr.param_id, "angle");
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: *angle_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        });
-        assert!(consumed);
-        match &actions[..] {
-            [PanelAction::SceneSetupExposeParam { object_label, param_label, param_id, .. }] => {
-                assert_eq!(object_label, "Azalea");
-                assert_eq!(param_label, "Bend Angle");
-                assert_eq!(param_id, "angle");
-            }
-            other => panic!("expected one SceneSetupExposeParam, got {other:?}"),
-        }
-        // The modifier's Axis row (a structural switch) must stay unexposable
-        // — same reasoning as Light's Mode row.
-        assert!(
-            !panel.mod_button_ids.iter().any(|(_, ctx)| ctx.param_label.ends_with("Axis")),
-            "a modifier's Axis row must not be a mod-button click target"
-        );
-    }
-
     /// UX-P3b-i's own deliverable: the per-row key-range collision audit the
     /// design doc's "as attempted" note calls out, extended from Objects
     /// (P3a's own `OBJ_KEY_STRIDE` 32→44 bump) to Light/Camera/Modifier.
@@ -6073,18 +5548,14 @@ mod tests {
         // C-P1b: the value-cell offsets (`OBJ_OFF_POS_X`/`ROT_X`/`SCALE_X`/
         // `COLOR_R`/`METALLIC`/`ROUGHNESS`) are gone — those rows' widgets
         // now key off `build_param_row`'s own `row_key_base` (`slot << 8`),
-        // a disjoint key space from `obj_key`'s. Only the exposure-lane mod
-        // buttons still key through `obj_key`.
+        // a disjoint key space from `obj_key`'s. Only NAME/REMOVE (header
+        // chrome) still key through `obj_key` (the exposure-lane mod
+        // buttons were removed with the ∿ column).
         assert_no_dupes_and_fits_stride(
             "OBJECT",
             &[
                 OBJ_OFF_NAME,
                 OBJ_OFF_REMOVE, OBJ_OFF_REMOVE + 1,
-                OBJ_OFF_POS_X_MOD, OBJ_OFF_POS_X_MOD + 1, OBJ_OFF_POS_X_MOD + 2,
-                OBJ_OFF_ROT_X_MOD, OBJ_OFF_ROT_X_MOD + 1, OBJ_OFF_ROT_X_MOD + 2,
-                OBJ_OFF_SCALE_X_MOD, OBJ_OFF_SCALE_X_MOD + 1, OBJ_OFF_SCALE_X_MOD + 2,
-                OBJ_OFF_METALLIC_MOD,
-                OBJ_OFF_ROUGHNESS_MOD,
             ],
             Some(OBJ_KEY_STRIDE),
         );
@@ -6094,48 +5565,21 @@ mod tests {
         // `SHADOW_SOFTNESS_MINUS`/`LIGHT_SIZE_MINUS`) are gone — those rows'
         // widgets now key off `build_param_row`'s own `row_key_base`
         // (`slot << 8`), same disjoint key space C-P1b established for
-        // Object. Only NAME/REMOVE (header chrome) and the exposure-lane mod
-        // buttons still key through `light_key`.
+        // Object. Only NAME/REMOVE (header chrome) still key through
+        // `light_key`.
         assert_no_dupes_and_fits_stride(
             "LIGHT",
             &[
                 LIGHT_OFF_REMOVE,
                 LIGHT_OFF_NAME,
-                LIGHT_OFF_INTENSITY_MOD,
-                LIGHT_OFF_POS_X_MOD, LIGHT_OFF_POS_X_MOD + 1, LIGHT_OFF_POS_X_MOD + 2,
-                LIGHT_OFF_AIM_X_MOD, LIGHT_OFF_AIM_X_MOD + 1, LIGHT_OFF_AIM_X_MOD + 2,
-                LIGHT_OFF_CAST_SHADOWS_MOD,
-                LIGHT_OFF_SHADOW_SOFTNESS_MOD,
-                LIGHT_OFF_LIGHT_SIZE_MOD,
             ],
             Some(LIGHT_KEY_STRIDE),
         );
 
-        // C-P1c: Camera's value-cell offsets are gone too — only the
-        // exposure-lane mod buttons still key through `CAMERA_KEY_BASE`.
-        // Camera has no per-index stride (exactly one row set per scene) —
-        // just pairwise-distinct offsets, plus a headroom check against the
-        // next section's base (`MODIFIER_KEY_BASE`, 2_000 above `CAMERA_KEY_BASE`).
-        let camera_offsets = [
-            CAMERA_OFF_ORBIT_MOD,
-            CAMERA_OFF_TILT_MOD,
-            CAMERA_OFF_DISTANCE_MOD,
-            CAMERA_OFF_FOV_MOD,
-            CAMERA_OFF_POS_X_MOD, CAMERA_OFF_POS_X_MOD + 1, CAMERA_OFF_POS_X_MOD + 2,
-            CAMERA_OFF_YAW_MOD,
-            CAMERA_OFF_PITCH_MOD,
-            CAMERA_OFF_ROLL_MOD,
-            CAMERA_OFF_TARGET_X_MOD, CAMERA_OFF_TARGET_X_MOD + 1, CAMERA_OFF_TARGET_X_MOD + 2,
-            CAMERA_OFF_LENS_FOCUS_MOD,
-            CAMERA_OFF_LENS_FSTOP_MOD,
-            CAMERA_OFF_LENS_SHUTTER_MOD,
-            CAMERA_OFF_LENS_EXPOSURE_MOD,
-        ];
-        assert_no_dupes_and_fits_stride("CAMERA", &camera_offsets, None);
-        assert!(
-            camera_offsets.iter().all(|&o| CAMERA_KEY_BASE + o < MODIFIER_KEY_BASE),
-            "a camera offset reaches into MODIFIER_KEY_BASE's range"
-        );
+        // C-P1c: Camera's value-cell offsets are gone, and the exposure-lane
+        // mod buttons went with the ∿ column — Camera keys nothing through
+        // an explicit-key scheme anymore (`build_param_row`'s `slot << 8`
+        // covers all its rows), so there is nothing left to audit here.
 
         // Modifier: per-slot offsets (up to 4 param slots) must fit inside
         // MODIFIER_ROW_STRIDE, same per-index-range contract as OBJECT/LIGHT.
@@ -6145,13 +5589,37 @@ mod tests {
         // cell, track, and steppers now key through `build_param_row`'s internal
         // `(slot << 8)` scheme, not `modifier_row_key`; only the reorder/
         // remove chrome and the mod-button offset still use it.
-        for slot in 0..4u64 {
-            assert_no_dupes_and_fits_stride(
-                "MODIFIER (per-row)",
-                &[MODIFIER_OFF_UP, MODIFIER_OFF_DOWN, MODIFIER_OFF_REMOVE, MODIFIER_OFF_PARAM_MOD_BASE + slot],
-                Some(MODIFIER_ROW_STRIDE),
-            );
+        assert_no_dupes_and_fits_stride(
+            "MODIFIER (per-row)",
+            &[MODIFIER_OFF_UP, MODIFIER_OFF_DOWN, MODIFIER_OFF_REMOVE],
+            Some(MODIFIER_ROW_STRIDE),
+        );
+    }
+
+    /// The scene cards' sliders carry the SAME `Track + RightClick →
+    /// SliderReset` contract every other slider in the app has — regression
+    /// for the missing hookup where `build_param_row` constructed the resets
+    /// but the panel never implemented `register_intents`, so right-click
+    /// reset was dead on every scene row while working everywhere else.
+    #[test]
+    fn scene_row_slider_track_right_click_resolves_to_slider_reset() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+
+        let mut checked = 0;
+        for ids in panel.object_card.slider_ids.iter().flatten() {
+            match reg.resolve(&tree, Some(ids.track), crate::intent::Gesture::RightClick) {
+                Some(PanelAction::SliderReset { .. }) => checked += 1,
+                other => panic!("expected SliderReset on object-card track, got {other:?}"),
+            }
         }
+        assert!(checked > 0, "at least one object-card slider must be built");
     }
 
     /// BUG-193/P5: the Lights-section twin of the object-removal test above
@@ -6543,11 +6011,16 @@ mod tests {
             let mut tree = UITree::new();
             panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
 
-            let slider_ids: Vec<crate::slider::SliderNodeIds> =
-                panel.modifier_card.slider_ids.iter().filter_map(|ids| *ids).collect();
+            let slider_ids: Vec<(usize, crate::slider::SliderNodeIds)> = panel
+                .modifier_card
+                .slider_ids
+                .iter()
+                .enumerate()
+                .filter_map(|(pi, ids)| ids.map(|ids| (pi, ids)))
+                .collect();
             assert!(!slider_ids.is_empty(), "azalea fixture must exercise at least one modifier card slider");
 
-            for ids in slider_ids {
+            for (pi, ids) in slider_ids {
                 let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
                     node_id: ids.track,
                     pos: Vec2::new(ids.track_rect.x, 0.0),
@@ -6556,16 +6029,53 @@ mod tests {
                 assert!(drag_consumed, "track {:?} must be drag-armable", ids.track);
                 panel.handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::ZERO });
 
-                let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
-                    node_id: ids.value_text,
-                    pos: Vec2::ZERO,
-                    modifiers: crate::input::Modifiers::default(),
-                });
-                assert!(typein_consumed, "value cell {:?} must also open type-in (registration parity)", ids.value_text);
-                assert!(
-                    matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
-                    "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
-                );
+                let is_enum = panel
+                    .modifier_card
+                    .param_info
+                    .get(pi)
+                    .and_then(|p| p.value_labels.as_ref())
+                    .is_some();
+                if is_enum {
+                    // BUG-250: an enum cell's click-to-change is single-click
+                    // cycle/dropdown; double-click must NOT open the numeric
+                    // type-in (registration parity is drag + enum-click).
+                    let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(
+                        !matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                        "enum cell {ids:?} must not open numeric type-in, got {actions:?}"
+                    );
+                    let _ = typein_consumed;
+
+                    let (click_consumed, actions) = panel.handle_event(&UIEvent::Click {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(click_consumed, "enum value cell {:?} must dispatch on click", ids.value_text);
+                    assert!(
+                        matches!(
+                            actions.as_slice(),
+                            [PanelAction::ParamSnapshot(..), PanelAction::ParamChanged(..), PanelAction::ParamCommit(..)]
+                                | [PanelAction::ParamEnumDropdown { .. }]
+                        ),
+                        "enum click must cycle (trio) or open the dropdown, got {actions:?}"
+                    );
+                } else {
+                    let (typein_consumed, actions) = panel.handle_event(&UIEvent::DoubleClick {
+                        node_id: ids.value_text,
+                        pos: Vec2::ZERO,
+                        modifiers: crate::input::Modifiers::default(),
+                    });
+                    assert!(typein_consumed, "value cell {:?} must also open type-in (registration parity)", ids.value_text);
+                    assert!(
+                        matches!(actions.as_slice(), [PanelAction::SceneSetupBeginNumericTextInput { .. }]),
+                        "double-click must emit SceneSetupBeginNumericTextInput, got {actions:?}"
+                    );
+                }
             }
         }
     }

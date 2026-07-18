@@ -308,6 +308,11 @@ pub fn dispatch(
         // before it ever reaches this dispatcher; this arm only keeps the
         // match exhaustive.
         PanelAction::SceneSetupEnumClicked { .. } => DispatchResult::handled(),
+        // BUG-250: the shared card core's enum value-cell dropdown is
+        // intercepted by `UIRoot::try_open_dropdown` the same way
+        // `SceneSetupEnumClicked` is; this arm only keeps the match
+        // exhaustive.
+        PanelAction::ParamEnumDropdown { .. } => DispatchResult::handled(),
         // UX-P2 D6: the "+ Add Modifier" button's dropdown is intercepted by
         // `UIRoot::try_open_dropdown` the same way `SceneSetupEnumClicked`
         // is, before it ever reaches this dispatcher; this arm only keeps
@@ -401,6 +406,7 @@ pub fn dispatch(
         | PanelAction::ParamSnapshot(..)
         | PanelAction::ParamChanged(..)
         | PanelAction::ParamCommit(..)
+        | PanelAction::ParamEnumSet(..)
         | PanelAction::DriverToggle(..)
         | PanelAction::EnvelopeToggle(..)
         | PanelAction::DriverConfig(..)
