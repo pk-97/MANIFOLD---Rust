@@ -4340,6 +4340,20 @@ impl Application {
         ws.ui_root.tick_inspector();
         ws.ui_root.update_fire_meters(&self.content_state.fire_meters, dt);
 
+        // Per-frame card VALUE sync for the editor's inspector column — the
+        // same call `push_state` makes for the main window (step 4 of the
+        // main tick), against the same `local_project` + active layer, so a
+        // driver / mapping / envelope moving a knob is seen on this window's
+        // card sliders this frame instead of freezing until the next
+        // structural sync. Drag safety rides on the shared guard: the
+        // snapshot drain already restored the actively-dragged field into
+        // `local_project`, so this writes the user's own value straight back.
+        let editor_active_idx = self
+            .active_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        crate::ui_bridge::sync_card_values(&mut ws.ui_root, &self.local_project, editor_active_idx);
+
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small, so a clear + rebuild is cheaper than dirty-tracking and
         // means stale rows can never linger after the target changes.
