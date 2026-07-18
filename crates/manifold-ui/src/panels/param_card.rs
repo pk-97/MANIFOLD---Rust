@@ -4303,16 +4303,19 @@ impl ParamCardPanel {
         if let Some(pi) = self.drag.env_target_index()
             && let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
-            let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+            // Live bounds, not the cached `track_rect`: in-place scroll shifts
+            // the tree nodes without refreshing the cache, so its y is stale.
+            let track_rect = tree.get_bounds(slider.track);
+            let norm = BitmapSlider::x_to_normalized(track_rect, pos.x);
             if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
                 *v = norm;
             }
             if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
-                let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                let base_x = slider.track_rect.x + OVERLAY_INSET;
+                let usable = track_rect.width - OVERLAY_INSET * 2.0;
+                let base_x = track_rect.x + OVERLAY_INSET;
                 let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
-                let bar_h = slider.track_rect.height + 4.0;
-                let bar_y = slider.track_rect.y - 2.0;
+                let bar_h = track_rect.height + 4.0;
+                let bar_y = track_rect.y - 2.0;
                 tree.set_bounds(
                     t.target_bar_id,
                     Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
@@ -4449,13 +4452,18 @@ impl ParamCardPanel {
         // old `norm.min`/`norm.clamp` spellings coincide); only the backing
         // store differs, and `TrimKind` selects it via the trim accessors.
         if let Some((kind, pi, is_min)) = self.drag.trim()
-            && let Some(track_rect) = self
+            && let Some(track_id) = self
                 .slider_ids
                 .get(pi)
                 .and_then(|s| s.as_ref())
-                .map(|s| s.track_rect)
+                .map(|s| s.track)
             && let Some((cur_min, cur_max)) = self.trim_range(kind, pi)
         {
+            // Live bounds, not the cached `track_rect`: in-place scroll shifts
+            // the tree nodes without refreshing the cache, and feeding its
+            // stale y to `reposition_trim_bars` teleports the bars off the
+            // slider (BUG-257).
+            let track_rect = tree.get_bounds(track_id);
             let norm = BitmapSlider::x_to_normalized(track_rect, pos.x);
             let (new_min, new_max) = if is_min {
                 (norm.min(cur_max), cur_max)
@@ -5633,6 +5641,79 @@ mod tests {
             "end emits exactly one trim commit: {ended:?}"
         );
         assert!(!panel.is_dragging());
+    }
+
+    /// BUG-257 regression: shift every node down (what `ScrollContainer::
+    /// offset_content` does on a wheel scroll), then drag. The overlay nodes
+    /// must land at the track's LIVE y, not the build-time cached one.
+    fn scroll_shift(tree: &mut UITree, delta_y: f32) {
+        for i in 0..tree.count() {
+            let id = tree.id_at(i);
+            let mut b = tree.get_bounds(id);
+            b.y += delta_y;
+            tree.set_bounds(id, b);
+        }
+    }
+
+    #[test]
+    fn trim_bars_follow_the_track_after_scroll() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        let trim = panel.trim_ids[0].as_ref().expect("driver trim built");
+        let (min_bar, max_bar, fill) = (trim.min_bar_id, trim.max_bar_id, trim.fill_id);
+
+        scroll_shift(&mut tree, 137.0);
+
+        panel.handle_pointer_down(min_bar, Vec2::ZERO);
+        let live = tree.get_bounds(track);
+        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::TrimChanged(TrimKind::Driver, ..)]),
+            "trim drag still routes after scroll: {moved:?}"
+        );
+
+        for (name, id) in [("min_bar", min_bar), ("max_bar", max_bar), ("fill", fill)] {
+            let y = tree.get_bounds(id).y;
+            assert!(
+                (y - live.y).abs() <= OVERLAY_INSET,
+                "{name} y={y} should track the live track y={} (stale cache would put it ~137px up)",
+                live.y
+            );
+        }
+    }
+
+    #[test]
+    fn env_target_bar_follows_the_track_after_scroll() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        let track = panel.slider_ids[0].as_ref().unwrap().track;
+        let target_bar = panel.target_ids[0].as_ref().expect("envelope target built").target_bar_id;
+
+        scroll_shift(&mut tree, 137.0);
+
+        panel.handle_pointer_down(target_bar, Vec2::ZERO);
+        let live = tree.get_bounds(track);
+        let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree);
+        assert!(
+            matches!(moved.as_slice(), [PanelAction::TargetChanged(..)]),
+            "target drag still routes after scroll: {moved:?}"
+        );
+
+        let bar_y = tree.get_bounds(target_bar).y;
+        assert!(
+            (bar_y - (live.y - 2.0)).abs() < 0.01,
+            "target bar y={bar_y} should sit 2px above the live track y={}",
+            live.y
+        );
     }
 
     #[test]
