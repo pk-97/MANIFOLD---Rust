@@ -440,6 +440,71 @@ fn apply_live_values_ignores_unmatched_node_ids() {
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
 
+/// A grouped snapshot whose sole inner node ("inner") carries a Float param
+/// exposed on the group's own face via `outer_routings` — the D6 group-face
+/// mirror row fixture for [`GraphCanvas::apply_live_values`]'s inner-source
+/// matching (`ParamView::live_source`).
+fn grouped_snapshot_with_group_param(current: f32) -> GraphSnapshot {
+    let mut inner = node(1, "node.blur", Some("inner"));
+    inner.parameters = vec![float_param("amount", current)];
+    let body = GroupSnapshot {
+        nodes: vec![node(0, "system.group_input", None), inner, node(2, "system.group_output", None)],
+        wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+        tint: None,
+    };
+    let mut group = node(10, GROUP_TYPE_ID, Some("tweak"));
+    group.inputs = vec![port("src")];
+    group.outputs = vec![port("out")];
+    group.group = Some(Box::new(body));
+    GraphSnapshot {
+        nodes: vec![
+            node(0, "system.source", Some("source")),
+            group,
+            node(2, "system.final_output", Some("final")),
+        ],
+        wires: vec![wire(0, "out", 10, "src"), wire(10, "out", 2, "in")],
+        outer_routings: vec![crate::graph_view::OuterParamRouting {
+            outer_label: "Amount".to_string(),
+            outer_param_id: "og_amount".to_string(),
+            node_handle: "inner".to_string(),
+            inner_param: "amount".to_string(),
+            source: crate::graph_view::OuterParamSource::User,
+        }],
+    }
+}
+
+#[test]
+fn apply_live_values_updates_group_face_mirror_row_via_inner_source() {
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&grouped_snapshot_with_group_param(0.25));
+    let group = canvas.find_node(10).unwrap();
+    assert_eq!(group.params.len(), 1);
+    assert_eq!(group.params[0].name, "og_amount", "row is renamed to the outer id (D6)");
+    assert_eq!(group.params[0].value, "0.25");
+
+    // The live entry is keyed by the INNER node's id/param — not the
+    // group's own (empty) node_id, and not the row's renamed
+    // `outer_param_id` — and must still reach the group-face row via
+    // `live_source`.
+    let live = vec![(manifold_foundation::NodeId::new("inner"), vec![("amount", 0.8_f32)])];
+    canvas.apply_live_values(&live);
+    let pv = &canvas.find_node(10).unwrap().params[0];
+    assert_eq!(pv.value, "0.80");
+    assert!((pv.fill.unwrap() - 0.8).abs() < 1e-3);
+}
+
+#[test]
+fn apply_live_values_group_face_row_keeps_snapshot_value_when_unmatched() {
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&grouped_snapshot_with_group_param(0.25));
+    // A live feed with no entry for the inner node's id leaves the mirror
+    // row at its frozen snapshot value — no panic, no stale-key match.
+    let live = vec![(manifold_foundation::NodeId::new("unrelated"), vec![("amount", 0.9_f32)])];
+    canvas.apply_live_values(&live);
+    let pv = &canvas.find_node(10).unwrap().params[0];
+    assert_eq!(pv.value, "0.25");
+}
+
 #[test]
 fn apply_live_values_feeds_sparkline_history() {
     let mut canvas = GraphCanvas::new();
