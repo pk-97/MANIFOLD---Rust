@@ -1402,13 +1402,6 @@ impl GltfInterp {
         }
     }
 
-    pub(crate) fn to_f32(self) -> f32 {
-        match self {
-            GltfInterp::Linear => 0.0,
-            GltfInterp::Step => 1.0,
-            GltfInterp::CubicSpline => 2.0,
-        }
-    }
 }
 
 /// One keyframe track (glTF `translation`/`scale` channel), any of the
@@ -1440,28 +1433,6 @@ pub(crate) struct QuatTrack {
     pub out_tangents: Vec<[f32; 4]>,
 }
 
-impl Vec3Track {
-    /// Keyframe `i`'s (in-tangent, out-tangent) — real values for
-    /// CUBICSPLINE, zero (unused by the LINEAR/STEP sampler) otherwise.
-    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 3], [f32; 3]) {
-        if self.mode == GltfInterp::CubicSpline {
-            (self.in_tangents[i], self.out_tangents[i])
-        } else {
-            ([0.0; 3], [0.0; 3])
-        }
-    }
-}
-
-impl QuatTrack {
-    /// Same as [`Vec3Track::tangents_at`] for a quaternion track.
-    pub(crate) fn tangents_at(&self, i: usize) -> ([f32; 4], [f32; 4]) {
-        if self.mode == GltfInterp::CubicSpline {
-            (self.in_tangents[i], self.out_tangents[i])
-        } else {
-            ([0.0; 4], [0.0; 4])
-        }
-    }
-}
 
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
 /// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
@@ -1528,6 +1499,22 @@ pub(crate) struct GltfObjectAnimation {
     pub translation: Option<Vec3Track>,
     pub rotation: Option<QuatTrack>,
     pub scale: Option<Vec3Track>,
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the scene-node index EACH
+    /// channel's track came from — one per channel, NOT a single
+    /// object-wide node. Confirmed load-bearing by `BoxAnimated.glb`
+    /// itself (the design's own canonical A1 fixture): its translation
+    /// channel targets node 0 (an ancestor), its rotation channel targets
+    /// node 2 (the mesh node) — two DIFFERENT physical nodes for the SAME
+    /// object, not a rare edge case. `None` when that channel isn't
+    /// animated at all (mirrors the sibling `Option<Vec3Track/QuatTrack>`
+    /// field). Stamped onto `node.gltf_animation_source`'s `translation_
+    /// node`/`rotation_node`/`scale_node` params so each channel samples
+    /// from its OWN correct entry in the shared, file-keyed `GltfAnimSet`
+    /// (whose `Channel`s are keyed by node index) instead of a per-object
+    /// baked Table.
+    pub translation_node: Option<usize>,
+    pub rotation_node: Option<usize>,
+    pub scale_node: Option<usize>,
 }
 
 /// Parse every `document.animations()` entry into its per-node TRS
@@ -1709,6 +1696,9 @@ fn resolve_object_animation(
     let mut translation: Option<Vec3Track> = None;
     let mut rotation: Option<QuatTrack> = None;
     let mut scale: Option<Vec3Track> = None;
+    let mut translation_node: Option<usize> = None;
+    let mut rotation_node: Option<usize> = None;
+    let mut scale_node: Option<usize> = None;
     for &node_index in chain {
         let Some(na) = node_anims.get(&node_index) else { continue };
         if let Some(t) = &na.translation {
@@ -1720,6 +1710,7 @@ fn resolve_object_animation(
                 ));
             } else {
                 translation = Some(t.clone());
+                translation_node = Some(node_index);
             }
         }
         if let Some(r) = &na.rotation {
@@ -1731,6 +1722,7 @@ fn resolve_object_animation(
                 ));
             } else {
                 rotation = Some(r.clone());
+                rotation_node = Some(node_index);
             }
         }
         if let Some(s) = &na.scale {
@@ -1742,6 +1734,7 @@ fn resolve_object_animation(
                 ));
             } else {
                 scale = Some(s.clone());
+                scale_node = Some(node_index);
             }
         }
     }
@@ -1757,7 +1750,15 @@ fn resolve_object_animation(
     .into_iter()
     .flatten()
     .fold(0.0f32, f32::max);
-    Some(GltfObjectAnimation { duration_s, translation, rotation, scale })
+    Some(GltfObjectAnimation {
+        duration_s,
+        translation,
+        rotation,
+        scale,
+        translation_node,
+        rotation_node,
+        scale_node,
+    })
 }
 
 // ─── GLTF_ANIMATION_DESIGN.md A2 — skinning (D2) ───────────────────────
@@ -1787,16 +1788,11 @@ pub(crate) struct GltfSkinInfo {
     /// applied here, never a crash.
     pub joint_root_world: Vec<Mat4>,
     pub inverse_bind_matrices: Vec<Mat4>,
-    /// Each joint's static BIND-pose local TRS (`node.transform().decomposed()`),
-    /// the fallback `node.gltf_skeleton_pose` uses for any joint this
-    /// animation clip doesn't touch — never the identity default A1's
-    /// rigid-object sampler uses, because an unanimated joint's bind pose
-    /// is very often NOT the identity (a resting arm bend, a T-pose
-    /// offset) and skinning (unlike A1's baked-static-transform objects)
-    /// never gets that offset from anywhere else.
-    pub joint_bind_translation: Vec<[f32; 3]>,
-    pub joint_bind_rotation: Vec<[f32; 4]>,
-    pub joint_bind_scale: Vec<[f32; 3]>,
+    // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: the per-joint bind-TRS fields that
+    // used to live here (`joint_bind_translation`/`_rotation`/`_scale`)
+    // are DELETED — deduped into `GltfAnimSet::node_bind_trs` (P1, indexed
+    // by whole-scene node index rather than duplicated per-skin), which
+    // `gltf_skeleton_pose::sample_joint_local` now reads exclusively.
 }
 
 /// Every node's parent, indexed by node index (`None` = root). Built once
@@ -1849,9 +1845,6 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
                 .collect();
             let mut joint_parent = Vec::with_capacity(joint_node_indices.len());
             let mut joint_root_world = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_translation = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_rotation = Vec::with_capacity(joint_node_indices.len());
-            let mut joint_bind_scale = Vec::with_capacity(joint_node_indices.len());
             for &node_idx in &joint_node_indices {
                 let parent_node = parent_of.get(node_idx).copied().flatten();
                 match parent_node.and_then(|p| joint_position.get(&p)) {
@@ -1868,28 +1861,13 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
                         joint_root_world.push(root_world);
                     }
                 }
-                let node = document.nodes().nth(node_idx);
-                let (t, r, s) = node
-                    .map(|n| n.transform().decomposed())
-                    .unwrap_or(([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]));
-                joint_bind_translation.push(t);
-                joint_bind_rotation.push(r);
-                joint_bind_scale.push(s);
             }
             let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.0.as_slice()));
             let inverse_bind_matrices: Vec<Mat4> = match reader.read_inverse_bind_matrices() {
                 Some(it) => it.collect(),
                 None => vec![MAT4_IDENTITY; joint_node_indices.len()],
             };
-            GltfSkinInfo {
-                joint_node_indices,
-                joint_parent,
-                joint_root_world,
-                inverse_bind_matrices,
-                joint_bind_translation,
-                joint_bind_rotation,
-                joint_bind_scale,
-            }
+            GltfSkinInfo { joint_node_indices, joint_parent, joint_root_world, inverse_bind_matrices }
         })
         .collect()
 }

@@ -163,14 +163,12 @@ impl Channel {
 /// One `document.animations()` entry — index == glTF `animations[]` index.
 #[derive(Debug, Clone)]
 pub struct AnimClip {
-    // Not yet read: P1's `node.gltf_skeleton_pose` still gets its duration
-    // from the (unchanged, still-read) `clip_durations` Table param —
-    // D1 keeps that param in the def since it's tiny and UI-relevant.
-    // This field exists for P2, when `node.gltf_animation_source` /
-    // `node.gltf_morph_weights` move onto the cache too and can read
-    // duration straight off the clip instead of a parallel Table.
-    // Un-suppress when P2 wires a reader against it.
-    #[allow(dead_code)]
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: read by all three samplers
+    /// (`node.gltf_animation_source`/`node.gltf_skeleton_pose`/
+    /// `node.gltf_morph_weights`) once an `Arc<GltfAnimSet>` is resident —
+    /// wins over the `clip_durations` Table param, which stays declared
+    /// (D5 back-compat / pre-load fallback) but is no longer the primary
+    /// source once a path resolves.
     pub duration_s: f32,
     /// Sorted ascending by `target_node` (channels for the same node stay
     /// adjacent, in parse order among themselves — at most one
@@ -195,6 +193,14 @@ impl AnimClip {
 
     pub(crate) fn scale_channel(&self, node: u32) -> Option<&Channel> {
         self.channels_for_node(node).iter().find(|c| c.kind == ChannelKind::Scale)
+    }
+
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `node.gltf_morph_weights`' cache
+    /// lookup — a `Weights` channel is keyed by the SAME `target_node`
+    /// convention as TRS channels (the mesh-owning node), matched
+    /// regardless of `target_count` (the caller checks that separately).
+    pub(crate) fn weights_channel(&self, node: u32) -> Option<&Channel> {
+        self.channels_for_node(node).iter().find(|c| matches!(c.kind, ChannelKind::Weights { .. }))
     }
 }
 

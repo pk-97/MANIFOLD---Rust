@@ -110,7 +110,9 @@ crate::primitive! {
             label: "Clip",
             ty: ParamType::Int,
             default: ParamValue::Float(0.0),
-            range: Some((0.0, 31.0)),
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md D6: follows the file, not an
+            // arbitrary A4-era cap (the dragon fixture has 52 clips).
+            range: Some((0.0, 255.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -381,7 +383,7 @@ impl Primitive for GltfSkeletonPose {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let duration_s = match ctx.params.get("duration_s") {
+        let duration_s_param = match ctx.params.get("duration_s") {
             Some(ParamValue::Float(f)) => f.max(1e-6),
             _ => 1.0,
         };
@@ -408,20 +410,6 @@ impl Primitive for GltfSkeletonPose {
             .or_else(|| ctx.params.get("trigger_count").and_then(ParamValue::as_scalar));
         self.trigger_latch.update(trigger_count, ctx.time.beats.0);
 
-        let clip_durations = table_or_empty(ctx.params.get("clip_durations"));
-        let duration_s = clip_duration(clip_durations, clip_index, duration_s);
-
-        let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
-        let progress = resolve_progress(
-            ctx.time,
-            wired_progress,
-            duration_s,
-            rate,
-            loop_mode,
-            self.trigger_latch.origin_beats(),
-        );
-        let t = progress * duration_s;
-
         let joint_count = match ctx.params.get("joint_count") {
             Some(ParamValue::Float(f)) => (f.round().max(0.0) as usize).min(MAX_JOINTS),
             _ => 0,
@@ -432,7 +420,10 @@ impl Primitive for GltfSkeletonPose {
 
         // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: `path`/`skin_index` select the
         // shared `Arc<GltfAnimSet>` instead of reading the six Table
-        // params (declared above, no longer read).
+        // params (declared above, no longer read). P2: the load is moved
+        // BEFORE `duration_s`/`progress` are resolved so a resident clip's
+        // own `AnimClip::duration_s` can drive playback speed instead of
+        // the (now fallback-only) `clip_durations` Table.
         let path = match ctx.params.get("path") {
             Some(ParamValue::String(s)) => s.as_str().to_owned(),
             _ => String::new(),
@@ -478,6 +469,29 @@ impl Primitive for GltfSkeletonPose {
         let Some(anim_set) = self.anim_set.clone() else {
             return;
         };
+
+        // P2: `AnimClip::duration_s` wins once the clip is resident; the
+        // `clip_durations` Table (still declared, D5) is only consulted as
+        // a pre-load / old-preset fallback.
+        let duration_s = match anim_set.clips.get(clip_index) {
+            Some(c) => c.duration_s,
+            None => {
+                let clip_durations = table_or_empty(ctx.params.get("clip_durations"));
+                clip_duration(clip_durations, clip_index, duration_s_param)
+            }
+        };
+
+        let wired_progress = ctx.inputs.scalar("progress").and_then(|v| v.as_scalar());
+        let progress = resolve_progress(
+            ctx.time,
+            wired_progress,
+            duration_s,
+            rate,
+            loop_mode,
+            self.trigger_latch.origin_beats(),
+        );
+        let t = progress * duration_s;
+
         let skin_matrices = sample_skeleton_pose(&anim_set, skin_index, clip_index, t, joint_count);
         if skin_matrices.is_empty() {
             return;
@@ -654,6 +668,46 @@ mod tests {
             node_bind_trs: Vec::new(),
         };
         assert!(sample_skeleton_pose(&anim_set, 0, 0, 0.0, 10).is_empty());
+    }
+
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D6/P2 gate: `clip_index`'s range is
+    /// `(0, 255)`, past the old A4-era 31-clip cap — a synthetic
+    /// `GltfAnimSet` with 40 distinct single-joint clips proves selection
+    /// actually works past 31, not just that the param accepts a bigger
+    /// number. Each clip `c` translates joint 0 to `x = c * 10` at t=1;
+    /// selecting clip 37 (well past 31) must sample clip 37's own value,
+    /// not clip 0's or a clamped one.
+    #[test]
+    fn clip_index_selects_correctly_past_the_old_31_clip_cap() {
+        const CLIP_COUNT: usize = 40;
+        let clips: Vec<AnimClip> = (0..CLIP_COUNT)
+            .map(|c| AnimClip {
+                duration_s: 1.0,
+                channels: vec![translation_channel(0, &[(0.0, [0.0, 0.0, 0.0]), (1.0, [(c * 10) as f32, 0.0, 0.0])])],
+            })
+            .collect();
+        let anim_set = GltfAnimSet {
+            clips,
+            skins: vec![SkinTopology {
+                joint_node_indices: vec![0],
+                joint_parent: vec![-1],
+                joint_root_world: vec![MAT4_IDENTITY],
+                inverse_bind_matrices: vec![MAT4_IDENTITY],
+            }],
+            node_parents: vec![-1],
+            node_bind_trs: vec![BindTrs { translation: [0.0; 3], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3] }],
+        };
+
+        for &c in &[0usize, 15, 31, 32, 37, 39] {
+            let matrices = sample_skeleton_pose(&anim_set, 0, c, 1.0, 1);
+            assert_eq!(matrices.len(), 1);
+            let expected_x = (c * 10) as f32;
+            assert!(
+                (matrices[0].c3[0] - expected_x).abs() < 1e-4,
+                "clip {c} (of {CLIP_COUNT}) must sample its own x={expected_x}, got {}",
+                matrices[0].c3[0]
+            );
+        }
     }
 
     /// P1's mandatory perf gate: a synthetic dragon-fixture-scale

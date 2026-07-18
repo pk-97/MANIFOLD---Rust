@@ -216,100 +216,23 @@ fn table(rows: Vec<Vec<f32>>) -> SerializedParamValue {
     SerializedParamValue::Table { rows }
 }
 
-/// GLTF_ANIMATION_DESIGN.md A2: `[joint_index, m0..m15]` row (column-major
-/// 4x4) — the row shape `node.gltf_skeleton_pose`'s `joint_root_world_table`
-/// / `inverse_bind_table` Tables use.
-fn mat4_row(joint: usize, m: &gltf_load::Mat4) -> Vec<f32> {
-    let mut row = Vec::with_capacity(17);
-    row.push(joint as f32);
-    for col in m.iter() {
-        row.extend_from_slice(col);
-    }
-    row
-}
-
-/// Push one Vec3 track row in the widened schema
-/// `[..prefix, time, val_x,val_y,val_z, mode, in_x,in_y,in_z, out_x,out_y,out_z]`
-/// (IMPORT_ANYTHING_WAVE_DESIGN.md W2) — `prefix` is whatever leading key
-/// columns the caller groups rows by (`[clip]` for the A1 rigid path,
-/// `[clip, joint]` for the A2 skeleton path); `gltf_anim_shared`'s samplers
-/// read the mode/tangent columns relative to the value column, so every
-/// caller gets STEP/CUBICSPLINE support for free by routing through this.
-fn push_vec3_row(
-    rows: &mut Vec<Vec<f32>>,
-    prefix: &[f32],
-    time: f32,
-    value: [f32; 3],
-    mode: gltf_load::GltfInterp,
-    in_tangent: [f32; 3],
-    out_tangent: [f32; 3],
-) {
-    let mut row = prefix.to_vec();
-    row.push(time);
-    row.extend_from_slice(&value);
-    row.push(mode.to_f32());
-    row.extend_from_slice(&in_tangent);
-    row.extend_from_slice(&out_tangent);
-    rows.push(row);
-}
-
-/// Same as [`push_vec3_row`] for a `[x, y, z, w]` quaternion track.
-fn push_quat_row(
-    rows: &mut Vec<Vec<f32>>,
-    prefix: &[f32],
-    time: f32,
-    value: [f32; 4],
-    mode: gltf_load::GltfInterp,
-    in_tangent: [f32; 4],
-    out_tangent: [f32; 4],
-) {
-    let mut row = prefix.to_vec();
-    row.push(time);
-    row.extend_from_slice(&value);
-    row.push(mode.to_f32());
-    row.extend_from_slice(&in_tangent);
-    row.extend_from_slice(&out_tangent);
-    rows.push(row);
-}
-
-/// Build the six flat Tables `node.gltf_skeleton_pose` needs from one
-/// object's resolved skin topology (`GltfSkinInfo`) plus EVERY parsed
-/// clip's per-node animation map (A4/D4: one row-group per `(clip_index,
-/// joint_index)` pair, not just clip 0). Topology rows (parent/root-world/
-/// inverse-bind) are per-joint only — a skin's topology doesn't vary by
-/// clip. Track rows are grouped ascending by `(clip_index, joint_index)`,
-/// ascending time within a block (the primitive's row-grouping contract). A
-/// joint with no animated channel in a given clip gets a single static row
-/// from its BIND pose (`joint_bind_translation`/`_rotation`/`_scale`) —
-/// never the identity A1's rigid-object sampler falls back to, because an
-/// unrigged joint's bind pose is frequently non-identity. `node_anims_by_clip`
-/// empty (a skin with zero animation clips in the whole asset) is treated as
-/// one implicit static clip 0. Returns the six Tables, the `clip_durations`
-/// rows (`[clip_index, duration_s]`), and a fallback `duration_s` (clip 0's,
-/// or `1e-3` if even that has no animated joints — the primitive's own
-/// zero-guard floor).
-#[allow(clippy::type_complexity)]
-fn build_skeleton_pose_tables(
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: replaces the P1-era
+/// `build_skeleton_pose_tables`, which built six flat keyframe/topology
+/// Tables — payload now lives entirely in the shared `gltf_anim_cache`
+/// (loaded from `path`), so the importer only needs the tiny
+/// `clip_durations` rows (`[clip_index, duration_s]`, D1: small enough to
+/// stay a graph-def param) plus a fallback `duration_s` (clip 0's, or
+/// `1e-3` if even that has no animated joints — the primitive's own
+/// zero-guard floor). `node_anims_by_clip` empty (a skin with zero
+/// animation clips in the whole asset) is treated as one implicit static
+/// clip 0.
+fn skeleton_pose_clip_durations(
     skin: &gltf_load::GltfSkinInfo,
     node_anims_by_clip: &[std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>],
-) -> (Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<Vec<f32>>, f32) {
+) -> (Vec<Vec<f32>>, f32) {
     let n = skin.joint_node_indices.len();
-    let mut parent_rows = Vec::with_capacity(n);
-    let mut root_world_rows = Vec::new();
-    let mut inverse_bind_rows = Vec::with_capacity(n);
-    for j in 0..n {
-        parent_rows.push(vec![j as f32, skin.joint_parent[j] as f32]);
-        inverse_bind_rows.push(mat4_row(j, &skin.inverse_bind_matrices[j]));
-        if skin.joint_parent[j] < 0 {
-            root_world_rows.push(mat4_row(j, &skin.joint_root_world[j]));
-        }
-    }
-
     let empty_anims = std::collections::BTreeMap::new();
     let clip_count = node_anims_by_clip.len().max(1);
-    let mut translation_rows = Vec::new();
-    let mut rotation_rows = Vec::new();
-    let mut scale_rows = Vec::new();
     let mut clip_durations_rows = Vec::with_capacity(clip_count);
     let mut fallback_duration_s = 1e-3;
 
@@ -317,71 +240,12 @@ fn build_skeleton_pose_tables(
         let node_anims = node_anims_by_clip.get(c).unwrap_or(&empty_anims);
         let mut duration_s: f32 = 0.0;
         for j in 0..n {
-            let anim = node_anims.get(&skin.joint_node_indices[j]);
-            let prefix = [c as f32, j as f32];
-            match anim.and_then(|a| a.translation.as_ref()) {
-                Some(t) if !t.times.is_empty() => {
-                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
-                        let (in_t, out_t) = t.tangents_at(i);
-                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
-                        duration_s = duration_s.max(*time);
-                    }
-                }
-                _ => {
-                    let b = skin.joint_bind_translation[j];
-                    push_vec3_row(
-                        &mut translation_rows,
-                        &prefix,
-                        0.0,
-                        b,
-                        gltf_load::GltfInterp::Linear,
-                        [0.0; 3],
-                        [0.0; 3],
-                    );
-                }
-            }
-            match anim.and_then(|a| a.rotation.as_ref()) {
-                Some(r) if !r.times.is_empty() => {
-                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
-                        let (in_t, out_t) = r.tangents_at(i);
-                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
-                        duration_s = duration_s.max(*time);
-                    }
-                }
-                _ => {
-                    let b = skin.joint_bind_rotation[j];
-                    push_quat_row(
-                        &mut rotation_rows,
-                        &prefix,
-                        0.0,
-                        b,
-                        gltf_load::GltfInterp::Linear,
-                        [0.0; 4],
-                        [0.0; 4],
-                    );
-                }
-            }
-            match anim.and_then(|a| a.scale.as_ref()) {
-                Some(s) if !s.times.is_empty() => {
-                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
-                        let (in_t, out_t) = s.tangents_at(i);
-                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
-                        duration_s = duration_s.max(*time);
-                    }
-                }
-                _ => {
-                    let b = skin.joint_bind_scale[j];
-                    push_vec3_row(
-                        &mut scale_rows,
-                        &prefix,
-                        0.0,
-                        b,
-                        gltf_load::GltfInterp::Linear,
-                        [0.0; 3],
-                        [0.0; 3],
-                    );
-                }
-            }
+            let Some(anim) = node_anims.get(&skin.joint_node_indices[j]) else { continue };
+            let last = |t: &[f32]| t.last().copied().unwrap_or(0.0);
+            duration_s = duration_s
+                .max(anim.translation.as_ref().map(|t| last(&t.times)).unwrap_or(0.0))
+                .max(anim.rotation.as_ref().map(|r| last(&r.times)).unwrap_or(0.0))
+                .max(anim.scale.as_ref().map(|s| last(&s.times)).unwrap_or(0.0));
         }
         let duration_s = duration_s.max(1e-3);
         clip_durations_rows.push(vec![c as f32, duration_s]);
@@ -390,74 +254,46 @@ fn build_skeleton_pose_tables(
         }
     }
 
-    (
-        parent_rows,
-        root_world_rows,
-        inverse_bind_rows,
-        translation_rows,
-        rotation_rows,
-        scale_rows,
-        clip_durations_rows,
-        fallback_duration_s,
-    )
+    (clip_durations_rows, fallback_duration_s)
 }
 
-/// GLTF_ANIMATION_DESIGN.md A3/A4: build `node.gltf_morph_weights`'
-/// `weight_tracks` Table rows from `morph`'s static topology plus EVERY
-/// parsed clip's per-node animation map — a `weights` channel targets the
-/// mesh-owning node directly (no ancestor-chain composition, unlike TRS),
-/// so this is a single lookup by `morph.mesh_node_index` per clip, not a
-/// chain walk. An unanimated target in a given clip (the node carries no
-/// `weights` channel, or the channel exists but doesn't cover the whole
-/// target range) falls back to its authored `static_weights[i]` — never a
-/// silent 0.0 (`MorphPrimitivesTest.glb`'s `mesh.weights = [0.5]` is the
-/// documented case this guards). `node_anims_by_clip` empty is treated as
-/// one implicit static clip 0 (mirrors `build_skeleton_pose_tables`).
-/// Returns `(weight_track_rows, clip_durations_rows, fallback_duration_s)`.
-fn build_morph_weight_table(
+/// GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: replaces the P1-era
+/// `build_morph_weight_table`, which built a `weight_tracks` keyframe
+/// Table — payload now lives in the shared `gltf_anim_cache`. The importer
+/// only needs `static_weights` (D1: O(target_count) topology, the tiny
+/// `[target_index, weight]` fallback `node.gltf_morph_weights` uses for a
+/// target the resolved clip's Weights channel doesn't cover — never a
+/// silent 0.0, `MorphPrimitivesTest.glb`'s `mesh.weights = [0.5]` is the
+/// documented case this guards) and `clip_durations` (tiny, D1). Returns
+/// `(static_weights_rows, clip_durations_rows, fallback_duration_s)`.
+/// `node_anims_by_clip` empty is treated as one implicit static clip 0
+/// (mirrors `skeleton_pose_clip_durations`).
+fn morph_weights_topology(
     morph: &gltf_load::GltfObjectMorph,
     node_anims_by_clip: &[std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>],
 ) -> (Vec<Vec<f32>>, Vec<Vec<f32>>, f32) {
     let n = morph.target_count as usize;
+    let static_weights_rows: Vec<Vec<f32>> =
+        (0..n).map(|i| vec![i as f32, morph.static_weights.get(i).copied().unwrap_or(0.0)]).collect();
+
     let empty_anims = std::collections::BTreeMap::new();
     let clip_count = node_anims_by_clip.len().max(1);
-    let mut rows = Vec::new();
     let mut clip_durations_rows = Vec::with_capacity(clip_count);
     let mut fallback_duration_s = 1e-3;
-
     for c in 0..clip_count {
         let node_anims = node_anims_by_clip.get(c).unwrap_or(&empty_anims);
-        // Rows must be grouped ascending by (clip_index, target_index),
-        // ascending time WITHIN a (clip, target) block — the SAME emission
-        // contract `build_skeleton_pose_tables` uses. glTF's keyframe
-        // `input` accessor is spec-required to be non-decreasing, so
-        // iterating `t.times` in accessor order is already time-ascending.
         let track = node_anims.get(&morph.mesh_node_index).and_then(|a| a.weights.as_ref());
-        let duration_s = match track {
-            Some(t) if !t.times.is_empty() && t.values.iter().all(|v| v.len() == n) => {
-                for i in 0..n {
-                    for (time, values) in t.times.iter().zip(t.values.iter()) {
-                        rows.push(vec![c as f32, i as f32, *time, values[i]]);
-                    }
-                }
-                t.times.last().copied().unwrap_or(0.0)
-            }
-            _ => {
-                for i in 0..n {
-                    let w = morph.static_weights.get(i).copied().unwrap_or(0.0);
-                    rows.push(vec![c as f32, i as f32, 0.0, w]);
-                }
-                0.0
-            }
-        }
-        .max(1e-3);
+        let duration_s = track
+            .and_then(|t| t.times.last().copied())
+            .unwrap_or(0.0)
+            .max(1e-3);
         clip_durations_rows.push(vec![c as f32, duration_s]);
         if c == 0 {
             fallback_duration_s = duration_s;
         }
     }
 
-    (rows, clip_durations_rows, fallback_duration_s)
+    (static_weights_rows, clip_durations_rows, fallback_duration_s)
 }
 
 /// Degrees→radians factor for the camera card sliders. The camera node's
@@ -937,39 +773,19 @@ fn build_object_group(
             let pose_node_id = format!("pose_{k}");
             let pose_id = fresh_id();
             let joint_count = obj_skin.info.joint_node_indices.len() as u32;
-            let (
-                parent_rows,
-                root_world_rows,
-                inverse_bind_rows,
-                translation_rows,
-                rotation_rows,
-                scale_rows,
-                clip_durations_rows,
-                duration_s,
-            ) = build_skeleton_pose_tables(&obj_skin.info, node_anims_by_clip);
+            let (clip_durations_rows, duration_s) =
+                skeleton_pose_clip_durations(&obj_skin.info, node_anims_by_clip);
             let mut pose_node =
                 plain_node(pose_id, &pose_node_id, "node.gltf_skeleton_pose", &pose_node_id);
             pose_node.params.insert("joint_count".to_string(), int(joint_count as i32));
             pose_node.params.insert("duration_s".to_string(), float(duration_s));
-            pose_node.params.insert("joint_parent_table".to_string(), table(parent_rows));
-            if !root_world_rows.is_empty() {
-                pose_node
-                    .params
-                    .insert("joint_root_world_table".to_string(), table(root_world_rows));
-            }
-            pose_node
-                .params
-                .insert("inverse_bind_table".to_string(), table(inverse_bind_rows));
-            pose_node
-                .params
-                .insert("translation_tracks".to_string(), table(translation_rows));
-            pose_node.params.insert("rotation_tracks".to_string(), table(rotation_rows));
-            pose_node.params.insert("scale_tracks".to_string(), table(scale_rows));
             pose_node.params.insert("clip_durations".to_string(), table(clip_durations_rows));
-            // GLTF_ANIM_RUNTIME_V2_DESIGN.md P1: additive — the Tables
-            // above are still emitted this phase (P2 deletes them), but
-            // `path`/`skin_index` are also stamped now so `run()` samples
-            // from the shared `gltf_anim_cache` instead.
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `path`/`skin_index` are
+            // the ONLY selectors the importer stamps — keyframe/topology
+            // payload lives entirely in the shared `gltf_anim_cache`
+            // (loaded from `path`), never in the six now-deleted Table
+            // params (`node.gltf_skeleton_pose`'s params still DECLARE
+            // them for D5 round-trip/migration; nothing reads them).
             pose_node
                 .params
                 .insert("skin_index".to_string(), int(obj_skin.skin_index as i32));
@@ -1074,8 +890,8 @@ fn build_object_group(
         let morphed_vertices_source: Option<u32> = if let Some(morph) = &m.morph {
             let weights_node_id = format!("morphweights_{k}");
             let weights_id = fresh_id();
-            let (weight_rows, weights_clip_durations_rows, weights_duration_s) =
-                build_morph_weight_table(morph, node_anims_by_clip);
+            let (static_weights_rows, weights_clip_durations_rows, weights_duration_s) =
+                morph_weights_topology(morph, node_anims_by_clip);
             let mut weights_node =
                 plain_node(weights_id, &weights_node_id, "node.gltf_morph_weights", &weights_node_id);
             weights_node
@@ -1086,11 +902,27 @@ fn build_object_group(
                 .insert("duration_s".to_string(), float(weights_duration_s));
             weights_node
                 .params
-                .insert("weight_tracks".to_string(), table(weight_rows));
+                .insert("static_weights".to_string(), table(static_weights_rows));
             weights_node
                 .params
                 .insert("clip_durations".to_string(), table(weights_clip_durations_rows));
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: `path`/`target_node`
+            // select the shared `gltf_anim_cache` entry — a `weights`
+            // channel targets the mesh-owning node directly, no
+            // ancestor-chain ambiguity.
+            weights_node
+                .params
+                .insert("target_node".to_string(), int(morph.mesh_node_index as i32));
             group_nodes.push(weights_node);
+            string_bindings.push(StringBindingDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                label: "Model File".to_string(),
+                default_value: path_str.to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new(&weights_node_id),
+                    param: "path".to_string(),
+                },
+            });
             animation_card_controls(
                 &mut card_params,
                 &mut card_bindings,
@@ -1543,34 +1375,36 @@ fn build_object_group(
             anim_node.params.insert("recenter_y".to_string(), float(m.own_center[1] - center[1]));
             anim_node.params.insert("recenter_z".to_string(), float(m.own_center[2] - center[2]));
 
-            let mut translation_rows = Vec::new();
-            let mut rotation_rows = Vec::new();
-            let mut scale_rows = Vec::new();
+            // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: keyframe payload no
+            // longer lives in Table params — `path` plus THREE per-channel
+            // node selectors (`translation_node`/`rotation_node`/
+            // `scale_node` — see node.gltf_animation_source's module doc
+            // comment for why one shared selector is wrong, confirmed by
+            // BoxAnimated.glb itself) select this object's channels from
+            // the shared `gltf_anim_cache`. `clip_durations` (tiny, D1) is
+            // still stamped per clip. The first `Some` clip's per-channel
+            // node indices are stamped as the file-wide selectors — every
+            // clip for one object resolves against the SAME scene-node
+            // structure, so this is consistent across clips, not just a
+            // clip-0 special case.
             let mut clip_durations_rows = Vec::with_capacity(m.animations.len());
             let mut fallback_duration_s = 1e-6;
+            let mut translation_node: Option<i32> = None;
+            let mut rotation_node: Option<i32> = None;
+            let mut scale_node: Option<i32> = None;
             for (c, clip_anim) in m.animations.iter().enumerate() {
                 let Some(anim) = clip_anim else {
                     clip_durations_rows.push(vec![c as f32, 1e-6]);
                     continue;
                 };
-                let prefix = [c as f32];
-                if let Some(t) = &anim.translation {
-                    for (i, (time, v)) in t.times.iter().zip(t.values.iter()).enumerate() {
-                        let (in_t, out_t) = t.tangents_at(i);
-                        push_vec3_row(&mut translation_rows, &prefix, *time, *v, t.mode, in_t, out_t);
-                    }
+                if translation_node.is_none() {
+                    translation_node = Some(anim.translation_node.map(|n| n as i32).unwrap_or(-1));
                 }
-                if let Some(r) = &anim.rotation {
-                    for (i, (time, v)) in r.times.iter().zip(r.values.iter()).enumerate() {
-                        let (in_t, out_t) = r.tangents_at(i);
-                        push_quat_row(&mut rotation_rows, &prefix, *time, *v, r.mode, in_t, out_t);
-                    }
+                if rotation_node.is_none() {
+                    rotation_node = Some(anim.rotation_node.map(|n| n as i32).unwrap_or(-1));
                 }
-                if let Some(s) = &anim.scale {
-                    for (i, (time, v)) in s.times.iter().zip(s.values.iter()).enumerate() {
-                        let (in_t, out_t) = s.tangents_at(i);
-                        push_vec3_row(&mut scale_rows, &prefix, *time, *v, s.mode, in_t, out_t);
-                    }
+                if scale_node.is_none() {
+                    scale_node = Some(anim.scale_node.map(|n| n as i32).unwrap_or(-1));
                 }
                 let duration_s = anim.duration_s.max(1e-6);
                 clip_durations_rows.push(vec![c as f32, duration_s]);
@@ -1580,16 +1414,21 @@ fn build_object_group(
             }
             anim_node.params.insert("duration_s".to_string(), float(fallback_duration_s));
             anim_node.params.insert("clip_durations".to_string(), table(clip_durations_rows));
-            if !translation_rows.is_empty() {
-                anim_node.params.insert("translation_track".to_string(), table(translation_rows));
-            }
-            if !rotation_rows.is_empty() {
-                anim_node.params.insert("rotation_track".to_string(), table(rotation_rows));
-            }
-            if !scale_rows.is_empty() {
-                anim_node.params.insert("scale_track".to_string(), table(scale_rows));
-            }
+            anim_node
+                .params
+                .insert("translation_node".to_string(), int(translation_node.unwrap_or(-1)));
+            anim_node.params.insert("rotation_node".to_string(), int(rotation_node.unwrap_or(-1)));
+            anim_node.params.insert("scale_node".to_string(), int(scale_node.unwrap_or(-1)));
             group_nodes.push(anim_node);
+            string_bindings.push(StringBindingDef {
+                id: MODEL_FILE_PARAM_ID.to_string(),
+                label: "Model File".to_string(),
+                default_value: path_str.to_string(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new(&anim_node_id),
+                    param: "path".to_string(),
+                },
+            });
             animation_card_controls(
                 &mut card_params,
                 &mut card_bindings,
@@ -5100,6 +4939,9 @@ mod tests {
                 ..Default::default()
             }),
             scale: None,
+            translation_node: Some(0),
+            rotation_node: Some(2),
+            scale_node: None,
         })];
         let mut static_obj = full_material(1, "Outer", 500);
         static_obj.animations = Vec::new();
@@ -5122,20 +4964,20 @@ mod tests {
         assert_eq!(anim_nodes.len(), 1, "only the animated object gets a source node");
         let anim = anim_nodes[0];
 
-        // Table params carry the parsed tracks (translation/rotation
-        // present, scale absent per the synthetic summary above).
-        assert!(matches!(
-            anim.params.get("translation_track"),
-            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
-        ));
-        assert!(matches!(
-            anim.params.get("rotation_track"),
-            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
-        ));
+        // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: no keyframe payload in the
+        // def any more — `path` + per-channel node selectors pick the
+        // shared cache entries. translation/rotation come from DIFFERENT
+        // nodes (0 and 2 respectively — the BoxAnimated.glb shape); scale
+        // was never animated -> -1 sentinel.
         assert!(
-            !anim.params.contains_key("scale_track"),
-            "absent scale channel must not be fabricated as a Table"
+            !anim.params.contains_key("translation_track"),
+            "keyframe payload must never live in the def (P2 D1)"
         );
+        assert!(!anim.params.contains_key("rotation_track"));
+        assert!(!anim.params.contains_key("scale_track"));
+        assert_eq!(anim.params.get("translation_node"), Some(&int(0)));
+        assert_eq!(anim.params.get("rotation_node"), Some(&int(2)));
+        assert_eq!(anim.params.get("scale_node"), Some(&int(-1)));
         assert_eq!(anim.params.get("duration_s"), Some(&float(2.0)));
 
         let transform =
@@ -5182,6 +5024,60 @@ mod tests {
             errors.is_empty(),
             "card lints must accept the assembled animated+rigged import: {errors:?}"
         );
+    }
+
+    /// GLTF_ANIM_RUNTIME_V2_DESIGN.md §3 invariant, P2 gate: no keyframe
+    /// payload in ANY def the importer emits. `skeleton_animated.glb` is a
+    /// real rigged+animated asset (drives `node.gltf_skeleton_pose` +
+    /// `node.gltf_animation_source` — see the neighboring card-lint and
+    /// BUG-205 tests) — pre-P2 this asset's def carried the six pose
+    /// Tables plus the rigid Tables, easily tens of KB per joint/keyframe.
+    /// Post-P2 the def carries only `path`/`skin_index`/`target_node`
+    /// selectors, so the whole serialized def stays comfortably under the
+    /// design's 256 KB budget (the dragon-scale 5.2 GB-RSS pathology this
+    /// design fixes needs P4's real-asset acceptance measurement; this
+    /// unit-scale gate proves the STORAGE CLASS is gone, not the exact
+    /// dragon number).
+    #[test]
+    fn imported_def_json_stays_small() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/skeleton_animated.glb");
+        let (def, _report) =
+            super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        let json = serde_json::to_string(&def).expect("serialize EffectGraphDef");
+        assert!(
+            json.len() < 256 * 1024,
+            "imported def serialized to {} bytes, budget is 256 KB (GLTF_ANIM_RUNTIME_V2_DESIGN.md D1)",
+            json.len()
+        );
+
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+        for n in &flat.nodes {
+            if matches!(
+                n.type_id.as_str(),
+                "node.gltf_skeleton_pose" | "node.gltf_animation_source" | "node.gltf_morph_weights"
+            ) {
+                for key in [
+                    "joint_parent_table",
+                    "joint_root_world_table",
+                    "inverse_bind_table",
+                    "translation_tracks",
+                    "rotation_tracks",
+                    "scale_tracks",
+                    "translation_track",
+                    "rotation_track",
+                    "scale_track",
+                    "weight_tracks",
+                ] {
+                    assert!(
+                        !n.params.contains_key(key),
+                        "{} ({}) still carries the dead keyframe param `{key}`",
+                        n.node_id.as_str(),
+                        n.type_id
+                    );
+                }
+            }
+        }
     }
 
     /// BUG-205 regression (double-transform half): a SKINNED object must
@@ -5475,11 +5371,12 @@ mod tests {
         );
     }
 
-    /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 (Table params + the new
-    /// node type survive V1 JSON save→reload — the STANDARD §5 gate must
-    /// PROVE this, not assume it, per the phase brief).
+    /// GLTF_ANIMATION_DESIGN.md A1 deliverable 4 / GLTF_ANIM_RUNTIME_V2_
+    /// DESIGN.md P2: the animation source node (now `path` + per-channel
+    /// node selectors, no keyframe Tables) survives V1 JSON save→reload —
+    /// the STANDARD §5 gate must PROVE this, not assume it.
     #[test]
-    fn animation_tables_survive_json_round_trip() {
+    fn animation_selectors_survive_json_round_trip() {
         use super::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
 
         let mut animated = full_material(0, "Inner", 1000);
@@ -5496,6 +5393,9 @@ mod tests {
                 ..Default::default()
             }),
             scale: None,
+            translation_node: Some(3),
+            rotation_node: Some(3),
+            scale_node: None,
         })];
         let summary = GltfImportSummary {
             materials: vec![animated],
@@ -5519,18 +5419,19 @@ mod tests {
             .iter()
             .find(|n| n.type_id == "node.gltf_animation_source")
             .expect("animation source survives reload");
-        assert!(matches!(
-            anim.params.get("translation_track"),
-            Some(SerializedParamValue::Table { rows }) if rows.len() == 4
-        ));
-        assert!(matches!(
-            anim.params.get("rotation_track"),
-            Some(SerializedParamValue::Table { rows }) if rows.len() == 2
-        ));
+        assert!(
+            !anim.params.contains_key("translation_track"),
+            "keyframe payload must never live in the def (P2 D1)"
+        );
+        assert!(!anim.params.contains_key("rotation_track"));
+        assert_eq!(anim.params.get("translation_node"), Some(&int(3)));
+        assert_eq!(anim.params.get("rotation_node"), Some(&int(3)));
+        assert_eq!(anim.params.get("scale_node"), Some(&int(-1)));
+        assert_eq!(anim.params.get("duration_s"), Some(&float(3.708_33)));
 
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_def(reloaded, &registry, None)
-            .expect("reloaded import graph with animation Tables must build through PresetRuntime::from_def");
+            .expect("reloaded import graph must build through PresetRuntime::from_def");
     }
 
     /// IMPORT_FIDELITY_DESIGN.md D8/F-P5 round-trip gate: a `Blend` alpha_mode
