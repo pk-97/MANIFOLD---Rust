@@ -127,6 +127,8 @@ Above tool choice: verify one level closer to the stage than where you changed t
 
 Write code directly in the main context by default. Only spawn an agent for genuinely large isolated tasks — tell the user if you do, and why.
 
+**K3 lanes (Peter's routing directive, 2026-07-18).** The default lane agent for investigation and well-scoped implementation is Kimi K3 at low effort, via cc-fleet: `cc-fleet subagent kimi-code --prompt-file <brief> [--profile slim-ro] --background` (resume into a fix with `--resume <session-id>`, keep the profile constant across turns). Model tiers: `k3` (default/strong) for anything needing judgment; `kimi-for-coding-highspeed` (fast slot, K2.7 ≈ Haiku-plus) for dumb chores only. Fable stays the top-level intelligence — design, review, verification, landing. No Opus lanes. Keep K3 cheap: rich briefs with file:line anchors and established findings (never send it exploring for what a memory or backlog entry already records), read-only profile for investigations, scope agreed before write access, and the lead session verifies citations and reruns the gate before landing anything. Playbook + current provider state: the `agent-model-staffing-preferences` memory. K3 leaves obey every rule in this file — worktree slots, pathspec commits, the landing protocol.
+
 ## Reference docs (read on-demand)
 
 [docs/README.md](docs/README.md) is the generated index of every active doc (one line each) — scan it to discover what exists; regenerate with `python3 scripts/gen_docs_index.py` after adding or renaming any doc (a workspace test enforces freshness). Closed/historical docs live in `docs/archive/`. The table below is the curated must-reads.
