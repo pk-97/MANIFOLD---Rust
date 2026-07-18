@@ -340,6 +340,137 @@ fn read_scene_node_param(
         .flatten()
 }
 
+/// BUG-249 (expose-then-arm, Peter's call): resolve a modulation-family
+/// action's `(target, param_id)` for BOTH row kinds through one funnel.
+///
+/// A converted scene row's `param_id` is the synthesized `scene.{doc}.{param}`
+/// id — the modulation runtime (`modulation.rs`) only ever resolves via
+/// `inst.params.get_mut(param_id)`, so storing a driver/envelope/audio-mod
+/// against the synth id arms state the runtime silently drops (the whole
+/// bug). The fix: a scene row's modulation always targets the REAL exposed
+/// instance param bound to the inner node —
+/// - already exposed → translate to the existing binding id
+///   ([`PresetInstance::binding_id_for_node_param`], bundled or user-added);
+/// - not exposed and `materialize` (an arm/add action) → first run the SAME
+///   `ToggleNodeParamExposeCommand` the panel's mod button and the graph
+///   editor's expose glyph dispatch (metadata from the primitive's own
+///   `ParamDef` table), then translate. Expose + arm are two undo entries —
+///   undo peels the arm first, then the exposure, which mirrors doing the
+///   two clicks by hand;
+/// - not exposed and `!materialize` (a config edit on a drawer that can't
+///   exist yet) → `None`, and the caller swallows the action.
+///
+/// A non-scene `param_id` (id-map miss) resolves through
+/// [`resolve_graph_target`] with the id unchanged — the pre-existing card
+/// path, byte-for-byte.
+#[allow(clippy::too_many_arguments)]
+fn resolve_mod_target(
+    ui: &UIRoot,
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    gpt: &GraphParamTarget,
+    param_id: &manifold_core::effects::ParamId,
+    editor_target: Option<&manifold_core::GraphTarget>,
+    effective_tab: InspectorTab,
+    active_layer: &Option<LayerId>,
+    selection: &SelectionState,
+    materialize: bool,
+) -> Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)> {
+    let Some((addr, snapshot_val)) = ui.scene_setup_panel.resolve_scene_param(param_id) else {
+        // Not a scene row — the existing exposed-param card path.
+        let target =
+            resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)?;
+        return Some((target, param_id.clone()));
+    };
+    let (_, target, catalog_default) = resolve_scene_write(
+        ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
+    )?;
+    let existing = project
+        .with_preset_graph_mut(&target, |inst| {
+            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
+        })
+        .flatten();
+    if let Some(id) = existing {
+        return Some((target, manifold_core::effects::ParamId::from(id)));
+    }
+    if !materialize {
+        return None;
+    }
+    // Materialize the exposure. Same construction as `project.rs`'s
+    // `SceneSetupExposeParam` arm, but with the param metadata read off the
+    // primitive's own `ParamDef` table (this funnel has no panel-supplied
+    // expose context — the click was a D/E/A button, not the mod button).
+    let manifold_core::GraphTarget::Generator(lid) = &target else {
+        return None;
+    };
+    let effective_def = project
+        .timeline
+        .find_layer_by_id(lid)
+        .and_then(|(_, layer)| layer.generator_graph().cloned())
+        .unwrap_or_else(|| catalog_default.clone());
+    let node = super::project::find_node_by_scope(&effective_def, &addr.scope_path, addr.node_doc_id)?;
+    let node_handle = node.handle.clone().unwrap_or_else(|| format!("node{}", addr.node_doc_id));
+    let node_id = node.node_id.clone();
+    let node_title = node.title.clone();
+    let type_id = node.type_id.clone();
+    let doc_params = node.params.clone();
+    // Primitive-side metadata: construct the node like `snapshot.rs` does
+    // (seed defaults, apply doc overrides, reconfigure) so variadic nodes
+    // report their real param list. Boundary path — first arm only.
+    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let mut boxed = registry.construct(&type_id)?;
+    let mut params: manifold_renderer::node_graph::ParamValues = ahash::AHashMap::default();
+    for pd in boxed.parameters() {
+        params.insert(pd.name.clone(), pd.default.clone());
+    }
+    for (k, v) in &doc_params {
+        params.insert(std::borrow::Cow::Owned(k.clone()), v.clone().into());
+    }
+    boxed.reconfigure(&params);
+    let pd = boxed.parameters().iter().find(|p| p.name.as_ref() == addr.param_id)?.clone();
+    let (min, max) = pd.range.unwrap_or((0.0, 1.0));
+    use manifold_renderer::node_graph::ParamType;
+    let is_angle = matches!(pd.ty, ParamType::Angle);
+    let (convert, value_labels) = if matches!(pd.ty, ParamType::Enum) {
+        (
+            manifold_core::effects::ParamConvert::EnumRound,
+            pd.enum_values.iter().map(|s| s.to_string()).collect(),
+        )
+    } else {
+        (manifold_core::effects::ParamConvert::Float, Vec::new())
+    };
+    let object_label = node_title.unwrap_or_else(|| node_handle.clone());
+    let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
+        target.clone(),
+        node_id,
+        addr.node_doc_id,
+        node_handle,
+        addr.param_id.clone(),
+        true,
+        catalog_default,
+        format!("{object_label} \u{b7} {}", pd.label),
+        min,
+        max,
+        snapshot_val,
+        convert,
+        is_angle,
+        value_labels,
+    )
+    .with_scope(addr.scope_path.clone());
+    let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+    boxed_cmd.execute(project);
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::Execute(boxed_cmd),
+    );
+    let minted = project
+        .with_preset_graph_mut(&target, |inst| {
+            inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
+        })
+        .flatten()?;
+    Some((target, manifold_core::effects::ParamId::from(minted)))
+}
+
 /// The `AbletonMappingTarget` for a resolved param `target` on `tab`, so the
 /// Ableton trim/invert arms route through the shared
 /// `Project::ableton_param_mappings_mut` locate-fork (effects addressed by
@@ -1458,11 +1589,16 @@ pub(super) fn dispatch_inspector(
 
         // ── Effect modulation ──────────────────────────────────────
         PanelAction::DriverToggle(gpt, param_id) => {
-            let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            else {
+            // BUG-249: scene rows redirect to their real exposed param
+            // (materializing the exposure on first arm) — see
+            // `resolve_mod_target`. Non-scene ids resolve exactly as before.
+            let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, true,
+            ) else {
                 return DispatchResult::structural();
             };
+            let param_id = &param_id;
             // Read the driver state off the SAME instance the command targets,
             // by target — never an ambient row index — so an editor-card driver
             // edit can't split (command -> watched instance, di -> another).
@@ -1503,11 +1639,13 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::AudioModToggle(gpt, param_id) => {
-            let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            else {
+            let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, true,
+            ) else {
                 return DispatchResult::structural();
             };
+            let param_id = &param_id;
             // Existing mod's enabled state, read off the resolved instance.
             let existing = project
                 .with_preset_graph_mut(&target, |inst| {
@@ -1542,11 +1680,13 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
-            let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            else {
+            let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, true,
+            ) else {
                 return DispatchResult::structural();
             };
+            let param_id = &param_id;
             let old_source = project
                 .with_preset_graph_mut(&target, |inst| {
                     inst.find_audio_mod(param_id.as_ref()).map(|a| a.source.clone())
@@ -1578,11 +1718,13 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::AudioModRemove(gpt, param_id) => {
-            let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            else {
+            let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) else {
                 return DispatchResult::structural();
             };
+            let param_id = &param_id;
             let driver_target = DriverTarget::from(&target);
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveAudioModCommand::new(driver_target, param_id.clone()));
@@ -1593,9 +1735,11 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModSetInvert(gpt, param_id) => {
             // Flip the mod's invert flag in one undo step. Reads the current
             // shape, flips `invert`, commits old→new via the shape command.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let old_shape = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
@@ -1625,9 +1769,11 @@ pub(super) fn dispatch_inspector(
             // Flip the mod's rate-of-change flag in one undo step — same shape
             // path as invert: read the current shape, flip `rate_of_change`,
             // commit old→new via the shape command.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let old_shape = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
@@ -1655,9 +1801,11 @@ pub(super) fn dispatch_inspector(
 
         PanelAction::AudioModShapeSnapshot(gpt, param_id) => {
             // Capture the pre-drag shape so the commit can record one undo step.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 *audio_shape_snapshot = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
@@ -1671,9 +1819,11 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let which = *which;
                 let v = *value;
                 graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
@@ -1689,9 +1839,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModShapeCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current shape (new) via the shape command.
             if let Some(old_shape) = audio_shape_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some((target, param_id)) = resolve_mod_target(
+                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
+                    active_layer, selection, false,
+                )
             {
+                let param_id = &param_id;
                 let new_shape = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.audio_mods
@@ -1721,9 +1874,11 @@ pub(super) fn dispatch_inspector(
         // SAME `ParameterAudioMod` every other drawer edit targets (no
         // separate per-instance config, no separate command family).
         PanelAction::AudioModSetTriggerMode(gpt, param_id, mode_idx) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let old_mode = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).and_then(|m| m.trigger_mode)
@@ -1756,9 +1911,11 @@ pub(super) fn dispatch_inspector(
         // Amount/Wrap/Mode rows and the collapsed "A"→"S"/"R" glyph all
         // depend on which action is armed.
         PanelAction::AudioModSetActionKind(gpt, param_id, kind_idx) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let (old_action, min, max, whole_numbers) = project
                     .with_preset_graph_mut(&target, |inst| {
                         let action = inst.find_audio_mod(param_id.as_ref()).map(|m| m.action);
@@ -1805,9 +1962,11 @@ pub(super) fn dispatch_inspector(
 
         PanelAction::AudioModStepAmountSnapshot(gpt, param_id) => {
             // Capture the pre-drag action so the commit can record one undo step.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 *audio_action_snapshot = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
@@ -1818,9 +1977,11 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModStepAmountChanged(gpt, param_id, value) => {
             // Live edit (no undo entry per frame) — the handle tracks the cursor.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let v = *value;
                 graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
                     let wrap = match m.action {
@@ -1835,9 +1996,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::AudioModStepAmountCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current action (new).
             if let Some(old_action) = audio_action_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some((target, param_id)) = resolve_mod_target(
+                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
+                    active_layer, selection, false,
+                )
             {
+                let param_id = &param_id;
                 let new_action = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
@@ -1864,9 +2028,11 @@ pub(super) fn dispatch_inspector(
         // click while some other action is armed (shouldn't happen — the row
         // isn't built then) is a harmless no-op.
         PanelAction::AudioModSetWrap(gpt, param_id, wrap_idx) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let old_action = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
@@ -2281,9 +2447,11 @@ pub(super) fn dispatch_inspector(
             // envelope. Effects are clip-timed, so only layer effects get
             // envelopes (master/clip have no trigger — the button is inert
             // there); generators are layer-scoped, always permitted.
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, true,
+            ) {
+                let param_id = &param_id;
                 let env_allowed = match &target {
                     manifold_core::GraphTarget::Generator(_) => true,
                     manifold_core::GraphTarget::Effect(_) => {
@@ -2312,11 +2480,13 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::DriverConfig(gpt, param_id, cfg) => {
-            let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            else {
+            let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) else {
                 return DispatchResult::structural();
             };
+            let param_id = &param_id;
             let driver_target = DriverTarget::from(&target);
             // Read the driver's current config off the same instance the
             // command targets (by GraphTarget), so an editor-card edit can't
@@ -2459,9 +2629,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::TargetChanged(gpt, param_id, norm) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let n = *norm;
                 graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.target_normalized = n;
@@ -2470,9 +2642,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EnvDecayChanged(gpt, param_id, decay) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let d = *decay;
                 graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.decay_beats = d;
@@ -2622,9 +2796,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::TargetSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let t = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
@@ -2641,9 +2817,12 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::TargetCommit(gpt, param_id) => {
             if let Some(old_target) = target_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some((target, param_id)) = resolve_mod_target(
+                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
+                    active_layer, selection, false,
+                )
             {
+                let param_id = &param_id;
                 let info = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
@@ -2664,9 +2843,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::EnvDecaySnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
+            if let Some((target, param_id)) = resolve_mod_target(
+                ui, project, content_tx, gpt, param_id, editor_target, effective_tab, active_layer,
+                selection, false,
+            ) {
+                let param_id = &param_id;
                 let d = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
@@ -2683,9 +2864,12 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EnvDecayCommit(gpt, param_id) => {
             if let Some(old_decay) = decay_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+                && let Some((target, param_id)) = resolve_mod_target(
+                    ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
+                    active_layer, selection, false,
+                )
             {
+                let param_id = &param_id;
                 let info = project
                     .with_preset_graph_mut(&target, |inst| {
                         inst.envelopes
@@ -3816,6 +4000,91 @@ mod scene_card_convergence_tests {
             "a completed macro drag must produce an undo-tracked command; got {} commands",
             cmds.len()
         );
+    }
+
+    /// BUG-249 gate (expose-then-arm): a `DriverToggle` on a scene row's
+    /// synthesized id must (1) materialize a REAL exposed instance param
+    /// via the same `ToggleNodeParamExposeCommand` path the mod button
+    /// dispatches, and (2) store the driver keyed by that real binding id —
+    /// present in `inst.params`, which is the ONLY namespace the runtime
+    /// (`modulation.rs`) resolves — never by the synth id, which the
+    /// runtime silently drops. Also proves re-toggle reuses the binding
+    /// (no duplicate exposure) and the panel read-back translation
+    /// (`scene_row_modulation`) reports the armed driver for the row.
+    #[test]
+    fn scene_row_driver_toggle_arms_a_real_exposed_param() {
+        let (mut project, layer_id) = scene_layer_project();
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, &project, &layer_id);
+        // The pid a real click carries: the panel's curated row key
+        // ("density"), NOT the graph key ("fog_density") — the id map's
+        // VALUE carries the graph address, its KEY uses the panel key.
+        let pid = manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
+
+        h.dispatch(
+            &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, pid.clone()),
+            &mut project,
+        );
+
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst = layer.gen_params().expect("arming must init gen_params");
+        let real_id = inst
+            .binding_id_for_node_param(node_doc_id, "fog_density")
+            .expect("first arm must materialize an exposed param binding");
+        assert_ne!(real_id, pid.as_ref(), "the binding id must not be the synth id");
+        assert!(
+            inst.params.contains(real_id.as_str()),
+            "the exposed param must exist in inst.params — the namespace modulation.rs resolves"
+        );
+        let drivers = inst.drivers.as_ref().expect("driver must be stored");
+        let d = drivers
+            .iter()
+            .find(|d| d.param_id.as_ref() == real_id)
+            .expect("driver must be keyed by the REAL binding id");
+        assert!(d.enabled);
+        assert!(
+            !drivers.iter().any(|d| d.param_id == pid),
+            "no driver may be keyed by the runtime-unresolvable synth id"
+        );
+        // base_value captured off the real param, not a garbage read of a
+        // param that doesn't exist (SceneStarter ships fog_density 0.04).
+        assert!((d.base_value - 0.04).abs() < 1e-6, "base_value = {}", d.base_value);
+
+        // Read-back half: the panel's per-row modulation lookup translates
+        // the row address to the real binding and sees the armed driver.
+        let row = crate::ui_bridge::state_sync::scene_row_modulation(
+            Some(inst),
+            node_doc_id,
+            "fog_density",
+            &[],
+        );
+        assert!(row.driver_active, "scene row read-back must report the armed driver");
+
+        // Both mutations reached the content thread as undo-tracked
+        // commands: the exposure + the driver add.
+        let executes = h
+            .drain()
+            .iter()
+            .filter(|c| matches!(c, ContentCommand::Execute(_)))
+            .count();
+        assert_eq!(executes, 2, "expose + arm = two Execute commands");
+
+        // Second toggle: translate-only — reuses the binding (no duplicate
+        // exposure) and flips the SAME driver off.
+        h.dispatch(
+            &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, pid.clone()),
+            &mut project,
+        );
+        let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
+        let inst = layer.gen_params().unwrap();
+        assert_eq!(
+            inst.binding_id_for_node_param(node_doc_id, "fog_density").as_deref(),
+            Some(real_id.as_str()),
+            "re-toggle must not mint a second binding"
+        );
+        let drivers = inst.drivers.as_ref().unwrap();
+        assert_eq!(drivers.len(), 1);
+        assert!(!drivers[0].enabled, "second toggle disarms the same driver");
     }
 
     /// Same race, scene-row flavor: a full project snapshot accepted

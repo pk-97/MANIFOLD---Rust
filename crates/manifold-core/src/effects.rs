@@ -1911,6 +1911,52 @@ impl PresetInstance {
             .collect()
     }
 
+    /// The REAL binding id (`inst.params` key) for the inner-graph param
+    /// `(node_doc_id, param_key)`, if any binding — bundled or user-added —
+    /// targets it. BUG-249: scene panel rows are keyed by synthesized
+    /// `scene.{doc}.{param}` ids the modulation runtime can never resolve;
+    /// every modulation write/read for a scene row must translate through
+    /// this to the exposed param the runtime actually evaluates
+    /// (`modulation.rs` resolves via `inst.params.get_mut(param_id)`).
+    /// Node identity follows the expose command's own convention: match the
+    /// binding's `node_id` against the node's stable id, falling back to
+    /// the handle-minted id when the stable id is empty (bundled nodes).
+    /// Returns `None` when the param isn't exposed (no binding yet).
+    pub fn binding_id_for_node_param(&self, node_doc_id: u32, param_key: &str) -> Option<String> {
+        use crate::effect_graph_def::{BindingTarget, EffectGraphNode};
+        fn find_node(nodes: &[EffectGraphNode], doc_id: u32) -> Option<&EffectGraphNode> {
+            for n in nodes {
+                if n.id == doc_id {
+                    return Some(n);
+                }
+                if let Some(group) = &n.group
+                    && let Some(found) = find_node(&group.nodes, doc_id)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let def = self.graph.as_ref()?;
+        let node = find_node(&def.nodes, node_doc_id)?;
+        let identity = if node.node_id.is_empty() {
+            let handle = node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+            crate::NodeId::new(handle.as_str())
+        } else {
+            node.node_id.clone()
+        };
+        let meta = def.preset_metadata.as_ref()?;
+        meta.bindings
+            .iter()
+            .find(|b| match &b.target {
+                BindingTarget::Node { node_id, param } => {
+                    *node_id == identity && param == param_key
+                }
+                BindingTarget::Composite { .. } => false,
+            })
+            .map(|b| b.id.clone())
+    }
+
     /// Build one [`UserParamBinding`] from a `user_added` [`BindingDef`]
     /// plus its matching `ParamSpecDef` reshape. Shared by
     /// [`Self::user_param_bindings`] and the single-binding lookups.
