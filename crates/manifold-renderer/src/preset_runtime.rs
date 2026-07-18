@@ -255,6 +255,38 @@ struct StringBindingResolution {
     /// `stringParams` entry's `id`.
     source_key: String,
     default: String,
+    /// The def node's OWN value for the target param, captured from the
+    /// (flattened) def at resolution time (BUG-182). Wins over `default`
+    /// when seeding at construction, so a def-baked value — a file path set
+    /// directly on the node, as the glb importer's mesh sources rely on —
+    /// survives the build. `None` when the def leaves the param unset.
+    def_value: Option<String>,
+}
+
+/// Read a def-baked String param value for string-binding seeding: the
+/// flattened def's node matching `node_id`, its literal `param` value if the
+/// def sets one (BUG-182 — the def node param wins over the binding's
+/// declared default at construction). Non-String serialized values can't
+/// occur for a String-typed param (the loader type-checks), but a mismatch
+/// degrades to `None` (= seed from the binding default) rather than failing
+/// the build.
+fn def_string_param_value(
+    flat_def: &manifold_core::effect_graph_def::EffectGraphDef,
+    node_id: &manifold_core::NodeId,
+    param: &str,
+) -> Option<String> {
+    let value = flat_def
+        .nodes
+        .iter()
+        .find(|n| &n.node_id == node_id)?
+        .params
+        .get(param)?;
+    match value {
+        manifold_core::effect_graph_def::SerializedParamValue::String { value } => {
+            Some(value.clone())
+        }
+        _ => None,
+    }
 }
 
 /// Errors produced when loading a generator preset (the generator
@@ -1397,7 +1429,9 @@ impl PresetRuntime {
             // `string_bindings`). A String param can't ride the float `apply`
             // loop, so these are applied separately (defaults seeded at build).
             // No shipping effect declares any today (Vec stays empty), so this
-            // is inert until one does.
+            // is inert until one does. `flat_splice_def` feeds each binding's
+            // `def_value` seed (BUG-182) and the preview-kind propagation below.
+            let flat_splice_def = manifold_core::flatten::flatten_groups(splice_def).ok();
             if let Some(meta) = view.canonical_def.preset_metadata.as_ref() {
                 for b in &meta.string_bindings {
                     if let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } =
@@ -1410,6 +1444,9 @@ impl PresetRuntime {
                             target_param: param.clone(),
                             source_key: b.id.clone(),
                             default: b.default_value.clone(),
+                            def_value: flat_splice_def
+                                .as_ref()
+                                .and_then(|flat| def_string_param_value(flat, node_id, param)),
                         });
                     }
                 }
@@ -1429,8 +1466,9 @@ impl PresetRuntime {
             // (groups inlined) so a filter inherits the data kind of whatever
             // upstream node feeds it. `node_id`s survive flatten (nodeId-safety
             // invariant), so these keys match `node_map` / `group_preview_map`.
-            let preview_kinds = manifold_core::flatten::flatten_groups(splice_def)
-                .map(|flat| crate::node_graph::PreviewEncoding::propagate(&flat))
+            let preview_kinds = flat_splice_def
+                .as_ref()
+                .map(crate::node_graph::PreviewEncoding::propagate)
                 .unwrap_or_default();
             // Build the unified resolved-binding list: static prefix
             // first (view.bindings → ResolvedBinding::from_static),
@@ -2807,6 +2845,9 @@ impl PresetRuntime {
                         target_param: param.clone(),
                         source_key: b.id.clone(),
                         default: b.default_value.clone(),
+                        def_value: flat_doc
+                            .as_ref()
+                            .and_then(|flat| def_string_param_value(flat, node_id, param)),
                     })
                 }
                 BindingTarget::Composite { .. } => None,
@@ -3043,33 +3084,49 @@ impl PresetRuntime {
     }
 
     /// Push the host's per-clip string overrides through the preset's
-    /// `stringBindings` to the matching inner-node String params. Keys absent
-    /// from `values` fall back to the binding's declared default.
+    /// `stringBindings` to the matching inner-node String params. Only keys
+    /// PRESENT in `values` are written — an absent key leaves the live node
+    /// param untouched (BUG-182: the previous fall-back-to-default behavior
+    /// re-asserted the binding's declared default every frame, so a file path
+    /// set directly on the node — e.g. `node.hdri_source`'s `path` via the
+    /// graph editor's picker — was silently overwritten by the card's empty
+    /// `hdri_file` default before the next frame ran). Defaults are seeded
+    /// once at construction by [`Self::apply_string_defaults`], so absent
+    /// keys still start from the binding default on a fresh runtime.
     pub fn apply_string_params(
         &mut self,
         values: Option<&std::collections::BTreeMap<String, String>>,
     ) {
+        let Some(values) = values else { return };
         for binding in &self.string_bindings {
-            let v: String = values
-                .and_then(|m| m.get(binding.source_key.as_str()))
-                .cloned()
-                .unwrap_or_else(|| binding.default.clone());
+            let Some(v) = values.get(binding.source_key.as_str()) else {
+                continue;
+            };
             let _ = self.graph.set_param(
                 binding.target_node,
                 &binding.target_param,
-                ParamValue::String(std::sync::Arc::new(v)),
+                ParamValue::String(std::sync::Arc::new(v.clone())),
             );
         }
     }
 
-    /// Seed every string binding with its declared default (once at
-    /// construction, before the host's first `set_string_params` call).
+    /// Seed every string binding's value once at construction, before the
+    /// host's first `set_string_params` call. Precedence (BUG-182): the def
+    /// node's OWN param value (`binding.def_value`, captured from the def at
+    /// resolution time) wins over the binding's declared default, so a
+    /// def-baked value — e.g. a file path set directly on the node in the
+    /// graph editor — survives construction. Host values pushed later via
+    /// [`Self::apply_string_params`] override either. (The live graph can't
+    /// be consulted for this distinction: `Graph::add_node` pre-populates
+    /// every declared param with its primitive default, so presence there
+    /// says nothing about whether the DEF set the param.)
     fn apply_string_defaults(&mut self) {
         for binding in &self.string_bindings {
+            let seed = binding.def_value.as_ref().unwrap_or(&binding.default);
             let _ = self.graph.set_param(
                 binding.target_node,
                 &binding.target_param,
-                ParamValue::String(std::sync::Arc::new(binding.default.clone())),
+                ParamValue::String(std::sync::Arc::new(seed.clone())),
             );
         }
     }
@@ -5456,6 +5513,138 @@ mod generator_runtime_tests {
         assert!(matches!(
             inst.params.get("scale"),
             Some(ParamValue::Float(v)) if (*v - 1.5).abs() < 1e-5
+        ));
+    }
+
+    /// BUG-182 regression: a String param set directly on a node (the graph
+    /// editor's param edit / file picker writes NODE params, not the card's
+    /// `clip.string_params` map) must survive host string-param pushes whose
+    /// map lacks the binding's key. The pre-fix behavior fell back to the
+    /// binding's declared default for absent keys, so the card's empty
+    /// `hdri_file` binding overwrote `node.hdri_source`'s `path` every frame.
+    #[test]
+    fn string_params_absent_key_does_not_clobber_node_level_value() {
+        let json = include_str!("../assets/generator-presets/Text.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Text preset must load");
+        let render_text = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "render_text")
+            .map(|(_, id)| id)
+            .expect("Text preset declares a node with handle `render_text`");
+
+        // Construction seed: the def node carries no `text` param, so the
+        // binding's declared default is planted.
+        assert!(matches!(
+            g.graph.get_node(render_text).unwrap().params.get("text"),
+            Some(ParamValue::String(s)) if s.as_str() == "HELLO"
+        ));
+
+        // Direct node-level write — what SetGraphNodeParamCommand +
+        // apply_inner_param_overrides produce for a graph-editor edit.
+        g.graph
+            .set_param(
+                render_text,
+                "text",
+                ParamValue::String(std::sync::Arc::new("DIRECT".to_string())),
+            )
+            .expect("render_text declares `text`");
+
+        // Neither a missing host map nor a map lacking the key may touch it.
+        g.apply_string_params(None);
+        let only_font: std::collections::BTreeMap<String, String> =
+            [("fontFamily".to_string(), "Menlo".to_string())].into_iter().collect();
+        g.apply_string_params(Some(&only_font));
+        assert!(
+            matches!(
+                g.graph.get_node(render_text).unwrap().params.get("text"),
+                Some(ParamValue::String(s)) if s.as_str() == "DIRECT"
+            ),
+            "absent host key must leave the node-level value alone"
+        );
+        // A present key in the same map DID write (only absent keys skip).
+        assert!(matches!(
+            g.graph.get_node(render_text).unwrap().params.get("fontFamily"),
+            Some(ParamValue::String(s)) if s.as_str() == "Menlo"
+        ));
+    }
+
+    /// The other half of BUG-182: an explicit host value must still win, land
+    /// live, and not be reverted by later pushes that omit the key.
+    #[test]
+    fn string_params_explicit_host_value_wins_and_sticks() {
+        let json = include_str!("../assets/generator-presets/Text.json");
+        let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
+            .expect("Text preset must load");
+        let render_text = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "render_text")
+            .map(|(_, id)| id)
+            .expect("render_text handle");
+
+        let host: std::collections::BTreeMap<String, String> =
+            [("text".to_string(), "HOST".to_string())].into_iter().collect();
+        g.apply_string_params(Some(&host));
+        assert!(matches!(
+            g.graph.get_node(render_text).unwrap().params.get("text"),
+            Some(ParamValue::String(s)) if s.as_str() == "HOST"
+        ));
+
+        // A later push that omits the key leaves the host's value live
+        // (sticky — defaults are a construction-time seed, not a per-frame
+        // re-assertion).
+        g.apply_string_params(None);
+        assert!(matches!(
+            g.graph.get_node(render_text).unwrap().params.get("text"),
+            Some(ParamValue::String(s)) if s.as_str() == "HOST"
+        ));
+    }
+
+    /// Construction seeding precedence (BUG-182): when the def node carries
+    /// its OWN value for a string-bound param (a def-baked file path set
+    /// directly on the node), that value must survive construction — the
+    /// binding's declared default is only a fallback for params the def
+    /// leaves unset.
+    #[test]
+    fn string_binding_construction_seed_respects_def_node_param_over_default() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+        let json = include_str!("../assets/generator-presets/Text.json");
+        let mut def: EffectGraphDef =
+            serde_json::from_str(json).expect("Text preset JSON must parse");
+        let node_doc = def
+            .nodes
+            .iter_mut()
+            .find(|n| n.node_id.as_str() == "render_text")
+            .expect("render_text node doc");
+        node_doc.params.insert(
+            "text".to_string(),
+            SerializedParamValue::String {
+                value: "FROM_DEF".to_string(),
+            },
+        );
+
+        let g = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None)
+            .expect("Text preset with a def-baked `text` param must build");
+        let render_text = g
+            .graph
+            .handles()
+            .find(|(h, _)| *h == "render_text")
+            .map(|(_, id)| id)
+            .expect("render_text handle");
+
+        assert!(
+            matches!(
+                g.graph.get_node(render_text).unwrap().params.get("text"),
+                Some(ParamValue::String(s)) if s.as_str() == "FROM_DEF"
+            ),
+            "def node param must win over the binding's declared default (\"HELLO\")"
+        );
+        // A param the def does NOT set still gets the binding default.
+        assert!(matches!(
+            g.graph.get_node(render_text).unwrap().params.get("fontFamily"),
+            Some(ParamValue::String(s)) if s.is_empty()
         ));
     }
 
