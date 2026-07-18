@@ -1830,6 +1830,11 @@ fn reduce_send(
             // to different targets and never block each other's refractory.
             let refr = send.transient_refractory[bi];
             let fired = is_peak && refr == 0 && (candidate > threshold || novel);
+            if std::env::var_os("MANIFOLD_ODF_DEBUG").is_some() {
+                eprintln!(
+                    "ODFDBG band={bi} candidate={candidate:.1} median={median:.1} threshold={threshold:.1} novelty_ref={novelty_ref:.1} novel={novel} is_peak={is_peak} refr={refr} fired={fired}"
+                );
+            }
             if fired {
                 bf.transients = 1.0;
                 send.transient_refractory[bi] = ONSET_REFRACTORY_HOPS;
