@@ -560,11 +560,10 @@ impl AudioSetupPanel {
     }
 
     /// Mouse-wheel scroll for the docked body. Returns true if the offset moved
-    /// (caller schedules a rebuild so the offset is re-applied). Positive
-    /// `delta` scrolls DOWN (reveals later content) — same sign convention as
-    /// the inspector's wheel handler.
+    /// (caller schedules a rebuild so the offset is re-applied). Sign convention
+    /// matches the inspector's wheel handler (positive `delta` = wheel up).
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        self.scroll.apply_scroll_delta(-delta)
+        self.scroll.apply_scroll_delta(delta)
     }
 
     /// The modal chrome as a host `View`: the hit-testable background (it must
@@ -2556,7 +2555,7 @@ mod tests {
         assert!(p.scroll.can_scroll());
         let unscrolled_y = p.scope_rect().expect("scope present while open").y;
 
-        let moved = p.handle_scroll(40.0);
+        let moved = p.handle_scroll(-40.0);
         assert!(moved, "scroll delta within scrollable range must move the offset");
         p.build_docked(&mut tree, test_dock_rect());
         let offset = p.scroll.scroll_offset();

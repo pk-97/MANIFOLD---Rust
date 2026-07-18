@@ -3860,7 +3860,7 @@ impl ScenePanel {
 
     /// Mouse-wheel scroll for the docked body.
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        self.scroll.apply_scroll_delta(-delta)
+        self.scroll.apply_scroll_delta(delta)
     }
 
     /// Whether a point lands inside the panel's own rect — for the app's
