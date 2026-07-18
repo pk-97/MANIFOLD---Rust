@@ -2707,6 +2707,22 @@ pub(super) fn dispatch_inspector(
             {
                 let mn = *min;
                 let mx = *max;
+                // Guard the in-flight range against a concurrent snapshot swap
+                // (BUG-246): restored via ActiveInspectorDrag::Trim::apply.
+                // Ableton needs its resolved mapping target; driver/audio don't.
+                let ableton_target = matches!(kind, TrimKind::Ableton)
+                    .then(|| {
+                        ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                    })
+                    .flatten();
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::Trim {
+                    kind: *kind,
+                    target: target.clone(),
+                    ableton_target,
+                    param_id: param_id.clone(),
+                    min: mn,
+                    max: mx,
+                });
                 match kind {
                     TrimKind::Driver => {
                         graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {

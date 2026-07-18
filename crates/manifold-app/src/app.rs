@@ -76,6 +76,20 @@ pub(crate) enum ActiveInspectorDrag {
         catalog_default: Box<manifold_core::effect_graph_def::EffectGraphDef>,
         value: f32,
     },
+    /// A modulation trim-range handle drag (driver / audio-mod / Ableton
+    /// sub-range bars, BUG-246). Not carried in any snapshot block, so a
+    /// concurrent `data_version` bump mid-drag replaces `local_project`
+    /// wholesale and the in-flight `[min, max]` snaps back. This restores the
+    /// live range through the same store each `TrimKind` writes.
+    Trim {
+        kind: manifold_ui::panels::TrimKind,
+        target: manifold_core::GraphTarget,
+        /// Resolved only for `TrimKind::Ableton`; `None` for driver/audio.
+        ableton_target: Option<manifold_core::ableton_mapping::AbletonMappingTarget>,
+        param_id: manifold_core::effects::ParamId,
+        min: f32,
+        max: f32,
+    },
 }
 
 impl ActiveInspectorDrag {
@@ -126,6 +140,56 @@ impl ActiveInspectorDrag {
                 )
                 .with_scope(addr.scope_path.clone());
                 cmd.execute(project);
+            }
+            Self::Trim {
+                kind,
+                target,
+                ableton_target,
+                param_id,
+                min,
+                max,
+            } => {
+                use manifold_ui::panels::TrimKind;
+                // Same store each kind's live `TrimChanged` write lands in
+                // (inspector.rs), re-applied so a mid-drag snapshot swap can't
+                // revert the in-flight range.
+                match kind {
+                    TrimKind::Driver => {
+                        project.with_preset_graph_mut(target, |inst| {
+                            if let Some(d) = inst
+                                .drivers
+                                .as_mut()
+                                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == *param_id))
+                            {
+                                d.trim_min = *min;
+                                d.trim_max = *max;
+                            }
+                        });
+                    }
+                    TrimKind::Audio => {
+                        project.with_preset_graph_mut(target, |inst| {
+                            if let Some(m) = inst
+                                .audio_mods
+                                .as_mut()
+                                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                            {
+                                m.shape.range_min = *min;
+                                m.shape.range_max = *max;
+                            }
+                        });
+                    }
+                    TrimKind::Ableton => {
+                        if let Some(mt) = ableton_target
+                            && let Some(ms) = project
+                                .ableton_param_mappings_mut(mt)
+                                .and_then(|opt| opt.as_mut())
+                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
+                        {
+                            m.range_min = *min;
+                            m.range_max = *max;
+                        }
+                    }
+                }
             }
         }
     }
