@@ -587,7 +587,7 @@ impl GeneratorRenderer {
             // `acquire_clip`'s doc comment on the same comparison.
             let (current_relight, current_relight_params) = layer
                 .gen_params()
-                .map(|gp| (gp.relight, gp.relight_params))
+                .map(|gp| (gp.relight_active(), gp.relight_params))
                 .unwrap_or_default();
             // Rebuild only on a *structure* change (override structure-version
             // bump), a "3D Shading" toggle/knob change, OR when the layer's
@@ -1202,7 +1202,7 @@ impl ClipRenderer for GeneratorRenderer {
         // knobs live on `gen_params` alongside the manifest above.
         let (relight, relight_params) = layer
             .and_then(|l| l.gen_params())
-            .map(|gp| (gp.relight, gp.relight_params))
+            .map(|gp| (gp.relight_active(), gp.relight_params))
             .unwrap_or_default();
         let acquired = self.acquire_clip(
             &clip.id,

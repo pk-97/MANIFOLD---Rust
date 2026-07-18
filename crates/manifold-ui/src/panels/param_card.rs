@@ -27,7 +27,7 @@ use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
-use manifold_foundation::{EffectId, LayerId};
+use manifold_foundation::{EffectId, LayerId, RELIGHT_FEATURE_ENABLED};
 
 // Stable keys for the host-owned card frame + header.
 const KEY_BORDER: u64 = 90_001;
@@ -1674,6 +1674,11 @@ impl ParamCardPanel {
     /// regardless of whether the card has any regular params
     /// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b).
     fn relight_block_height(&self) -> f32 {
+        // Feature disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // the "3D Shading" block is not drawn, so it contributes no height.
+        if !RELIGHT_FEATURE_ENABLED {
+            return 0.0;
+        }
         const RELIGHT_ROW_COUNT: f32 = 1.0 + 6.0 + 1.0; // label + 6 knobs + Height From
         RELIGHT_ROW_COUNT * (ROW_HEIGHT + ROW_SPACING)
     }
@@ -1996,17 +2001,19 @@ impl ParamCardPanel {
                     .inert()
                     .key(KEY_CHANGE),
             )
-            .child(gap())
-            .child(
-                // "3D Shading" toggle — same unconditional icon as the effect
-                // header (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b).
+            // "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) and its
+            // leading gap — hidden entirely while the feature is disabled app-wide
+            // (`manifold_foundation::RELIGHT_FEATURE_ENABLED`). `Option<View>` is
+            // `IntoIterator`, so `children` adds 0 or 1 views.
+            .children(RELIGHT_FEATURE_ENABLED.then(gap))
+            .children(RELIGHT_FEATURE_ENABLED.then(|| {
                 View::button("3D")
                     .w(Sizing::Fixed(RELIGHT_W))
                     .fill_h()
                     .style(toggle_btn_style(self.relight.enabled))
                     .inert()
-                    .key(KEY_RELIGHT),
-            )
+                    .key(KEY_RELIGHT)
+            }))
             .child(gap())
             .child(cog)
             .child(
@@ -2156,16 +2163,16 @@ impl ParamCardPanel {
                     .inert()
                     .key(KEY_TOGGLE),
             )
-            .child(
-                // "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) —
-                // unconditional in both `CardContext`s (a real per-instance
-                // flag, unlike the editor-only cog).
+            // "3D Shading" toggle (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5b) — hidden
+            // entirely while the feature is disabled app-wide
+            // (`manifold_foundation::RELIGHT_FEATURE_ENABLED`).
+            .children(RELIGHT_FEATURE_ENABLED.then(|| {
                 View::button("3D")
                     .fixed(RELIGHT_W, 16.0)
                     .style(toggle_btn_style(self.relight.enabled))
                     .inert()
-                    .key(KEY_RELIGHT),
-            );
+                    .key(KEY_RELIGHT)
+            }));
         // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
         // expand chevron is always the rightmost control — same trailing order as
         // the generator header (… · cog · ▾).
@@ -2878,6 +2885,12 @@ impl ParamCardPanel {
         mut cy: f32,
         content_w: f32,
     ) {
+        // Feature disabled app-wide (`manifold_foundation::RELIGHT_FEATURE_ENABLED`):
+        // draw no "3D Shading" label, knobs, or Height From row. The slider-id
+        // slots stay `None`, so drag/reset hit-tests never match.
+        if !RELIGHT_FEATURE_ENABLED {
+            return;
+        }
         let enabled = self.relight.enabled;
         let label_color = if enabled { color::TEXT_PRIMARY_C32 } else { color::TEXT_DIMMED_C32 };
         tree.add_label(
@@ -6221,9 +6234,14 @@ mod tests {
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - GAP - COG_W;
         // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
-        // the ON/OFF toggle and the cog.
-        let relight_x = cog_x - GAP - RELIGHT_W;
-        let toggle_x = relight_x - GAP - TOGGLE_W;
+        // the ON/OFF toggle and the cog — but only when the feature is enabled
+        // (`RELIGHT_FEATURE_ENABLED`). Disabled, the auto-gap row drops the icon
+        // and its gap, so the toggle lands one slot left of the cog.
+        let toggle_x = if RELIGHT_FEATURE_ENABLED {
+            cog_x - GAP - RELIGHT_W - GAP - TOGGLE_W
+        } else {
+            cog_x - GAP - TOGGLE_W
+        };
         let elem_y = inner_y + (HEADER_HEIGHT - 16.0) * 0.5;
 
         let close = |a: Rect, b: Rect| {
@@ -6234,8 +6252,13 @@ mod tests {
         };
         let toggle = tree.get_bounds(panel.host.node_id_for_key(KEY_TOGGLE).unwrap());
         assert!(close(toggle, Rect::new(toggle_x, elem_y, TOGGLE_W, 16.0)), "toggle {toggle:?}");
-        let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
-        assert!(close(relight, Rect::new(relight_x, elem_y, RELIGHT_W, 16.0)), "relight {relight:?}");
+        if RELIGHT_FEATURE_ENABLED {
+            let relight_x = cog_x - GAP - RELIGHT_W;
+            let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
+            assert!(close(relight, Rect::new(relight_x, elem_y, RELIGHT_W, 16.0)), "relight {relight:?}");
+        } else {
+            assert!(panel.host.node_id_for_key(KEY_RELIGHT).is_none(), "relight icon hidden when feature off");
+        }
         let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
         assert!(close(chevron, Rect::new(chevron_x, elem_y, CHEVRON_W, 16.0)), "chevron {chevron:?}");
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
@@ -6302,9 +6325,14 @@ mod tests {
         let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - COG_W;
         // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
-        // Change and the cog.
-        let relight_x = cog_x - GAP - RELIGHT_W;
-        let change_x = relight_x - GAP - CHANGE_BTN_W;
+        // Change and the cog — but only when the feature is enabled
+        // (`RELIGHT_FEATURE_ENABLED`). Disabled, the icon and its leading gap are
+        // both dropped, so Change lands one slot left of the cog.
+        let change_x = if RELIGHT_FEATURE_ENABLED {
+            cog_x - GAP - RELIGHT_W - GAP - CHANGE_BTN_W
+        } else {
+            cog_x - GAP - CHANGE_BTN_W
+        };
 
         let close = |a: Rect, b: Rect| {
             (a.x - b.x).abs() < 0.01
@@ -6319,11 +6347,16 @@ mod tests {
         );
         let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
         assert!(close(cog, Rect::new(cog_x, inner_y, COG_W, HEADER_HEIGHT)), "cog {cog:?}");
-        let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
-        assert!(
-            close(relight, Rect::new(relight_x, inner_y, RELIGHT_W, HEADER_HEIGHT)),
-            "relight {relight:?}"
-        );
+        if RELIGHT_FEATURE_ENABLED {
+            let relight_x = cog_x - GAP - RELIGHT_W;
+            let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
+            assert!(
+                close(relight, Rect::new(relight_x, inner_y, RELIGHT_W, HEADER_HEIGHT)),
+                "relight {relight:?}"
+            );
+        } else {
+            assert!(panel.host.node_id_for_key(KEY_RELIGHT).is_none(), "relight icon hidden when feature off");
+        }
         let change = tree.get_bounds(panel.host.node_id_for_key(KEY_CHANGE).unwrap());
         assert!(
             close(
