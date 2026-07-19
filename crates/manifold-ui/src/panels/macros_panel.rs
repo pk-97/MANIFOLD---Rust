@@ -12,15 +12,15 @@
 use super::PanelAction;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::{
-    ABL_CONFIG_HEIGHT, AbletonConfigClick, AbletonConfigIds, AbletonMappingDisplay, OVERLAY_INSET,
-    TRIM_BAR_W, TrimHandleIds, build_ableton_config, build_trim_handles_explicit,
+    ABL_CONFIG_HEIGHT, AbletonConfigClick, AbletonConfigIds, AbletonMappingDisplay, TrimHandleIds,
+    build_ableton_config, build_trim_handles_explicit, reposition_trim_bars,
     check_ableton_config_click,
 };
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::drag::DragController;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
+use crate::slider::{BitmapSlider, SliderColors, SliderDragState, TrackSpan};
 use crate::tree::UITree;
 use crate::types::MACRO_COUNT;
 
@@ -312,7 +312,7 @@ impl MacrosPanel {
                         self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
                             tree,
                             ids.track,
-                            ids.track_rect,
+                            tree.get_bounds(ids.track),
                             amin,
                             amax,
                             color::ABL_TRIM_BAR_C32,
@@ -385,7 +385,10 @@ impl MacrosPanel {
             && let Some((cur_min, cur_max)) = self.ableton_ranges[i]
             && let Some(ids) = self.sliders[i].ids()
         {
-            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+            // Live bounds, not the cached span: in-place scroll shifts the
+            // tree nodes without refreshing panel caches (BUG-257/259).
+            let track_rect = tree.get_bounds(ids.track);
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x);
             let (new_min, new_max) = if is_min {
                 (norm.clamp(0.0, cur_max), cur_max)
             } else {
@@ -394,33 +397,7 @@ impl MacrosPanel {
             self.ableton_ranges[i] = Some((new_min, new_max));
 
             if let Some(t) = &self.ableton_trim_ids[i] {
-                let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
-                let base_x = ids.track_rect.x + OVERLAY_INSET;
-                let fill_x = base_x + new_min * usable;
-                let fill_w = (new_max - new_min) * usable;
-                let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
-                tree.set_bounds(
-                    t.fill_id,
-                    Rect::new(fill_x, ids.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
-                );
-                tree.set_bounds(
-                    t.min_bar_id,
-                    Rect::new(
-                        base_x + new_min * usable - TRIM_BAR_W * 0.5,
-                        ids.track_rect.y,
-                        TRIM_BAR_W,
-                        ids.track_rect.height,
-                    ),
-                );
-                tree.set_bounds(
-                    t.max_bar_id,
-                    Rect::new(
-                        base_x + new_max * usable - TRIM_BAR_W * 0.5,
-                        ids.track_rect.y,
-                        TRIM_BAR_W,
-                        ids.track_rect.height,
-                    ),
-                );
+                reposition_trim_bars(tree, track_rect, t, new_min, new_max);
             }
 
             return vec![PanelAction::AbletonMacroTrimChanged(i, new_min, new_max)];
@@ -620,9 +597,9 @@ mod tests {
 
         // Drag toward a new min. Expected value computed via the same
         // x_to_normalized helper the production path uses, clamped to cur_max.
-        let track_rect = panel.sliders[0].ids().unwrap().track_rect;
+        let track_rect = tree.get_bounds(panel.sliders[0].track_id().unwrap());
         let pos_x = track_rect.x + track_rect.width * 0.35;
-        let expected_norm = BitmapSlider::x_to_normalized(track_rect, pos_x).clamp(0.0, 0.8);
+        let expected_norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x).clamp(0.0, 0.8);
         let drag = panel.handle_drag(pos_x, &mut tree);
         match drag.as_slice() {
             [PanelAction::AbletonMacroTrimChanged(0, new_min, new_max)] => {
@@ -652,7 +629,7 @@ mod tests {
         let pos_x_max = track_rect.x + track_rect.width * 0.95;
         // cur_min is whatever the previous drag committed it to (expected_norm),
         // since ableton_ranges was mutated in place during the first drag.
-        let expected_max = BitmapSlider::x_to_normalized(track_rect, pos_x_max).clamp(expected_norm, 1.0);
+        let expected_max = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos_x_max).clamp(expected_norm, 1.0);
         let drag_max = panel.handle_drag(pos_x_max, &mut tree);
         match drag_max.as_slice() {
             [PanelAction::AbletonMacroTrimChanged(0, new_min, new_max)] => {
@@ -663,6 +640,49 @@ mod tests {
         }
         let release_max = panel.handle_release();
         assert!(matches!(release_max.as_slice(), [PanelAction::AbletonMacroTrimCommit(0)]));
+    }
+
+    /// BUG-257 class, macros-panel instance: after an in-place scroll (every
+    /// content node's y shifted, no rebuild), an Ableton trim drag must place
+    /// the bars at the track's LIVE y — before the fix this block read the
+    /// build-time cached rect and teleported the bars to the pre-scroll row.
+    #[test]
+    fn ableton_trim_bars_follow_the_track_after_scroll() {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        let mut ranges: Vec<Option<(f32, f32)>> = vec![None; MACRO_COUNT];
+        ranges[0] = Some((0.2, 0.8));
+        panel.set_ableton_ranges(&ranges);
+        panel.build(&mut tree, rect());
+
+        let trim = panel.ableton_trim_ids[0].expect("trim built");
+        let track = panel.sliders[0].track_id().unwrap();
+
+        // What ScrollContainer::offset_content does on a wheel scroll.
+        for i in 0..tree.count() {
+            let id = tree.id_at(i);
+            let mut b = tree.get_bounds(id);
+            b.y += 137.0;
+            tree.set_bounds(id, b);
+        }
+
+        panel.handle_press(trim.min_bar_id, 0.3);
+        let live = tree.get_bounds(track);
+        let drag = panel.handle_drag(live.x + live.width * 0.5, &mut tree);
+        assert!(
+            matches!(drag.as_slice(), [PanelAction::AbletonMacroTrimChanged(0, ..)]),
+            "trim drag still routes after scroll: {drag:?}"
+        );
+
+        for (name, id) in [("min_bar", trim.min_bar_id), ("max_bar", trim.max_bar_id), ("fill", trim.fill_id)] {
+            let y = tree.get_bounds(id).y;
+            assert!(
+                (y - live.y).abs() <= 4.0,
+                "{name} y={y} should track the live track y={} (stale cache would put it ~137px up)",
+                live.y
+            );
+        }
     }
 
     #[test]

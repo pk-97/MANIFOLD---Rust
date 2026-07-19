@@ -4469,7 +4469,8 @@ fn is_degrees_param(param_id: &str) -> bool {
 }
 
 /// UX-P2 (D2): the value an active object slider drag resolves to at
-/// `pos_x`, computed from its OWN `track_rect` — the exact math
+/// `pos_x`, computed from its OWN cached `track_span` (x-only, so the
+/// build-time cache is scroll-safe by contract, BUG-259) — the exact math
 /// [`crate::slider::SliderDragState::apply_drag`] uses, minus that method's
 /// tree-mutating visual update. `handle_event` has no `&mut UITree` (the
 /// panel's whole event surface is tree-free by design), so the slider's
@@ -4482,7 +4483,7 @@ fn slider_drag_value(slider: &crate::slider::SliderDragState, pos_x: f32) -> Opt
         return None;
     }
     let ids = slider.ids()?;
-    let norm = crate::slider::BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+    let norm = crate::slider::BitmapSlider::x_to_normalized(ids.track_span, pos_x);
     Some(crate::slider::BitmapSlider::normalized_to_value(norm, slider.min, slider.max))
 }
 
@@ -4963,7 +4964,7 @@ mod tests {
         // Slot 1 = Angle (slot 0 is the Axis enum row) — see
         // `modifier_id_map_is_total_over_every_built_row`.
         let ids = panel.modifier_card.slider_ids[1].expect("Angle renders a card slider");
-        let track = ids.track_rect;
+        let track = tree.get_bounds(ids.track);
         let target = GraphParamTarget::Generator;
         let pid = panel.modifier_card.pid_at(1);
 
@@ -5204,7 +5205,7 @@ mod tests {
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let ids = panel.object_card.slider_ids[OBJ_ROW_ROUGHNESS].expect("Roughness renders a slider");
-        let track = ids.track_rect;
+        let track = tree.get_bounds(ids.track);
         let target = GraphParamTarget::Generator;
         let pid = panel.object_card.pid_at(OBJ_ROW_ROUGHNESS);
 
@@ -5877,7 +5878,7 @@ mod tests {
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let ids = panel.light_card.slider_ids[LIGHT_ROW_INTENSITY].expect("Intensity renders a slider");
-        let track = ids.track_rect;
+        let track = tree.get_bounds(ids.track);
         let target = GraphParamTarget::Generator;
         let pid = panel.light_card.pid_at(LIGHT_ROW_INTENSITY);
         let (addr, _) = panel.resolve_scene_param(&pid).expect("intensity id resolves through the id map");
@@ -6023,7 +6024,7 @@ mod tests {
             for (pi, ids) in slider_ids {
                 let (drag_consumed, _) = panel.handle_event(&UIEvent::PointerDown {
                     node_id: ids.track,
-                    pos: Vec2::new(ids.track_rect.x, 0.0),
+                    pos: Vec2::new(tree.get_bounds(ids.track).x, 0.0),
                     modifiers: crate::input::Modifiers::default(),
                 });
                 assert!(drag_consumed, "track {:?} must be drag-armable", ids.track);

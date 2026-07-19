@@ -1981,6 +1981,7 @@ impl InspectorCompositePanel {
         node_id: NodeId,
         pos: Vec2,
         modifiers: Modifiers,
+        tree: &UITree,
     ) -> Vec<PanelAction> {
         let target = self.find_target_for_node(node_id);
         self.pressed_target = target;
@@ -2033,17 +2034,17 @@ impl InspectorCompositePanel {
                 PressedTarget::MasterEffect(i) => self
                     .master_effects
                     .get_mut(i)
-                    .map(|c| c.handle_pointer_down(node_id, pos))
+                    .map(|c| c.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
                 PressedTarget::LayerEffect(i) => self
                     .layer_effects
                     .get_mut(i)
-                    .map(|c| c.handle_pointer_down(node_id, pos))
+                    .map(|c| c.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
                 PressedTarget::GenParam => self
                     .gen_params
                     .as_mut()
-                    .map(|gp| gp.handle_pointer_down(node_id, pos))
+                    .map(|gp| gp.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;
@@ -2450,7 +2451,7 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) {
                     return Vec::new();
                 }
-                self.route_pointer_down(*node_id, *pos, *modifiers)
+                self.route_pointer_down(*node_id, *pos, *modifiers, tree)
             }
             UIEvent::DoubleClick { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) {
@@ -3515,7 +3516,7 @@ mod tests {
         // Begin a scrollbar drag on the layer thumb, then drag toward the bottom.
         let thumb = panel.layer_scroll.thumb_id().unwrap();
         let vp = panel.layer_scroll.viewport();
-        panel.route_pointer_down(thumb, Vec2::new(vp.x, vp.y), Modifiers::NONE);
+        panel.route_pointer_down(thumb, Vec2::new(vp.x, vp.y), Modifiers::NONE, &tree);
         assert!(panel.dragging_scrollbar);
         let _ = panel.handle_drag(Vec2::new(vp.x, vp.y + vp.height * 0.8), &mut tree);
 
@@ -3590,7 +3591,7 @@ mod tests {
         // Simulate scrollbar pointer down.
         let sb_id = panel.layer_scroll.thumb_id().unwrap();
         let pos = Vec2::new(280.0, 100.0);
-        panel.route_pointer_down(sb_id, pos, crate::input::Modifiers::NONE);
+        panel.route_pointer_down(sb_id, pos, crate::input::Modifiers::NONE, &tree);
 
         assert!(panel.is_dragging());
         assert!(panel.dragging_scrollbar);

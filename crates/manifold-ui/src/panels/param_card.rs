@@ -24,7 +24,7 @@ use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds, TrackSpan};
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
 use manifold_foundation::{EffectId, LayerId, RELIGHT_FEATURE_ENABLED};
@@ -4048,7 +4048,10 @@ impl ParamCardPanel {
     /// emitted target comes from `param_target()`, so effect and generator share
     /// one path; toggle/trigger rows (generator-only, no slider widget) are
     /// skipped in step 5.
-    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
+    /// `tree` is read-only and mandatory (BUG-259): all geometry comes from
+    /// live bounds, never the build-time cache — in-place scroll shifts node
+    /// y without refreshing panel caches (BUG-257).
+    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2, tree: &UITree) -> Vec<PanelAction> {
         let target = self.param_target();
 
         // 1. Envelope target handle (the orange grab bar on the slider track).
@@ -4067,7 +4070,10 @@ impl ParamCardPanel {
                 && node_id == c.decay_slider.track
             {
                 self.drag.begin(ParamDragTarget::EnvDecay { index: pi }, pos);
-                let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
+                let norm = BitmapSlider::x_to_normalized(
+                    TrackSpan::of(tree.get_bounds(c.decay_slider.track)),
+                    pos.x,
+                );
                 let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
                 return vec![
                     PanelAction::EnvDecaySnapshot(target, self.pid_at(pi)),
@@ -4089,7 +4095,7 @@ impl ParamCardPanel {
                 if let Some(sl) = dids.sliders.get(si)
                     && node_id == sl.track
                 {
-                    let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
+                    let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(sl.track)), pos.x).clamp(0.0, 1.0);
                     let value = audio_shape_value_from_norm(which, norm);
                     self.drag.begin(ParamDragTarget::AudioShape { index: pi, param: which }, pos);
                     let pid = self.pid_at(pi);
@@ -4111,7 +4117,7 @@ impl ParamCardPanel {
                 && node_id == sl.track
             {
                 let info = &self.param_info[pi];
-                let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
+                let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(sl.track)), pos.x).clamp(0.0, 1.0);
                 let mut value = norm_to_step_amount(norm, info.min, info.max);
                 if info.whole_numbers {
                     value = value.round();
@@ -4188,10 +4194,8 @@ impl ParamCardPanel {
                     .get(pi)
                     .copied()
                     .unwrap_or(false)
-                    && let Some(ref trim) = self.trim_ids.get(pi).and_then(|t| t.as_ref())
+                    && self.trim_ids.get(pi).and_then(|t| t.as_ref()).is_some()
                 {
-                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = ids.track_rect.x + OVERLAY_INSET;
                     let tmin = self
                         .state
                         .mod_state
@@ -4206,8 +4210,11 @@ impl ParamCardPanel {
                         .get(pi)
                         .copied()
                         .unwrap_or(1.0);
-                    let min_center = base_x + tmin * usable;
-                    let max_center = base_x + tmax * usable;
+                    // Live bounds + the shared geometry fn: the zone can never
+                    // drift from the drawn bars (BUG-258) or a scroll (BUG-259).
+                    let bars = trim_bar_rects(tree.get_bounds(ids.track), tmin, tmax);
+                    let min_center = bars.min_bar.x + TRIM_BAR_W * 0.5;
+                    let max_center = bars.max_bar.x + TRIM_BAR_W * 0.5;
                     let hit_zone = 8.0; // px proximity zone for trim handles
 
                     let dist_min = (pos.x - min_center).abs();
@@ -4218,7 +4225,6 @@ impl ParamCardPanel {
                             ParamDragTarget::Trim { kind: TrimKind::Driver, index: pi, is_min: true },
                             pos,
                         );
-                        let _ = trim;
                         return vec![PanelAction::TrimSnapshot(TrimKind::Driver, target, self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
@@ -4240,8 +4246,6 @@ impl ParamCardPanel {
                     .copied()
                     .unwrap_or(false)
                 {
-                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = ids.track_rect.x + OVERLAY_INSET;
                     let tgt = self
                         .state
                         .mod_state
@@ -4249,7 +4253,8 @@ impl ParamCardPanel {
                         .get(pi)
                         .copied()
                         .unwrap_or(1.0);
-                    let target_center = base_x + tgt * usable;
+                    let bar = target_bar_rect(tree.get_bounds(ids.track), tgt);
+                    let target_center = bar.x + TARGET_BAR_W * 0.5;
                     if (pos.x - target_center).abs() < 8.0 {
                         self.drag.begin(ParamDragTarget::EnvTarget { index: pi }, pos);
                         return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
@@ -4258,7 +4263,7 @@ impl ParamCardPanel {
 
                 // No trim/target handle nearby — normal param slider drag
                 self.drag.begin(ParamDragTarget::Param { index: pi }, pos);
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+                let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
                 let info = &self.param_info[pi];
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
@@ -4280,7 +4285,7 @@ impl ParamCardPanel {
             {
                 let field = spec.field;
                 self.drag.begin(ParamDragTarget::Relight { field }, pos);
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+                let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
                 return vec![
                     PanelAction::RelightParamSnapshot(target, field),
@@ -4306,20 +4311,12 @@ impl ParamCardPanel {
             // Live bounds, not the cached `track_rect`: in-place scroll shifts
             // the tree nodes without refreshing the cache, so its y is stale.
             let track_rect = tree.get_bounds(slider.track);
-            let norm = BitmapSlider::x_to_normalized(track_rect, pos.x);
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos.x);
             if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
                 *v = norm;
             }
             if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
-                let usable = track_rect.width - OVERLAY_INSET * 2.0;
-                let base_x = track_rect.x + OVERLAY_INSET;
-                let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
-                let bar_h = track_rect.height + 4.0;
-                let bar_y = track_rect.y - 2.0;
-                tree.set_bounds(
-                    t.target_bar_id,
-                    Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
-                );
+                tree.set_bounds(t.target_bar_id, target_bar_rect(track_rect, norm));
             }
             let pid = self.pid_at(pi);
             return match self.kind {
@@ -4333,8 +4330,11 @@ impl ParamCardPanel {
         if let Some(pi) = self.drag.env_decay_index()
             && let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref())
         {
-            let norm = BitmapSlider::x_to_normalized(cfg.decay_slider.track_rect, pos.x)
-                .clamp(0.0, 1.0);
+            let norm = BitmapSlider::x_to_normalized(
+                TrackSpan::of(tree.get_bounds(cfg.decay_slider.track)),
+                pos.x,
+            )
+            .clamp(0.0, 1.0);
             let decay = norm * ENV_DECAY_MAX;
             if let Some(v) = self.state.mod_state.env_decay.get_mut(pi) {
                 *v = decay;
@@ -4354,14 +4354,18 @@ impl ParamCardPanel {
                 AudioShapeParam::Attack => 1,
                 AudioShapeParam::Release => 2,
             };
-            let rect = self
+            let track_id = self
                 .audio_configs
                 .get(pi)
                 .and_then(|c| c.as_ref())
                 .and_then(|(d, _)| d.sliders.get(si))
-                .map(|sl| sl.track_rect);
-            if let Some(rect) = rect {
-                let norm = BitmapSlider::x_to_normalized(rect, pos.x).clamp(0.0, 1.0);
+                .map(|sl| sl.track);
+            if let Some(track_id) = track_id {
+                let norm = BitmapSlider::x_to_normalized(
+                    TrackSpan::of(tree.get_bounds(track_id)),
+                    pos.x,
+                )
+                .clamp(0.0, 1.0);
                 let value = audio_shape_value_from_norm(which, norm);
                 match which {
                     AudioShapeParam::Sensitivity => {
@@ -4407,15 +4411,19 @@ impl ParamCardPanel {
         // Step-Amount slider drag (D8) — its own path, see `handle_pointer_down`
         // 2c. Updates fill + value and dispatches the live edit.
         if let Some(pi) = self.drag.step_amount() {
-            let rect = self
+            let track_id = self
                 .audio_configs
                 .get(pi)
                 .and_then(|c| c.as_ref())
                 .and_then(|(d, _)| d.sliders.get(3))
-                .map(|sl| sl.track_rect);
-            if let Some(rect) = rect {
+                .map(|sl| sl.track);
+            if let Some(track_id) = track_id {
                 let info = &self.param_info[pi];
-                let norm = BitmapSlider::x_to_normalized(rect, pos.x).clamp(0.0, 1.0);
+                let norm = BitmapSlider::x_to_normalized(
+                    TrackSpan::of(tree.get_bounds(track_id)),
+                    pos.x,
+                )
+                .clamp(0.0, 1.0);
                 let mut value = norm_to_step_amount(norm, info.min, info.max);
                 if info.whole_numbers {
                     value = value.round();
@@ -4464,7 +4472,7 @@ impl ParamCardPanel {
             // stale y to `reposition_trim_bars` teleports the bars off the
             // slider (BUG-257).
             let track_rect = tree.get_bounds(track_id);
-            let norm = BitmapSlider::x_to_normalized(track_rect, pos.x);
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track_rect), pos.x);
             let (new_min, new_max) = if is_min {
                 (norm.min(cur_max), cur_max)
             } else {
@@ -4495,7 +4503,7 @@ impl ParamCardPanel {
             && let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
             let info = &self.param_info[pi];
-            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
             let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
             let val = if info.whole_numbers { val.round() } else { val };
             let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
@@ -4523,7 +4531,7 @@ impl ParamCardPanel {
             && let Some(ids) = self.relight_slider_ids[i].as_ref()
         {
             let spec = &RELIGHT_FIELD_SPECS[i];
-            let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
             let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
             let display_norm = BitmapSlider::value_to_normalized(val, spec.min, spec.max);
             self.relight.set_value(field, val);
@@ -5583,10 +5591,10 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         let track = panel.slider_ids[0].as_ref().unwrap().track;
-        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
-        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y));
+        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
         assert!(
             matches!(down.as_slice(), [PanelAction::ParamSnapshot(..), PanelAction::ParamChanged(..)]),
             "begin emits snapshot + first value: {down:?}"
@@ -5620,14 +5628,14 @@ mod tests {
         let trim = panel.trim_ids[0].as_ref().expect("driver trim built");
         let min_bar_id = trim.min_bar_id;
 
-        let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0));
+        let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
             matches!(down.as_slice(), [PanelAction::TrimSnapshot(TrimKind::Driver, GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
             "begin emits a trim snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
 
-        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.4;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
@@ -5669,7 +5677,7 @@ mod tests {
 
         scroll_shift(&mut tree, 137.0);
 
-        panel.handle_pointer_down(min_bar, Vec2::ZERO);
+        panel.handle_pointer_down(min_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.3, live.y), &mut tree);
         assert!(
@@ -5700,7 +5708,7 @@ mod tests {
 
         scroll_shift(&mut tree, 137.0);
 
-        panel.handle_pointer_down(target_bar, Vec2::ZERO);
+        panel.handle_pointer_down(target_bar, Vec2::ZERO, &tree);
         let live = tree.get_bounds(track);
         let moved = panel.handle_drag(Vec2::new(live.x + live.width * 0.5, live.y), &mut tree);
         assert!(
@@ -5727,14 +5735,14 @@ mod tests {
         let target = panel.target_ids[0].as_ref().expect("envelope target built");
         let target_bar_id = target.target_bar_id;
 
-        let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0));
+        let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0), &tree);
         assert!(
             matches!(down.as_slice(), [PanelAction::TargetSnapshot(GraphParamTarget::Effect(0), pid)] if pid.as_ref() == "radius"),
             "begin emits a target snapshot: {down:?}"
         );
         assert!(panel.is_dragging());
 
-        let track_rect = panel.slider_ids[0].as_ref().unwrap().track_rect;
+        let track_rect = tree.get_bounds(panel.slider_ids[0].as_ref().unwrap().track);
         let new_x = track_rect.x + track_rect.width * 0.3;
         let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree);
         assert!(
@@ -5760,9 +5768,9 @@ mod tests {
 
         let cfg = panel.envelope_config_ids[0].as_ref().expect("envelope config built");
         let decay_track = cfg.decay_slider.track;
-        let decay_rect = cfg.decay_slider.track_rect;
+        let decay_rect = tree.get_bounds(cfg.decay_slider.track);
 
-        let down = panel.handle_pointer_down(decay_track, Vec2::new(decay_rect.x, decay_rect.y));
+        let down = panel.handle_pointer_down(decay_track, Vec2::new(decay_rect.x, decay_rect.y), &tree);
         assert!(
             matches!(
                 down.as_slice(),
@@ -5825,9 +5833,9 @@ mod tests {
         let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
         let sens_slider = dids.sliders[0]; // Sensitivity — the first shaping slider
         let sens_track = sens_slider.track;
-        let sens_rect = sens_slider.track_rect;
+        let sens_rect = tree.get_bounds(sens_track);
 
-        let down = panel.handle_pointer_down(sens_track, Vec2::new(sens_rect.x, sens_rect.y));
+        let down = panel.handle_pointer_down(sens_track, Vec2::new(sens_rect.x, sens_rect.y), &tree);
         assert!(
             matches!(
                 down.as_slice(),
@@ -5865,9 +5873,9 @@ mod tests {
         let (dids, _) = panel.audio_configs[0].as_ref().expect("audio drawer built");
         let step_slider = *dids.sliders.get(3).expect("Step slider built while Action=Step");
         let step_track = step_slider.track;
-        let step_rect = step_slider.track_rect;
+        let step_rect = tree.get_bounds(step_track);
 
-        let down = panel.handle_pointer_down(step_track, Vec2::new(step_rect.x, step_rect.y));
+        let down = panel.handle_pointer_down(step_track, Vec2::new(step_rect.x, step_rect.y), &tree);
         assert!(
             matches!(
                 down.as_slice(),

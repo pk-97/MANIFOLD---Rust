@@ -893,13 +893,39 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     let bundled = manifold_renderer::node_graph::bundled_preset_def(&gen_type);
     let def = layer.generator_graph().or(bundled);
     let Some(def) = def else { return };
+    let gen_inst = layer.gen_params();
 
-    // Resolve a row's address to its current numeric value in the def. A row
-    // whose param has no override entry (still at catalog default) resolves
-    // to `None` — the panel keeps the built text, which came from the same
-    // catalog default; a value only changes via a write that lifts the
-    // override.
+    // Resolve a row's address to its current numeric value. BOUND rows first
+    // (BUG-260): a row whose inner (node, param) is covered by a card/user
+    // binding lives in the binding's instance slot — the write path edits
+    // that slot (`inspector.rs::scene_bound_slot`; a def write on a bound
+    // param is structurally dead), so the display must read the slot too, or
+    // the row pins back to the def's stale value one frame after every write.
+    // Mirrors the structural build's `display_value` below; the def walk is
+    // the unbound fallback. A row whose param has no override entry (still at
+    // catalog default) resolves to `None` — the panel keeps the built text,
+    // which came from the same catalog default; a value only changes via a
+    // write that lifts the override.
     let resolve = |addr: &RowAddr| -> Option<f32> {
+        let bound_value = gen_inst
+            .and_then(|inst| {
+                inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
+                    .or_else(|| {
+                        manifold_core::effects::binding_id_for_node_param_in(
+                            def,
+                            addr.node_doc_id,
+                            &addr.param_id,
+                        )
+                    })
+                    .and_then(|id| {
+                        inst.params
+                            .contains(id.as_str())
+                            .then(|| inst.get_base_param(id.as_str()))
+                    })
+            });
+        if let Some(v) = bound_value {
+            return Some(v);
+        }
         let mut nodes = &def.nodes;
         for scope_id in &addr.scope_path {
             nodes = &nodes.iter().find(|n| n.id == *scope_id)?.group.as_ref()?.nodes;
@@ -3669,6 +3695,86 @@ mod sync_scene_row_values_tests {
         assert!(
             tree_has_text(&ui, "0.66 (driven)"),
             "sync_scene_row_values must push the new value onto the driven row's label"
+        );
+    }
+
+    /// Scene-panel audit (2026-07-19), conviction test for the suspected
+    /// bound-row display bug: when a scene row's (node, param) is covered by
+    /// a card/user binding, bound-row WRITES land in the binding's instance
+    /// slot (`inspector.rs::scene_bound_slot` — "a def write on a bound param
+    /// is structurally dead"), so the row's per-frame display must read that
+    /// slot too. `sync_scene_row_values`'s `resolve` closure reads only the
+    /// def — the structural build's `display_value` checks the slot, the
+    /// per-frame sync does not — so a bound row pins back to the def's stale
+    /// value one frame after any write. This is the remaining half of
+    /// BUG-237's "scrub does nothing": the write was fixed, the read was not.
+    #[test]
+    fn bound_row_display_reads_the_binding_slot_not_the_def() {
+        let (mut project, layer_id, node_doc_id, value) = scene_project();
+        let mut ui = UIRoot::new();
+        build_panel(&mut ui, &layer_id, node_doc_id, value, false);
+
+        // Expose fog_density exactly the way the app's arm path does
+        // (`ToggleNodeParamExposeCommand`, the same command the panel's mod
+        // button and `resolve_mod_target` dispatch).
+        let gen_type = project
+            .timeline
+            .find_layer_by_id(layer_id.as_str())
+            .unwrap()
+            .1
+            .generator_type()
+            .clone();
+        let catalog = manifold_renderer::node_graph::bundled_preset_def(&gen_type)
+            .expect("SceneStarter is a bundled preset")
+            .clone();
+        let fog_node = catalog
+            .nodes
+            .iter()
+            .find(|n| n.id == node_doc_id)
+            .expect("fog node at root scope");
+        let node_identity = if fog_node.node_id.is_empty() {
+            let handle = fog_node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
+            manifold_core::NodeId::new(handle.as_str())
+        } else {
+            fog_node.node_id.clone()
+        };
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let mut expose: Box<dyn manifold_editing::command::Command + Send> =
+            Box::new(manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
+                target.clone(),
+                node_identity,
+                node_doc_id,
+                fog_node.handle.clone().unwrap_or_else(|| "fog".to_string()),
+                "fog_density".to_string(),
+                true,
+                catalog,
+                "Fog Density".to_string(),
+                0.0,
+                1.0,
+                value,
+                manifold_core::effects::ParamConvert::Float,
+                false,
+                Vec::new(),
+            ));
+        expose.execute(&mut project);
+
+        let binding_id = project
+            .with_preset_graph_mut(&target, |inst| {
+                inst.binding_id_for_node_param(node_doc_id, "fog_density")
+            })
+            .flatten()
+            .expect("exposure must mint a binding");
+
+        // A bound-row write: moves the binding's slot, never the def
+        // (`scene_bound_slot`'s whole rationale). Then the per-frame sync
+        // must show the SLOT value on the row.
+        let moved = project.with_preset_graph_mut(&target, |inst| inst.set_base_param(&binding_id, 0.9));
+        assert_eq!(moved, Some(true), "the exposure must create the instance slot");
+        sync_scene_row_values(&mut ui, &project);
+
+        assert!(
+            tree_has_text(&ui, "0.90"),
+            "a bound scene row must display the binding's slot value, not the def's stale value"
         );
     }
 }
