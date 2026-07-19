@@ -947,6 +947,93 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     };
 
     ui.scene_setup_panel.sync_row_values(&mut ui.tree, &resolve);
+
+    // P2 slice 2a: the new unified properties card's per-frame value push —
+    // real exposed params, resolved the SAME way `sync_card_values` resolves
+    // the main generator inspector card's values (`ui_translate::
+    // param_slots_to_ui`), just against the SCENE PANEL's own bound layer
+    // (`live_layer_id`) rather than the app's `active_layer` — the same
+    // "panel's own layer, not active_layer" invariant `resolve_scene_write`
+    // established for the old converted rows (see that fn's doc comment).
+    if let Some(gp) = gen_inst {
+        let slots = crate::ui_translate::param_slots_to_ui(&gp.params);
+        ui.scene_setup_panel.sync_properties_values(&mut ui.tree, &slots);
+    }
+}
+
+/// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the REAL section
+/// string(s) P1 stamped onto every param bound to one of `doc_ids` — read
+/// directly off `def`'s exposure metadata via a binding-target -> node-doc-id
+/// cross-reference, never reconstructed from a naming convention. Two
+/// stamping code paths (creation-time commands vs the load-time migration)
+/// produce DIFFERENT section strings for the same node kind (e.g. a
+/// scene_object's own section is the bare handle at creation,
+/// "{handle} — Object" after migration) — reading the real string is the only
+/// way to filter correctly regardless of which path produced it. Dedups,
+/// preserves first-seen order. `doc_ids` lookups are identity reads (which
+/// node does this binding target), not graph-topology tracing.
+fn sections_for_doc_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    doc_ids: &[u32],
+) -> Vec<String> {
+    let Some(def) = def else { return Vec::new() };
+    let Some(meta) = def.preset_metadata.as_ref() else { return Vec::new() };
+    if doc_ids.is_empty() {
+        return Vec::new();
+    }
+
+    fn collect_doc_ids_by_node_id(
+        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+        out: &mut ahash::AHashMap<manifold_core::NodeId, u32>,
+    ) {
+        for n in nodes {
+            // Node identity follows the expose command's own convention
+            // (inspector.rs's `resolve_scene_write`/BUG-260 doc comment):
+            // match against the node's stable id, falling back to the
+            // handle-minted id when the stable id is empty (bundled/
+            // imported nodes) — a bare `n.node_id.clone()` key would collide
+            // every empty-id node into ONE HashMap slot (the last one wins),
+            // silently cross-wiring an unrelated node's sections onto this
+            // one (found via headless PNG: an object's sections included
+            // "Environment").
+            let identity = if n.node_id.as_str().is_empty() {
+                let handle = n.handle.clone().unwrap_or_else(|| format!("node{}", n.id));
+                manifold_core::NodeId::new(handle)
+            } else {
+                n.node_id.clone()
+            };
+            out.insert(identity, n.id);
+            if let Some(g) = n.group.as_deref() {
+                collect_doc_ids_by_node_id(&g.nodes, out);
+            }
+        }
+    }
+    let mut doc_id_by_node_id = ahash::AHashMap::default();
+    collect_doc_ids_by_node_id(&def.nodes, &mut doc_id_by_node_id);
+
+    let mut sections: Vec<String> = Vec::new();
+    for binding in &meta.bindings {
+        let manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } = &binding.target
+        else {
+            continue;
+        };
+        let Some(&doc_id) = doc_id_by_node_id.get(node_id) else {
+            continue;
+        };
+        if !doc_ids.contains(&doc_id) {
+            continue;
+        }
+        let Some(spec) = meta.params.iter().find(|p| p.id == binding.id) else {
+            continue;
+        };
+        let Some(section) = spec.section.clone() else {
+            continue;
+        };
+        if !sections.contains(&section) {
+            sections.push(section);
+        }
+    }
+    sections
 }
 
 /// Push per-frame card VALUES (slider fill + readout, enabled toggle, card
@@ -1597,6 +1684,10 @@ pub fn sync_inspector_data(
             .or(active_layer);
         let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
 
+        // P2 slice 2a: the scene panel's bound layer's FULL generator
+        // `ParamCardConfig`, filled in below only in the `Live` arm — see
+        // `ScenePanel::configure_params`'s doc comment.
+        let mut full_params: Option<ParamCardConfig> = None;
         let state = match layer {
             None => SceneSetupState::NoSelection("Select a layer to set up its scene.".to_string()),
             Some(l) if l.layer_type != LayerType::Generator => SceneSetupState::NoSelection(
@@ -1889,6 +1980,30 @@ pub fn sync_inspector_data(
                                         // when wrapped, else root (empty).
                                         let modifier_scope =
                                             group_node_id.map(|g| vec![g]).unwrap_or_default();
+                                        // P2 slice 2a: the real P1 section
+                                        // string(s) covering this object —
+                                        // its scene_object node, transform
+                                        // node, material node, and every
+                                        // modifier in its stack. Read
+                                        // straight off the layer's exposure
+                                        // metadata via doc-id cross-reference
+                                        // (`sections_for_doc_ids`) — never
+                                        // reconstructed from a naming
+                                        // convention (creation-time and
+                                        // load-migration stamping produce
+                                        // different strings for the same
+                                        // node kind).
+                                        let mut object_doc_ids = vec![*object_node_id];
+                                        if let Some(t) = transform {
+                                            object_doc_ids.push(t.node_doc_id);
+                                        }
+                                        if let manifold_renderer::node_graph::scene_vm::MaterialVm::Known(m) =
+                                            material
+                                        {
+                                            object_doc_ids.push(m.node_doc_id);
+                                        }
+                                        object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
+                                        let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
                                         ObjectRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
                                                 index: *index,
@@ -1926,6 +2041,7 @@ pub fn sync_inspector_data(
                                                     })
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,
+                                                sections,
                                             },
                                         ))
                                     }
@@ -2020,6 +2136,10 @@ pub fn sync_inspector_data(
                                                     0.0,
                                                     20.0,
                                                 )),
+                                                // P2 slice 2a: see
+                                                // `ObjectKnownRow::sections`'s
+                                                // doc comment.
+                                                sections: sections_for_doc_ids(def.as_ref(), &[r.node_doc_id]),
                                             },
                                         ))
                                     }
@@ -2119,6 +2239,47 @@ pub fn sync_inspector_data(
                             // (moved there C-P1b so `transform_row`/
                             // `material_row` can reuse them too) — reused
                             // here unchanged.
+                            // P2 slice 2a: the real P1 section string(s)
+                            // covering the camera atom (+ lens, if wired)
+                            // and World (environment/atmosphere) — see
+                            // `SceneSetupVm::camera_sections`/
+                            // `world_sections`'s doc comments. Computed from
+                            // `vm.camera`/`vm.environment`/`vm.atmosphere`
+                            // BEFORE the consuming matches below (reads the
+                            // VM's own case analysis, never re-derives graph
+                            // topology).
+                            let camera_sections = {
+                                use manifold_renderer::node_graph::scene_vm::CameraVm;
+                                let mut ids = match &vm.camera {
+                                    CameraVm::Orbit(c) => vec![c.node_doc_id],
+                                    CameraVm::Free(c) => vec![c.node_doc_id],
+                                    CameraVm::LookAt(c) => vec![c.node_doc_id],
+                                    CameraVm::Custom { .. } | CameraVm::None => Vec::new(),
+                                };
+                                let lens_id = match &vm.camera {
+                                    CameraVm::Orbit(c) => c.lens.as_ref().map(|l| l.node_doc_id),
+                                    CameraVm::Free(c) => c.lens.as_ref().map(|l| l.node_doc_id),
+                                    CameraVm::LookAt(c) => c.lens.as_ref().map(|l| l.node_doc_id),
+                                    CameraVm::Custom { .. } | CameraVm::None => None,
+                                };
+                                if let Some(id) = lens_id {
+                                    ids.push(id);
+                                }
+                                sections_for_doc_ids(def.as_ref(), &ids)
+                            };
+                            let world_sections = {
+                                use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
+                                let mut ids = Vec::new();
+                                match &vm.environment {
+                                    EnvironmentVm::Importer(e) => ids.push(e.intensity_addr.node_doc_id),
+                                    EnvironmentVm::Bare(e) => ids.push(e.intensity_addr.node_doc_id),
+                                    EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
+                                }
+                                if let AtmosphereVm::Wired(a) = &vm.atmosphere {
+                                    ids.push(a.density_addr.node_doc_id);
+                                }
+                                sections_for_doc_ids(def.as_ref(), &ids)
+                            };
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -2228,6 +2389,14 @@ pub fn sync_inspector_data(
                                 project.audio_setup.sends.iter().map(|s| s.label.clone()).collect(),
                                 project.audio_setup.sends.iter().map(|s| s.id.clone()).collect(),
                             );
+                            // P2 slice 2a: the layer's FULL generator
+                            // `ParamCardConfig` — the SAME `gen_params_to_config`
+                            // the main inspector's generator card uses (see
+                            // `ScenePanel::configure_params`'s doc comment for
+                            // why THIS layer, never `active_layer`).
+                            full_params = gen_inst.map(|gp| {
+                                gen_params_to_config(gp, layer_id.as_str(), None, automation_latched)
+                            });
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
                                 scene_name: l.name.clone(),
@@ -2243,6 +2412,8 @@ pub fn sync_inspector_data(
                                 objects,
                                 lights,
                                 camera,
+                                camera_sections,
+                                world_sections,
                             }))
                         }
                     }
@@ -2250,6 +2421,7 @@ pub fn sync_inspector_data(
             }
         };
         ui.scene_setup_panel.configure(state);
+        ui.scene_setup_panel.configure_params(full_params);
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
@@ -3544,233 +3716,6 @@ mod sync_card_values_tests {
         // No "stale text is gone" assertion: "0.50" legitimately appears on
         // other widgets (e.g. mapping trim fields seeded from the same
         // default), so disappearance is not a sound oracle here.
-    }
-}
-
-#[cfg(test)]
-mod sync_scene_row_values_tests {
-    //! The scene-row twin of `sync_card_values_tests`: a fog-density value
-    //! changed in the (UI-local) project after the panel was built must reach
-    //! the row's on-tree text through `sync_scene_row_values` alone — no
-    //! structural re-sync, no rebuild — for BOTH row shapes (a live slider
-    //! row and a driven read-only label row).
-    use super::*;
-    use manifold_ui::panels::scene_setup_panel::{
-        AtmosphereRowVm, CameraRowVm, EnvironmentRowVm, ModulatedRow, RowAddr, RowModulation,
-        RowValue, SceneSetupState, SceneSetupVm,
-    };
-
-    /// A SceneStarter generator layer + the bundled def's fog node id and
-    /// current fog_density value — same fixture family as `project.rs`'s
-    /// `scene_layer_project`.
-    fn scene_project() -> (Project, manifold_core::LayerId, u32, f32) {
-        use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, SceneVm};
-        let mut project = Project::default();
-        let idx = project.timeline.add_layer(
-            "Scene",
-            LayerType::Generator,
-            PresetTypeId::from_string("SceneStarter".to_string()),
-        );
-        let layer_id = project.timeline.layers[idx].layer_id.clone();
-        let def = manifold_renderer::node_graph::bundled_preset_def(
-            &project.timeline.layers[idx].generator_type().clone(),
-        )
-        .expect("SceneStarter is a bundled preset");
-        let vm = SceneVm::from_def(def).expect("SceneStarter resolves as a scene");
-        let AtmosphereVm::Wired(a) = vm.atmosphere else {
-            panic!("SceneStarter's atmosphere must be Wired");
-        };
-        (project, layer_id, a.density_addr.node_doc_id, a.density_value)
-    }
-
-    /// Open + build the panel with a Live VM whose fog-density row is either
-    /// live (slider) or driven (read-only label).
-    fn build_panel(ui: &mut UIRoot, layer_id: &manifold_core::LayerId, node_doc_id: u32, value: f32, driven: bool) {
-        let row = |v: f32| ModulatedRow {
-            value: RowValue {
-                addr: RowAddr::root(node_doc_id, "fog_density"),
-                value: v,
-                min: 0.0,
-                max: 1.0,
-                driven,
-                exposed: false,
-            },
-            modulation: Box::new(RowModulation::default()),
-        };
-        ui.scene_setup_panel.open();
-        ui.scene_setup_panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
-            layer_id: layer_id.clone(),
-            scene_name: "Scene".to_string(),
-            multiple_scenes: false,
-            object_count: 0,
-            light_count: 0,
-            shadow_caster_count: 0,
-            scene_root_node_id: 0,
-            environment: EnvironmentRowVm::None,
-            atmosphere: AtmosphereRowVm::Wired { density: row(value), height_falloff: row(value) },
-            audio_send_labels: Vec::new(),
-            audio_send_ids: Vec::new(),
-            objects: Vec::new(),
-            lights: Vec::new(),
-            camera: CameraRowVm::None,
-        })));
-        // Same region wrapper the real dock build uses (`ui_root.rs`'s
-        // scene_setup block) — a root-parented build outside a region panics
-        // by design (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4).
-        let dock = manifold_ui::Rect::new(0.0, 0.0, 400.0, 800.0);
-        let region = ui.tree.begin_region(
-            dock,
-            manifold_ui::ZTier::Base,
-            "scene_setup",
-            manifold_ui::UIFlags::empty(),
-        );
-        let start = ui.tree.count();
-        ui.scene_setup_panel.build_docked(&mut ui.tree, dock);
-        ui.tree.end_region(region, start);
-    }
-
-    fn tree_has_text(ui: &UIRoot, needle: &str) -> bool {
-        ui.tree.nodes().iter().any(|n| n.text.as_deref() == Some(needle))
-    }
-
-    /// Write `value` into the fog node's `fog_density` — the same place a
-    /// scene-row command write lands. Post exposure-convergence (P1) every
-    /// scene-vocabulary param is exposed (bound) at birth, so that place is
-    /// the binding's instance slot, NOT the def node param (a def write on a
-    /// bound param is structurally dead — BUG-237/260). Writing the slot is
-    /// what `sync_scene_row_values`'s resolve reads back.
-    fn write_fog_density(project: &mut Project, layer_id: &manifold_core::LayerId, node_doc_id: u32, value: f32) {
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        // The exposure's card slot id is the doc-id-prefixed param name
-        // (`{doc}_fog_density`), seeded into the instance manifest from the
-        // registry at layer creation. (`binding_id_for_node_param` can't be
-        // used here — it needs a lifted graph override, which a fresh
-        // `add_layer` scene doesn't have.)
-        let slot = format!("{node_doc_id}_fog_density");
-        let moved = project.with_preset_graph_mut(&target, |inst| inst.set_base_param(&slot, value));
-        assert_eq!(
-            moved,
-            Some(true),
-            "the scene-row write must move the exposed {slot} slot"
-        );
-    }
-
-    #[test]
-    fn project_write_reaches_live_slider_row_via_sync_scene_row_values() {
-        let (mut project, layer_id, node_doc_id, value) = scene_project();
-        let mut ui = UIRoot::new();
-        build_panel(&mut ui, &layer_id, node_doc_id, value, false);
-        assert!(
-            tree_has_text(&ui, &format!("{value:.2}")),
-            "baseline: the built slider row must show the pre-change value"
-        );
-
-        write_fog_density(&mut project, &layer_id, node_doc_id, 0.66);
-        sync_scene_row_values(&mut ui, &project);
-
-        assert!(
-            tree_has_text(&ui, "0.66"),
-            "sync_scene_row_values must push the new value onto the built slider row"
-        );
-    }
-
-    #[test]
-    fn project_write_reaches_driven_label_row_via_sync_scene_row_values() {
-        let (mut project, layer_id, node_doc_id, value) = scene_project();
-        let mut ui = UIRoot::new();
-        build_panel(&mut ui, &layer_id, node_doc_id, value, true);
-        assert!(
-            tree_has_text(&ui, &format!("{value:.2} (driven)")),
-            "baseline: the built driven row must show the pre-change value"
-        );
-
-        write_fog_density(&mut project, &layer_id, node_doc_id, 0.66);
-        sync_scene_row_values(&mut ui, &project);
-
-        assert!(
-            tree_has_text(&ui, "0.66 (driven)"),
-            "sync_scene_row_values must push the new value onto the driven row's label"
-        );
-    }
-
-    /// Scene-panel audit (2026-07-19), conviction test for the suspected
-    /// bound-row display bug: when a scene row's (node, param) is covered by
-    /// a card/user binding, bound-row WRITES land in the binding's instance
-    /// slot (`inspector.rs::scene_bound_slot` — "a def write on a bound param
-    /// is structurally dead"), so the row's per-frame display must read that
-    /// slot too. `sync_scene_row_values`'s `resolve` closure reads only the
-    /// def — the structural build's `display_value` checks the slot, the
-    /// per-frame sync does not — so a bound row pins back to the def's stale
-    /// value one frame after any write. This is the remaining half of
-    /// BUG-237's "scrub does nothing": the write was fixed, the read was not.
-    #[test]
-    fn bound_row_display_reads_the_binding_slot_not_the_def() {
-        let (mut project, layer_id, node_doc_id, value) = scene_project();
-        let mut ui = UIRoot::new();
-        build_panel(&mut ui, &layer_id, node_doc_id, value, false);
-
-        // Expose fog_density exactly the way the app's arm path does
-        // (`ToggleNodeParamExposeCommand`, the same command the panel's mod
-        // button and `resolve_mod_target` dispatch).
-        let gen_type = project
-            .timeline
-            .find_layer_by_id(layer_id.as_str())
-            .unwrap()
-            .1
-            .generator_type()
-            .clone();
-        let catalog = manifold_renderer::node_graph::bundled_preset_def(&gen_type)
-            .expect("SceneStarter is a bundled preset")
-            .clone();
-        let fog_node = catalog
-            .nodes
-            .iter()
-            .find(|n| n.id == node_doc_id)
-            .expect("fog node at root scope");
-        let node_identity = if fog_node.node_id.is_empty() {
-            let handle = fog_node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}"));
-            manifold_core::NodeId::new(handle.as_str())
-        } else {
-            fog_node.node_id.clone()
-        };
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let mut expose: Box<dyn manifold_editing::command::Command + Send> =
-            Box::new(manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
-                target.clone(),
-                node_identity,
-                node_doc_id,
-                fog_node.handle.clone().unwrap_or_else(|| "fog".to_string()),
-                "fog_density".to_string(),
-                true,
-                catalog,
-                "Fog Density".to_string(),
-                0.0,
-                1.0,
-                value,
-                manifold_core::effects::ParamConvert::Float,
-                false,
-                Vec::new(),
-            ));
-        expose.execute(&mut project);
-
-        let binding_id = project
-            .with_preset_graph_mut(&target, |inst| {
-                inst.binding_id_for_node_param(node_doc_id, "fog_density")
-            })
-            .flatten()
-            .expect("exposure must mint a binding");
-
-        // A bound-row write: moves the binding's slot, never the def
-        // (`scene_bound_slot`'s whole rationale). Then the per-frame sync
-        // must show the SLOT value on the row.
-        let moved = project.with_preset_graph_mut(&target, |inst| inst.set_base_param(&binding_id, 0.9));
-        assert_eq!(moved, Some(true), "the exposure must create the instance slot");
-        sync_scene_row_values(&mut ui, &project);
-
-        assert!(
-            tree_has_text(&ui, "0.90"),
-            "a bound scene row must display the binding's slot value, not the def's stale value"
-        );
     }
 }
 

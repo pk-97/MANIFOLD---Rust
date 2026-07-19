@@ -77,7 +77,7 @@ use std::path::{Path, PathBuf};
 // outliner's eye-toggle/selection-highlight colours (`scene_setup_panel.rs`)
 // — same inherited not-yet-tokenized-chrome pattern as P1's dock column,
 // folded into the same §15 ramp.
-const COLOR_BASELINE: usize = 214;
+const COLOR_BASELINE: usize = 213;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
