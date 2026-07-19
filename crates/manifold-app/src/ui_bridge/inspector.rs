@@ -300,7 +300,7 @@ fn scene_bound_slot(
     addr: &manifold_ui::panels::scene_setup_panel::RowAddr,
     catalog_default: &manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Option<manifold_core::effects::ParamId> {
-    project
+    let pid = project
         .with_preset_graph_mut(target, |inst| {
             inst.binding_id_for_node_param(addr.node_doc_id, &addr.param_id)
         })
@@ -314,7 +314,24 @@ fn scene_bound_slot(
                 &addr.param_id,
             )
         })
-        .map(manifold_core::effects::ParamId::from)
+        .map(manifold_core::effects::ParamId::from)?;
+
+    // Write-side twin of BUG-260 (P1, SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md):
+    // a structural command (AddSceneObjectCommand/AddSceneLightCommand/
+    // InsertMeshModifierCommand/ImportModelIntoSceneCommand) can stamp a
+    // fresh binding straight into the graph's `preset_metadata` without
+    // touching the LIVE instance's param manifest — that only reconciles at
+    // load (`Project::reconcile_param_manifests`), never mid-session. So the
+    // binding can resolve above before the instance actually carries a slot
+    // for it (e.g. an object added THIS session, never yet saved+reloaded).
+    // Treat that window as "not bound yet": every caller falls through to
+    // its unbound (direct graph-def) write path instead of silently writing
+    // nothing — the same "def walk as unbound fallback" doctrine BUG-260
+    // established for reads, applied here to writes.
+    let has_slot = project
+        .with_preset_graph_mut(target, |inst| inst.params.contains(pid.as_ref()))
+        .unwrap_or(false);
+    has_slot.then_some(pid)
 }
 
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a/C-P1b: descend into
