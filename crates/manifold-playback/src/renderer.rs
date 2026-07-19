@@ -17,6 +17,13 @@ pub trait ClipRenderer: Any + Send {
         layer_index: i32,
     ) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
+
+    /// Drop ALL project-derived state: active clips, every cache keyed by
+    /// project-local ids (`LayerId` / `ClipId`), pooled render targets.
+    /// Called by `PlaybackEngine::initialize` at EVERY project boundary.
+    /// This is not optional cleanup: ids and serialized version counters
+    /// collide across projects derived from the same template, so any state
+    /// that survives is stale the moment a new project arrives (BUG-256).
     fn release_all(&mut self);
 
     /// Called when a project is loaded/changed.
