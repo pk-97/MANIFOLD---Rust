@@ -22,7 +22,7 @@ use manifold_editing::commands::effects::BindingMappingEdit;
 /// instance's per-instance graph override, materializing it from `seed_def`
 /// (the catalog graph, resolved renderer-side) when the instance is still on
 /// the catalog default. Addresses the param by stable id.
-fn build_mapping_command(
+pub(crate) fn build_mapping_command(
     target: &manifold_core::GraphTarget,
     param_id: &str,
     edit: manifold_editing::commands::effects::BindingMappingEdit,
@@ -36,6 +36,39 @@ fn build_mapping_command(
             seed_def,
         ),
     )
+}
+
+/// `Application::seed_def_for` minus the `&self` — the catalog/bundled
+/// default def a mapping edit seeds from when the instance hasn't diverged,
+/// resolvable from any `&Project` (the `ActiveInspectorDrag` mapping-drag
+/// restore in app.rs uses it, same as `preview_mapping` does here).
+pub(crate) fn seed_def_for_project(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+    match target {
+        manifold_core::GraphTarget::Effect(eid) => {
+            let fx = project.find_effect_by_id(eid)?;
+            if fx.graph.is_some() {
+                return None;
+            }
+            let view = manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
+            Some((*view.canonical_def).clone())
+        }
+        manifold_core::GraphTarget::Generator(lid) => {
+            let layer = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| &l.layer_id == lid)?;
+            if layer.generator_graph().is_some() {
+                return None;
+            }
+            let gp = layer.gen_params()?;
+            manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
+                .map(|v| (*v.canonical_def).clone())
+        }
+    }
 }
 
 /// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
@@ -437,31 +470,7 @@ impl Application {
         &self,
         target: &manifold_core::GraphTarget,
     ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        match target {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                if fx.graph.is_some() {
-                    return None;
-                }
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                Some((*view.canonical_def).clone())
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                if layer.generator_graph().is_some() {
-                    return None;
-                }
-                let gp = layer.gen_params()?;
-                manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
-                    .map(|v| (*v.canonical_def).clone())
-            }
-        }
+        seed_def_for_project(&self.local_project, target)
     }
 
     /// The graph def the editor currently shows for the watched target — the
@@ -1656,6 +1665,19 @@ impl Application {
                     // note / seed) and kind-aware (effect / generator).
                     self.mapping_range_snapshot =
                         self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
+                    // Guard the in-flight range against a mid-drag full-snapshot
+                    // stomp (BUG-262); restored by `ActiveInspectorDrag::apply`.
+                    if let (Some(t), Some((mn, mx))) =
+                        (self.mapping_target(), self.mapping_range_snapshot)
+                    {
+                        self.active_inspector_drag =
+                            Some(crate::app::ActiveInspectorDrag::MappingRange {
+                                target: t,
+                                param_id: binding_id.to_string(),
+                                min: mn,
+                                max: mx,
+                            });
+                    }
                     continue;
                 }
                 PanelAction::EffectMappingRangeChanged {
@@ -1663,6 +1685,18 @@ impl Application {
                     min,
                     max,
                 } => {
+                    // Track the in-flight range on the guard so a snapshot
+                    // stomp restores the latest dragged value, not the pre-drag
+                    // one (BUG-262).
+                    if let Some(crate::app::ActiveInspectorDrag::MappingRange {
+                        min: gmin,
+                        max: gmax,
+                        ..
+                    }) = &mut self.active_inspector_drag
+                    {
+                        *gmin = *min;
+                        *gmax = *max;
+                    }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
                             &t,
@@ -1677,6 +1711,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingRangeCommit { binding_id } => {
+                    self.active_inspector_drag = None;
                     let snap = self.mapping_range_snapshot.take();
                     if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
                         && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
@@ -1755,6 +1790,19 @@ impl Application {
                 PanelAction::EffectMappingAffineSnapshot { binding_id } => {
                     self.mapping_affine_snapshot =
                         self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
+                    // Guard the in-flight scale/offset against a mid-drag
+                    // snapshot stomp (BUG-262).
+                    if let (Some(t), Some((sc, of))) =
+                        (self.mapping_target(), self.mapping_affine_snapshot)
+                    {
+                        self.active_inspector_drag =
+                            Some(crate::app::ActiveInspectorDrag::MappingAffine {
+                                target: t,
+                                param_id: binding_id.to_string(),
+                                scale: sc,
+                                offset: of,
+                            });
+                    }
                     continue;
                 }
                 PanelAction::EffectMappingAffineChanged {
@@ -1762,6 +1810,15 @@ impl Application {
                     scale,
                     offset,
                 } => {
+                    if let Some(crate::app::ActiveInspectorDrag::MappingAffine {
+                        scale: gscale,
+                        offset: goffset,
+                        ..
+                    }) = &mut self.active_inspector_drag
+                    {
+                        *gscale = *scale;
+                        *goffset = *offset;
+                    }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
                             &t,
@@ -1776,6 +1833,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingAffineCommit { binding_id } => {
+                    self.active_inspector_drag = None;
                     let snap = self.mapping_affine_snapshot.take();
                     if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
                         && let Some((_, _, new_scale, new_offset)) =

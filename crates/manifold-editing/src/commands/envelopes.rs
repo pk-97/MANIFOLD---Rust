@@ -94,6 +94,54 @@ impl Command for RemoveEnvelopeCommand {
     }
 }
 
+/// Flip an existing envelope's `enabled` flag (by index) — the card's
+/// envelope button when an envelope already exists (the no-envelope case is
+/// [`AddEnvelopeCommand`]). Mirrors `ToggleDriverEnabledCommand`.
+#[derive(Debug)]
+pub struct ToggleEnvelopeEnabledCommand {
+    target: GraphTarget,
+    env_index: usize,
+    old_enabled: bool,
+    new_enabled: bool,
+}
+
+impl ToggleEnvelopeEnabledCommand {
+    pub fn new(target: GraphTarget, env_index: usize, old_enabled: bool, new_enabled: bool) -> Self {
+        Self {
+            target,
+            env_index,
+            old_enabled,
+            new_enabled,
+        }
+    }
+}
+
+impl Command for ToggleEnvelopeEnabledCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let idx = self.env_index;
+        let val = self.new_enabled;
+        project.with_preset_graph_mut(&self.target, |inst| {
+            if let Some(e) = inst.envelopes.as_mut().and_then(|envs| envs.get_mut(idx)) {
+                e.enabled = val;
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let idx = self.env_index;
+        let val = self.old_enabled;
+        project.with_preset_graph_mut(&self.target, |inst| {
+            if let Some(e) = inst.envelopes.as_mut().and_then(|envs| envs.get_mut(idx)) {
+                e.enabled = val;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Toggle Envelope"
+    }
+}
+
 /// Change an envelope's `decay_beats` — the card's single envelope slider (by index).
 #[derive(Debug)]
 pub struct ChangeEnvelopeDecayCommand {
