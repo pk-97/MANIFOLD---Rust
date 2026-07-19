@@ -148,13 +148,12 @@ impl LiveTriggerState {
                 // edge level below needs the pre-tick value to recompute the
                 // sensitivity-scaled raw signal for edge detection.
                 let prev_raw_before_condition = follower.prev_raw;
-                // Edge-detect the pre-range-map `conditioned` signal — the
-                // exact same split the trigger-gate arm in
-                // `modulation::evaluate_instance_audio_mods` uses (never the
-                // range-mapped value `AudioModShape::apply` would produce),
-                // so *whether* a clip fires can never be distorted by a trim
-                // handle even if one is ever exposed on this drawer.
-                let conditioned = cfg.shape.condition(
+                // The return value is unused (firing AND the meter both read
+                // `edge_level` since the 2026-07-19 meter-honesty fix), but
+                // the call itself is load-bearing: it advances
+                // `follower.prev_raw`, which the rate-of-change arm of
+                // `edge_level` differences against next tick.
+                let _conditioned = cfg.shape.condition(
                     raw,
                     dt_s,
                     &mut follower.smoothed,
@@ -177,16 +176,20 @@ impl LiveTriggerState {
                 } else {
                     (raw * cfg.shape.sensitivity).clamp(0.0, 1.0)
                 };
-                // D6 (P3c, BUG-082's fix): capture the same shaped signal the
-                // edge check below reads, keyed on the owning layer + this
-                // config's index — the drawer meter shows exactly what
-                // decides whether the clip fires. Pushed before the edge
-                // check so the meter reflects the level every tick, not only
-                // on a fire — and, since BUG-109, whether or not `fire_enabled`
-                // is set, so the meter breathes with the music while stopped.
+                // D6 (P3c, BUG-082's fix): capture the signal the edge check
+                // below reads, keyed on the owning layer + this config's
+                // index — the drawer meter shows exactly what decides whether
+                // the clip fires. Pushed before the edge check so the meter
+                // reflects the level every tick, not only on a fire — and,
+                // since BUG-109, whether or not `fire_enabled` is set, so the
+                // meter breathes with the music while stopped. Since
+                // 2026-07-19 (param-drawer unification) that signal is
+                // `edge_level`, NOT `conditioned`: BUG-242 moved firing onto
+                // the sensitivity-scaled raw edge, and a meter showing the
+                // shaped envelope lied about where the threshold sat.
                 fire_meters.push(
                     fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
-                    conditioned,
+                    edge_level,
                 );
                 if fire_enabled && follower.edge.advance(edge_level, 0.5) {
                     fires.push(FireRequest {

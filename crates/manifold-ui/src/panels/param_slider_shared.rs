@@ -114,8 +114,19 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 /// audio-mod drawer, so the reserved height must always include the strip
 /// too — this used to omit it, so a metered drawer overflowed its reserved
 /// slot by `METER_STRIP_H` (6px) every time one showed.
+/// Row budget (must mirror `build_audio_mod_drawer`'s row order exactly):
+/// Source + Listen (chips) + Sensitivity always; the Feature/Band matrix rows
+/// only while the "Custom" cell is open; Invert + Attack + Release only where
+/// they act — an `is_trigger_gate` target fires on the raw sensitivity-scaled
+/// edge (BUG-242), so those three are placebo there and not built.
 pub(crate) fn audio_config_height(info: &ParamInfo, mod_state: &ParamModState, i: usize) -> f32 {
-    let mut n = 7;
+    let mut n = 3; // Source, Listen (chips + Custom), Sensitivity
+    if !info.is_trigger_gate {
+        n += 3; // Invert, Attack, Release
+    }
+    if mod_state.audio_matrix_open.get(i).copied().unwrap_or(false) {
+        n += 2; // Feature + Band (the Custom matrix)
+    }
     let show_action = !info.is_toggle && !info.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
     if show_action {
@@ -398,6 +409,11 @@ pub struct ParamModState {
     /// while `audio_action_idx == 1`.
     pub audio_wrap_idx: Vec<i32>,
 
+    /// Per-param: the drawer's full Feature×Band matrix is open (the "Custom"
+    /// cell trailing the Listen chips). SESSION-ONLY UI state — `sync_audio`
+    /// never writes it; it mirrors no model field.
+    pub audio_matrix_open: Vec<bool>,
+
     // ── Automation lane indicator (P4 §7 last bullet) ──
     /// Per-param: an enabled automation lane with ≥1 point exists on this
     /// instance for this param (Live's red "automated" dot).
@@ -639,6 +655,7 @@ impl ParamModState {
             audio_action_idx: vec![0; param_count],
             audio_step_amount: vec![1.0; param_count],
             audio_wrap_idx: vec![0; param_count],
+            audio_matrix_open: vec![false; param_count],
             automation_active: vec![false; param_count],
             automation_overridden: vec![false; param_count],
         }
@@ -646,6 +663,10 @@ impl ParamModState {
 
     /// Sync audio-modulation display state from the card config.
     pub fn sync_audio(&mut self, n: usize, audio: &AudioCardState) {
+        // Session-only UI state: sized here so a card whose param list grew
+        // since `allocate` never has a dead "Custom" toggle. Never overwritten
+        // from the model — it's not a mirrored field.
+        self.audio_matrix_open.resize(n, false);
         for i in 0..n {
             self.audio_active[i] = audio.active.get(i).copied().unwrap_or(false);
             self.audio_kind_idx[i] = audio.kind_idx.get(i).copied().unwrap_or(0);
@@ -1967,10 +1988,27 @@ pub(crate) fn build_audio_mod_drawer(
     let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
     let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
     let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
-    // The feature matrix: a Feature row (kind) and a Band row, each a single
-    // selection. Flat button indices run sends, then kinds
-    // (0..AUDIO_KIND_COUNT), then bands, then the two modifier toggles —
-    // see match_param_row_click.
+    // The Listen row: the curated chips (same `trigger_source_chips` the
+    // clip-trigger drawer uses — pure presentation over the same
+    // `AudioFeature { kind, band }` cells) plus a trailing "Custom" cell that
+    // opens the full Feature×Band matrix behind it. The open state is
+    // session-only UI (`ParamModState::audio_matrix_open`), never synced.
+    let current = crate::types::AudioFeature::new(
+        audio_kind_from_index(kind_sel as usize),
+        audio_band_from_index(band_sel as usize),
+    );
+    let matrix_open = mod_state.audio_matrix_open.get(i).copied().unwrap_or(false);
+    let mut chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
+        .into_iter()
+        .map(|c| DrawerButton::new(c.label, c.active))
+        .collect();
+    chip_buttons.push(DrawerButton::new("Custom", matrix_open));
+    // An `is_trigger_gate` target fires on the raw sensitivity-scaled edge
+    // (BUG-242): Invert/Attack/Release never reach the Schmitt trigger, so
+    // the drawer doesn't offer them there. Continuous, `is_trigger`, and
+    // Step/Random mods all read the shaped envelope and keep them.
+    let shaping_offered = !info.is_trigger_gate;
+    // The Feature/Band matrix rows, only while "Custom" is open.
     let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
         .iter()
         .enumerate()
@@ -2029,17 +2067,27 @@ pub(crate) fn build_audio_mod_drawer(
             label: Some("Source".into()),
         },
         DrawerRow::Buttons {
+            buttons: chip_buttons,
+            width: ButtonWidth::Proportional,
+            label: Some("Listen".into()),
+        },
+    ];
+    if matrix_open {
+        rows.push(DrawerRow::Buttons {
             buttons: kind_buttons,
             width: ButtonWidth::Uniform,
             label: Some("Feature".into()),
-        },
-        DrawerRow::Buttons {
+        });
+        rows.push(DrawerRow::Buttons {
             buttons: band_buttons,
             width: ButtonWidth::Uniform,
             label: Some("Band".into()),
-        },
-        DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None },
-        shape_slider(
+        });
+    }
+    if shaping_offered {
+        rows.push(DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional, label: None });
+    }
+    rows.push(shape_slider(
             // §7.2 item 3, 2026-07-11: display label only — "Amount" reads as
             // a generic gain knob; "Sensitivity" says what it tunes (how
             // easily this config fires/drives against the fixed 0.5 edge).
@@ -2050,24 +2098,25 @@ pub(crate) fn build_audio_mod_drawer(
             format!("{sens:.2}"),
             shape_reset(AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
             show_amount_meter,
-        ),
-        shape_slider(
+        ));
+    if shaping_offered {
+        rows.push(shape_slider(
             "Attack",
             attack / AUDIO_ATTACK_MAX_MS,
             AUDIO_ATTACK_DEFAULT_MS / AUDIO_ATTACK_MAX_MS,
             format!("{attack:.0} ms"),
             shape_reset(AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
             false,
-        ),
-        shape_slider(
+        ));
+        rows.push(shape_slider(
             "Release",
             release / AUDIO_RELEASE_MAX_MS,
             AUDIO_RELEASE_DEFAULT_MS / AUDIO_RELEASE_MAX_MS,
             format!("{release:.0} ms"),
             shape_reset(AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
             false,
-        ),
-    ];
+        ));
+    }
     // D8: the Action row (Cont/Step/Rand) — every non-toggle, non-trigger
     // param card. Never built for `is_trigger`/`is_trigger_gate` (F2/D8
     // forbidden move): those rows count events by design, they don't step
@@ -2836,9 +2885,17 @@ pub(crate) enum RowClick {
     AudioToggle(usize),
     /// A send button in the audio drawer (param index, send index).
     AudioSelectSend(usize, usize),
-    /// A feature-kind button in the audio drawer (param index, kind index).
+    /// A Listen-row chip in the audio drawer (param index, chip index into
+    /// `trigger_source_chips(current)`) — sets kind AND band in one action.
+    AudioSelectChip(usize, usize),
+    /// The "Custom" cell trailing the Listen chips (param index) — opens or
+    /// closes the Feature×Band matrix. Session-only UI state, no model action.
+    AudioToggleMatrix(usize),
+    /// A feature-kind button in the audio drawer's open Custom matrix (param
+    /// index, kind index).
     AudioSelectKind(usize, usize),
-    /// A band button in the audio drawer (param index, band index).
+    /// A band button in the audio drawer's open Custom matrix (param index,
+    /// band index).
     AudioSelectBand(usize, usize),
     /// The "Invert" toggle in the audio drawer (param index).
     AudioToggleInvert(usize),
@@ -2958,17 +3015,18 @@ pub(crate) fn match_param_row_click(
     }
 
     // Audio drawer buttons: one flat index across rows in build order —
-    // sends, the Feature (kind) row, the Band row, the ONE modifier toggle
-    // (Invert — Delta removed §7.2 item 2, 2026-07-11), then (D8,
-    // non-toggle/non-trigger rows only) the Action row, then — while armed
-    // to Step — the Wrap row, then — an `is_trigger_gate` row
-    // unconditionally, or a slider row armed to Step/Random — the trailing
-    // Mode row (§9 U2/D3). Must stay in lockstep with the row order
-    // `build_audio_mod_drawer` actually builds. The shaping/Sensitivity
-    // sliders are `DrawerRow::Slider`s, not buttons, so they contribute
-    // nothing to this flat index; a drawer with fewer trailing rows simply
-    // has no buttons past its last one, so `resolve_button` can never
-    // produce an `f` that reaches an arm that isn't built.
+    // sends, the Listen chips (`trigger_source_chips(current)` + the
+    // trailing "Custom" cell), then — only while the matrix is open — the
+    // Feature and Band rows, then — only where shaping is offered (every
+    // target EXCEPT `is_trigger_gate`, which fires on the raw BUG-242 edge)
+    // the Invert toggle, then (D8, non-toggle/non-trigger rows only) the
+    // Action row, then — while armed to Step — the Wrap row, then the
+    // trailing Mode row (§9 U2/D3). Must stay in lockstep with the row order
+    // `build_audio_mod_drawer` actually builds. The shaping sliders are
+    // `DrawerRow::Slider`s, not buttons, so they contribute nothing to this
+    // flat index; a drawer with fewer trailing rows simply has no buttons
+    // past its last one, so `resolve_button` can never produce an `f` that
+    // reaches an arm that isn't built.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
@@ -2976,19 +3034,41 @@ pub(crate) fn match_param_row_click(
             if flat < *send_count {
                 return Some(RowClick::AudioSelectSend(pi, flat));
             }
-            let f = flat - send_count;
-            if f < AUDIO_KIND_COUNT {
-                return Some(RowClick::AudioSelectKind(pi, f));
+            let mut f = flat - send_count;
+            let current = crate::types::AudioFeature::new(
+                audio_kind_from_index(
+                    mod_state.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize
+                ),
+                audio_band_from_index(
+                    mod_state.audio_band_idx.get(pi).copied().unwrap_or(0) as usize
+                ),
+            );
+            let chip_count = trigger_source_chips(current).len();
+            if f < chip_count {
+                return Some(RowClick::AudioSelectChip(pi, f));
             }
-            let f = f - AUDIO_KIND_COUNT;
-            if f < AUDIO_BAND_COUNT {
-                return Some(RowClick::AudioSelectBand(pi, f));
-            }
-            let f = f - AUDIO_BAND_COUNT;
+            f -= chip_count;
             if f == 0 {
-                return Some(RowClick::AudioToggleInvert(pi));
+                return Some(RowClick::AudioToggleMatrix(pi));
             }
-            let f = f - 1;
+            f -= 1;
+            if mod_state.audio_matrix_open.get(pi).copied().unwrap_or(false) {
+                if f < AUDIO_KIND_COUNT {
+                    return Some(RowClick::AudioSelectKind(pi, f));
+                }
+                f -= AUDIO_KIND_COUNT;
+                if f < AUDIO_BAND_COUNT {
+                    return Some(RowClick::AudioSelectBand(pi, f));
+                }
+                f -= AUDIO_BAND_COUNT;
+            }
+            let is_gate = param_info.get(pi).map(|p| p.is_trigger_gate).unwrap_or(false);
+            if !is_gate {
+                if f == 0 {
+                    return Some(RowClick::AudioToggleInvert(pi));
+                }
+                f -= 1;
+            }
             let show_action = param_info
                 .get(pi)
                 .map(|p| !p.is_toggle && !p.is_trigger)
@@ -2997,7 +3077,7 @@ pub(crate) fn match_param_row_click(
                 if f < AUDIO_ACTION_COUNT {
                     return Some(RowClick::AudioSelectAction(pi, f));
                 }
-                let f = f - AUDIO_ACTION_COUNT;
+                f -= AUDIO_ACTION_COUNT;
                 let action_idx = mod_state.audio_action_idx.get(pi).copied().unwrap_or(0);
                 if action_idx == 1 {
                     if f < AUDIO_WRAP_COUNT {

@@ -1257,6 +1257,39 @@ impl SceneCardState {
         );
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
+
+    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
+    /// (kind, band) indices and reuses the same set-source action a matrix
+    /// click would issue, one command carrying both axes. Mirrors
+    /// `ParamCardPanel::audio_select_chip_action`.
+    fn audio_select_chip_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        chip: usize,
+    ) -> Vec<PanelAction> {
+        use super::param_slider_shared::{
+            audio_band_from_index, audio_kind_from_index, trigger_source_chips,
+        };
+        let ms = &self.mod_state;
+        let current = crate::types::AudioFeature::new(
+            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
+            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
+        );
+        let chips = trigger_source_chips(current);
+        let Some(chip) = chips.get(chip) else {
+            return vec![];
+        };
+        let kind_idx = crate::types::AudioFeatureKind::ALL
+            .iter()
+            .position(|&k| k == chip.feature.kind)
+            .unwrap_or(0);
+        let band_idx = crate::types::AudioBand::ALL
+            .iter()
+            .position(|&b| b == chip.feature.band)
+            .unwrap_or(0);
+        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx))
+    }
 }
 
 /// Placeholder `ParamInfo` used only to size `SceneCardState::resize`'s
@@ -3724,6 +3757,15 @@ impl ScenePanel {
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.world_card.audio_set_source_action(target, pi, Some(k), None, None)
                             }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.world_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.world_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
+                            }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.world_card.audio_set_source_action(target, pi, None, Some(k), None)
                             }
@@ -3788,6 +3830,15 @@ impl ScenePanel {
                             }
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.object_card.audio_set_source_action(target, pi, Some(k), None, None)
+                            }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.object_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.object_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
                             }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.object_card.audio_set_source_action(target, pi, None, Some(k), None)
@@ -3854,6 +3905,15 @@ impl ScenePanel {
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.light_card.audio_set_source_action(target, pi, Some(k), None, None)
                             }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.light_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.light_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
+                            }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.light_card.audio_set_source_action(target, pi, None, Some(k), None)
                             }
@@ -3919,6 +3979,15 @@ impl ScenePanel {
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.camera_card.audio_set_source_action(target, pi, Some(k), None, None)
                             }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.camera_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.camera_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
+                            }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.camera_card.audio_set_source_action(target, pi, None, Some(k), None)
                             }
@@ -3983,6 +4052,15 @@ impl ScenePanel {
                             }
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.modifier_card.audio_set_source_action(target, pi, Some(k), None, None)
+                            }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.modifier_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.modifier_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
                             }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.modifier_card.audio_set_source_action(target, pi, None, Some(k), None)
