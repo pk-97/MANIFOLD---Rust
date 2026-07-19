@@ -130,6 +130,20 @@ showtime? Latency the performer feels, failure mode mid-set, what the UI shows w
 the subsystem degrades. A design carrying its stage consequences in writing is what
 lets Peter approve it as the person who has to perform on it.
 
+**The zero-new-systems test.** Before committing, count the design's new *identity,
+addressing, or dispatch systems* — a new id scheme, a lookup map that mirrors an
+existing one, a resolution funnel, a per-frame cache translating between two existing
+systems. The expected answer is zero. If the design needs a translation layer between
+two systems that already work, the correct move is to question one of the systems, not
+to build the layer: the layer is where the next five bugs will live, because every
+value now has two homes that must be kept in agreement by hand. The reference failure
+is the scene panel's synthesized `scene.{doc}.{param}` ids + per-frame id map +
+`resolve_scene_param`/`resolve_mod_target` funnels (SCENE_PANEL_EXPOSURE_CONVERGENCE
+§3a, 2026-07-19) — a whole addressing universe built to avoid reusing the exposure
+system that already did the job, and the home of BUG-237/249/250/260 in one week.
+This test composes with §4: when your second candidate architecture deletes a
+translation layer instead of adding one, that is strong evidence it is the right one.
+
 ## 4. Alternatives — generate two, price both, kill your favorite
 
 One candidate architecture means you haven't found the seam yet. Generate at least
@@ -242,6 +256,24 @@ Phasing is part of the design, not packaging. The rules that matter:
   with a trigger. The dead-LANES escape (AUTOMATION_LANES §7 chooser, 2026-07-07)
   is the proof case: the UX section's centerpiece affordance was absent from §10,
   so four faithful phases shipped an unreachable feature.
+- **Never phase by family.** If the phase plan repeats the same integration once
+  per item/family ("convert World, then Object, then Light, then Modifier"), the
+  plan is manufacturing N copies of one mechanism — five dispatch blocks, five
+  lookup twins — and the copies are where the dead-feature bugs breed (the scene
+  panel's C-P1a..d split produced exactly this; one family's click path died
+  unnoticed in each copy). Phase by *layer* instead: one phase builds the single
+  generic host, the next flows every family through it. If the families genuinely
+  differ, the differences belong in data (a table the host reads), not in five
+  code paths.
+- **Gates must be behavioral, and a blind oracle is a stop sign.** Deletion greps
+  and unit tests prove structure, not behavior; the scene-convergence landing was
+  green on both while 8 of 21 scene flow scripts were silently dead (BUG-252).
+  Two rules follow. A landing that claims flow verification must account for every
+  flow file on disk for that surface — a count match, not a named subset chosen
+  post hoc. And when the harness *cannot observe* the behavior that matters most
+  (BUG-239: live values invisible to `--script`), the options are fix the oracle
+  or don't land — waiving the most important assertion and landing anyway is how
+  "green" came to mean nothing on this surface.
 
 ## 8. Done deciding vs. done surveying
 
