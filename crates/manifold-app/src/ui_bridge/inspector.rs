@@ -5052,4 +5052,1253 @@ mod scene_card_convergence_tests {
             "undo must restore the pre-drag slot value, still at {restored}"
         );
     }
+
+    /// Phase-1 baseline for the undo/redo audit (Peter 2026-07-19: undo/redo
+    /// "broken, out of order, or just don't respond" across sliders, buttons,
+    /// toggles, clips, trims). Every undoable gesture family gets two probes:
+    ///
+    /// - CLEAN: gesture → exactly ONE undo-tracked `Execute` → execute/undo/
+    ///   redo round-trips the probed value through a REAL `EditingService`
+    ///   (the content thread's own gateway), and the undo stack grows by
+    ///   exactly one per gesture.
+    /// - STOMP (drag trios only): a full project snapshot lands mid-gesture
+    ///   (data_version bump from any concurrent command — playback, MIDI
+    ///   phantom commit, another gesture), simulated exactly the way
+    ///   app_render.rs ~808-817 applies it: replace the local project, then
+    ///   restore the guarded drag. Families without an `ActiveInspectorDrag`
+    ///   variant lose the in-flight value here — the commit then sees
+    ///   old == new and emits NO undo entry ("doesn't respond").
+    mod undo_baseline {
+        use super::*;
+        use manifold_editing::service::EditingService;
+
+        /// The content-thread side of the loop: a real `EditingService` over
+        /// its own project, driven exactly the way content_commands.rs drives
+        /// it (`Execute` → `service.execute`, `ExecuteBatch` → `execute_batch`,
+        /// `MutateProject(Live)` → plain closure application, no undo entry).
+        struct ContentSide {
+            project: Project,
+            service: EditingService,
+            undo_depth: usize,
+        }
+
+        impl ContentSide {
+            fn new(project: &Project) -> Self {
+                Self {
+                    project: project.clone(),
+                    service: EditingService::new(),
+                    undo_depth: 0,
+                }
+            }
+
+            /// Apply every drained command the way the content thread would.
+            /// Returns how many undo-tracked commands landed.
+            fn apply(&mut self, cmds: Vec<ContentCommand>) -> usize {
+                let mut n = 0;
+                for c in cmds {
+                    match c {
+                        ContentCommand::Execute(cmd) => {
+                            self.service.execute(cmd, &mut self.project);
+                            self.undo_depth += 1;
+                            n += 1;
+                        }
+                        ContentCommand::ExecuteBatch(cmds, desc) => {
+                            let k = cmds.len();
+                            self.service.execute_batch(cmds, desc, &mut self.project);
+                            self.undo_depth += k.max(1);
+                            n += 1;
+                        }
+                        ContentCommand::MutateProject(f) | ContentCommand::MutateProjectLive(f) => {
+                            f(&mut self.project);
+                        }
+                        _ => {}
+                    }
+                }
+                n
+            }
+        }
+
+        /// Full gesture → undo → redo cycle assertion: the gesture must emit
+        /// exactly one undo-tracked command; executing it lands `after`;
+        /// undo restores `before`; redo reapplies `after`; stack grows by 1.
+        fn assert_undo_cycle<P>(
+            side: &mut ContentSide,
+            cmds: Vec<ContentCommand>,
+            probe: impl Fn(&Project) -> P,
+            before: P,
+            after: P,
+            label: &str,
+        ) where
+            P: PartialEq + std::fmt::Debug,
+        {
+            let depth0 = side.undo_depth;
+            let landed = side.apply(cmds);
+            assert_eq!(
+                landed, 1,
+                "{label}: gesture must emit exactly ONE undo-tracked Execute; got {landed}"
+            );
+            assert_eq!(
+                side.undo_depth,
+                depth0 + 1,
+                "{label}: undo stack must grow by exactly one per gesture"
+            );
+            assert_eq!(probe(&side.project), after, "{label}: execute must land the new value");
+            assert!(side.service.undo(&mut side.project), "{label}: undo must be available");
+            assert_eq!(
+                probe(&side.project),
+                before,
+                "{label}: undo must restore the pre-gesture value"
+            );
+            assert!(side.service.redo(&mut side.project), "{label}: redo must be available");
+            assert_eq!(probe(&side.project), after, "{label}: redo must reapply the value");
+        }
+
+        /// Mirror app_render's mid-gesture full-snapshot acceptance: replace
+        /// the local project with the stale pre-gesture one, then restore the
+        /// guarded drag (app_render.rs ~808-817).
+        fn snapshot_stomp(h: &Harness, stale: &Project) -> Project {
+            let mut p = stale.clone();
+            if let Some(ref drag) = h.active_inspector_drag {
+                drag.apply(&mut p);
+            }
+            p
+        }
+
+        /// Drive a drag trio and assert the undo cycle, clean or stomped.
+        /// `gesture` runs Snapshot + Changed ticks (NOT the commit); `commit`
+        /// dispatches the commit action and returns the drained commands.
+        fn trio_cycle<P>(
+            label: &str,
+            mut project: Project,
+            h: &mut Harness,
+            gesture: impl Fn(&mut Harness, &mut Project),
+            commit: impl Fn(&mut Harness, &mut Project) -> DispatchResult,
+            probe: impl Fn(&Project) -> P,
+            before: P,
+            after: P,
+            stomp: bool,
+        ) where
+            P: PartialEq + std::fmt::Debug,
+        {
+            let stale = project.clone();
+            let mut side = ContentSide::new(&project);
+            gesture(h, &mut project);
+            // Live ticks reach the content thread as non-undoable writes.
+            side.apply(h.drain());
+            if stomp {
+                project = snapshot_stomp(h, &stale);
+            }
+            commit(h, &mut project);
+            let label = if stomp { format!("{label} [stomp]") } else { label.to_string() };
+            assert_undo_cycle(&mut side, h.drain(), probe, before, after, &label);
+        }
+
+        // ── Fixtures ─────────────────────────────────────────────
+
+        fn gpt() -> manifold_ui::GraphParamTarget {
+            manifold_ui::GraphParamTarget::Generator
+        }
+
+        /// Materialize a REAL exposed binding on the scene layer's
+        /// fog_density node via the production expose-then-arm path (the
+        /// BUG-249 fixture shape: DriverToggle on the scene row's synth id
+        /// mints `ToggleNodeParamExposeCommand` + `AddDriverCommand`).
+        /// Returns the real binding id. Setup commands are drained — the
+        /// content side clones the post-arm project, so both sides agree.
+        fn materialized_param(
+            h: &mut Harness,
+            project: &mut Project,
+            layer_id: &LayerId,
+        ) -> manifold_core::effects::ParamId {
+            let node_doc_id = open_scene_panel_on_fog_density(&mut h.ui, project, layer_id);
+            let synth =
+                manifold_ui::panels::scene_setup_panel::synth_world_param_id(node_doc_id, "density");
+            h.dispatch(
+                &PanelAction::DriverToggle(manifold_ui::GraphParamTarget::Generator, synth.clone()),
+                project,
+            );
+            h.drain();
+            let real = gen_inst(project, layer_id)
+                .binding_id_for_node_param(node_doc_id, "fog_density")
+                .expect("DriverToggle materializes an exposed binding");
+            std::borrow::Cow::Owned(real)
+        }
+
+        /// Immutable read of a layer's generator instance — the probe-side
+        /// counterpart of `with_preset_graph_mut` (no immutable variant
+        /// exists, and probes only get `&Project`).
+        fn gen_inst<'p>(
+            p: &'p Project,
+            layer_id: &LayerId,
+        ) -> &'p manifold_core::effects::PresetInstance {
+            let (_, layer) = p.timeline.find_layer_by_id(layer_id).expect("layer resolves");
+            layer.gen_params().expect("generator instance materialized")
+        }
+
+        fn with_send(project: &mut Project) -> manifold_core::AudioSendId {
+            let send = manifold_core::audio_setup::AudioSend::new("Kick");
+            let id = send.id.clone();
+            project.audio_setup.sends.push(send);
+            id
+        }
+
+        fn test_feature() -> manifold_core::audio_mod::AudioFeature {
+            manifold_core::audio_mod::AudioFeature::new(
+                manifold_core::audio_mod::AudioFeatureKind::Amplitude,
+                manifold_core::audio_mod::AudioBand::Full,
+            )
+        }
+
+        // ── Settings sliders ─────────────────────────────────────
+
+        fn master_opacity_case(stomp: bool) {
+            let project = Project::default();
+            let mut h = Harness::new(None);
+            let before = project.settings.master_opacity;
+            let after = 0.42f32;
+            trio_cycle(
+                "master_opacity",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::MasterOpacitySnapshot, p);
+                    h.dispatch(&PanelAction::MasterOpacityChanged(0.6), p);
+                    h.dispatch(&PanelAction::MasterOpacityChanged(after), p);
+                },
+                |h, p| h.dispatch(&PanelAction::MasterOpacityCommit, p),
+                |p| p.settings.master_opacity,
+                before,
+                after,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn master_opacity_clean() {
+            master_opacity_case(false);
+        }
+
+        #[test]
+        fn master_opacity_stomp() {
+            master_opacity_case(true);
+        }
+
+        fn led_brightness_case(stomp: bool) {
+            let project = Project::default();
+            let mut h = Harness::new(None);
+            let before = project.settings.led_brightness;
+            let after = 0.37f32;
+            trio_cycle(
+                "led_brightness",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::LedBrightnessSnapshot, p);
+                    h.dispatch(&PanelAction::LedBrightnessChanged(0.9), p);
+                    h.dispatch(&PanelAction::LedBrightnessChanged(after), p);
+                },
+                |h, p| h.dispatch(&PanelAction::LedBrightnessCommit, p),
+                |p| p.settings.led_brightness,
+                before,
+                after,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn led_brightness_clean() {
+            led_brightness_case(false);
+        }
+
+        #[test]
+        fn led_brightness_stomp() {
+            led_brightness_case(true);
+        }
+
+        fn macro_case(stomp: bool) {
+            let mut project = Project::default();
+            project.settings.macro_bank.slots[0].value = 0.2;
+            let mut h = Harness::new(None);
+            trio_cycle(
+                "macro",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::MacroSnapshot(0), p);
+                    h.dispatch(&PanelAction::MacroChanged(0, 0.5), p);
+                    h.dispatch(&PanelAction::MacroChanged(0, 0.8), p);
+                },
+                |h, p| h.dispatch(&PanelAction::MacroCommit(0), p),
+                |p| p.settings.macro_bank.slots[0].value,
+                0.2,
+                0.8,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn macro_clean() {
+            macro_case(false);
+        }
+
+        #[test]
+        fn macro_stomp() {
+            macro_case(true);
+        }
+
+        // ── Layer sliders ────────────────────────────────────────
+
+        fn layer_opacity_case(stomp: bool) {
+            let (project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let lid = layer_id.clone();
+            let before = project
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .map(|(_, l)| l.opacity)
+                .unwrap();
+            trio_cycle(
+                "layer_opacity",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::LayerOpacitySnapshot, p);
+                    h.dispatch(&PanelAction::LayerOpacityChanged(0.9), p);
+                    h.dispatch(&PanelAction::LayerOpacityChanged(0.55), p);
+                },
+                |h, p| h.dispatch(&PanelAction::LayerOpacityCommit, p),
+                move |p| {
+                    p.timeline
+                        .find_layer_by_id(&lid)
+                        .map(|(_, l)| l.opacity)
+                        .unwrap()
+                },
+                before,
+                0.55,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn layer_opacity_clean() {
+            layer_opacity_case(false);
+        }
+
+        #[test]
+        fn layer_opacity_stomp() {
+            layer_opacity_case(true);
+        }
+
+        fn audio_gain_case(stomp: bool) {
+            let (project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let lid = layer_id.clone();
+            let lid2 = layer_id.clone();
+            let before = project
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .map(|(_, l)| l.audio_gain_db)
+                .unwrap();
+            trio_cycle(
+                "audio_gain",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::AudioGainSnapshot(lid.clone()), p);
+                    h.dispatch(&PanelAction::AudioGainChanged(lid.clone(), 3.0), p);
+                    h.dispatch(&PanelAction::AudioGainChanged(lid.clone(), -6.0), p);
+                },
+                |h, p| h.dispatch(&PanelAction::AudioGainCommit(lid.clone()), p),
+                move |p| {
+                    p.timeline
+                        .find_layer_by_id(&lid2)
+                        .map(|(_, l)| l.audio_gain_db)
+                        .unwrap()
+                },
+                before,
+                -6.0,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_gain_clean() {
+            audio_gain_case(false);
+        }
+
+        #[test]
+        fn audio_gain_stomp() {
+            audio_gain_case(true);
+        }
+
+        // ── Card param drag (exposed manifest slot) ──────────────
+
+        fn card_param_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
+            let after = before + 0.25;
+            let probe_lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            trio_cycle(
+                "card_param",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::ParamSnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::ParamChanged(gpt(), pid.clone(), before + 0.1), p);
+                    h.dispatch(&PanelAction::ParamChanged(gpt(), pid.clone(), after), p);
+                },
+                |h, p| h.dispatch(&PanelAction::ParamCommit(gpt(), pid.clone()), p),
+                move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
+                before,
+                after,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn card_param_clean() {
+            card_param_case(false);
+        }
+
+        #[test]
+        fn card_param_stomp() {
+            card_param_case(true);
+        }
+
+        // ── Modulation trims + envelope handles ──────────────────
+
+        /// Arm a driver (trim 0..1) on a materialized exposed param — the
+        /// materialize dispatch itself arms the driver, so this is one call.
+        fn arm_driver(
+            h: &mut Harness,
+            project: &mut Project,
+            layer_id: &LayerId,
+        ) -> manifold_core::effects::ParamId {
+            materialized_param(h, project, layer_id)
+        }
+
+        fn driver_trim_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = arm_driver(&mut h, &mut project, &layer_id);
+            let probe_lid = layer_id.clone();
+            trio_cycle(
+                "driver_trim",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(
+                        &PanelAction::TrimSnapshot(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                        p,
+                    );
+                    h.dispatch(
+                        &PanelAction::TrimChanged(
+                            manifold_ui::panels::TrimKind::Driver,
+                            gpt(),
+                            pid.clone(),
+                            0.3,
+                            0.9,
+                        ),
+                        p,
+                    );
+                },
+                |h, p| {
+                    h.dispatch(
+                        &PanelAction::TrimCommit(manifold_ui::panels::TrimKind::Driver, gpt(), pid.clone()),
+                        p,
+                    )
+                },
+                move |p| {
+                    let d = &gen_inst(p, &probe_lid).drivers.as_ref().unwrap()[0];
+                    (d.trim_min, d.trim_max)
+                },
+                (0.0, 1.0),
+                (0.3, 0.9),
+                stomp,
+            );
+        }
+
+        #[test]
+        fn driver_trim_clean() {
+            driver_trim_case(false);
+        }
+
+        #[test]
+        fn driver_trim_stomp() {
+            driver_trim_case(true);
+        }
+
+        /// Arm an envelope on a materialized exposed param.
+        fn arm_envelope(
+            h: &mut Harness,
+            project: &mut Project,
+            layer_id: &LayerId,
+        ) -> manifold_core::effects::ParamId {
+            let pid = materialized_param(h, project, layer_id);
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            project.with_preset_graph_mut(&target, |inst| {
+                inst.envelopes = Some(vec![manifold_core::effects::ParamEnvelope {
+                    param_id: pid.clone(),
+                    enabled: true,
+                    target_normalized: 0.2,
+                    decay_beats: 1.0,
+                    legacy_param_index: None,
+                    current_level: 0.0,
+                    was_clip_active: false,
+                }]);
+            });
+            pid
+        }
+
+        fn envelope_target_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = arm_envelope(&mut h, &mut project, &layer_id);
+            let probe_lid = layer_id.clone();
+            trio_cycle(
+                "envelope_target",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::TargetSnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::TargetChanged(gpt(), pid.clone(), 0.75), p);
+                },
+                |h, p| h.dispatch(&PanelAction::TargetCommit(gpt(), pid.clone()), p),
+                move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].target_normalized,
+                0.2,
+                0.75,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn envelope_target_clean() {
+            envelope_target_case(false);
+        }
+
+        #[test]
+        fn envelope_target_stomp() {
+            envelope_target_case(true);
+        }
+
+        fn envelope_decay_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = arm_envelope(&mut h, &mut project, &layer_id);
+            let probe_lid = layer_id.clone();
+            trio_cycle(
+                "envelope_decay",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::EnvDecaySnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::EnvDecayChanged(gpt(), pid.clone(), 3.5), p);
+                },
+                |h, p| h.dispatch(&PanelAction::EnvDecayCommit(gpt(), pid.clone()), p),
+                move |p| gen_inst(p, &probe_lid).envelopes.as_ref().unwrap()[0].decay_beats,
+                1.0,
+                3.5,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn envelope_decay_clean() {
+            envelope_decay_case(false);
+        }
+
+        #[test]
+        fn envelope_decay_stomp() {
+            envelope_decay_case(true);
+        }
+
+        // ── Audio modulation drawer sliders ──────────────────────
+
+        fn arm_audio_mod(
+            h: &mut Harness,
+            project: &mut Project,
+            layer_id: &LayerId,
+        ) -> manifold_core::effects::ParamId {
+            let send_id = with_send(project);
+            let pid = materialized_param(h, project, layer_id);
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            project.with_preset_graph_mut(&target, |inst| {
+                inst.audio_mods_mut().push(
+                    manifold_core::audio_mod::ParameterAudioMod::new(
+                        pid.clone(),
+                        send_id,
+                        test_feature(),
+                    ),
+                );
+            });
+            pid
+        }
+
+        fn audio_mod_shape_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = arm_audio_mod(&mut h, &mut project, &layer_id);
+            let before = gen_inst(&project, &layer_id)
+                .find_audio_mod(pid.as_ref())
+                .map(|m| m.shape.sensitivity)
+                .unwrap();
+            let probe_lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            trio_cycle(
+                "audio_mod_shape",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::AudioModShapeSnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(
+                        &PanelAction::AudioModShapeParamChanged(
+                            gpt(),
+                            pid.clone(),
+                            manifold_ui::panels::AudioShapeParam::Sensitivity,
+                            0.83,
+                        ),
+                        p,
+                    );
+                },
+                |h, p| h.dispatch(&PanelAction::AudioModShapeCommit(gpt(), pid.clone()), p),
+                move |p| {
+                    gen_inst(p, &probe_lid)
+                        .find_audio_mod(probe_pid.as_ref())
+                        .map(|m| m.shape.sensitivity)
+                        .unwrap()
+                },
+                before,
+                0.83,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_mod_shape_clean() {
+            audio_mod_shape_case(false);
+        }
+
+        #[test]
+        fn audio_mod_shape_stomp() {
+            audio_mod_shape_case(true);
+        }
+
+        fn audio_trigger_shape_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let send_id = with_send(&mut project);
+            let (_, layer) = project.timeline.find_layer_by_id_mut(&layer_id).unwrap();
+            layer.clip_triggers.push(
+                manifold_core::audio_trigger::LayerClipTrigger::new(
+                    manifold_core::audio_mod::AudioModSource {
+                        send_id,
+                        feature: test_feature(),
+                    },
+                ),
+            );
+            let before = project
+                .timeline
+                .find_layer_by_id(&layer_id)
+                .map(|(_, l)| l.clip_triggers[0].shape.sensitivity)
+                .unwrap();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let lid = layer_id.clone();
+            let lid2 = layer_id.clone();
+            let lid3 = layer_id.clone();
+            trio_cycle(
+                "audio_trigger_shape",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioTriggerShapeSnapshot(lid.clone(), 0), p);
+                    h.dispatch(
+                        &PanelAction::AudioTriggerShapeParamChanged(
+                            lid.clone(),
+                            0,
+                            manifold_ui::panels::AudioShapeParam::Sensitivity,
+                            0.91,
+                        ),
+                        p,
+                    );
+                },
+                move |h, p| h.dispatch(&PanelAction::AudioTriggerShapeCommit(lid2.clone(), 0), p),
+                move |p| {
+                    p.timeline
+                        .find_layer_by_id(&lid3)
+                        .map(|(_, l)| l.clip_triggers[0].shape.sensitivity)
+                        .unwrap()
+                },
+                before,
+                0.91,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_trigger_shape_clean() {
+            audio_trigger_shape_case(false);
+        }
+
+        #[test]
+        fn audio_trigger_shape_stomp() {
+            audio_trigger_shape_case(true);
+        }
+
+        // ── Audio Setup panel drags ──────────────────────────────
+
+        fn audio_send_gain_case(stomp: bool) {
+            let mut project = Project::default();
+            let send_id = with_send(&mut project);
+            let before = project.audio_setup.find_send(&send_id).unwrap().gain_db;
+            let mut h = Harness::new(None);
+            let sid = send_id.clone();
+            let sid2 = send_id.clone();
+            let sid3 = send_id.clone();
+            trio_cycle(
+                "audio_send_gain",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioSendGainDragBegin(sid.clone()), p);
+                    h.dispatch(&PanelAction::AudioSendGainDragChanged(sid.clone(), 4.0), p);
+                    h.dispatch(&PanelAction::AudioSendGainDragChanged(sid.clone(), -3.0), p);
+                },
+                move |h, p| h.dispatch(&PanelAction::AudioSendGainDragCommit(sid2.clone()), p),
+                move |p| p.audio_setup.find_send(&sid3).unwrap().gain_db,
+                before,
+                -3.0,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_send_gain_clean() {
+            audio_send_gain_case(false);
+        }
+
+        #[test]
+        fn audio_send_gain_stomp() {
+            audio_send_gain_case(true);
+        }
+
+        fn audio_crossover_case(stomp: bool) {
+            let project = Project::default();
+            let before = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+            let after = (before.0, before.1 + 1000.0);
+            let mut h = Harness::new(None);
+            trio_cycle(
+                "audio_crossover",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioCrossoverDragBegin, p);
+                    h.dispatch(
+                        &PanelAction::AudioCrossoverChanged(manifold_ui::BandDivider::Mid, after.1),
+                        p,
+                    );
+                },
+                |h, p| h.dispatch(&PanelAction::AudioCrossoverCommit, p),
+                |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
+                before,
+                after,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_crossover_clean() {
+            audio_crossover_case(false);
+        }
+
+        #[test]
+        fn audio_crossover_stomp() {
+            audio_crossover_case(true);
+        }
+
+        // ── Relight knobs ────────────────────────────────────────
+
+        fn relight_param_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let _pid = materialized_param(&mut h, &mut project, &layer_id);
+            let field = manifold_ui::panels::UiRelightField::Gain;
+            let core_field = crate::ui_translate::relight_field_to_editing(field);
+            let before = core_field.get(&gen_inst(&project, &layer_id).relight_params);
+            let after = before + 0.5;
+            let probe_lid = layer_id.clone();
+            trio_cycle(
+                "relight_param",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::RelightParamSnapshot(gpt(), field), p);
+                    h.dispatch(&PanelAction::RelightParamChanged(gpt(), field, after), p);
+                },
+                |h, p| h.dispatch(&PanelAction::RelightParamCommit(gpt(), field), p),
+                move |p| core_field.get(&gen_inst(p, &probe_lid).relight_params),
+                before,
+                after,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn relight_param_clean() {
+            relight_param_case(false);
+        }
+
+        #[test]
+        fn relight_param_stomp() {
+            relight_param_case(true);
+        }
+
+        // ── Atomic one-shots (buttons / toggles) ─────────────────
+
+        /// Atomic gesture: dispatch once, feed everything to the content
+        /// side, assert the undo cycle.
+        fn atomic_cycle<P>(
+            label: &str,
+            project: Project,
+            h: &mut Harness,
+            gesture: impl Fn(&mut Harness, &mut Project),
+            probe: impl Fn(&Project) -> P,
+            before: P,
+            after: P,
+        ) where
+            P: PartialEq + std::fmt::Debug,
+        {
+            let mut side = ContentSide::new(&project);
+            let mut project = project;
+            gesture(h, &mut project);
+            assert_undo_cycle(&mut side, h.drain(), probe, before, after, label);
+        }
+
+        #[test]
+        fn param_toggle_atomic() {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
+            let after = if before > 0.5 { 0.0 } else { 1.0 };
+            let probe_lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            atomic_cycle(
+                "param_toggle",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::ParamToggle(gpt(), pid.clone()), p);
+                },
+                move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
+                before,
+                after,
+            );
+        }
+
+        #[test]
+        fn param_fire_atomic() {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
+            let probe_lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            atomic_cycle(
+                "param_fire",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::ParamFire(gpt(), pid.clone()), p);
+                },
+                move |p| gen_inst(p, &probe_lid).get_base_param(probe_pid.as_ref()),
+                before,
+                before + 1.0,
+            );
+        }
+
+        #[test]
+        fn driver_toggle_atomic() {
+            // The materialize dispatch arms an ENABLED driver; the toggle
+            // under test flips it off (one undo unit).
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            atomic_cycle(
+                "driver_toggle_disarm",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::DriverToggle(gpt(), pid.clone()), p);
+                },
+                move |p| {
+                    gen_inst(p, &lid)
+                        .drivers
+                        .as_ref()
+                        .and_then(|ds| ds.iter().find(|d| d.param_id == probe_pid).map(|d| d.enabled))
+                        .unwrap_or(true)
+                },
+                true,
+                false,
+            );
+        }
+
+        #[test]
+        fn envelope_toggle_atomic() {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            atomic_cycle(
+                "envelope_toggle_arm",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::EnvelopeToggle(gpt(), pid.clone()), p);
+                },
+                move |p| {
+                    gen_inst(p, &lid)
+                        .envelopes
+                        .as_ref()
+                        .map(|es| es.iter().filter(|e| e.param_id == probe_pid).count())
+                        .unwrap_or(0)
+                },
+                0usize,
+                1usize,
+            );
+        }
+
+        #[test]
+        fn audio_mod_toggle_atomic() {
+            let (mut project, layer_id) = scene_layer_project();
+            with_send(&mut project);
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            atomic_cycle(
+                "audio_mod_toggle_arm",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioModToggle(gpt(), pid.clone()), p);
+                },
+                move |p| {
+                    gen_inst(p, &lid)
+                        .find_audio_mod(probe_pid.as_ref())
+                        .map(|m| m.enabled)
+                        .unwrap_or(false)
+                },
+                false,
+                true,
+            );
+        }
+
+        #[test]
+        fn audio_trigger_add_then_enable_then_remove_atomic() {
+            let (mut project, layer_id) = scene_layer_project();
+            with_send(&mut project);
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let mut side = ContentSide::new(&project);
+            let probe = |p: &Project, lid: &LayerId| {
+                p.timeline
+                    .find_layer_by_id(lid)
+                    .map(|(_, l)| (l.clip_triggers.len(), l.clip_triggers.first().map(|t| t.enabled)))
+                    .unwrap()
+            };
+            // Add: one undo unit, (0, None) → (1, Some(false)) — rows start disabled.
+            h.dispatch(&PanelAction::AudioTriggerAdd(layer_id.clone()), &mut project);
+            let cmds = h.drain();
+            assert_undo_cycle(
+                &mut side,
+                cmds,
+                |p| probe(p, &layer_id),
+                (0usize, None),
+                (1usize, Some(false)),
+                "audio_trigger_add",
+            );
+            // Enable the fresh row: one undo unit, Some(false) → Some(true).
+            h.dispatch(
+                &PanelAction::AudioTriggerEnabledToggle(layer_id.clone(), 0),
+                &mut project,
+            );
+            let cmds = h.drain();
+            assert_undo_cycle(
+                &mut side,
+                cmds,
+                |p| probe(p, &layer_id),
+                (1usize, Some(false)),
+                (1usize, Some(true)),
+                "audio_trigger_enable",
+            );
+            // Remove: one undo unit, back to (0, None).
+            h.dispatch(&PanelAction::AudioTriggerRemove(layer_id.clone(), 0), &mut project);
+            let cmds = h.drain();
+            assert_undo_cycle(
+                &mut side,
+                cmds,
+                |p| probe(p, &layer_id),
+                (1usize, Some(true)),
+                (0usize, None),
+                "audio_trigger_remove",
+            );
+        }
+
+        #[test]
+        fn audio_send_gain_typed_atomic() {
+            let mut project = Project::default();
+            let send_id = with_send(&mut project);
+            let before = project.audio_setup.find_send(&send_id).unwrap().gain_db;
+            let mut h = Harness::new(None);
+            let sid = send_id.clone();
+            let sid2 = send_id.clone();
+            atomic_cycle(
+                "audio_send_gain_typed",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioSendGainSetTyped(sid.clone(), 7.5), p);
+                },
+                move |p| p.audio_setup.find_send(&sid2).unwrap().gain_db,
+                before,
+                7.5,
+            );
+        }
+
+        #[test]
+        fn audio_send_floor_step_atomic() {
+            let mut project = Project::default();
+            let send_id = with_send(&mut project);
+            let before = project.audio_setup.find_send(&send_id).unwrap().floor_db;
+            let mut h = Harness::new(None);
+            let sid = send_id.clone();
+            let sid2 = send_id.clone();
+            atomic_cycle(
+                "audio_send_floor_step",
+                project,
+                &mut h,
+                move |h, p| {
+                    h.dispatch(&PanelAction::AudioSendFloorStep(sid.clone(), 1.0), p);
+                },
+                move |p| p.audio_setup.find_send(&sid2).unwrap().floor_db,
+                before,
+                -100.0,
+            );
+        }
+
+        // ── Clip gestures (timeline host path) ───────────────────
+
+        use manifold_ui::timeline_editing_host::TimelineEditingHost;
+
+        /// Owns the pieces `AppEditingHost` borrows, so a test can build the
+        /// host, drive a gesture, drop the host, then drain the channel.
+        struct ClipRig {
+            project: Project,
+            tx: crossbeam_channel::Sender<ContentCommand>,
+            rx: crossbeam_channel::Receiver<ContentCommand>,
+            content_state: crate::content_state::ContentState,
+            cursor: manifold_ui::cursors::CursorManager,
+            active_layer: Option<LayerId>,
+            needs_rebuild: bool,
+            needs_structural_sync: bool,
+            scroll_dirty: crate::ui_root::ScrollDirty,
+            invalidate: Vec<usize>,
+            pre_drag: Vec<Box<dyn manifold_editing::command::Command>>,
+        }
+
+        impl ClipRig {
+            fn new(project: Project) -> Self {
+                let (tx, rx) = crossbeam_channel::unbounded();
+                Self {
+                    project,
+                    tx,
+                    rx,
+                    content_state: crate::content_state::ContentState::default(),
+                    cursor: manifold_ui::cursors::CursorManager::default(),
+                    active_layer: None,
+                    needs_rebuild: false,
+                    needs_structural_sync: false,
+                    scroll_dirty: crate::ui_root::ScrollDirty::default(),
+                    invalidate: Vec::new(),
+                    pre_drag: Vec::new(),
+                }
+            }
+
+            fn host(&mut self) -> crate::editing_host::AppEditingHost<'_> {
+                crate::editing_host::AppEditingHost::new(
+                    &mut self.project,
+                    &self.tx,
+                    &self.content_state,
+                    &mut self.cursor,
+                    &mut self.active_layer,
+                    &mut self.needs_rebuild,
+                    &mut self.needs_structural_sync,
+                    &mut self.scroll_dirty,
+                    &mut self.invalidate,
+                    &mut self.pre_drag,
+                )
+            }
+
+            fn drain(&self) -> Vec<ContentCommand> {
+                self.rx.try_iter().collect()
+            }
+        }
+
+        /// One video layer + one clip [4..8] created through the REAL host
+        /// path; both the rig's project and the returned content side carry it.
+        fn clip_project() -> (ClipRig, ContentSide, manifold_core::ClipId) {
+            let mut project = Project::default();
+            project.timeline.add_layer(
+                "V",
+                manifold_core::types::LayerType::Video,
+                manifold_core::PresetTypeId::from_string("Video".to_string()),
+            );
+            let mut rig = ClipRig::new(project);
+            let clip_id = rig
+                .host()
+                .create_clip_at_position(manifold_core::Beats(4.0), 0, manifold_core::Beats(4.0))
+                .expect("clip creation resolves");
+            // Setup is NOT under test: the content side simply starts from the
+            // post-create project with an empty undo history.
+            rig.drain();
+            let side = ContentSide::new(&rig.project);
+            (rig, side, clip_id)
+        }
+
+        /// Immutable clip lookup (the timeline's `find_clip_by_id` takes &mut
+        /// for its cache; probes only get `&Project`).
+        fn find_clip<'p>(p: &'p Project, id: &manifold_core::ClipId) -> Option<&'p manifold_core::clip::TimelineClip> {
+            p.timeline
+                .layers
+                .iter()
+                .flat_map(|l| l.clips.iter())
+                .find(|c| c.id == *id)
+        }
+
+        fn clip_start(p: &Project, id: &manifold_core::ClipId) -> manifold_core::Beats {
+            find_clip(p, id).map(|c| c.start_beat).expect("clip resolves")
+        }
+
+        fn clip_duration(p: &Project, id: &manifold_core::ClipId) -> manifold_core::Beats {
+            find_clip(p, id).map(|c| c.duration_beats).expect("clip resolves")
+        }
+
+        fn clip_count(p: &Project) -> usize {
+            p.timeline.layers.iter().map(|l| l.clips.len()).sum()
+        }
+
+        #[test]
+        fn clip_create_atomic() {
+            // clip_project's setup IS the create gesture — verify it recorded
+            // exactly one undo unit that round-trips. Rebuild it inline so the
+            // drain isn't consumed as setup.
+            let mut project = Project::default();
+            project.timeline.add_layer(
+                "V",
+                manifold_core::types::LayerType::Video,
+                manifold_core::PresetTypeId::from_string("Video".to_string()),
+            );
+            let mut rig = ClipRig::new(project);
+            let mut side = ContentSide::new(&rig.project);
+            let id = rig
+                .host()
+                .create_clip_at_position(manifold_core::Beats(4.0), 0, manifold_core::Beats(4.0));
+            assert!(id.is_some(), "create resolves a clip id");
+            assert_undo_cycle(
+                &mut side,
+                rig.drain(),
+                clip_count,
+                0usize,
+                1usize,
+                "clip_create",
+            );
+        }
+
+        #[test]
+        fn clip_move_atomic() {
+            let (mut rig, mut side, clip_id) = clip_project();
+            {
+                let mut host = rig.host();
+                host.begin_command_batch();
+                host.set_clip_start_beat(clip_id.as_str(), manifold_core::Beats(12.0));
+                host.record_move(clip_id.as_str(), manifold_core::Beats(4.0), manifold_core::Beats(12.0), 0, 0);
+                host.commit_command_batch("Move Clip");
+            }
+            let pid = clip_id.clone();
+            assert_undo_cycle(
+                &mut side,
+                rig.drain(),
+                move |p| clip_start(p, &pid),
+                manifold_core::Beats(4.0),
+                manifold_core::Beats(12.0),
+                "clip_move",
+            );
+        }
+
+        #[test]
+        fn clip_trim_atomic() {
+            let (mut rig, mut side, clip_id) = clip_project();
+            let old_dur = clip_duration(&rig.project, &clip_id);
+            {
+                let mut host = rig.host();
+                host.begin_command_batch();
+                host.set_clip_trim(
+                    clip_id.as_str(),
+                    manifold_core::Beats(4.0),
+                    manifold_core::Beats(2.0),
+                    manifold_core::Seconds(0.0),
+                );
+                host.record_trim(
+                    clip_id.as_str(),
+                    manifold_core::Beats(4.0),
+                    manifold_core::Beats(4.0),
+                    old_dur,
+                    manifold_core::Beats(2.0),
+                    manifold_core::Seconds(0.0),
+                    manifold_core::Seconds(0.0),
+                );
+                host.commit_command_batch("Trim Clip");
+            }
+            let pid = clip_id.clone();
+            assert_undo_cycle(
+                &mut side,
+                rig.drain(),
+                move |p| clip_duration(p, &pid),
+                old_dur,
+                manifold_core::Beats(2.0),
+                "clip_trim",
+            );
+        }
+
+        #[test]
+        fn clip_delete_atomic() {
+            let (mut rig, mut side, clip_id) = clip_project();
+            let mut ui = UIRoot::new();
+            let mut selection = manifold_ui::UIState::new();
+            let mut active_layer = None;
+            let mut prefs = crate::user_prefs::UserPrefs::for_test();
+            crate::ui_bridge::editing::dispatch_editing(
+                &PanelAction::ContextDeleteClip(clip_id.to_string()),
+                &mut rig.project,
+                &rig.tx,
+                &rig.content_state,
+                &mut ui,
+                &mut selection,
+                &mut active_layer,
+                &mut prefs,
+            );
+            assert_undo_cycle(
+                &mut side,
+                rig.drain(),
+                clip_count,
+                1usize,
+                0usize,
+                "clip_delete",
+            );
+        }
+    }
 }
