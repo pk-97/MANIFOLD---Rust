@@ -5168,14 +5168,20 @@ mod scene_card_convergence_tests {
 
         let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
         let inst = layer.gen_params().expect("imported layer carries a PresetInstance");
+        // P1 exposure convergence: the camera's orbit exposure is now the
+        // doc-id-prefixed card slot id (`{doc}_orbit`), replacing the retired
+        // curated `cam_orbit`. (`binding_id_for_node_param` can't be used to
+        // discover it — an imported layer stores its graph in the embedded
+        // preset, not on the instance, so the instance's own `graph` is None.)
+        let orbit_slot = format!("{camera_node_doc_id}_orbit");
         assert!(
-            inst.params.contains("cam_orbit"),
-            "importer metadata must expose the cam_orbit slot"
+            inst.params.contains(orbit_slot.as_str()),
+            "importer metadata must expose the {orbit_slot} slot"
         );
         assert!(
-            (inst.get_base_param("cam_orbit") - new_orbit).abs() < 1e-4,
-            "the drag must move the BOUND card slot (cam_orbit), got {}",
-            inst.get_base_param("cam_orbit")
+            (inst.get_base_param(&orbit_slot) - new_orbit).abs() < 1e-4,
+            "the drag must move the BOUND card slot ({orbit_slot}), got {}",
+            inst.get_base_param(&orbit_slot)
         );
         // The def node param must be untouched — the slot is the one value.
         let def_untouched = layer
@@ -5192,7 +5198,7 @@ mod scene_card_convergence_tests {
         cmd.execute(&mut project);
         cmd.undo(&mut project);
         let (_, layer) = project.timeline.find_layer_by_id(&layer_id).unwrap();
-        let restored = layer.gen_params().unwrap().get_base_param("cam_orbit");
+        let restored = layer.gen_params().unwrap().get_base_param(&orbit_slot);
         assert!(
             (restored - new_orbit).abs() > 1e-4,
             "undo must restore the pre-drag slot value, still at {restored}"

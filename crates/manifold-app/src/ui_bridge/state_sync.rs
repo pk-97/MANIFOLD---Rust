@@ -3633,27 +3633,26 @@ mod sync_scene_row_values_tests {
         ui.tree.nodes().iter().any(|n| n.text.as_deref() == Some(needle))
     }
 
-    /// Write `value` into the layer's own instance def (lifting the override
-    /// from the bundled default) — the same place a scene-row command write
-    /// lands.
+    /// Write `value` into the fog node's `fog_density` — the same place a
+    /// scene-row command write lands. Post exposure-convergence (P1) every
+    /// scene-vocabulary param is exposed (bound) at birth, so that place is
+    /// the binding's instance slot, NOT the def node param (a def write on a
+    /// bound param is structurally dead — BUG-237/260). Writing the slot is
+    /// what `sync_scene_row_values`'s resolve reads back.
     fn write_fog_density(project: &mut Project, layer_id: &manifold_core::LayerId, node_doc_id: u32, value: f32) {
-        let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id.as_str()).unwrap();
-        let gen_type = layer.generator_type().clone();
-        let gp = layer.gen_params_or_init();
-        let def = gp.graph.get_or_insert_with(|| {
-            manifold_renderer::node_graph::bundled_preset_def(&gen_type)
-                .expect("SceneStarter is a bundled preset")
-                .clone()
-        });
-        def.nodes
-            .iter_mut()
-            .find(|n| n.id == node_doc_id)
-            .expect("fog node")
-            .params
-            .insert(
-                "fog_density".to_string(),
-                manifold_core::effect_graph_def::SerializedParamValue::Float { value },
-            );
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        // The exposure's card slot id is the doc-id-prefixed param name
+        // (`{doc}_fog_density`), seeded into the instance manifest from the
+        // registry at layer creation. (`binding_id_for_node_param` can't be
+        // used here — it needs a lifted graph override, which a fresh
+        // `add_layer` scene doesn't have.)
+        let slot = format!("{node_doc_id}_fog_density");
+        let moved = project.with_preset_graph_mut(&target, |inst| inst.set_base_param(&slot, value));
+        assert_eq!(
+            moved,
+            Some(true),
+            "the scene-row write must move the exposed {slot} slot"
+        );
     }
 
     #[test]

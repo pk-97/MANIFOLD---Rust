@@ -150,8 +150,14 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
         .load()
         .entries()
         .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(&json)
+            let mut def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+            // P1 scene-panel exposure convergence: keep the preset-definition
+            // registry (instance-slot seed) in lockstep with the def cache's
+            // stamped exposures — same call as `rebuild_def_cache`. A no-op for
+            // effect presets today (no scene-vocabulary nodes), applied for
+            // symmetry so a future scene-effect can't silently reopen the gap.
+            migrate_scene_exposures(&mut def);
             def.preset_metadata
         })
         .collect()
