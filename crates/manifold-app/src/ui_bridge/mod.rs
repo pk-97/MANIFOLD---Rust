@@ -430,8 +430,6 @@ pub fn dispatch(
         | PanelAction::AudioTriggerRemove(..)
         | PanelAction::AudioTriggerEnabledToggle(..)
         | PanelAction::AudioTriggerSetSource(..)
-        | PanelAction::AudioTriggerSetInvert(..)
-        | PanelAction::AudioTriggerSetRateOfChange(..)
         | PanelAction::AudioTriggerShapeSnapshot(..)
         | PanelAction::AudioTriggerShapeParamChanged(..)
         | PanelAction::AudioTriggerShapeCommit(..)

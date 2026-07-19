@@ -698,39 +698,33 @@ pub enum PanelAction {
     // section. A `LayerClipTrigger` has no `GraphParamTarget`/`ParamId` (it
     // addresses by `LayerId` + its index in `Layer.clip_triggers`), so this
     // is an ADDITIVE family parallel to `AudioMod*` above, not a repurposing
-    // of it — `build_audio_mod_drawer` (the ONE shared drawer builder, D5)
-    // is parameterized by `AudioModDrawerTarget` to emit whichever family
-    // fits its caller.
+    // of it.
     /// Toggle the AUDIO TRIGGERS section's collapse state — UI-local (mirrors
     /// `MacrosCollapseToggle`; no `Project` write, no persistence).
     AudioTriggerSectionToggle,
     /// Expand/collapse one row's drawer — UI-local, same as the section toggle.
     AudioTriggerRowExpandToggle(LayerId, usize),
-    /// Append a new (disabled) `LayerClipTrigger` to the layer, sourcing the
-    /// project's first audio send. No-op when no sends exist (mirrors
+    /// Append a new clip trigger to the layer: ENABLED, listening to the
+    /// first send's kick cell, so one click gives a firing trigger the user
+    /// adjusts from there. No-op when no sends exist (mirrors
     /// `AudioModToggle`'s "arm" no-send case).
     AudioTriggerAdd(LayerId),
     /// Remove the clip trigger at `index`.
     AudioTriggerRemove(LayerId, usize),
     /// Flip `enabled` on the clip trigger at `index` — the row's own ON/OFF
     /// button (D4: a clip trigger has no Mode row to arbitrate with, so its
-    /// existence isn't its enabled state the way a param audio-mod's is;
-    /// `LayerClipTrigger::new` starts disabled by design — "the user enables
-    /// a row once they've tuned it").
+    /// existence isn't its enabled state the way a param audio-mod's is).
     AudioTriggerEnabledToggle(LayerId, usize),
     /// Set a clip trigger's source: which send + which feature (mirrors
-    /// `AudioModSetSource`).
+    /// `AudioModSetSource`). A chip click and a Source-row click both arrive
+    /// as this one action, carrying the full cell.
     AudioTriggerSetSource(LayerId, usize, AudioSendId, AudioFeature),
-    /// Toggle a clip trigger's invert flag (mirrors `AudioModSetInvert`).
-    AudioTriggerSetInvert(LayerId, usize),
-    /// Toggle a clip trigger's rate-of-change flag (mirrors
-    /// `AudioModSetRateOfChange`).
-    AudioTriggerSetRateOfChange(LayerId, usize),
     /// Snapshot a clip trigger's shape before a drawer-slider drag (undo
     /// start) — mirrors `AudioModShapeSnapshot`.
     AudioTriggerShapeSnapshot(LayerId, usize),
     /// Live-edit one shape scalar during a drawer-slider drag (no undo
-    /// entry) — mirrors `AudioModShapeParamChanged`.
+    /// entry) — mirrors `AudioModShapeParamChanged`. The clip-trigger drawer
+    /// only ever sends `AudioShapeParam::Sensitivity` (its only slider).
     AudioTriggerShapeParamChanged(LayerId, usize, AudioShapeParam, f32),
     /// Commit a shape-slider drag as one undo step — mirrors
     /// `AudioModShapeCommit`.

@@ -35,21 +35,25 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "▸ Full → Amplitude", "type": "Button" } },
+      "selector": { "Query": { "text": "▼ Low → Kick", "type": "Button" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Listen", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Snare", "type": "Button" } },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "text": "▸ Full → Amplitude", "type": "Button" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": { "text": "Low", "type": "Button", "under_text": "▼ Full → Amplitude" }
-      },
+      "target": { "Query": { "text": "Snare", "type": "Button" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
@@ -57,7 +61,7 @@
   "Dump",
   {
     "Assert": {
-      "selector": { "Query": { "text": "▼ Low → Amplitude", "type": "Button" } },
+      "selector": { "Query": { "text": "▼ Mid → Transients", "type": "Button" } },
       "check": "Exists"
     }
   }

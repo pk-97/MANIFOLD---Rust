@@ -2263,19 +2263,36 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::AudioTriggerAdd(layer_id) => {
-            // Mirrors `AudioModToggle`'s "arm" no-send case: inert until the
-            // Audio Setup dock defines at least one send.
+            // One click = a firing trigger: enabled, listening to the first
+            // send's kick cell (the dedicated ridge detector — the most
+            // common thing a performer points a layer at), default shape,
+            // 1b one-shot. The user hears it fire immediately and adjusts
+            // from there. Inert until the Audio Setup dock defines a send
+            // (mirrors `AudioModToggle`'s "arm" no-send case).
             if let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone()) {
-                let trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
+                let mut trigger = manifold_core::audio_trigger::LayerClipTrigger::new(
                     manifold_core::audio_mod::AudioModSource {
                         send_id,
-                        feature: manifold_core::AudioFeature::default(),
+                        feature: manifold_core::AudioFeature::new(
+                            manifold_core::AudioFeatureKind::Kick,
+                            manifold_core::AudioBand::Low,
+                        ),
                     },
                 );
+                trigger.enabled = true;
+                let new_index = project
+                    .timeline
+                    .find_layer_by_id_mut(layer_id)
+                    .map(|(_, l)| l.clip_triggers.len());
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(AddLayerClipTriggerCommand::new(layer_id.clone(), trigger));
                 boxed.execute(project);
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                // Open the new row's drawer so its (now minimal) tuning is
+                // immediately visible.
+                if let Some(index) = new_index {
+                    ui.inspector.audio_trigger_section_mut().expand_row(index);
+                }
             }
             DispatchResult::structural()
         }
@@ -2320,38 +2337,6 @@ pub(super) fn dispatch_inspector(
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
-        }
-        PanelAction::AudioTriggerSetInvert(layer_id, index) => {
-            let old = project
-                .timeline
-                .find_layer_by_id_mut(layer_id)
-                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
-            if let Some(old) = old {
-                let mut new = old.clone();
-                new.shape.invert = !old.shape.invert;
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
-                );
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::AudioTriggerSetRateOfChange(layer_id, index) => {
-            let old = project
-                .timeline
-                .find_layer_by_id_mut(layer_id)
-                .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
-            if let Some(old) = old {
-                let mut new = old.clone();
-                new.shape.rate_of_change = !old.shape.rate_of_change;
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
-                    SetLayerClipTriggerCommand::new(layer_id.clone(), *index, old, new),
-                );
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
-            DispatchResult::handled()
         }
         PanelAction::AudioTriggerShapeSnapshot(layer_id, index) => {
             // Reuses `audio_shape_snapshot` (the param-mod shaping-slider
@@ -6160,7 +6145,7 @@ mod scene_card_convergence_tests {
         }
 
         #[test]
-        fn audio_trigger_add_then_enable_then_remove_atomic() {
+        fn audio_trigger_add_then_toggle_then_remove_atomic() {
             let (mut project, layer_id) = scene_layer_project();
             with_send(&mut project);
             let mut h = Harness::new(Some(layer_id.clone()));
@@ -6171,7 +6156,8 @@ mod scene_card_convergence_tests {
                     .map(|(_, l)| (l.clip_triggers.len(), l.clip_triggers.first().map(|t| t.enabled)))
                     .unwrap()
             };
-            // Add: one undo unit, (0, None) → (1, Some(false)) — rows start disabled.
+            // Add: one undo unit, (0, None) → (1, Some(true)) — the clip-trigger
+            // drawer redesign lands an ENABLED kick trigger so one click fires.
             h.dispatch(&PanelAction::AudioTriggerAdd(layer_id.clone()), &mut project);
             let cmds = h.drain();
             assert_undo_cycle(
@@ -6179,10 +6165,11 @@ mod scene_card_convergence_tests {
                 cmds,
                 |p| probe(p, &layer_id),
                 (0usize, None),
-                (1usize, Some(false)),
+                (1usize, Some(true)),
                 "audio_trigger_add",
             );
-            // Enable the fresh row: one undo unit, Some(false) → Some(true).
+            // Toggle the fresh (already-enabled) row off: one undo unit,
+            // Some(true) → Some(false).
             h.dispatch(
                 &PanelAction::AudioTriggerEnabledToggle(layer_id.clone(), 0),
                 &mut project,
@@ -6192,9 +6179,9 @@ mod scene_card_convergence_tests {
                 &mut side,
                 cmds,
                 |p| probe(p, &layer_id),
-                (1usize, Some(false)),
                 (1usize, Some(true)),
-                "audio_trigger_enable",
+                (1usize, Some(false)),
+                "audio_trigger_toggle",
             );
             // Remove: one undo unit, back to (0, None).
             h.dispatch(&PanelAction::AudioTriggerRemove(layer_id.clone(), 0), &mut project);
@@ -6203,7 +6190,7 @@ mod scene_card_convergence_tests {
                 &mut side,
                 cmds,
                 |p| probe(p, &layer_id),
-                (1usize, Some(true)),
+                (1usize, Some(false)),
                 (0usize, None),
                 "audio_trigger_remove",
             );
