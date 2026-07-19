@@ -486,6 +486,20 @@ impl PlaybackEngine {
     // ─── Lifecycle ───
 
     pub fn initialize(&mut self, mut project: Project) {
+        // BUG-256: a project swap is a hard boundary for ALL runtime state
+        // keyed by project-local identity. Renderers cache by `LayerId` /
+        // `ClipId` and gate rebuilds on serialized per-project version
+        // counters — both collide across two projects derived from the same
+        // template, so without a full release the previous project's
+        // generator instances keep serving the new project's layers (the
+        // "locked to the first-loaded project" bug). Stop every clip (which
+        // also drains the engine's own id-keyed maps) and release every
+        // renderer's project-derived caches before the new project goes in.
+        self.stop_all_clips();
+        for renderer in &mut self.renderers {
+            renderer.release_all();
+        }
+
         // Ensure all runtime caches are populated regardless of how the project arrived.
         // LoadProject goes through the loader which already calls this, but NewProject
         // or programmatic construction may not. Redundant calls are safe (idempotent).

@@ -2467,8 +2467,8 @@ mod tests {
     /// appended `UserParamBinding`'s manifest slot; round-tripping through
     /// the REAL `serde_json` + `load_project_from_json` path (same migration
     /// + reconcile pass a `.manifold` file goes through, per
-    /// `legacy_route_migrates_and_the_round_trip_survives_save_and_reload`'s
-    /// precedent in `manifold-io`) is the only honest way to prove it.
+    ///   `legacy_route_migrates_and_the_round_trip_survives_save_and_reload`'s
+    ///   precedent in `manifold-io`) is the only honest way to prove it.
     #[test]
     fn exposed_generator_param_survives_save_reload_and_still_modulates() {
         use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};

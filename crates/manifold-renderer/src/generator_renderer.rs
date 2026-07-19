@@ -1276,7 +1276,14 @@ impl ClipRenderer for GeneratorRenderer {
         }
         // Release per-layer generator state (particle buffers, density textures, etc.)
         // to prevent GPU memory leaks across project switches.
+        // BUG-256: this is also the correctness boundary — `layer_generators`
+        // is keyed by `LayerId` and rebuild-gated on serialized version
+        // counters, both of which collide across template-derived projects,
+        // so keeping it would serve the previous project's generators.
         self.layer_generators.clear();
+        // Parked-clip thumbnails are keyed by `ClipId` — same collision
+        // class as `layer_generators`, so they must not survive either.
+        self.thumb_gens.clear();
         // Drop the pooled render-target Vec too. Across project
         // switches at different resolutions, these would otherwise
         // persist as stale-sized RenderTargets. Lazy-realloc on the
