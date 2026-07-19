@@ -150,6 +150,28 @@ pub(crate) enum ActiveInspectorDrag {
         min: f32,
         max: f32,
     },
+    /// A graph-editor mapping-sidebar range drag (`EffectMappingRange*` trio,
+    /// BUG-262). Unlike the cluster-C families this one dispatches through
+    /// `app_render`'s `pending_actions` loop, not the inspector: the commit
+    /// reads the new range back via `watched_reshape`, so an unguarded
+    /// mid-drag snapshot swap reverts the def and the commit sees old == new —
+    /// no undo entry. Restores the in-flight range through the same
+    /// `build_mapping_command` write `preview_mapping` lands each tick.
+    MappingRange {
+        target: manifold_core::GraphTarget,
+        param_id: String,
+        min: f32,
+        max: f32,
+    },
+    /// A graph-editor mapping-sidebar affine (scale/offset) drag
+    /// (`EffectMappingAffine*` trio, BUG-262). Same restore path as
+    /// `MappingRange`, writing the binding's scale/offset.
+    MappingAffine {
+        target: manifold_core::GraphTarget,
+        param_id: String,
+        scale: f32,
+        offset: f32,
+    },
 }
 
 impl ActiveInspectorDrag {
@@ -371,6 +393,41 @@ impl ActiveInspectorDrag {
                     m.range_min = *min;
                     m.range_max = *max;
                 }
+            }
+            // The two mapping families restore through the SAME command
+            // `preview_mapping` executes each `*Changed` tick — build the
+            // reshape edit and run it on the project so a mid-drag snapshot
+            // swap can't revert the def value the commit reads back via
+            // `watched_reshape` (BUG-262, undo audit 2026-07-19 cluster C).
+            Self::MappingRange {
+                target,
+                param_id,
+                min,
+                max,
+            } => {
+                let seed = crate::app_render::seed_def_for_project(project, target);
+                let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    min: Some(*min),
+                    max: Some(*max),
+                    ..Default::default()
+                };
+                crate::app_render::build_mapping_command(target, param_id, edit, seed)
+                    .execute(project);
+            }
+            Self::MappingAffine {
+                target,
+                param_id,
+                scale,
+                offset,
+            } => {
+                let seed = crate::app_render::seed_def_for_project(project, target);
+                let edit = manifold_editing::commands::effects::BindingMappingEdit {
+                    scale: Some(*scale),
+                    offset: Some(*offset),
+                    ..Default::default()
+                };
+                crate::app_render::build_mapping_command(target, param_id, edit, seed)
+                    .execute(project);
             }
         }
     }

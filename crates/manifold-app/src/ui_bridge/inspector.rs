@@ -6569,4 +6569,113 @@ mod scene_card_convergence_tests {
             );
         }
     }
+
+    /// BUG-262 regression. The mapping-sidebar range/affine drags dispatch
+    /// through `app_render`'s `pending_actions` loop, not the inspector host
+    /// the matrix above drives, so they can't ride `trio_cycle`. What made
+    /// them lose undo entries was a mid-gesture full-snapshot *stomp*
+    /// reverting the in-flight reshape before the commit read it back via
+    /// `watched_reshape` — the exact failure `ActiveInspectorDrag::apply` now
+    /// prevents. These prove the restore at that level: given the guard a live
+    /// drag installs, a stale pre-drag snapshot must come back carrying the
+    /// dragged value, so the commit sees new != old and records one undo.
+    mod mapping_undo_baseline {
+        use super::*;
+
+        /// A master effect carrying one user param binding whose reshape lives
+        /// in the per-instance graph (mirrors the editing crate's
+        /// `project_with_one_user_binding`). Pre-drag range 0..1, affine 1/0.
+        fn project_with_binding() -> (Project, manifold_core::GraphTarget, String) {
+            let mut project = Project::default();
+            let mut fx = manifold_core::effects::PresetInstance::new(
+                manifold_core::PresetTypeId::new("Mirror"),
+            );
+            let effect_id = fx.id.clone();
+            let binding_id = "user.uv_transform.rotation.1".to_string();
+            fx.append_user_binding(manifold_core::effects::UserParamBinding {
+                id: binding_id.clone(),
+                label: "Original Label".to_string(),
+                node_id: manifold_core::NodeId::new("uv_transform"),
+                legacy_node_handle: None,
+                inner_param: "rotation".to_string(),
+                min: 0.0,
+                max: 1.0,
+                default_value: 0.25,
+                convert: manifold_core::effects::ParamConvert::Float,
+                is_angle: false,
+                invert: false,
+                curve: manifold_core::macro_bank::MacroCurve::Linear,
+                scale: 1.0,
+                offset: 0.0,
+                value_labels: Vec::new(),
+                section: None,
+            });
+            project.settings.master_effects.push(fx);
+            (
+                project,
+                manifold_core::GraphTarget::Effect(effect_id),
+                binding_id,
+            )
+        }
+
+        /// Read the binding's live `(min, max, scale, offset)` back the way
+        /// `watched_reshape` does — through the synthesized binding view.
+        fn reshape(project: &Project, id: &str) -> (f32, f32, f32, f32) {
+            let b = project.settings.master_effects[0]
+                .user_param_bindings()
+                .into_iter()
+                .find(|b| b.id == id)
+                .expect("binding present");
+            (b.min, b.max, b.scale, b.offset)
+        }
+
+        #[test]
+        fn mapping_range_drag_survives_snapshot_stomp() {
+            let (project, target, binding_id) = project_with_binding();
+            let (min0, max0, _, _) = reshape(&project, &binding_id);
+            assert_eq!((min0, max0), (0.0, 1.0), "fixture starts at the default range");
+
+            // The guard a live range drag installs (in-flight range 0.2..0.8).
+            let guard = crate::app::ActiveInspectorDrag::MappingRange {
+                target,
+                param_id: binding_id.clone(),
+                min: 0.2,
+                max: 0.8,
+            };
+            // A full snapshot lands mid-drag carrying the stale pre-drag
+            // project; app_render restores the guarded drag onto it.
+            let mut stomped = project.clone();
+            guard.apply(&mut stomped);
+
+            let (min, max, _, _) = reshape(&stomped, &binding_id);
+            assert_eq!(
+                (min, max),
+                (0.2, 0.8),
+                "range stomp must be undone so the commit sees new != old and records undo"
+            );
+        }
+
+        #[test]
+        fn mapping_affine_drag_survives_snapshot_stomp() {
+            let (project, target, binding_id) = project_with_binding();
+            let (_, _, scale0, offset0) = reshape(&project, &binding_id);
+            assert_eq!((scale0, offset0), (1.0, 0.0), "fixture starts at identity affine");
+
+            let guard = crate::app::ActiveInspectorDrag::MappingAffine {
+                target,
+                param_id: binding_id.clone(),
+                scale: 2.5,
+                offset: -0.5,
+            };
+            let mut stomped = project.clone();
+            guard.apply(&mut stomped);
+
+            let (_, _, scale, offset) = reshape(&stomped, &binding_id);
+            assert_eq!(
+                (scale, offset),
+                (2.5, -0.5),
+                "affine stomp must be undone so the commit sees new != old and records undo"
+            );
+        }
+    }
 }

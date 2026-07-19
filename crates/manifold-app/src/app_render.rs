@@ -1665,6 +1665,19 @@ impl Application {
                     // note / seed) and kind-aware (effect / generator).
                     self.mapping_range_snapshot =
                         self.watched_reshape(binding_id).map(|(mn, mx, _, _)| (mn, mx));
+                    // Guard the in-flight range against a mid-drag full-snapshot
+                    // stomp (BUG-262); restored by `ActiveInspectorDrag::apply`.
+                    if let (Some(t), Some((mn, mx))) =
+                        (self.mapping_target(), self.mapping_range_snapshot)
+                    {
+                        self.active_inspector_drag =
+                            Some(crate::app::ActiveInspectorDrag::MappingRange {
+                                target: t,
+                                param_id: binding_id.to_string(),
+                                min: mn,
+                                max: mx,
+                            });
+                    }
                     continue;
                 }
                 PanelAction::EffectMappingRangeChanged {
@@ -1672,6 +1685,18 @@ impl Application {
                     min,
                     max,
                 } => {
+                    // Track the in-flight range on the guard so a snapshot
+                    // stomp restores the latest dragged value, not the pre-drag
+                    // one (BUG-262).
+                    if let Some(crate::app::ActiveInspectorDrag::MappingRange {
+                        min: gmin,
+                        max: gmax,
+                        ..
+                    }) = &mut self.active_inspector_drag
+                    {
+                        *gmin = *min;
+                        *gmax = *max;
+                    }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
                             &t,
@@ -1686,6 +1711,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingRangeCommit { binding_id } => {
+                    self.active_inspector_drag = None;
                     let snap = self.mapping_range_snapshot.take();
                     if let (Some((old_min, old_max)), Some(t)) = (snap, self.mapping_target())
                         && let Some((new_min, new_max, _, _)) = self.watched_reshape(binding_id)
@@ -1764,6 +1790,19 @@ impl Application {
                 PanelAction::EffectMappingAffineSnapshot { binding_id } => {
                     self.mapping_affine_snapshot =
                         self.watched_reshape(binding_id).map(|(_, _, sc, of)| (sc, of));
+                    // Guard the in-flight scale/offset against a mid-drag
+                    // snapshot stomp (BUG-262).
+                    if let (Some(t), Some((sc, of))) =
+                        (self.mapping_target(), self.mapping_affine_snapshot)
+                    {
+                        self.active_inspector_drag =
+                            Some(crate::app::ActiveInspectorDrag::MappingAffine {
+                                target: t,
+                                param_id: binding_id.to_string(),
+                                scale: sc,
+                                offset: of,
+                            });
+                    }
                     continue;
                 }
                 PanelAction::EffectMappingAffineChanged {
@@ -1771,6 +1810,15 @@ impl Application {
                     scale,
                     offset,
                 } => {
+                    if let Some(crate::app::ActiveInspectorDrag::MappingAffine {
+                        scale: gscale,
+                        offset: goffset,
+                        ..
+                    }) = &mut self.active_inspector_drag
+                    {
+                        *gscale = *scale;
+                        *goffset = *offset;
+                    }
                     if let Some(t) = self.mapping_target() {
                         self.preview_mapping(
                             &t,
@@ -1785,6 +1833,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::EffectMappingAffineCommit { binding_id } => {
+                    self.active_inspector_drag = None;
                     let snap = self.mapping_affine_snapshot.take();
                     if let (Some((old_scale, old_offset)), Some(t)) = (snap, self.mapping_target())
                         && let Some((_, _, new_scale, new_offset)) =
