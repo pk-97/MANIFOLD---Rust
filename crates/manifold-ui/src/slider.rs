@@ -36,6 +36,28 @@ const FILL_INSET: f32 = 1.0;
 const THUMB_WIDTH: f32 = 4.0;
 const THUMB_INSET: f32 = 1.0;
 
+/// Horizontal span of a slider track: x + width, and NOTHING else. This is
+/// the only track-layout data a panel may cache at build time. In-place
+/// scroll (`ScrollContainer::offset_content`) shifts node y without
+/// refreshing panel caches, and a cached y fed back into `set_bounds`
+/// teleports overlay nodes to the pre-scroll row (BUG-257) — so y/height
+/// are deliberately unrepresentable here (BUG-259). Anything that positions
+/// nodes must read live bounds: `tree.get_bounds(ids.track)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackSpan {
+    pub x: f32,
+    pub width: f32,
+}
+
+impl TrackSpan {
+    pub const ZERO: Self = Self { x: 0.0, width: 0.0 };
+
+    /// The span of a full rect (use when you hold live bounds from the tree).
+    pub fn of(rect: Rect) -> Self {
+        Self { x: rect.x, width: rect.width }
+    }
+}
+
 /// Identifies the nodes that make up a single slider instance.
 /// Stored by the owning panel for event routing and value updates.
 #[derive(Debug, Clone, Copy)]
@@ -45,10 +67,9 @@ pub struct SliderNodeIds {
     pub fill: NodeId,            // non-interactive — subtle fill from left to value
     pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
     pub value_text: NodeId,      // interactive — double-click to type (in the right gutter, D13)
-    pub track_rect: Rect,        // usable track (excludes value gutter), captured at build time.
-                                 // x/width stay valid (in-place scroll shifts only y), so it's fine
-                                 // for x_to_normalized(); NEVER use its y to position nodes — read
-                                 // tree.get_bounds(track) instead (BUG-257).
+    pub track_span: TrackSpan,   // cached x/width of the usable track (excludes value gutter);
+                                 // scroll-invariant. For y/height read tree.get_bounds(track) —
+                                 // never cache them (BUG-259).
     /// The slider's normalized default, for right-click reset.
     pub default_normalized: f32,
 }
@@ -304,7 +325,7 @@ impl BitmapSlider {
             fill: NodeId::PLACEHOLDER,
             thumb: NodeId::PLACEHOLDER,
             value_text: NodeId::PLACEHOLDER,
-            track_rect: Rect::ZERO,
+            track_span: TrackSpan::ZERO,
             default_normalized,
         };
 
@@ -351,7 +372,7 @@ impl BitmapSlider {
         //    mapping, fill, and thumb all agree and never reach under the value. ──
         let track_rect = z.track;
         let value_box_x = z.value_cell.x;
-        ids.track_rect = track_rect;
+        ids.track_span = TrackSpan::of(track_rect);
 
         ids.track = tree.add_node(
             parent_id,
@@ -570,11 +591,11 @@ impl BitmapSlider {
 
     /// Convert a panel-local X coordinate to a 0–1 normalized value
     /// relative to the track bounds.
-    pub fn x_to_normalized(track_rect: Rect, local_x: f32) -> f32 {
-        if track_rect.width <= 0.0 {
+    pub fn x_to_normalized(span: TrackSpan, pos_x: f32) -> f32 {
+        if span.width <= 0.0 {
             return 0.0;
         }
-        let t = (local_x - track_rect.x) / track_rect.width;
+        let t = (pos_x - span.x) / span.width;
         t.clamp(0.0, 1.0)
     }
 
@@ -668,7 +689,7 @@ impl SliderDragState {
         self.whole_numbers = whole_numbers;
     }
 
-    /// Node IDs (for panels that need to read track_rect, etc.).
+    /// Node IDs (for panels that need the track span / node ids, etc.).
     pub fn ids(&self) -> Option<&SliderNodeIds> {
         self.ids.as_ref()
     }
@@ -696,7 +717,7 @@ impl SliderDragState {
             return None;
         }
         self.drag.start((), Vec2::new(pos_x, 0.0));
-        let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+        let norm = BitmapSlider::x_to_normalized(ids.track_span, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
         let val = if self.whole_numbers { val.round() } else { val };
         self.cached_value = val;
@@ -717,7 +738,7 @@ impl SliderDragState {
         }
         self.drag.track(Vec2::new(pos_x, 0.0));
         let ids = self.ids.as_ref()?;
-        let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+        let norm = BitmapSlider::x_to_normalized(ids.track_span, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
         let val = if self.whole_numbers { val.round() } else { val };
         let display_norm = BitmapSlider::value_to_normalized(val, self.min, self.max);
@@ -752,7 +773,7 @@ impl SliderDragState {
     pub fn raw_norm(&self, pos_x: f32) -> f32 {
         self.ids
             .as_ref()
-            .map(|ids| BitmapSlider::x_to_normalized(ids.track_rect, pos_x))
+            .map(|ids| BitmapSlider::x_to_normalized(ids.track_span, pos_x))
             .unwrap_or(0.0)
     }
 
@@ -904,8 +925,8 @@ mod tests {
             value_gap: VALUE_GAP,
         };
         let z = BitmapSlider::zones(rect, &metrics);
-        assert_eq!(z.track.x, ids.track_rect.x);
-        assert_eq!(z.track.width, ids.track_rect.width);
+        assert_eq!(z.track.x, ids.track_span.x);
+        assert_eq!(z.track.width, ids.track_span.width);
         assert_eq!(z.label.map(|l| l.x), Some(0.0));
     }
 
@@ -1079,7 +1100,7 @@ mod tests {
 
     #[test]
     fn x_to_normalized_edges() {
-        let track = Rect::new(100.0, 0.0, 200.0, 20.0);
+        let track = TrackSpan::of(Rect::new(100.0, 0.0, 200.0, 20.0));
         assert_eq!(BitmapSlider::x_to_normalized(track, 100.0), 0.0);
         assert_eq!(BitmapSlider::x_to_normalized(track, 300.0), 1.0);
         assert!((BitmapSlider::x_to_normalized(track, 200.0) - 0.5).abs() < 0.01);

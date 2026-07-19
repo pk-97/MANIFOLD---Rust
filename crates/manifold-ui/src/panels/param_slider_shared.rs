@@ -785,6 +785,44 @@ impl ParamDragState {
     }
 }
 
+/// The ONE trim-geometry source (BUG-258): the fill + bar rects for a trim
+/// range on a track. Build, reposition, and hit-zone math all derive from
+/// this, so the grabbable zone can never drift from the drawn handle.
+pub(crate) struct TrimBarRects {
+    pub fill: Rect,
+    pub min_bar: Rect,
+    pub max_bar: Rect,
+}
+
+pub(crate) fn trim_bar_rects(track_rect: Rect, min: f32, max: f32) -> TrimBarRects {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let base_x = track_rect.x + OVERLAY_INSET;
+    TrimBarRects {
+        fill: Rect::new(
+            base_x + min * usable,
+            track_rect.y + OVERLAY_INSET,
+            (max - min) * usable,
+            track_rect.height - OVERLAY_INSET * 2.0,
+        ),
+        min_bar: Rect::new(base_x + min * usable - TRIM_BAR_W * 0.5, track_rect.y, TRIM_BAR_W, track_rect.height),
+        max_bar: Rect::new(base_x + max * usable - TRIM_BAR_W * 0.5, track_rect.y, TRIM_BAR_W, track_rect.height),
+    }
+}
+
+/// The envelope target bar's rect for a depth `norm` on a track — the
+/// single geometry source for build, drag-reposition, and hit-zone math
+/// (same anti-drift contract as [`trim_bar_rects`], BUG-258).
+pub(crate) fn target_bar_rect(track_rect: Rect, norm: f32) -> Rect {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let base_x = track_rect.x + OVERLAY_INSET;
+    Rect::new(
+        base_x + norm * usable - TARGET_BAR_W * 0.5,
+        track_rect.y - 2.0,
+        TARGET_BAR_W,
+        track_rect.height + 4.0,
+    )
+}
+
 /// Reposition a trim overlay's three nodes (fill + min/max bars) along a slider
 /// track for a new `[min, max]`. The pixel math is identical for driver,
 /// Ableton, and audio trims — this is the single copy they all share, so a
@@ -797,33 +835,10 @@ pub(crate) fn reposition_trim_bars(
     new_min: f32,
     new_max: f32,
 ) {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
-    let base_x = track_rect.x + OVERLAY_INSET;
-    let fill_x = base_x + new_min * usable;
-    let fill_w = (new_max - new_min) * usable;
-    let fill_h = track_rect.height - OVERLAY_INSET * 2.0;
-    tree.set_bounds(
-        ids.fill_id,
-        Rect::new(fill_x, track_rect.y + OVERLAY_INSET, fill_w, fill_h),
-    );
-    tree.set_bounds(
-        ids.min_bar_id,
-        Rect::new(
-            base_x + new_min * usable - TRIM_BAR_W * 0.5,
-            track_rect.y,
-            TRIM_BAR_W,
-            track_rect.height,
-        ),
-    );
-    tree.set_bounds(
-        ids.max_bar_id,
-        Rect::new(
-            base_x + new_max * usable - TRIM_BAR_W * 0.5,
-            track_rect.y,
-            TRIM_BAR_W,
-            track_rect.height,
-        ),
-    );
+    let r = trim_bar_rects(track_rect, new_min, new_max);
+    tree.set_bounds(ids.fill_id, r.fill);
+    tree.set_bounds(ids.min_bar_id, r.min_bar);
+    tree.set_bounds(ids.max_bar_id, r.max_bar);
 }
 
 // ── Shared helper functions ─────────────────────────────────────
@@ -1097,18 +1112,15 @@ pub(crate) fn build_envelope_target(
     mod_state: &ParamModState,
     param_idx: usize,
 ) -> EnvelopeTargetIds {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
     let norm = mod_state.target_norm.get(param_idx).copied().unwrap_or(0.5);
-    let bar_x = track_rect.x + OVERLAY_INSET + norm * usable - TARGET_BAR_W * 0.5;
-    let bar_h = track_rect.height + 4.0;
-    let bar_y = track_rect.y - 2.0;
+    let bar = target_bar_rect(track_rect, norm);
 
     let target_bar_id = tree.add_button(
         Some(track_parent),
-        bar_x,
-        bar_y,
-        TARGET_BAR_W,
-        bar_h,
+        bar.x,
+        bar.y,
+        bar.width,
+        bar.height,
         UIStyle {
             bg_color: color::ENVELOPE_ACTIVE_C32,
             hover_bg_color: color::TARGET_BAR_HOVER_C32,
@@ -1186,31 +1198,28 @@ pub(crate) fn build_trim_handles(
     mod_state: &ParamModState,
     param_idx: usize,
 ) -> TrimHandleIds {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
     let tmin = mod_state.trim_min.get(param_idx).copied().unwrap_or(0.0);
     let tmax = mod_state.trim_max.get(param_idx).copied().unwrap_or(1.0);
+    let r = trim_bar_rects(track_rect, tmin, tmax);
 
-    let fill_x = track_rect.x + OVERLAY_INSET + tmin * usable;
-    let fill_w = (tmax - tmin) * usable;
     let fill_id = tree.add_panel(
         Some(track_parent),
-        fill_x,
-        track_rect.y + OVERLAY_INSET,
-        fill_w,
-        track_rect.height - OVERLAY_INSET * 2.0,
+        r.fill.x,
+        r.fill.y,
+        r.fill.width,
+        r.fill.height,
         UIStyle {
             bg_color: color::TRIM_FILL_C32,
             ..UIStyle::default()
         },
     );
 
-    let min_x = fill_x - TRIM_BAR_W * 0.5;
     let min_bar_id = tree.add_button(
         Some(track_parent),
-        min_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
+        r.min_bar.x,
+        r.min_bar.y,
+        r.min_bar.width,
+        r.min_bar.height,
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
@@ -1220,13 +1229,12 @@ pub(crate) fn build_trim_handles(
         "",
     );
 
-    let max_x = track_rect.x + OVERLAY_INSET + tmax * usable - TRIM_BAR_W * 0.5;
     let max_bar_id = tree.add_button(
         Some(track_parent),
-        max_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
+        r.max_bar.x,
+        r.max_bar.y,
+        r.max_bar.width,
+        r.max_bar.height,
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
@@ -1255,29 +1263,26 @@ pub(crate) fn build_trim_handles_explicit(
     bar_hover: Color32,
     fill_color: Color32,
 ) -> TrimHandleIds {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let r = trim_bar_rects(track_rect, min, max);
 
-    let fill_x = track_rect.x + OVERLAY_INSET + min * usable;
-    let fill_w = (max - min) * usable;
     let fill_id = tree.add_panel(
         Some(track_parent),
-        fill_x,
-        track_rect.y + OVERLAY_INSET,
-        fill_w,
-        track_rect.height - OVERLAY_INSET * 2.0,
+        r.fill.x,
+        r.fill.y,
+        r.fill.width,
+        r.fill.height,
         UIStyle {
             bg_color: fill_color,
             ..UIStyle::default()
         },
     );
 
-    let min_x = fill_x - TRIM_BAR_W * 0.5;
     let min_bar_id = tree.add_button(
         Some(track_parent),
-        min_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
+        r.min_bar.x,
+        r.min_bar.y,
+        r.min_bar.width,
+        r.min_bar.height,
         UIStyle {
             bg_color: bar_color,
             hover_bg_color: bar_hover,
@@ -1287,13 +1292,12 @@ pub(crate) fn build_trim_handles_explicit(
         "",
     );
 
-    let max_x = track_rect.x + OVERLAY_INSET + max * usable - TRIM_BAR_W * 0.5;
     let max_bar_id = tree.add_button(
         Some(track_parent),
-        max_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
+        r.max_bar.x,
+        r.max_bar.y,
+        r.max_bar.width,
+        r.max_bar.height,
         UIStyle {
             bg_color: bar_color,
             hover_bg_color: bar_hover,
@@ -2476,12 +2480,13 @@ pub(crate) fn build_param_row(
         );
     }
 
-    // Trim handles (if driver expanded).
+    // Trim handles (if driver expanded). Bounds come from the tree (the
+    // track was just built, so they're live), not the panel cache (BUG-259).
     if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
         ids.trim = Some(build_trim_handles(
             tree,
             slider.track,
-            slider.track_rect,
+            tree.get_bounds(slider.track),
             mod_state,
             i,
         ));
@@ -2493,7 +2498,7 @@ pub(crate) fn build_param_row(
         ids.target = Some(build_envelope_target(
             tree,
             slider.track,
-            slider.track_rect,
+            tree.get_bounds(slider.track),
             mod_state,
             i,
         ));
@@ -2504,7 +2509,7 @@ pub(crate) fn build_param_row(
         ids.ableton_trim = Some(build_trim_handles_explicit(
             tree,
             slider.track,
-            slider.track_rect,
+            tree.get_bounds(slider.track),
             amin,
             amax,
             color::ABL_TRIM_BAR_C32,
@@ -2522,7 +2527,7 @@ pub(crate) fn build_param_row(
         ids.audio_trim = Some(build_trim_handles_explicit(
             tree,
             slider.track,
-            slider.track_rect,
+            tree.get_bounds(slider.track),
             amin,
             amax,
             color::AUDIO_TRIM_BAR_C32,

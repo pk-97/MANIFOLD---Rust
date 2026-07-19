@@ -537,7 +537,7 @@ impl AudioTriggerSection {
                 if let Some(sl) = dids.sliders.get(si)
                     && node_id == sl.track
                 {
-                    let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos_x).clamp(0.0, 1.0);
+                    let norm = BitmapSlider::x_to_normalized(sl.track_span, pos_x).clamp(0.0, 1.0);
                     let value = shape_value_from_norm(which, norm);
                     self.dragging_shape.start((i, which), Vec2::new(pos_x, 0.0));
                     return vec![
@@ -563,7 +563,7 @@ impl AudioTriggerSection {
             .get(i)
             .and_then(|c| c.as_ref())
             .and_then(|(d, _)| d.sliders.get(si))
-            .map(|sl| sl.track_rect);
+            .map(|sl| sl.track_span);
         let Some(rect) = rect else { return Vec::new() };
         let norm = BitmapSlider::x_to_normalized(rect, pos_x).clamp(0.0, 1.0);
         let value = shape_value_from_norm(which, norm);

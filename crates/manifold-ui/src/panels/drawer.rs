@@ -343,7 +343,7 @@ pub struct DrawerIds {
     pub sliders: Vec<SliderNodeIds>,
     /// Right-click reset action for each entry in [`Self::sliders`], same
     /// order/index — a parallel array (rather than folding into `sliders`)
-    /// so existing `sliders[i].track`/`.track_rect` access sites are
+    /// so existing `sliders[i].track`/`.track_span` access sites are
     /// untouched (BUG-070 follow-through).
     pub slider_resets: Vec<PanelAction>,
     /// D6 fire meter node ids, parallel to [`Self::sliders`] (same index) —

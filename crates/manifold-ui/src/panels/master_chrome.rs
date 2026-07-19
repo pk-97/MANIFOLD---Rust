@@ -524,7 +524,7 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         let track_id = panel.opacity.track_id().unwrap();
-        let track_rect = panel.opacity.ids().unwrap().track_rect;
+        let track_rect = tree.get_bounds(panel.opacity.track_id().unwrap());
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
         let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
