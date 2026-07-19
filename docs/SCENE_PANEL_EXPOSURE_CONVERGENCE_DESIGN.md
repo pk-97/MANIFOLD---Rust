@@ -1,4 +1,4 @@
-# Scene Panel Exposure Convergence — audit findings + direction (DISCUSSION)
+# Scene Panel Exposure Convergence — audit findings + direction (APPROVED 2026-07-19)
 
 **Status: DISCUSSION — findings + recommendation captured 2026-07-19 (Fable, full audit session with Peter). Peter has picked the converge-on-exposure direction in principle ("Your recommendation please"); the open decisions in §5 are his to answer before this becomes an APPROVED design. This doc is the continuity artifact for that discussion — a fresh session should be able to execute from it without the original conversation.**
 **Companion docs:** `docs/SCENE_SETUP_PANEL_DESIGN.md` (v1, SHIPPED), `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (SHIPPED), `docs/SCENE_PANEL_UX_DESIGN.md` (SHIPPED, D2/D3 superseded), `docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md` (SHIPPED 2026-07-18). BUG-260 in `docs/BUG_BACKLOG.md` (FIXED this session).
@@ -56,19 +56,19 @@ The panel keeps what makes it a scene panel: the outliner (Camera · World · li
 
 **Bug classes that die structurally, not by patch:** BUG-260's def-vs-slot split (one value home); BUG-249's decorative modulation (rows are real params from birth — modulation/MIDI/OSC/Ableton/undo all free); BUG-250-style dead click paths (one dispatch path, the card's); enum-type mutation (exposed enums write via the card command); label/default/range drift (single metadata source); key-budget collisions (card rows use card identity).
 
-## 5. Open decisions — Peter's to answer before APPROVED
+## 5. Decisions — RESOLVED by Peter 2026-07-19
 
-1. **Card length.** A dressed scene exposes dozens of params onto the generator card (the D8 "flooding" fear, now accepted as the price of one mechanism). Mitigation: collapsed named sections per scene item (existing machinery), scene sections collapsed by default. Accept?
-2. **Wire-driven params.** A param fed by a wire (port-shadow, e.g. an LFO wired in the graph) is read-only "driven" in today's panel. When such a param is exposed, the slot and the wire both claim it; the runtime semantic is wire-wins-at-eval. Presentation decision needed (show driven state on the card row exactly as the panel does today — the facts already exist in the VM).
-3. **Un-expose semantics.** Removing an exposure in the graph editor removes the row from the panel too. Proposed: accept as honest single-mechanism behavior (today's panel always shows curated rows regardless).
-4. **UI density follow-ups (separate small decisions, unblocked by this design):** a compact 3-cell vec3 row variant shared by card + panel (fixes the 14-row object body); swatch placement; outliner glyph treatment. Not in scope for the convergence itself.
-5. **Migration shape.** Load-time, idempotent, stamps curated exposures into existing projects' scenes (same posture as `migrate_scene_object_wires` — never silently dropping; scenes whose topology doesn't match the vocabulary get no new exposures and their rows simply don't appear — same honesty as today's custom rows).
-6. **Panel-side Ableton surface:** card rows expose Ableton mapping; today's scene rows don't (`ableton_config_ids` always `None`). After convergence the panel rows *could* show it — proposed: keep the panel minimal (T/∿/A only), map from the card; revisit if Peter reaches for it.
+1. **Card length — ACCEPTED.** Exposed params group under one collapsed named section per scene item ("Teapot — Transform", "Key Light") on the generator card, using the existing section machinery, collapsed by default. The scene panel is unaffected (rows filtered by outliner selection).
+2. **Wire-driven params — ACCEPTED.** Exposed wire-fed params render read-only "driven" on the card row exactly as the panel does today (wire-wins-at-eval).
+3. **Un-expose semantics — ACCEPTED.** Removing an exposure removes the panel row — honest single-mechanism behavior.
+4. **UI density follow-ups — PARKED.** Compact 3-cell vec3 row, swatch placement, outliner glyphs: separate small decisions, not in this design's scope.
+5. **Migration shape — ACCEPTED.** Load-time, idempotent, stamps curated exposures (same posture as `migrate_scene_object_wires`, never silently dropping).
+6. **Ableton surface — AMENDED by Peter.** Not card-only. Ableton mapping (and every row affordance: T/∿/A/Ableton) must ship in the unified row component the card path provides, so panel rows get it free and every future panel does too. The row component is a library dumb agents reach for; no per-panel affordance forks, ever. Consequence for P2: panel rows render through the card's row builders with the full affordance set, not a minimal subset.
 
-## 6. Phasing sketch (only after §5 answers; per DESIGN_DOC_STANDARD)
+## 6. Phasing (per DESIGN_DOC_STANDARD)
 
 - **P1 — exposure stamping at creation + migration.** Importer/starter/AddSceneObject/AddLight/InsertMeshModifier stamp full-param exposures into named collapsed sections; idempotent load migration; round-trip + undo tests. No panel changes yet — the card simply shows everything (this is the truth the panel will read).
-- **P2 — panel rows read the manifest.** Scene rows become filtered exposed-param rows via the card's builders/dispatch; delete the synthetic-id system, id map, funnels, dispatch copies, hand tables, `scene_bound_slot`, and the per-family bespoke machinery. Negative gates: `rg 'synth_world_param_id|id_map|resolve_scene_param|scene_bound_slot|modifier_param_rows'` → 0 outside history.
+- **P2 — panel rows read the manifest.** Scene rows become filtered exposed-param rows via the card's builders/dispatch **with the full row-affordance set (T/∿/A/Ableton — §5.6: one row component, no per-panel forks)**; delete the synthetic-id system, id map, funnels, dispatch copies, hand tables, `scene_bound_slot`, and the per-family bespoke machinery. Negative gates: `rg 'synth_world_param_id|id_map|resolve_scene_param|scene_bound_slot|modifier_param_rows'` → 0 outside history.
 - **P3 — outliner/discovery slimming.** `scene_vm.rs` to item-discovery only; state_sync transcription to the thin section-filter query; eye toggle rides the exposed `visible` param.
 - **P4 — polish + flows.** Rewrite the scene flow suite against the real rows (kill BUG-240's retired-gesture flow and the stale light-intensity-drag flow); side-by-side dialect PNG; supersession sweep across the four prior scene design docs (their status headers must point here).
 - Gates per phase: focused nextest + scoped clippy; full sweep at landing; PNGs looked at, not asserted. No GPU work anywhere in this design.
