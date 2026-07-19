@@ -90,6 +90,66 @@ pub(crate) enum ActiveInspectorDrag {
         min: f32,
         max: f32,
     },
+    /// A layer-header audio-gain drag (`AudioGain*` trio). Unguarded, a
+    /// mid-drag snapshot swap reverted the in-flight dB and the commit saw
+    /// old == new — no undo entry (undo audit 2026-07-19, cluster C).
+    AudioGain {
+        layer_id: LayerId,
+        db: f32,
+    },
+    /// An envelope target (orange handle) drag (`Target*` trio).
+    EnvelopeTarget {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        value: f32,
+    },
+    /// An envelope decay slider drag (`EnvDecay*` trio).
+    EnvelopeDecay {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        value: f32,
+    },
+    /// An audio-mod drawer shape-slider drag (`AudioModShape*` trio) —
+    /// holds the whole shape so any of the three scalars restores.
+    AudioModShape {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        shape: manifold_core::audio_mod::AudioModShape,
+    },
+    /// An audio-mod Step-amount drag (`AudioModStepAmount*` trio).
+    AudioModStepAmount {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+        amount: f32,
+    },
+    /// A layer clip-trigger shape-slider drag (`AudioTriggerShape*` trio).
+    AudioTriggerShape {
+        layer_id: LayerId,
+        index: usize,
+        shape: manifold_core::audio_mod::AudioModShape,
+    },
+    /// An Audio Setup send-gain label drag (`AudioSendGainDrag*` trio).
+    AudioSendGain {
+        send_id: manifold_core::AudioSendId,
+        db: f32,
+    },
+    /// An Audio Setup band-divider drag (`AudioCrossover*` trio).
+    AudioCrossover {
+        low_hz: f32,
+        mid_hz: f32,
+    },
+    /// A "3D Shading" knob drag (`RelightParam*` trio).
+    RelightParam {
+        target: manifold_core::GraphTarget,
+        field: manifold_core::effects::RelightField,
+        value: f32,
+    },
+    /// An Ableton macro trim-bar drag (`AbletonMacroTrim*` trio).
+    AbletonMacroTrim {
+        slot_idx: usize,
+        min: f32,
+        max: f32,
+    },
 }
 
 impl ActiveInspectorDrag {
@@ -113,9 +173,14 @@ impl ActiveInspectorDrag {
                 value,
             } => {
                 project.with_preset_graph_mut(target, |inst| {
-                    // Direct id write of the effective value (no-op if the id
-                    // isn't in the manifest).
-                    inst.set_param(param_id.as_ref(), *value);
+                    // Restore through the SAME write the drag's motion ticks
+                    // use (`ParamChanged` → `set_base_param`): the commit
+                    // reads the BASE value, so an effective-only restore
+                    // (`set_param`) leaves base stale after a snapshot swap
+                    // and the commit sees old == new — no undo entry. The
+                    // `touched` mark is correct here: this replays a live
+                    // user gesture, and the drag's own ticks already set it.
+                    inst.set_base_param(param_id.as_ref(), *value);
                 });
             }
             Self::Macro { idx, value } => {
@@ -189,6 +254,122 @@ impl ActiveInspectorDrag {
                             m.range_max = *max;
                         }
                     }
+                }
+            }
+            // Every restore below writes through the SAME store the family's
+            // live `*Changed` arm writes, so a mid-drag snapshot swap can't
+            // revert the in-flight value (undo audit 2026-07-19, cluster C).
+            Self::AudioGain { layer_id, db } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
+                    layer.audio_gain_db = *db;
+                }
+            }
+            Self::EnvelopeTarget {
+                target,
+                param_id,
+                value,
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(e) = inst
+                        .envelopes
+                        .as_mut()
+                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
+                    {
+                        e.target_normalized = *value;
+                    }
+                });
+            }
+            Self::EnvelopeDecay {
+                target,
+                param_id,
+                value,
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(e) = inst
+                        .envelopes
+                        .as_mut()
+                        .and_then(|es| es.iter_mut().find(|e| e.param_id == *param_id))
+                    {
+                        e.decay_beats = *value;
+                    }
+                });
+            }
+            Self::AudioModShape {
+                target,
+                param_id,
+                shape,
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(m) = inst
+                        .audio_mods
+                        .as_mut()
+                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                    {
+                        m.shape = *shape;
+                    }
+                });
+            }
+            Self::AudioModStepAmount {
+                target,
+                param_id,
+                amount,
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    if let Some(m) = inst
+                        .audio_mods
+                        .as_mut()
+                        .and_then(|ms| ms.iter_mut().find(|a| a.param_id == *param_id))
+                    {
+                        let wrap = match m.action {
+                            manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
+                            _ => manifold_core::audio_mod::WrapMode::Wrap,
+                        };
+                        m.action = manifold_core::audio_mod::TriggerAction::Step {
+                            amount: *amount,
+                            wrap,
+                        };
+                    }
+                });
+            }
+            Self::AudioTriggerShape {
+                layer_id,
+                index,
+                shape,
+            } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+                    && let Some(t) = layer.clip_triggers.get_mut(*index)
+                {
+                    t.shape = *shape;
+                }
+            }
+            Self::AudioSendGain { send_id, db } => {
+                if let Some(s) = project.audio_setup.find_send_mut(send_id) {
+                    s.gain_db = *db;
+                }
+            }
+            Self::AudioCrossover { low_hz, mid_hz } => {
+                project.audio_setup.low_hz = *low_hz;
+                project.audio_setup.mid_hz = *mid_hz;
+            }
+            Self::RelightParam {
+                target,
+                field,
+                value,
+            } => {
+                project.with_preset_graph_mut(target, |inst| {
+                    field.set(&mut inst.relight_params, *value);
+                });
+            }
+            Self::AbletonMacroTrim { slot_idx, min, max } => {
+                if let Some(m) = project
+                    .settings
+                    .macro_bank
+                    .slots
+                    .get_mut(*slot_idx)
+                    .and_then(|s| s.ableton_mapping.as_mut())
+                {
+                    m.range_min = *min;
+                    m.range_max = *max;
                 }
             }
         }

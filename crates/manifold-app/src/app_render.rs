@@ -22,7 +22,7 @@ use manifold_editing::commands::effects::BindingMappingEdit;
 /// instance's per-instance graph override, materializing it from `seed_def`
 /// (the catalog graph, resolved renderer-side) when the instance is still on
 /// the catalog default. Addresses the param by stable id.
-fn build_mapping_command(
+pub(crate) fn build_mapping_command(
     target: &manifold_core::GraphTarget,
     param_id: &str,
     edit: manifold_editing::commands::effects::BindingMappingEdit,
@@ -36,6 +36,39 @@ fn build_mapping_command(
             seed_def,
         ),
     )
+}
+
+/// `Application::seed_def_for` minus the `&self` — the catalog/bundled
+/// default def a mapping edit seeds from when the instance hasn't diverged,
+/// resolvable from any `&Project` (the `ActiveInspectorDrag` mapping-drag
+/// restore in app.rs uses it, same as `preview_mapping` does here).
+pub(crate) fn seed_def_for_project(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+    match target {
+        manifold_core::GraphTarget::Effect(eid) => {
+            let fx = project.find_effect_by_id(eid)?;
+            if fx.graph.is_some() {
+                return None;
+            }
+            let view = manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
+            Some((*view.canonical_def).clone())
+        }
+        manifold_core::GraphTarget::Generator(lid) => {
+            let layer = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| &l.layer_id == lid)?;
+            if layer.generator_graph().is_some() {
+                return None;
+            }
+            let gp = layer.gen_params()?;
+            manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
+                .map(|v| (*v.canonical_def).clone())
+        }
+    }
 }
 
 /// Drag-commit variant: the command carries the EXPLICIT pre-drag reverse
@@ -437,31 +470,7 @@ impl Application {
         &self,
         target: &manifold_core::GraphTarget,
     ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        match target {
-            manifold_core::GraphTarget::Effect(eid) => {
-                let fx = self.local_project.find_effect_by_id(eid)?;
-                if fx.graph.is_some() {
-                    return None;
-                }
-                let view =
-                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())?;
-                Some((*view.canonical_def).clone())
-            }
-            manifold_core::GraphTarget::Generator(lid) => {
-                let layer = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == lid)?;
-                if layer.generator_graph().is_some() {
-                    return None;
-                }
-                let gp = layer.gen_params()?;
-                manifold_renderer::node_graph::loaded_preset_view_by_id(gp.generator_type())
-                    .map(|v| (*v.canonical_def).clone())
-            }
-        }
+        seed_def_for_project(&self.local_project, target)
     }
 
     /// The graph def the editor currently shows for the watched target — the

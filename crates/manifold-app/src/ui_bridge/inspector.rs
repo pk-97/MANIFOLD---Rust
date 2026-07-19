@@ -29,7 +29,8 @@ use manifold_editing::commands::effects::{
     SetRelightHeightFromCommand, SetRelightParamCommand, ToggleEffectCommand, ToggleRelightCommand,
 };
 use manifold_editing::commands::envelopes::{
-    ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
+    AddEnvelopeCommand, ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
+    ToggleEnvelopeEnabledCommand,
 };
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::commands::layer::{
@@ -825,10 +826,21 @@ pub(super) fn dispatch_inspector(
                 .timeline
                 .find_layer_by_id(id)
                 .map(|(_, l)| l.audio_gain_db);
+            if let Some(db) = *drag_snapshot {
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioGain {
+                    layer_id: id.clone(),
+                    db,
+                });
+            }
             DispatchResult::handled()
         }
         PanelAction::AudioGainChanged(id, db) => {
             let db = *db;
+            if let Some(crate::app::ActiveInspectorDrag::AudioGain { db: guard, .. }) =
+                active_inspector_drag
+            {
+                *guard = db;
+            }
             if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
                 layer.audio_gain_db = db;
                 let id = id.clone();
@@ -844,6 +856,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::AudioGainCommit(id) => {
+            *active_inspector_drag = None;
             if let Some(old_db) = drag_snapshot.take()
                 && let Some((_, layer)) = project.timeline.find_layer_by_id(id)
             {
@@ -1546,11 +1559,18 @@ pub(super) fn dispatch_inspector(
             // exactly what `SceneSetupParamChanged`'s dispatch arm already
             // does per-tick today; the fix is that this now fires ONCE per
             // gesture instead of once per motion event.
-            if let Some(old_val) = drag_snapshot.take()
+            //
+            // The scene probe must NOT consume the snapshot (read, don't
+            // `take()`): for an ordinary exposed card param the scene
+            // resolution misses, and a consumed snapshot leaves the exposed
+            // commit path below with `None` — every card slider drag (and
+            // param type-in, which rides this trio) recorded NO undo entry.
+            if let Some(old_val) = *drag_snapshot
                 && let Some((addr, target, catalog_default)) = resolve_scene_write(
                     ui, project, gpt, param_id, editor_target, effective_tab, active_layer, selection,
                 )
             {
+                *drag_snapshot = None;
                 // Bound row → the drag moved the instance slot; commit the
                 // same `ChangeGraphParamCommand` an exposed card commit uses.
                 if let Some(pid) = scene_bound_slot(project, &target, &addr, &catalog_default) {
@@ -1942,6 +1962,13 @@ pub(super) fn dispatch_inspector(
                             .map(|m| m.shape)
                     })
                     .flatten();
+                if let Some(shape) = *audio_shape_snapshot {
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioModShape {
+                        target,
+                        param_id: param_id.clone(),
+                        shape,
+                    });
+                }
             }
             DispatchResult::handled()
         }
@@ -1954,6 +1981,15 @@ pub(super) fn dispatch_inspector(
                 let param_id = &param_id;
                 let which = *which;
                 let v = *value;
+                if let Some(crate::app::ActiveInspectorDrag::AudioModShape { shape, .. }) =
+                    active_inspector_drag
+                {
+                    match which {
+                        AudioShapeParam::Sensitivity => shape.sensitivity = v,
+                        AudioShapeParam::Attack => shape.attack_ms = v,
+                        AudioShapeParam::Release => shape.release_ms = v,
+                    }
+                }
                 graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
                     match which {
                         AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
@@ -1966,6 +2002,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModShapeCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current shape (new) via the shape command.
+            *active_inspector_drag = None;
             if let Some(old_shape) = audio_shape_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
                     ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
@@ -2100,6 +2137,18 @@ pub(super) fn dispatch_inspector(
                         inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                     })
                     .flatten();
+                let amount = match audio_action_snapshot.as_ref() {
+                    Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) => *amount,
+                    _ => 0.0,
+                };
+                if audio_action_snapshot.is_some() {
+                    *active_inspector_drag =
+                        Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
+                            target,
+                            param_id: param_id.clone(),
+                            amount,
+                        });
+                }
             }
             DispatchResult::handled()
         }
@@ -2111,6 +2160,12 @@ pub(super) fn dispatch_inspector(
             ) {
                 let param_id = &param_id;
                 let v = *value;
+                if let Some(crate::app::ActiveInspectorDrag::AudioModStepAmount {
+                    amount, ..
+                }) = active_inspector_drag
+                {
+                    *amount = v;
+                }
                 graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
                     let wrap = match m.action {
                         manifold_core::audio_mod::TriggerAction::Step { wrap, .. } => wrap,
@@ -2123,6 +2178,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioModStepAmountCommit(gpt, param_id) => {
             // One undo step: snapshot (old) → current action (new).
+            *active_inspector_drag = None;
             if let Some(old_action) = audio_action_snapshot.take()
                 && let Some((target, param_id)) = resolve_mod_target(
                     ui, project, content_tx, gpt, param_id, editor_target, effective_tab,
@@ -2308,11 +2364,27 @@ pub(super) fn dispatch_inspector(
                 .find_layer_by_id_mut(layer_id)
                 .and_then(|(_, l)| l.clip_triggers.get(*index))
                 .map(|t| t.shape);
+            if let Some(shape) = *audio_shape_snapshot {
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioTriggerShape {
+                    layer_id: layer_id.clone(),
+                    index: *index,
+                    shape,
+                });
+            }
             DispatchResult::handled()
         }
         PanelAction::AudioTriggerShapeParamChanged(layer_id, index, which, value) => {
             let which = *which;
             let v = *value;
+            if let Some(crate::app::ActiveInspectorDrag::AudioTriggerShape { shape, .. }) =
+                active_inspector_drag
+            {
+                match which {
+                    AudioShapeParam::Sensitivity => shape.sensitivity = v,
+                    AudioShapeParam::Attack => shape.attack_ms = v,
+                    AudioShapeParam::Release => shape.release_ms = v,
+                }
+            }
             clip_trigger_shape_dual_edit(project, content_tx, layer_id, *index, move |shape| {
                 match which {
                     AudioShapeParam::Sensitivity => shape.sensitivity = v,
@@ -2323,6 +2395,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::AudioTriggerShapeCommit(layer_id, index) => {
+            *active_inspector_drag = None;
             if let Some(old_shape) = audio_shape_snapshot.take() {
                 let current = project
                     .timeline
@@ -2441,6 +2514,12 @@ pub(super) fn dispatch_inspector(
                     .map(|s| s.gain_db)
                     .unwrap_or(0.0),
             );
+            if let Some(db) = *audio_send_gain_drag_snapshot {
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioSendGain {
+                    send_id: id.clone(),
+                    db,
+                });
+            }
             DispatchResult::handled()
         }
         PanelAction::AudioSendGainDragChanged(id, db) => {
@@ -2448,6 +2527,11 @@ pub(super) fn dispatch_inspector(
             // then apply to the local project and the content thread so the
             // label + `GainBank` track the cursor — no capture restart.
             let clamped = db.clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
+            if let Some(crate::app::ActiveInspectorDrag::AudioSendGain { db: guard, .. }) =
+                active_inspector_drag
+            {
+                *guard = clamped;
+            }
             if let Some(s) = project.audio_setup.find_send_mut(id) {
                 s.gain_db = clamped;
             }
@@ -2464,6 +2548,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioSendGainDragCommit(id) => {
             // One undo step: snapshot (old) → current gain (new).
+            *active_inspector_drag = None;
             if let Some(old) = audio_send_gain_drag_snapshot.take() {
                 let new = project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(old);
                 if (new - old).abs() > f32::EPSILON {
@@ -2530,6 +2615,12 @@ pub(super) fn dispatch_inspector(
             // Snapshot the pre-drag crossovers so the commit records one undo step.
             *audio_crossover_snapshot =
                 Some((project.audio_setup.low_hz, project.audio_setup.mid_hz));
+            if let Some((low_hz, mid_hz)) = *audio_crossover_snapshot {
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AudioCrossover {
+                    low_hz,
+                    mid_hz,
+                });
+            }
             DispatchResult::handled()
         }
         PanelAction::AudioCrossoverChanged(band, hz) => {
@@ -2543,6 +2634,12 @@ pub(super) fn dispatch_inspector(
             } else {
                 manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, *hz, false)
             };
+            if let Some(crate::app::ActiveInspectorDrag::AudioCrossover { low_hz, mid_hz }) =
+                active_inspector_drag
+            {
+                *low_hz = low;
+                *mid_hz = mid;
+            }
             project.audio_setup.low_hz = low;
             project.audio_setup.mid_hz = mid;
             ContentCommand::send(
@@ -2556,6 +2653,7 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::AudioCrossoverCommit => {
             // One undo step: snapshot (old) → current crossovers (new).
+            *active_inspector_drag = None;
             if let Some(old) = audio_crossover_snapshot.take() {
                 let new = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
                 if new != old {
@@ -2587,22 +2685,37 @@ pub(super) fn dispatch_inspector(
                     }
                 };
                 if env_allowed {
-                    let pid = param_id.clone();
-                    let toggle = move |p: &mut Project| {
-                        p.with_preset_graph_mut(&target, |inst| {
-                            let envs = inst.envelopes.get_or_insert_with(Vec::new);
-                            if let Some(idx) = envs.iter().position(|e| e.param_id == pid) {
-                                envs[idx].enabled = !envs[idx].enabled;
-                            } else {
-                                envs.push(ParamEnvelope::new(pid.clone()));
-                            }
-                        });
-                    };
-                    toggle(project);
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::MutateProject(Box::new(toggle)),
-                    );
+                    // Undo-tracked like the DriverToggle/AudioModToggle
+                    // siblings (was `MutateProject` — arming or flipping an
+                    // envelope recorded NO undo entry): existing envelope →
+                    // flip `enabled`; none → add a fresh enabled one.
+                    let existing = project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.envelopes
+                                .as_ref()
+                                .and_then(|envs| {
+                                    envs.iter()
+                                        .position(|e| e.param_id == *param_id)
+                                        .map(|idx| (idx, envs[idx].enabled))
+                                })
+                        })
+                        .flatten();
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        if let Some((idx, old)) = existing {
+                            Box::new(ToggleEnvelopeEnabledCommand::new(
+                                target.clone(),
+                                idx,
+                                old,
+                                !old,
+                            ))
+                        } else {
+                            Box::new(AddEnvelopeCommand::new(
+                                target.clone(),
+                                ParamEnvelope::new(param_id.clone()),
+                            ))
+                        };
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::structural()
@@ -2779,6 +2892,11 @@ pub(super) fn dispatch_inspector(
             ) {
                 let param_id = &param_id;
                 let n = *norm;
+                if let Some(crate::app::ActiveInspectorDrag::EnvelopeTarget { value, .. }) =
+                    active_inspector_drag
+                {
+                    *value = n;
+                }
                 graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.target_normalized = n;
                 });
@@ -2792,6 +2910,11 @@ pub(super) fn dispatch_inspector(
             ) {
                 let param_id = &param_id;
                 let d = *decay;
+                if let Some(crate::app::ActiveInspectorDrag::EnvelopeDecay { value, .. }) =
+                    active_inspector_drag
+                {
+                    *value = d;
+                }
                 graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
                     env.decay_beats = d;
                 });
@@ -2955,6 +3078,11 @@ pub(super) fn dispatch_inspector(
                     .flatten();
                 if let Some(t) = t {
                     *target_snapshot = Some(t);
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeTarget {
+                        target,
+                        param_id: param_id.clone(),
+                        value: t,
+                    });
                 }
             }
             DispatchResult::handled()
@@ -3002,6 +3130,11 @@ pub(super) fn dispatch_inspector(
                     .flatten();
                 if let Some(d) = d {
                     *decay_snapshot = Some(d);
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EnvelopeDecay {
+                        target,
+                        param_id: param_id.clone(),
+                        value: d,
+                    });
                 }
             }
             DispatchResult::handled()
@@ -3555,6 +3688,13 @@ pub(super) fn dispatch_inspector(
                 let f = crate::ui_translate::relight_field_to_editing(*field);
                 *drag_snapshot =
                     project.with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                if let Some(value) = *drag_snapshot {
+                    *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::RelightParam {
+                        target,
+                        field: f,
+                        value,
+                    });
+                }
             }
             DispatchResult::handled()
         }
@@ -3564,6 +3704,11 @@ pub(super) fn dispatch_inspector(
             {
                 let f = crate::ui_translate::relight_field_to_editing(*field);
                 let v = *val;
+                if let Some(crate::app::ActiveInspectorDrag::RelightParam { value, .. }) =
+                    active_inspector_drag
+                {
+                    *value = v;
+                }
                 // Live drag: update the UI-side project immediately so the
                 // slider follows the pointer, and mirror to the content thread
                 // via `MutateProjectLive`. No `bump_graph_structure_version`
@@ -3584,6 +3729,7 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::RelightParamCommit(gpt, field) => {
+            *active_inspector_drag = None;
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(target) =
                     resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
@@ -3817,6 +3963,15 @@ pub(super) fn dispatch_inspector(
             let slot_idx = *slot_idx;
             let min = *min;
             let max = *max;
+            if let Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
+                min: g_min,
+                max: g_max,
+                ..
+            }) = active_inspector_drag
+            {
+                *g_min = min;
+                *g_max = max;
+            }
             if let Some(slot) = project.settings.macro_bank.slots.get_mut(slot_idx)
                 && let Some(m) = &mut slot.ableton_mapping
             {
@@ -3846,11 +4001,17 @@ pub(super) fn dispatch_inspector(
                 .map(|m| (m.range_min, m.range_max))
             {
                 *trim_snapshot = Some(range);
+                *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::AbletonMacroTrim {
+                    slot_idx: *slot_idx,
+                    min: range.0,
+                    max: range.1,
+                });
             }
             DispatchResult::handled()
         }
         PanelAction::AbletonMacroTrimCommit(slot_idx) => {
             use manifold_core::ableton_mapping::AbletonMappingTarget;
+            *active_inspector_drag = None;
             if let Some((old_min, old_max)) = trim_snapshot.take()
                 && let Some((new_min, new_max)) = project
                     .settings
@@ -6088,6 +6249,113 @@ mod scene_card_convergence_tests {
                 before,
                 -100.0,
             );
+        }
+
+        // ── Ableton macro trim + step-amount (same stomp class) ──
+
+        fn ableton_macro_trim_case(stomp: bool) {
+            let mut project = Project::default();
+            project.settings.macro_bank.slots[0].ableton_mapping =
+                Some(manifold_core::ableton_mapping::AbletonParamMapping {
+                    param_id: std::borrow::Cow::Owned("m0".to_string()),
+                    address: manifold_core::ableton_mapping::AbletonMacroAddress {
+                        track_id: 0,
+                        device_id: 0,
+                        param_id: 0,
+                        device_identity: manifold_core::ableton_mapping::AbletonDeviceIdentity {
+                            device_class_name: "InstrumentGroupDevice".to_string(),
+                        },
+                        track_name: String::new(),
+                        device_name: String::new(),
+                        macro_name: String::new(),
+                    },
+                    range_min: 0.0,
+                    range_max: 1.0,
+                    inverted: false,
+                    legacy_param_index: None,
+                    last_value: 0.0,
+                    status: manifold_core::ableton_mapping::AbletonMappingStatus::default(),
+                });
+            let mut h = Harness::new(None);
+            trio_cycle(
+                "ableton_macro_trim",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::AbletonMacroTrimSnapshot(0), p);
+                    h.dispatch(&PanelAction::AbletonMacroTrimChanged(0, 0.2, 0.7), p);
+                },
+                |h, p| h.dispatch(&PanelAction::AbletonMacroTrimCommit(0), p),
+                |p| {
+                    let m = p.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
+                    (m.range_min, m.range_max)
+                },
+                (0.0, 1.0),
+                (0.2, 0.7),
+                stomp,
+            );
+        }
+
+        #[test]
+        fn ableton_macro_trim_clean() {
+            ableton_macro_trim_case(false);
+        }
+
+        #[test]
+        fn ableton_macro_trim_stomp() {
+            ableton_macro_trim_case(true);
+        }
+
+        fn audio_mod_step_amount_case(stomp: bool) {
+            let (mut project, layer_id) = scene_layer_project();
+            let mut h = Harness::new(Some(layer_id.clone()));
+            let pid = arm_audio_mod(&mut h, &mut project, &layer_id);
+            // The Step-amount row only exists while the action is Step.
+            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+            project.with_preset_graph_mut(&target, |inst| {
+                if let Some(m) = inst
+                    .audio_mods
+                    .as_mut()
+                    .and_then(|ms| ms.iter_mut().find(|a| a.param_id == pid))
+                {
+                    m.action = manifold_core::audio_mod::TriggerAction::Step {
+                        amount: 0.1,
+                        wrap: manifold_core::audio_mod::WrapMode::Wrap,
+                    };
+                }
+            });
+            let probe_lid = layer_id.clone();
+            let probe_pid = pid.clone();
+            let read_amount = move |p: &Project| {
+                match gen_inst(p, &probe_lid).find_audio_mod(probe_pid.as_ref()).map(|m| m.action) {
+                    Some(manifold_core::audio_mod::TriggerAction::Step { amount, .. }) => amount,
+                    _ => f32::NAN,
+                }
+            };
+            trio_cycle(
+                "audio_mod_step_amount",
+                project,
+                &mut h,
+                |h, p| {
+                    h.dispatch(&PanelAction::AudioModStepAmountSnapshot(gpt(), pid.clone()), p);
+                    h.dispatch(&PanelAction::AudioModStepAmountChanged(gpt(), pid.clone(), 0.65), p);
+                },
+                |h, p| h.dispatch(&PanelAction::AudioModStepAmountCommit(gpt(), pid.clone()), p),
+                read_amount,
+                0.1,
+                0.65,
+                stomp,
+            );
+        }
+
+        #[test]
+        fn audio_mod_step_amount_clean() {
+            audio_mod_step_amount_case(false);
+        }
+
+        #[test]
+        fn audio_mod_step_amount_stomp() {
+            audio_mod_step_amount_case(true);
         }
 
         // ── Clip gestures (timeline host path) ───────────────────
