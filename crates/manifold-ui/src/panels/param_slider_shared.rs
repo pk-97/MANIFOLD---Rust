@@ -95,35 +95,26 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
 /// Height of the per-param audio-modulation drawer for param `i`. Rows: send
-/// selector, the Level feature row, the Tone feature row, the three shaping
-/// sliders (Amount/Attack/Release), and the modifier toggles (Inv/d-dt) — 7
-/// rows, always. Derived from the shared drawer metrics so the card's
-/// reserved height can never drift from what's actually drawn.
+/// selector, the Feature row, the Band row, the Invert toggle, and the three
+/// shaping sliders (Sensitivity/Attack/Release) — 7 rows, always. Derived
+/// from the shared drawer metrics so the card's reserved height can never
+/// drift from what's actually drawn.
 ///
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger param (`show_action`,
 /// mirrors `build_audio_mod_drawer`'s own gate) additionally carries the
 /// Action row, and — while armed to Step — the Amount slider + Wrap row.
 /// The trailing Mode row (§9 U2) shows for an `is_trigger_gate` target
-/// unconditionally, or for a slider row armed to Step/Random (D3).
-/// `has_length_row` mirrors `build_audio_mod_drawer`'s `length_beats: Option<f32>`
-/// (P3, D4/D5) — `Some` there means `true` here, so a caller reserving height
-/// for a clip-trigger drawer (whose Length row this function otherwise has no
-/// way to know about) agrees with what actually gets built. Both existing
-/// callers (`mod_config_height`, the effect/generator card's own height math)
-/// pass `false` — neither builds a clip trigger.
+/// unconditionally, or for a slider row armed to Step/Random (D3). The layer
+/// clip-trigger surface reserves its own height via
+/// [`clip_trigger_drawer_height`] — its drawer is a different, smaller row
+/// set built by [`build_clip_trigger_drawer`].
 ///
 /// Adds [`crate::panels::drawer::METER_STRIP_H`] unconditionally (2026-07-11):
-/// `build_audio_mod_drawer`'s Amount row now carries a live meter on EVERY
-/// audio-mod drawer, not just fire-mode ones (`show_amount_meter` widened to
-/// unconditional), so the reserved height must always include the strip too —
-/// this used to omit it, so a metered drawer overflowed its reserved slot by
-/// `METER_STRIP_H` (6px) every time one showed.
-pub(crate) fn audio_config_height(
-    info: &ParamInfo,
-    mod_state: &ParamModState,
-    i: usize,
-    has_length_row: bool,
-) -> f32 {
+/// `build_audio_mod_drawer`'s Sensitivity row carries a live meter on EVERY
+/// audio-mod drawer, so the reserved height must always include the strip
+/// too — this used to omit it, so a metered drawer overflowed its reserved
+/// slot by `METER_STRIP_H` (6px) every time one showed.
+pub(crate) fn audio_config_height(info: &ParamInfo, mod_state: &ParamModState, i: usize) -> f32 {
     let mut n = 7;
     let show_action = !info.is_toggle && !info.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
@@ -135,9 +126,6 @@ pub(crate) fn audio_config_height(
     }
     if info.is_trigger_gate || (show_action && action_idx != 0) {
         n += 1; // Mode row
-    }
-    if has_length_row {
-        n += 1; // Length row (clip triggers only)
     }
     crate::panels::drawer::uniform_rows_height(n) + crate::panels::drawer::METER_STRIP_H
 }
@@ -479,6 +467,88 @@ pub(crate) fn audio_band_labels() -> [&'static str; 4] {
 /// Number of feature kinds / bands exposed in the drawer.
 pub(crate) const AUDIO_KIND_COUNT: usize = crate::types::AudioFeatureKind::ALL.len();
 pub(crate) const AUDIO_BAND_COUNT: usize = 4;
+
+// ── Curated trigger-source chips (clip-trigger drawer) ─────────────
+//
+// A clip trigger fires on an onset, so the raw Feature×Band matrix (32 cells,
+// most of them continuous-modulation features that make no sense as a fire
+// source) is the wrong vocabulary for that surface. The chips below are the
+// musically-named cells a performer actually reaches for. They are PURE
+// PRESENTATION: each maps onto the same `AudioFeature { kind, band }` the
+// matrix edits, so the model, serialization, and evaluator never know the
+// difference. The realtime-analysis backing per chip:
+//
+//   Kick       — the dedicated descending-FM-ridge kick detector (sub-bass;
+//                blind to bassline notes a Low-band flux transient can't
+//                separate). The runtime ignores `band` for `Kick` (always
+//                reads Low), so the chip matches on kind alone.
+//   Bass       — Transients×Low: any low-band onset, bassline notes included
+//                ("pulse on every bass note").
+//   Snare/Hats — Transients×Mid/High: band transients, NOT instrument
+//                classifiers — a mid-band onset from vocals or a synth stab
+//                fires Snare too. On a separated stem send they read true.
+//   Transients — Transients×Full: any hit, anywhere. The always-works generic.
+//
+// Classifier-open (AUDIO_EVENT_CLASSIFIER): when the neural labeler earns its
+// place, its classes append here as more named cells — the drawer builds from
+// this list, never from an assumption that five chips are all that exists.
+
+/// One curated trigger-source cell: a label plus the `AudioFeature` it sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceChip {
+    pub label: String,
+    pub feature: crate::types::AudioFeature,
+    /// Whether the trigger's current cell is this chip.
+    pub active: bool,
+}
+
+/// The curated cells, in drawer order (low → high, generic last).
+pub(crate) const TRIGGER_SOURCE_CHIPS: [(&str, crate::types::AudioFeatureKind, crate::types::AudioBand); 5] = [
+    ("Kick", crate::types::AudioFeatureKind::Kick, crate::types::AudioBand::Low),
+    ("Bass", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Low),
+    ("Snare", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Mid),
+    ("Hats", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::High),
+    ("Transients", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Full),
+];
+
+/// The chips a clip-trigger drawer shows for `current`: the curated five with
+/// the active one highlighted — plus, when the current cell isn't one of the
+/// five (an older project pointing at e.g. Flux×Mid, or a future classifier
+/// class surfaced through the param-mod drawer's full matrix), a truthful
+/// trailing chip naming the actual cell, so the drawer never silently
+/// re-points a trigger at a different signal than the one it fires from.
+pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<SourceChip> {    let mut chips: Vec<SourceChip> = TRIGGER_SOURCE_CHIPS
+        .iter()
+        .map(|&(label, kind, band)| {
+            // `Kick` ignores `band` at evaluation time (always reads Low), so
+            // a saved Kick cell matches its chip regardless of the stored band.
+            let active = kind == current.kind
+                && (band == current.band || kind == crate::types::AudioFeatureKind::Kick);
+            SourceChip {
+                label: label.to_string(),
+                feature: crate::types::AudioFeature::new(kind, band),
+                active,
+            }
+        })
+        .collect();
+    if !chips.iter().any(|c| c.active) {
+        chips.push(SourceChip {
+            label: format!("{}\u{00B7}{}", current.kind.label(), current.band.label()),
+            feature: current,
+            active: true,
+        });
+    }
+    chips
+}
+
+/// Container height of a clip-trigger drawer: Source row, Listen (chips)
+/// row, Sensitivity slider, Length row — plus the Sensitivity meter strip.
+///
+/// Paired with [`build_clip_trigger_drawer`] so a caller reserving height
+/// (the AUDIO TRIGGERS section) can't drift from what's actually built.
+pub(crate) fn clip_trigger_drawer_height() -> f32 {
+    crate::panels::drawer::uniform_rows_height(4) + crate::panels::drawer::METER_STRIP_H
+}
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
@@ -1558,7 +1628,7 @@ pub(crate) fn mod_config_height(
     match tab {
         ModTab::Envelope => ENV_CONFIG_HEIGHT,
         ModTab::Driver => driver_config_height(),
-        ModTab::Audio => audio_config_height(info, mod_state, i, false),
+        ModTab::Audio => audio_config_height(info, mod_state, i),
         ModTab::Ableton => ABL_CONFIG_HEIGHT,
     }
 }
@@ -1710,34 +1780,18 @@ pub(crate) fn format_beats(b: f32) -> String {
     }
 }
 
-/// Which [`PanelAction`] family a [`build_audio_mod_drawer`] call's OWN
-/// embedded reset gestures emit (P3b, D5). `Param` is the pre-P3b behavior —
-/// an effect/generator param card's audio mod, keyed by the existing
-/// `(GraphParamTarget, ParamId)` pair (`ParamId` still comes from `info`,
-/// unchanged). `ClipTrigger` is new: a `LayerClipTrigger` has no
-/// `GraphParamTarget`/`ParamId` to address (it lives on `Layer.clip_triggers`,
-/// addressed by `LayerId` + its index), so it rides the additive
-/// `PanelAction::AudioTrigger*` family instead of a repurposed `AudioMod*`.
-#[derive(Debug, Clone)]
-pub(crate) enum AudioModDrawerTarget {
-    Param(GraphParamTarget),
-    ClipTrigger(LayerId, usize),
-}
-
 /// Build the per-param audio-modulation config drawer (Source/Feature/Band/
-/// Inv-Delta toggles + Amount/Attack/Release shaping sliders, plus an optional
-/// trailing Mode row). Shared by `build_param_row`'s Audio mod-tab branch
-/// (continuous params, behind the multi-tab drawer),
+/// Invert toggle + Sensitivity/Attack/Release shaping sliders, plus the
+/// conditional Action/Amount/Wrap/Mode rows). Shared by `build_param_row`'s
+/// Audio mod-tab branch (continuous params, behind the multi-tab drawer) and
 /// `build_toggle_trigger_row`'s `is_trigger`/`is_trigger_gate` cases (D5b/§9 —
 /// a fire-button OR a trigger-gate toggle reaches the SAME drawer, audio-only,
-/// no tab strip since Driver/Envelope/Ableton never apply to either), and
-/// (P3b) `audio_trigger_section.rs`'s per-row clip-trigger drawer — the third
-/// caller D5 names ("one drawer builder, three callers"). Returns the built
-/// `DrawerIds` plus the send count (the caller needs it to split the
-/// drawer's flat button index into send vs. feature/band/mode regions — see
-/// `match_param_row_click` for the two `Param` callers;
-/// `audio_trigger_section.rs` owns its own smaller click resolver since
-/// Action/Wrap/Mode never apply to a clip trigger and Length always does).
+/// no tab strip since Driver/Envelope/Ableton never apply to either). The
+/// layer clip-trigger surface uses its own [`build_clip_trigger_drawer`]
+/// instead — a fire-edge config has no use for this drawer's envelope shaping
+/// or the raw feature matrix. Returns the built `DrawerIds` plus the send
+/// count (the caller needs it to split the drawer's flat button index into
+/// send vs. feature/band/mode regions — see `match_param_row_click`).
 ///
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger `info` (a plain slider
 /// row) additionally gets the Action row (Cont/Step/Rand); while armed to
@@ -1748,27 +1802,152 @@ pub(crate) enum AudioModDrawerTarget {
 /// both call sites (`build_toggle_trigger_row`, `build_param_row`) just pass
 /// `info` and let this function derive which extra rows apply.
 ///
-/// `length_beats` (P3, D4/D5) is the ONE genuinely-parameterized addition: a
-/// trailing Length row (`one_shot_beats`, "1b"-style stepper labels) appends
-/// when `Some`. Unlike Mode, Length isn't derivable from `info`/`mod_state`
-/// (a `LayerClipTrigger` has no `ParamInfo`/`ParamModState` backing at all —
-/// P3's layer-side caller synthesizes both, `is_trigger: true` so Action/Wrap/
-/// Mode all correctly suppress via the existing `show_action`/`show_mode`
-/// logic above) — it carries the config's actual `one_shot_beats` value, so
-/// the row can show which length is currently selected. `None` (both existing
-/// callers) omits the row entirely — behavior unchanged.
+/// This function only builds visuals plus the shaping sliders' right-click
+/// reset actions. Everything else a click on this drawer can do —
+/// Source/Feature/Band selection, Invert, the drag itself — is resolved by
+/// the CALLER: `ParamCardPanel` owns its own click/drag dispatch
+/// (`match_param_row_click`, `handle_press`/`handle_drag`), keyed on
+/// `(GraphParamTarget, ParamId)`.
+/// The send-picker row's buttons, with the selected send highlighted and each
+/// label tinted its send identity color (text-only, so the selected send shows
+/// the standard highlight instead of a block of saturated color). Shared by
+/// the param-mod drawer and the clip-trigger drawer.
+fn audio_send_buttons(
+    mod_state: &ParamModState,
+    i: usize,
+) -> Vec<crate::panels::drawer::DrawerButton> {
+    use crate::panels::drawer::DrawerButton;
+    let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+    mod_state
+        .audio_send_labels
+        .iter()
+        .enumerate()
+        .map(|(k, label)| {
+            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
+            match mod_state.audio_send_ids.get(k) {
+                Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
+                None => btn,
+            }
+        })
+        .collect()
+}
+
+/// A shaping slider's right-click reset action for a param-card audio mod.
+fn param_shape_reset(
+    gpt: GraphParamTarget,
+    pid: manifold_foundation::ParamId,
+    which: AudioShapeParam,
+    default: f32,
+) -> PanelAction {
+    PanelAction::slider_reset(
+        PanelAction::AudioModShapeSnapshot(gpt, pid.clone()),
+        PanelAction::AudioModShapeParamChanged(gpt, pid.clone(), which, default),
+        PanelAction::AudioModShapeCommit(gpt, pid),
+    )
+}
+
+/// A shaping slider's right-click reset action for a layer clip trigger
+/// (addressed by `LayerId` + row index — no `GraphParamTarget`/`ParamId`).
+fn clip_trigger_shape_reset(
+    layer_id: &LayerId,
+    row: usize,
+    which: AudioShapeParam,
+    default: f32,
+) -> PanelAction {
+    PanelAction::slider_reset(
+        PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), row),
+        PanelAction::AudioTriggerShapeParamChanged(layer_id.clone(), row, which, default),
+        PanelAction::AudioTriggerShapeCommit(layer_id.clone(), row),
+    )
+}
+
+/// The Length row (`one_shot_beats`, "1b"-style buttons) — clip triggers only.
+fn length_row(beats: f32) -> crate::panels::drawer::DrawerRow {
+    use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow};
+    let length_sel = length_option_index(beats);
+    DrawerRow::Buttons {
+        buttons: length_labels()
+            .into_iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(l, k == length_sel))
+            .collect(),
+        width: ButtonWidth::Uniform,
+        label: Some("Length".into()),
+    }
+}
+
+/// The clip-trigger drawer (AUDIO TRIGGERS section, one per layer row):
+/// Source (send picker) → Listen (curated trigger-source chips, see
+/// [`TRIGGER_SOURCE_CHIPS`]) → Sensitivity slider with the live fire meter →
+/// Length. Deliberately NOT [`build_audio_mod_drawer`] with rows hidden: a
+/// clip trigger fires on the raw sensitivity-scaled signal against a fixed
+/// edge, so Attack/Release/Invert (which only shape the continuous
+/// envelope) would be knobs that do nothing, and the Feature×Band matrix is
+/// the wrong vocabulary for an onset — both are replaced by the chips.
 ///
-/// `target` (P3b, D5) is the OTHER parameterized piece: which [`PanelAction`]
-/// family the drawer's OWN reset gestures (the Sensitivity/Attack/Release
-/// sliders' right-click resets, built inline below) emit. Everything else a
-/// click on this drawer can do — Source/Feature/Band selection, Invert, the
-/// drag itself, Length — is resolved by the CALLER (this function only builds
-/// visuals + those three reset actions), exactly as it already was for the
-/// two `Param` callers below: `ParamCardPanel` owns its own click/drag
-/// dispatch (`match_param_row_click`, `handle_press`/`handle_drag`), keyed on
-/// `(GraphParamTarget, ParamId)`. The new `ClipTrigger` caller
-/// (`audio_trigger_section.rs`) owns an analogous, independent dispatch keyed
-/// on `(LayerId, index)` — that's a second CALLER, not a forked BUILDER.
+/// Flat button order (what the section's click resolver walks): send buttons,
+/// then the chips [`trigger_source_chips`] returned for the current cell
+/// (five, or six when a truthful fallback chip is appended), then the Length
+/// options. `DrawerIds.sliders[0]` is Sensitivity; `DrawerIds.meters[0]` its
+/// fire meter. Returns the ids plus the send count, same contract as
+/// [`build_audio_mod_drawer`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_clip_trigger_drawer(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    w: f32,
+    mod_state: &ParamModState,
+    i: usize,
+    config_font: u16,
+    layer_id: &LayerId,
+    row: usize,
+    length_beats: f32,
+) -> (crate::panels::drawer::DrawerIds, usize) {
+    use crate::panels::drawer::{ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    let send_count = mod_state.audio_send_labels.len();
+    let current = crate::types::AudioFeature::new(
+        audio_kind_from_index(mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
+        audio_band_from_index(mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize),
+    );
+    let chip_buttons: Vec<DrawerButton> = trigger_source_chips(current)
+        .into_iter()
+        .map(|c| DrawerButton::new(c.label, c.active))
+        .collect();
+    let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(AUDIO_SENS_DEFAULT);
+    let rows = vec![
+        DrawerRow::Buttons {
+            buttons: audio_send_buttons(mod_state, i),
+            width: ButtonWidth::Proportional,
+            label: Some("Source".into()),
+        },
+        DrawerRow::Buttons {
+            buttons: chip_buttons,
+            width: ButtonWidth::Proportional,
+            label: Some("Listen".into()),
+        },
+        DrawerRow::Slider {
+            label: "Sensitivity".to_string(),
+            norm: (sens / AUDIO_SENS_MAX).clamp(0.0, 1.0),
+            default_norm: (AUDIO_SENS_DEFAULT / AUDIO_SENS_MAX).clamp(0.0, 1.0),
+            value_text: format!("{sens:.2}"),
+            label_w: AUDIO_SHAPE_LABEL_W,
+            reset: clip_trigger_shape_reset(layer_id, row, AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
+            show_meter: true,
+        },
+        length_row(length_beats),
+    ];
+    let spec = DrawerSpec {
+        rows,
+        btn_font_size: config_font,
+        slider_font_size: FONT_SIZE,
+        theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
+    };
+    let dids = crate::panels::drawer::build(tree, parent, x, cy, w, &spec);
+    (dids, send_count)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_audio_mod_drawer(
     tree: &mut UITree,
@@ -1780,29 +1959,11 @@ pub(crate) fn build_audio_mod_drawer(
     i: usize,
     config_font: u16,
     info: &ParamInfo,
-    target: AudioModDrawerTarget,
-    length_beats: Option<f32>,
+    gpt: GraphParamTarget,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
     let pid = info.param_id.clone();
-    let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
     let send_count = mod_state.audio_send_labels.len();
-    let send_buttons: Vec<DrawerButton> = mod_state
-        .audio_send_labels
-        .iter()
-        .enumerate()
-        .map(|(k, label)| {
-            let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
-            // Tint the label with the send's identity color so a driven
-            // slider reads the same color as its source in the Audio Setup
-            // panel — text-only, so the selected send shows the standard
-            // highlight instead of a drawer-wide block of saturated color.
-            match mod_state.audio_send_ids.get(k) {
-                Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
-                None => btn,
-            }
-        })
-        .collect();
     let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
     let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
     let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
@@ -1852,28 +2013,8 @@ pub(crate) fn build_audio_mod_drawer(
     // Each shaping slider's right-click reset — AudioModShape's own default.
     // BUG-070: these never had a reset gesture before this (the drawer only
     // opens when armed, gated the same way the drag hit-test already is).
-    // P3b/D5: the ONE parameterized spot — which action family the reset
-    // emits depends on `target`. Matches on `&target` (not by value) so the
-    // closure stays `Fn` — it's invoked once per shaping slider (Amount/
-    // Attack/Release), below.
-    let shape_reset = |which: AudioShapeParam, default: f32| match &target {
-        AudioModDrawerTarget::Param(gpt) => {
-            let gpt = *gpt;
-            PanelAction::slider_reset(
-                PanelAction::AudioModShapeSnapshot(gpt, pid.clone()),
-                PanelAction::AudioModShapeParamChanged(gpt, pid.clone(), which, default),
-                PanelAction::AudioModShapeCommit(gpt, pid.clone()),
-            )
-        }
-        AudioModDrawerTarget::ClipTrigger(layer_id, idx) => {
-            let idx = *idx;
-            PanelAction::slider_reset(
-                PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), idx),
-                PanelAction::AudioTriggerShapeParamChanged(layer_id.clone(), idx, which, default),
-                PanelAction::AudioTriggerShapeCommit(layer_id.clone(), idx),
-            )
-        }
-    };
+    let shape_reset =
+        |which: AudioShapeParam, default: f32| param_shape_reset(gpt, pid.clone(), which, default);
     // Modifier toggle below the band row: "Invert" (loud → low). Flat index
     // sits one past the bands. Delta (rate-of-change) removed from the UI
     // (§7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
@@ -1883,7 +2024,7 @@ pub(crate) fn build_audio_mod_drawer(
     let toggle_buttons = vec![DrawerButton::new("Invert", invert_on)];
     let mut rows = vec![
         DrawerRow::Buttons {
-            buttons: send_buttons,
+            buttons: audio_send_buttons(mod_state, i),
             width: ButtonWidth::Proportional,
             label: Some("Source".into()),
         },
@@ -1957,19 +2098,10 @@ pub(crate) fn build_audio_mod_drawer(
             } else {
                 format!("{amount:.2}")
             };
-            // Unreachable for `ClipTrigger`: this whole block is gated on
-            // `show_action`, which is `false` whenever `info.is_trigger` is
-            // true — every clip-trigger caller sets it. The fallback arm
-            // below only exists so the (dead for that target) branch still
-            // type-checks against `AudioModStepAmount*`'s `GraphParamTarget`.
-            let gpt_for_step = match &target {
-                AudioModDrawerTarget::Param(g) => *g,
-                AudioModDrawerTarget::ClipTrigger(..) => GraphParamTarget::Generator,
-            };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::AudioModStepAmountSnapshot(gpt_for_step, pid.clone()),
-                PanelAction::AudioModStepAmountChanged(gpt_for_step, pid.clone(), default_amount),
-                PanelAction::AudioModStepAmountCommit(gpt_for_step, pid.clone()),
+                PanelAction::AudioModStepAmountSnapshot(gpt, pid.clone()),
+                PanelAction::AudioModStepAmountChanged(gpt, pid.clone(), default_amount),
+                PanelAction::AudioModStepAmountCommit(gpt, pid.clone()),
             );
             rows.push(shape_slider(
                 "Step",
@@ -2008,25 +2140,6 @@ pub(crate) fn build_audio_mod_drawer(
             buttons: mode_buttons,
             width: ButtonWidth::Uniform,
             label: Some("Mode".into()),
-        });
-    }
-    // P3 D4/D5: the trailing Length row — clip triggers only (`Some`), never
-    // param/gate cards (`None`, unchanged). Appended last so its flat button
-    // index is easy for the clip-trigger caller to derive: total buttons
-    // across every row above (Source/Feature/Band/Invert; never Action/
-    // Wrap/Mode since the clip-trigger caller's synthesized `info.is_trigger`
-    // is true, suppressing `show_action`/`show_mode` above).
-    if let Some(beats) = length_beats {
-        let length_sel = length_option_index(beats);
-        let length_buttons: Vec<DrawerButton> = length_labels()
-            .into_iter()
-            .enumerate()
-            .map(|(k, l)| DrawerButton::new(l, k == length_sel))
-            .collect();
-        rows.push(DrawerRow::Buttons {
-            buttons: length_buttons,
-            width: ButtonWidth::Uniform,
-            label: Some("Length".into()),
         });
     }
     let spec = DrawerSpec {
@@ -2219,8 +2332,7 @@ pub(crate) fn build_toggle_trigger_row(
                 i,
                 config_font,
                 info,
-                AudioModDrawerTarget::Param(target),
-                None, // no Length row — this caller is a param/gate card, not a clip trigger
+                target,
             );
             if animate_drawer {
                 cy = drawer_top + drawer_reveal.unwrap_or(0.0).max(0.0);
@@ -2684,9 +2796,7 @@ pub(crate) fn build_param_row(
     // Action/Amount/Wrap rows (D8) — derived inside from `info`.
     if shown_tab == Some(ModTab::Audio) {
         let (dids, send_count) = build_audio_mod_drawer(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, info,
-            AudioModDrawerTarget::Param(target),
-            None, // no Length row — this caller is a param/gate card, not a clip trigger
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, config_font, info, target,
         );
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));

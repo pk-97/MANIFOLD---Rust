@@ -1,5 +1,6 @@
 //! AUDIO TRIGGERS — the inspector's layer-owned clip-trigger authoring
-//! section (P3b, `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`).
+//! section (P3b, `docs/AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`;
+//! drawer redesigned 2026-07-19).
 //!
 //! A single collapsible section pinned at the top of the selected layer's
 //! inspector content, default-collapsed (Peter, 2026-07-10: "a single
@@ -11,30 +12,29 @@
 //! precedent since it sits inside the layer column like `layer_chrome`
 //! does, not as an independent top-level strip like `MacrosPanel`).
 //!
-//! Each row is one `Layer.clip_triggers` entry: an ON/OFF toggle (D4 — a
-//! `LayerClipTrigger` starts disabled; "the user enables a row once they've
-//! tuned it"), a label that expands/collapses the row's drawer, and a
-//! remove button. The expanded drawer is the SAME `build_audio_mod_drawer`
-//! every param/gate card uses (D5, "one drawer builder, three callers"),
-//! parameterized via `AudioModDrawerTarget::ClipTrigger` so its reset
-//! gestures emit the additive `PanelAction::AudioTrigger*` family instead of
-//! `AudioMod*` (a `LayerClipTrigger` has no `GraphParamTarget`/`ParamId`).
+//! Each row is one `Layer.clip_triggers` entry: an ON/OFF toggle, a label
+//! that expands/collapses the row's drawer, and a remove button. The
+//! expanded drawer is [`build_clip_trigger_drawer`] — a purpose-built
+//! surface, NOT the shared param-mod drawer: a clip trigger fires on the raw
+//! sensitivity-scaled signal against a fixed edge, so that drawer's
+//! Attack/Release/Invert rows would be knobs that do nothing here (the
+//! shaped envelope only conditions continuous modulation and the meter), and
+//! its 8×4 Feature×Band matrix is the wrong vocabulary for an onset. The
+//! drawer is four rows: Source (send), Listen (curated trigger-source
+//! chips — see `TRIGGER_SOURCE_CHIPS`), Sensitivity (with the live fire
+//! meter), Length.
 //!
-//! This module owns its OWN click/drag dispatch (Source/Feature/Band/Invert/
-//! Length button clicks, Sensitivity/Attack/Release slider drags) — the
-//! same division of labor `ParamCardPanel` already has with the shared
-//! drawer builder (drawer = shared visuals + 3 reset actions; click/drag
-//! resolution = caller-owned). It's a second CALLER of the shared builder,
-//! not a fork of it.
+//! This module owns its OWN click/drag dispatch (Source/chip/Length button
+//! clicks, the Sensitivity slider drag) — the same division of labor
+//! `ParamCardPanel` has with its drawer builder (builder = visuals + the
+//! slider's reset action; click/drag resolution = caller-owned).
 
 use super::drawer::DrawerIds;
-use super::param_card::ParamInfo;
 use super::param_slider_shared::{
-    AUDIO_ATTACK_MAX_MS, AUDIO_BAND_COUNT, AUDIO_KIND_COUNT, AUDIO_MOD_ACTIVE_C32,
-    AUDIO_RELEASE_MAX_MS, AUDIO_SENS_MAX, AudioCardState, AudioModDrawerTarget, DRAWER_BOTTOM_GAP,
-    FONT_SIZE, LENGTH_OPTIONS, ParamModState, ROW_HEIGHT, audio_band_from_index,
-    audio_config_height, audio_kind_from_index, build_audio_mod_drawer, de_btn_style,
-    toggle_btn_style,
+    AUDIO_ATTACK_DEFAULT_MS, AUDIO_MOD_ACTIVE_C32, AUDIO_RELEASE_DEFAULT_MS, AUDIO_SENS_MAX,
+    AudioCardState, DRAWER_BOTTOM_GAP, FONT_SIZE, LENGTH_OPTIONS, ParamModState, ROW_HEIGHT,
+    audio_band_from_index, audio_kind_from_index, build_clip_trigger_drawer,
+    clip_trigger_drawer_height, de_btn_style, toggle_btn_style, trigger_source_chips,
 };
 use super::{AudioShapeParam, PanelAction};
 use crate::chrome::{Align, ChromeHost, Sizing, View};
@@ -67,10 +67,12 @@ const KEY_ROW_DRAWER_BASE: u64 = 4_000;
 
 /// Structural config for the section, assembled in `state_sync` from a
 /// layer's `clip_triggers` — the panel data boundary (state_sync stays the
-/// sole source; this panel never reads `Project`). Mirrors the shape
-/// `configure_layer_effects`/`ParamCardConfig` uses for the analogous
-/// effect-card list, scaled down to what a `LayerClipTrigger` actually
-/// carries (no envelopes/drivers/Ableton — those don't apply here).
+/// sole source; this panel never reads `Project`). Only what the drawer
+/// actually shows: the source cell (send + feature), the fire-edge tuning
+/// (sensitivity), and the one-shot length. Attack/release/invert are
+/// continuous-envelope shaping — they don't gate a fire edge, so this
+/// surface neither displays nor edits them (the model fields keep their
+/// defaults).
 #[derive(Debug, Clone, Default)]
 pub struct AudioTriggerRowConfig {
     pub enabled: bool,
@@ -79,11 +81,7 @@ pub struct AudioTriggerRowConfig {
     pub label: String,
     pub kind_idx: i32,
     pub band_idx: i32,
-    pub invert: bool,
-    pub rate_of_change: bool,
     pub sensitivity: f32,
-    pub attack_ms: f32,
-    pub release_ms: f32,
     pub send_id: Option<AudioSendId>,
     pub one_shot_beats: f32,
 }
@@ -103,7 +101,6 @@ pub struct AudioTriggerSection {
     labels: Vec<String>,
     enabled: Vec<bool>,
     one_shot_beats: Vec<f32>,
-    param_info: Vec<ParamInfo>,
     mod_state: ParamModState,
     /// Per-row: is this row's drawer open. UI-local (mirrors `is_collapsed`);
     /// resized on every `configure()`, preserving the existing prefix so a
@@ -113,11 +110,11 @@ pub struct AudioTriggerSection {
     audio_configs: Vec<Option<(DrawerIds, usize)>>,
     first_node: Option<NodeId>,
     node_count: usize,
-    /// `(row_index, which)` of the shaping slider currently being dragged,
-    /// mirroring `ParamCardPanel::DragState::dragging_audio_shape`. Lifecycle
-    /// on `DragController` (P7, `docs/UI_WIDGET_UNIFICATION_DESIGN.md`) — the
-    /// grab position isn't read back (each `handle_drag` call gets a fresh
-    /// `pos_x`), only the active/payload/release shape is used.
+    /// `(row_index, which)` of the shaping slider currently being dragged.
+    /// Only `AudioShapeParam::Sensitivity` is grabbable (it's the drawer's
+    /// only slider); the payload keeps the enum so the action family stays
+    /// uniformly typed. Lifecycle on `DragController` (P7,
+    /// `docs/UI_WIDGET_UNIFICATION_DESIGN.md`).
     dragging_shape: DragController<(usize, AudioShapeParam)>,
 }
 
@@ -136,7 +133,6 @@ impl AudioTriggerSection {
             labels: Vec::new(),
             enabled: Vec::new(),
             one_shot_beats: Vec::new(),
-            param_info: Vec::new(),
             mod_state: ParamModState::allocate(0),
             expanded: Vec::new(),
             audio_configs: Vec::new(),
@@ -158,6 +154,17 @@ impl AudioTriggerSection {
         if let Some(e) = self.expanded.get_mut(index) {
             *e = !*e;
         }
+    }
+
+    /// Open one row's drawer without toggling — the Add flow uses this so a
+    /// freshly-created trigger's tuning is immediately visible. Grows the
+    /// vector if the row hasn't been configured into existence yet (Add's
+    /// structural resync lands after the action dispatch).
+    pub fn expand_row(&mut self, index: usize) {
+        if index >= self.expanded.len() {
+            self.expanded.resize(index + 1, false);
+        }
+        self.expanded[index] = true;
     }
 
     pub fn layer_id(&self) -> Option<&LayerId> {
@@ -187,33 +194,15 @@ impl AudioTriggerSection {
         self.labels = config.rows.iter().map(|r| r.label.clone()).collect();
         self.enabled = config.rows.iter().map(|r| r.enabled).collect();
         self.one_shot_beats = config.rows.iter().map(|r| r.one_shot_beats).collect();
+        // Truncate-then-grow: `resize` alone never shrinks, so a removed row
+        // used to leave a stale tail and shift every later row's flag.
+        self.expanded.truncate(n);
         self.expanded.resize(n, false);
 
-        self.param_info = (0..n)
-            .map(|i| ParamInfo {
-                param_id: manifold_foundation::ParamId::from(format!("clip_trigger_{i}")),
-                name: self.labels[i].clone(),
-                min: 0.0,
-                max: 1.0,
-                default: 0.0,
-                whole_numbers: false,
-                is_angle: false,
-                exposed: true,
-                is_toggle: false,
-                // Always `true` (D4): suppresses the drawer's Action/Wrap/
-                // Mode rows via the same `show_action`/`show_mode` logic
-                // `build_audio_mod_drawer` already derives from `info`.
-                is_trigger: true,
-                is_trigger_gate: false,
-                value_labels: None,
-                osc_address: None,
-                ableton_display: None,
-                ableton_range: None,
-                mappable: false,
-                section: None,
-            })
-            .collect();
-
+        // The drawer reads send/kind/band/sensitivity out of `ParamModState`
+        // (the shared audio-mod display state). The envelope fields a clip
+        // trigger never shows are filled with their defaults — inert here:
+        // no row displays them and no gesture writes them.
         let audio = AudioCardState {
             active: config.rows.iter().map(|r| r.enabled).collect(),
             send_id: config.rows.iter().map(|r| r.send_id.clone()).collect(),
@@ -221,11 +210,11 @@ impl AudioTriggerSection {
             band_idx: config.rows.iter().map(|r| r.band_idx).collect(),
             range_min: vec![0.0; n],
             range_max: vec![1.0; n],
-            invert: config.rows.iter().map(|r| r.invert).collect(),
-            rate: config.rows.iter().map(|r| r.rate_of_change).collect(),
+            invert: vec![false; n],
+            rate: vec![false; n],
             sensitivity: config.rows.iter().map(|r| r.sensitivity).collect(),
-            attack_ms: config.rows.iter().map(|r| r.attack_ms).collect(),
-            release_ms: config.rows.iter().map(|r| r.release_ms).collect(),
+            attack_ms: vec![AUDIO_ATTACK_DEFAULT_MS; n],
+            release_ms: vec![AUDIO_RELEASE_DEFAULT_MS; n],
             trigger_mode_idx: vec![0; n],
             action_idx: vec![0; n],
             step_amount: vec![1.0; n],
@@ -249,9 +238,7 @@ impl AudioTriggerSection {
         for i in 0..self.labels.len() {
             h += ROW_HEIGHT + ROW_SPACING;
             if self.expanded.get(i).copied().unwrap_or(false) {
-                h += audio_config_height(&self.param_info[i], &self.mod_state, i, true)
-                    + DRAWER_BOTTOM_GAP
-                    + ROW_SPACING;
+                h += clip_trigger_drawer_height() + DRAWER_BOTTOM_GAP + ROW_SPACING;
             }
         }
         h + ADD_ROW_H
@@ -346,12 +333,10 @@ impl AudioTriggerSection {
                     col = col.child(row_line);
 
                     if expanded {
-                        let drawer_h =
-                            audio_config_height(&self.param_info[i], &self.mod_state, i, true);
                         col = col.child(
                             View::panel()
                                 .fill_w()
-                                .h(Sizing::Fixed(drawer_h + DRAWER_BOTTOM_GAP))
+                                .h(Sizing::Fixed(clip_trigger_drawer_height() + DRAWER_BOTTOM_GAP))
                                 .key(KEY_ROW_DRAWER_BASE + i as u64),
                         );
                     }
@@ -401,12 +386,8 @@ impl AudioTriggerSection {
                 // section's own chrome subtree), not `None` — so the drawer
                 // shares an ancestor with its row's label/toggle for
                 // selector tooling (`under_text` in ui-flow scripts) and
-                // ordinary z-order/clip inheritance, matching
-                // `build_toggle_trigger_row`'s real-parent convention rather
-                // than `macros_panel`'s `None`-parented static sub-widgets
-                // (that panel's slots never need "which row is this" scoping
-                // — its slot COUNT is fixed at `MACRO_COUNT`).
-                let (dids, send_count) = build_audio_mod_drawer(
+                // ordinary z-order/clip inheritance.
+                let (dids, send_count) = build_clip_trigger_drawer(
                     tree,
                     Some(slot_id),
                     slot.x,
@@ -415,9 +396,9 @@ impl AudioTriggerSection {
                     &self.mod_state,
                     i,
                     color::FONT_CAPTION,
-                    &self.param_info[i],
-                    AudioModDrawerTarget::ClipTrigger(layer_id, i),
-                    Some(one_shot),
+                    &layer_id,
+                    i,
+                    one_shot,
                 );
                 self.audio_configs[i] = Some((dids, send_count));
             }
@@ -437,31 +418,21 @@ impl AudioTriggerSection {
 
     // ── Click resolution ─────────────────────────────────────────────
 
-    /// Combine the row's current send/kind/band selections with the one
-    /// dimension a click changed — mirrors `ParamCardPanel::audio_set_source_action`.
-    fn set_source_action(
-        &self,
-        layer_id: LayerId,
-        i: usize,
-        send_override: Option<usize>,
-        kind_override: Option<usize>,
-        band_override: Option<usize>,
-    ) -> Vec<PanelAction> {
-        let send_k = send_override
-            .map(|k| k as i32)
-            .unwrap_or_else(|| self.mod_state.audio_send_idx.get(i).copied().unwrap_or(-1));
-        let Some(send_id) = (send_k >= 0)
-            .then(|| self.mod_state.audio_send_ids.get(send_k as usize).cloned())
-            .flatten()
-        else {
-            return vec![];
-        };
-        let kind_idx = kind_override
-            .unwrap_or_else(|| self.mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize);
-        let band_idx = band_override
-            .unwrap_or_else(|| self.mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize);
-        let feature = AudioFeature::new(audio_kind_from_index(kind_idx), audio_band_from_index(band_idx));
-        vec![PanelAction::AudioTriggerSetSource(layer_id, i, send_id, feature)]
+    /// Row `i`'s current source cell as the drawer displays it — the basis
+    /// for clicks that change one axis and keep the other.
+    fn current_feature(&self, i: usize) -> AudioFeature {
+        AudioFeature::new(
+            audio_kind_from_index(self.mod_state.audio_kind_idx.get(i).copied().unwrap_or(0) as usize),
+            audio_band_from_index(self.mod_state.audio_band_idx.get(i).copied().unwrap_or(0) as usize),
+        )
+    }
+
+    fn current_send_id(&self, i: usize) -> Option<AudioSendId> {
+        let idx = self.mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+        if idx < 0 {
+            return None;
+        }
+        self.mod_state.audio_send_ids.get(idx as usize).cloned()
     }
 
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
@@ -485,34 +456,34 @@ impl AudioTriggerSection {
             }
         }
 
-        // Drawer button clicks — send/feature/band/invert/length. Flat
-        // index order matches exactly what `build_audio_mod_drawer` builds
-        // for a `ClipTrigger` target (is_trigger:true, is_trigger_gate:false,
-        // length_beats:Some): Source, Feature, Band, [Invert], Length. Delta
-        // removed from the drawer (§7.2 item 2, 2026-07-11), so the toggle
-        // row now contributes exactly one flat index, not two.
-        // Action/Wrap/Mode never appear (`show_action`/`show_mode` are false
-        // whenever `info.is_trigger` is true), unlike the general-purpose
-        // `match_param_row_click` this deliberately doesn't reuse.
+        // Drawer button clicks. Flat index order matches exactly what
+        // `build_clip_trigger_drawer` builds: send buttons, then the chips
+        // `trigger_source_chips` returns for the row's current cell (five,
+        // or six with a truthful fallback chip), then Length.
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, send_count)) = cfg else { continue };
             let Some(flat) = dids.resolve_button(node_id) else { continue };
+            let feature = self.current_feature(i);
             if flat < *send_count {
-                return self.set_source_action(layer_id, i, Some(flat), None, None);
+                // Source click: keep the row's feature, point it at this send.
+                let Some(send_id) = self.mod_state.audio_send_ids.get(flat).cloned() else {
+                    return vec![];
+                };
+                return vec![PanelAction::AudioTriggerSetSource(layer_id, i, send_id, feature)];
             }
             let f = flat - send_count;
-            if f < AUDIO_KIND_COUNT {
-                return self.set_source_action(layer_id, i, None, Some(f), None);
+            let chips = trigger_source_chips(feature);
+            if f < chips.len() {
+                // Chip click: keep the row's send, listen to the chip's cell.
+                let Some(send_id) = self.current_send_id(i) else { return vec![] };
+                return vec![PanelAction::AudioTriggerSetSource(
+                    layer_id,
+                    i,
+                    send_id,
+                    chips[f].feature,
+                )];
             }
-            let f = f - AUDIO_KIND_COUNT;
-            if f < AUDIO_BAND_COUNT {
-                return self.set_source_action(layer_id, i, None, None, Some(f));
-            }
-            let f = f - AUDIO_BAND_COUNT;
-            if f == 0 {
-                return vec![PanelAction::AudioTriggerSetInvert(layer_id, i)];
-            }
-            let f = f - 1;
+            let f = f - chips.len();
             if f < LENGTH_OPTIONS.len() {
                 return vec![PanelAction::AudioTriggerSetLength(layer_id, i, LENGTH_OPTIONS[f])];
             }
@@ -520,77 +491,63 @@ impl AudioTriggerSection {
         Vec::new()
     }
 
-    // ── Shaping-slider drag (Amount/Attack/Release) ─────────────────────
-    // Mirrors `ParamCardPanel`'s "2b. Audio shaping sliders" press/drag/
-    // release exactly (`param_card.rs`), addressed by row index instead of
-    // `pi` and emitting `AudioTrigger*` instead of `AudioMod*`.
+    // ── Sensitivity slider drag ──────────────────────────────────────
+    // The drawer's only slider (`DrawerIds.sliders[0]`). Mirrors
+    // `ParamCardPanel`'s audio-shaping press/drag/release, addressed by row
+    // index and emitting `AudioTrigger*` instead of `AudioMod*`.
 
     pub fn handle_press(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
         for (i, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
-            for (si, which) in [
-                (0usize, AudioShapeParam::Sensitivity),
-                (1, AudioShapeParam::Attack),
-                (2, AudioShapeParam::Release),
-            ] {
-                if let Some(sl) = dids.sliders.get(si)
-                    && node_id == sl.track
-                {
-                    let norm = BitmapSlider::x_to_normalized(sl.track_span, pos_x).clamp(0.0, 1.0);
-                    let value = shape_value_from_norm(which, norm);
-                    self.dragging_shape.start((i, which), Vec2::new(pos_x, 0.0));
-                    return vec![
-                        PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), i),
-                        PanelAction::AudioTriggerShapeParamChanged(layer_id, i, which, value),
-                    ];
-                }
+            if let Some(sl) = dids.sliders.first()
+                && node_id == sl.track
+            {
+                let norm = BitmapSlider::x_to_normalized(sl.track_span, pos_x).clamp(0.0, 1.0);
+                let value = norm * AUDIO_SENS_MAX;
+                self.dragging_shape
+                    .start((i, AudioShapeParam::Sensitivity), Vec2::new(pos_x, 0.0));
+                return vec![
+                    PanelAction::AudioTriggerShapeSnapshot(layer_id.clone(), i),
+                    PanelAction::AudioTriggerShapeParamChanged(
+                        layer_id,
+                        i,
+                        AudioShapeParam::Sensitivity,
+                        value,
+                    ),
+                ];
             }
         }
         Vec::new()
     }
 
     pub fn handle_drag(&mut self, pos_x: f32, tree: &mut UITree) -> Vec<PanelAction> {
-        let Some(&(i, which)) = self.dragging_shape.payload() else { return Vec::new() };
+        let Some(&(i, _)) = self.dragging_shape.payload() else { return Vec::new() };
         let Some(layer_id) = self.layer_id.clone() else { return Vec::new() };
-        let si = match which {
-            AudioShapeParam::Sensitivity => 0,
-            AudioShapeParam::Attack => 1,
-            AudioShapeParam::Release => 2,
-        };
         let rect = self
             .audio_configs
             .get(i)
             .and_then(|c| c.as_ref())
-            .and_then(|(d, _)| d.sliders.get(si))
+            .and_then(|(d, _)| d.sliders.first())
             .map(|sl| sl.track_span);
         let Some(rect) = rect else { return Vec::new() };
         let norm = BitmapSlider::x_to_normalized(rect, pos_x).clamp(0.0, 1.0);
-        let value = shape_value_from_norm(which, norm);
-        match which {
-            AudioShapeParam::Sensitivity => {
-                if let Some(v) = self.mod_state.audio_sensitivity.get_mut(i) {
-                    *v = value;
-                }
-            }
-            AudioShapeParam::Attack => {
-                if let Some(v) = self.mod_state.audio_attack_ms.get_mut(i) {
-                    *v = value;
-                }
-            }
-            AudioShapeParam::Release => {
-                if let Some(v) = self.mod_state.audio_release_ms.get_mut(i) {
-                    *v = value;
-                }
-            }
+        let value = norm * AUDIO_SENS_MAX;
+        if let Some(v) = self.mod_state.audio_sensitivity.get_mut(i) {
+            *v = value;
         }
-        let text = shape_value_text(which, value);
+        let text = format!("{value:.2}");
         if let Some((d, _)) = self.audio_configs.get(i).and_then(|c| c.as_ref())
-            && let Some(sl) = d.sliders.get(si)
+            && let Some(sl) = d.sliders.first()
         {
             BitmapSlider::update_value(tree, sl, norm, &text);
         }
-        vec![PanelAction::AudioTriggerShapeParamChanged(layer_id, i, which, value)]
+        vec![PanelAction::AudioTriggerShapeParamChanged(
+            layer_id,
+            i,
+            AudioShapeParam::Sensitivity,
+            value,
+        )]
     }
 
     pub fn handle_release(&mut self) -> Vec<PanelAction> {
@@ -605,10 +562,8 @@ impl AudioTriggerSection {
 
     /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
     /// P3c, BUG-082's fix): push this tick's live shaped-signal level onto
-    /// every open row's Amount meter — in place, no rebuild. Every clip
-    /// trigger is a fire-mode config (D6: "clip triggers alike" — no
-    /// `is_trigger_gate` gate needed here, unlike `ParamCardPanel`). Keyed
-    /// on `(layer_id, row index)` via `manifold_foundation::
+    /// every open row's Sensitivity meter — in place, no rebuild. Keyed on
+    /// `(layer_id, row index)` via `manifold_foundation::
     /// fire_meter_key_for_clip_trigger` — the SAME constructor the
     /// content-thread capture uses.
     pub fn update_fire_meters(
@@ -631,11 +586,10 @@ impl AudioTriggerSection {
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` §7.2 item 5):
-    /// row index of the currently-OPEN clip-trigger drawer, if any. Every
-    /// clip trigger is fire-mode by construction (D6: no `is_trigger_gate`
-    /// gate needed here, unlike `ParamCardPanel`) — `audio_configs[i].is_some()`
-    /// already means "this row is expanded AND the section isn't collapsed"
-    /// (see `configure_and_build`'s gate). First match wins.
+    /// row index of the currently-OPEN clip-trigger drawer, if any.
+    /// `audio_configs[i].is_some()` already means "this row is expanded AND
+    /// the section isn't collapsed" (see `configure_and_build`'s gate).
+    /// First match wins.
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
         self.audio_configs.iter().position(Option::is_some)
     }
@@ -657,7 +611,7 @@ impl AudioTriggerSection {
         crate::types::AudioBand::ALL.get(idx as usize).copied()
     }
 
-    /// Right-click resets on the shaping sliders — the drawer's own
+    /// Right-click reset on the Sensitivity slider — the drawer's own
     /// `slider_resets`, registered exactly as `ParamCardPanel` does. Walks
     /// the contract via [`BitmapSlider::register_track_reset`]
     /// (UI_WIDGET_UNIFICATION_DESIGN.md P1).
@@ -671,25 +625,10 @@ impl AudioTriggerSection {
     }
 }
 
-fn shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {
-    let n = norm.clamp(0.0, 1.0);
-    match which {
-        AudioShapeParam::Sensitivity => n * AUDIO_SENS_MAX,
-        AudioShapeParam::Attack => n * AUDIO_ATTACK_MAX_MS,
-        AudioShapeParam::Release => n * AUDIO_RELEASE_MAX_MS,
-    }
-}
-
-fn shape_value_text(which: AudioShapeParam, value: f32) -> String {
-    match which {
-        AudioShapeParam::Sensitivity => format!("{value:.2}"),
-        AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AudioFeatureKind;
 
     // P7 (`docs/UI_WIDGET_UNIFICATION_DESIGN.md`) behavior-pinning test for the
     // `dragging_shape` grab/release lifecycle, written BEFORE migrating the
@@ -709,10 +648,10 @@ mod tests {
         let mut section = AudioTriggerSection::new();
         section.layer_id = Some(LayerId::new("layer-1"));
 
-        // Simulate `handle_press` having grabbed row 2's Attack slider.
+        // Simulate `handle_press` having grabbed row 2's Sensitivity slider.
         section
             .dragging_shape
-            .start((2, AudioShapeParam::Attack), Vec2::ZERO);
+            .start((2, AudioShapeParam::Sensitivity), Vec2::ZERO);
         assert!(section.is_dragging());
 
         let actions = section.handle_release();
@@ -749,5 +688,45 @@ mod tests {
         let mut tree = UITree::new();
         let mut section = AudioTriggerSection::new();
         assert!(section.handle_drag(0.5, &mut tree).is_empty());
+    }
+
+    #[test]
+    fn curated_chips_cover_the_onset_cells_and_fall_back_truthfully() {
+        use crate::types::AudioBand;
+        use super::super::param_slider_shared::TRIGGER_SOURCE_CHIPS;
+        // Every curated cell highlights exactly its own chip.
+        for &(label, kind, band) in TRIGGER_SOURCE_CHIPS.iter() {
+            let chips = trigger_source_chips(AudioFeature::new(kind, band));
+            assert_eq!(chips.len(), 5, "curated cell needs no fallback chip");
+            let active: Vec<_> = chips.iter().filter(|c| c.active).collect();
+            assert_eq!(active.len(), 1, "{label} must highlight exactly one chip");
+            assert_eq!(active[0].label, label);
+        }
+        // The Kick detector ignores band — a Kick cell on any band still
+        // highlights the Kick chip (never a spurious fallback).
+        let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Full));
+        assert_eq!(chips.len(), 5);
+        assert!(chips.iter().any(|c| c.active && c.label == "Kick"));
+        // A non-curated cell (an older project's Flux×Mid) keeps a truthful
+        // trailing chip naming what it actually listens to.
+        let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Flux, AudioBand::Mid));
+        assert_eq!(chips.len(), 6);
+        assert_eq!(chips[5].label, "Flux\u{00B7}Mid");
+        assert!(chips[5].active);
+        assert_eq!(chips.iter().filter(|c| c.active).count(), 1);
+    }
+
+    #[test]
+    fn expand_row_grows_to_fit_then_survives_resync() {
+        let mut section = AudioTriggerSection::new();
+        // Add dispatches before the structural resync: the row doesn't exist
+        // in `expanded` yet, so expand_row must grow to fit.
+        section.expand_row(1);
+        assert_eq!(section.expanded, vec![false, true]);
+        // configure()'s truncate+resize preserves the prefix — the new row
+        // stays expanded.
+        section.expanded.truncate(2);
+        section.expanded.resize(2, false);
+        assert_eq!(section.expanded, vec![false, true]);
     }
 }

@@ -2321,11 +2321,7 @@ pub fn sync_inspector_data(
                             label: format!("{} \u{2192} {}", feature.band.label(), feature.kind.label()),
                             kind_idx: feature.kind.index() as i32,
                             band_idx: feature.band.index() as i32,
-                            invert: t.shape.invert,
-                            rate_of_change: t.shape.rate_of_change,
                             sensitivity: t.shape.sensitivity,
-                            attack_ms: t.shape.attack_ms,
-                            release_ms: t.shape.release_ms,
                             send_id: Some(t.source.send_id.clone()),
                             one_shot_beats: t.one_shot_beats.0 as f32,
                         }
