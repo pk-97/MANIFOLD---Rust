@@ -57,7 +57,25 @@ pub fn stamp_scene_node_exposures(
     };
     let node_id = node.node_id.clone();
 
-    let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+    let meta = def.preset_metadata.get_or_insert_with(empty_scene_preset_metadata);
+
+    stamp_scene_node_exposures_into(
+        &mut meta.params,
+        &mut meta.bindings,
+        node_doc_id,
+        &node_id,
+        section,
+        params_metadata,
+    )
+}
+
+/// The empty `PresetMetadata` shell `stamp_scene_node_exposures` and
+/// `migrate_scene_exposures` both lift a `None` `def.preset_metadata` into
+/// before extending it. Not a real preset identity — every real generator's
+/// catalog default already carries its own `preset_metadata`; this exists so
+/// a hand-built def with none doesn't silently drop the new card entries.
+fn empty_scene_preset_metadata() -> PresetMetadata {
+    PresetMetadata {
         id: crate::PresetTypeId::from_string("__scene_exposure__".to_string()),
         display_name: String::new(),
         category: String::new(),
@@ -72,16 +90,7 @@ pub fn stamp_scene_node_exposures(
         value_aliases: Vec::new(),
         string_params: Vec::new(),
         string_bindings: Vec::new(),
-    });
-
-    stamp_scene_node_exposures_into(
-        &mut meta.params,
-        &mut meta.bindings,
-        node_doc_id,
-        &node_id,
-        section,
-        params_metadata,
-    )
+    }
 }
 
 /// Variant for callers that already own the `params`/`bindings` vectors (the
@@ -183,9 +192,18 @@ fn unique_param_id(params: &[ParamSpecDef], base: &str) -> String {
     }
 }
 
-/// Walk every node in `def` and stamp exposures for any whose `type_id` is in
-/// `vocabulary`. `section_name` is called for each stamped node. Returns `true`
-/// iff anything changed.
+/// Walk every node in `def` — INCLUDING every `node.group`'s inner body,
+/// recursively at any depth — and stamp exposures for any whose `type_id` is
+/// in `vocabulary`. `section_name` is called for each stamped node. Returns
+/// `true` iff anything changed.
+///
+/// A grouped node (e.g. an imported/added object's `mat_k`/`transform_k`/
+/// `scene_object`) still stamps into the def's TOP-LEVEL `preset_metadata`,
+/// targeting the inner node's bare `NodeId` — the same convention the glTF
+/// importer and the creation commands use (`docs/
+/// SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` P1). Nested node ids are
+/// unique across the def by construction, so this never collides with a
+/// top-level exposure.
 ///
 /// The vocabulary and section naming live in the caller (`manifold_renderer`)
 /// because this module intentionally has no primitive registry dependency.
@@ -198,28 +216,52 @@ pub fn migrate_scene_exposures<F>(
 where
     F: FnMut(&EffectGraphNode) -> String,
 {
-    let node_ids: Vec<u32> = def
-        .nodes
-        .iter()
-        .filter(|n| vocabulary.contains(&n.type_id.as_str()))
-        .map(|n| n.id)
-        .collect();
+    let mut found: Vec<(u32, NodeId, String, String)> = Vec::new();
+    collect_vocab_nodes(&def.nodes, vocabulary, &mut section_name, &mut found);
+    if found.is_empty() {
+        return false;
+    }
+
+    let meta = def.preset_metadata.get_or_insert_with(empty_scene_preset_metadata);
 
     let mut changed = false;
-    for id in node_ids {
-        // Re-find the node to satisfy the borrow checker: `section_name` may
-        // need to inspect the node while we mutate `def`.
-        let Some(node) = def.nodes.iter().find(|n| n.id == id) else {
-            continue;
-        };
-        let section = section_name(node);
-        let type_id = node.type_id.clone();
+    for (node_doc_id, node_id, type_id, section) in found {
         let metadata = provider.metadata_for_type(&type_id);
-        if stamp_scene_node_exposures(def, id, &section, &metadata) {
+        if stamp_scene_node_exposures_into(
+            &mut meta.params,
+            &mut meta.bindings,
+            node_doc_id,
+            &node_id,
+            &section,
+            &metadata,
+        ) {
             changed = true;
         }
     }
     changed
+}
+
+/// Recursively collect `(doc_id, node_id, type_id, section)` for every node
+/// in `nodes` (and every `node.group`'s inner body, at any depth) whose
+/// `type_id` is in `vocabulary`. `section_name` is invoked once per matched
+/// node during this read-only walk, before any mutation of the owning def.
+fn collect_vocab_nodes<F>(
+    nodes: &[EffectGraphNode],
+    vocabulary: &[&str],
+    section_name: &mut F,
+    out: &mut Vec<(u32, NodeId, String, String)>,
+) where
+    F: FnMut(&EffectGraphNode) -> String,
+{
+    for node in nodes {
+        if vocabulary.contains(&node.type_id.as_str()) {
+            let section = section_name(node);
+            out.push((node.id, node.node_id.clone(), node.type_id.clone(), section));
+        }
+        if let Some(body) = node.group.as_deref() {
+            collect_vocab_nodes(&body.nodes, vocabulary, section_name, out);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -341,5 +383,75 @@ mod tests {
             &TestProvider
         ));
         assert_eq!(def, after_first);
+    }
+
+    /// P1 Task D: a grouped scene-vocab node (e.g. an added object's own
+    /// `node.transform_3d`, living inside a `node.group` body) must still get
+    /// its exposure stamped — into the def's TOP-LEVEL `preset_metadata`,
+    /// targeting the inner node's bare `NodeId` — not just top-level nodes.
+    /// Idempotent on a second run.
+    #[test]
+    fn migrate_exposes_grouped_node_param_targeting_inner_node_id() {
+        use crate::effect_graph_def::{GroupDef, GroupInterface, GROUP_TYPE_ID};
+
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.transform_3d" {
+                    vec![float_meta("pos_x", "X")]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let inner_node_id = NodeId::new("transform_0");
+        let mut inner = make_node(10, "node.transform_3d");
+        inner.node_id = inner_node_id.clone();
+
+        let mut group_node = make_node(1, GROUP_TYPE_ID);
+        group_node.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+            nodes: vec![inner],
+            wires: Vec::new(),
+            tint: None,
+        }));
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![group_node],
+            wires: vec![],
+        };
+
+        let vocab = ["node.transform_3d"];
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Object 1 — Transform".to_string(),
+            &TestProvider
+        ));
+
+        let meta = def.preset_metadata.as_ref().expect("stamped into top-level preset_metadata");
+        assert_eq!(meta.params.len(), 1);
+        assert_eq!(meta.params[0].section.as_deref(), Some("Object 1 — Transform"));
+        assert!(
+            meta.bindings.iter().any(|b| matches!(
+                &b.target,
+                BindingTarget::Node { node_id, param } if *node_id == inner_node_id && param == "pos_x"
+            )),
+            "binding targets the grouped node's bare NodeId, not the group's"
+        );
+
+        let after_first = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &vocab,
+            |_n| "Object 1 — Transform".to_string(),
+            &TestProvider
+        ));
+        assert_eq!(def, after_first, "second run is idempotent");
     }
 }
