@@ -3599,6 +3599,38 @@ impl ParamCardPanel {
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
 
+    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
+    /// (kind, band) indices and reuses the same set-source action a matrix
+    /// click would issue, one command carrying both axes.
+    fn audio_select_chip_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        chip: usize,
+    ) -> Vec<PanelAction> {
+        use super::param_slider_shared::{
+            audio_band_from_index, audio_kind_from_index, trigger_source_chips,
+        };
+        let ms = &self.state.mod_state;
+        let current = crate::types::AudioFeature::new(
+            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
+            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
+        );
+        let chips = trigger_source_chips(current);
+        let Some(chip) = chips.get(chip) else {
+            return vec![];
+        };
+        let kind_idx = crate::types::AudioFeatureKind::ALL
+            .iter()
+            .position(|&k| k == chip.feature.kind)
+            .unwrap_or(0);
+        let band_idx = crate::types::AudioBand::ALL
+            .iter()
+            .position(|&b| b == chip.feature.band)
+            .unwrap_or(0);
+        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx))
+    }
+
     /// A click on an `is_trigger_gate` row's Mode row (§9 U3) — converts the
     /// clicked button index to a `TriggerFireMode` at this dispatch boundary
     /// (this crate mirrors core enums rather than depending on
@@ -3738,6 +3770,15 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioSelectSend(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None, None)
+                }
+                RowClick::AudioSelectChip(pi, c) => {
+                    self.audio_select_chip_action(GraphParamTarget::Effect(ei), pi, c)
+                }
+                RowClick::AudioToggleMatrix(pi) => {
+                    if let Some(open) = self.state.mod_state.audio_matrix_open.get_mut(pi) {
+                        *open = !*open;
+                    }
+                    vec![]
                 }
                 RowClick::AudioSelectKind(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(k), None)
@@ -3911,6 +3952,15 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioSelectSend(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Generator, pi, Some(k), None, None)
+                }
+                RowClick::AudioSelectChip(pi, c) => {
+                    self.audio_select_chip_action(GraphParamTarget::Generator, pi, c)
+                }
+                RowClick::AudioToggleMatrix(pi) => {
+                    if let Some(open) = self.state.mod_state.audio_matrix_open.get_mut(pi) {
+                        *open = !*open;
+                    }
+                    vec![]
                 }
                 RowClick::AudioSelectKind(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Generator, pi, None, Some(k), None)
@@ -5106,9 +5156,18 @@ mod tests {
         }
 
         // The Mode row's last button ("Both") — flat index = send_count(1) +
-        // kind_count(8) + band_count(4) + 1 (Invert — Delta removed §7.2
-        // item 2) + 2 (Both is the Mode row's 3rd button, index 2).
-        let mode_both_btn = button_ids[1 + AUDIO_KIND_COUNT + 4 + 1 + 2];
+        // the Listen chips (`trigger_source_chips` for the fixture's cell) +
+        // 1 (the trailing "Custom" cell) + 2 (Both is the Mode row's 3rd
+        // button, index 2). A trigger-gate drawer has no Invert button
+        // (placebo on the raw BUG-242 edge) and its Feature/Band matrix is
+        // closed by default.
+        let ms = &panel.state.mod_state;
+        let current = crate::types::AudioFeature::new(
+            audio_kind_from_index(ms.audio_kind_idx.get(gi).copied().unwrap_or(0) as usize),
+            audio_band_from_index(ms.audio_band_idx.get(gi).copied().unwrap_or(0) as usize),
+        );
+        let chip_count = trigger_source_chips(current).len();
+        let mode_both_btn = button_ids[1 + chip_count + 1 + 2];
         let actions = panel.handle_click(mode_both_btn);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -6858,7 +6917,10 @@ mod tests {
         panel.register_intents(&mut reg);
 
         let dids = &panel.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
-        assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
+        // Param-drawer unification (2026-07-19): a trigger-gate target fires
+        // on the raw BUG-242 edge, so Attack/Release are placebo there and
+        // the drawer builds only Sensitivity.
+        assert_eq!(dids.sliders.len(), 1, "Sensitivity only — Attack/Release dropped on trigger-gate");
         for sl in &dids.sliders {
             assert_track_resets(&reg, &tree, sl.track);
         }

@@ -12,6 +12,8 @@
 
 K3 is a Fable-level model priced like one. The earlier "K3 = default lane agent" routing is dead; so is "K3 orchestrates Sonnet lanes" as a standing configuration — when Fable is the session, Fable leads and K3 is consulted, not staffed.
 
+**When K3 IS the top-level session** (Peter opened the session on K3 as the main orchestration agent — no Fable above it), the consult-only rule doesn't apply: K3 leads by default. It designs, implements, verifies, and LANDS its own work under the same landing protocol and the same verification bar this doc sets for Fable (§Verification: adversarial pass, citations checked, gate rerun on the merged tree). What it still doesn't do is spawn K3 lane workers under itself — lanes under a K3 session are Sonnet/K2.7 mechanical executors. (Peter's directive 2026-07-19, same session as this doc.)
+
 ## When K3 is consulted (the only two triggers)
 
 1. **Design fork** — during design, when Fable has a genuine fork the audit can't kill (the §5 alternative-killing step in DESIGN_AUTHORING.md). One focused question, not an open-ended review.
