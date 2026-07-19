@@ -14,6 +14,7 @@ pub mod atmosphere;
 pub mod camera;
 pub mod light;
 pub mod material;
+pub mod scene_exposure;
 pub mod scene_object;
 pub mod transform;
 pub mod viewport_camera;
