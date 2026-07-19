@@ -1,0 +1,78 @@
+# Scene Panel Exposure Convergence — audit findings + direction (DISCUSSION)
+
+**Status: DISCUSSION — findings + recommendation captured 2026-07-19 (Fable, full audit session with Peter). Peter has picked the converge-on-exposure direction in principle ("Your recommendation please"); the open decisions in §5 are his to answer before this becomes an APPROVED design. This doc is the continuity artifact for that discussion — a fresh session should be able to execute from it without the original conversation.**
+**Companion docs:** `docs/SCENE_SETUP_PANEL_DESIGN.md` (v1, SHIPPED), `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` (SHIPPED), `docs/SCENE_PANEL_UX_DESIGN.md` (SHIPPED, D2/D3 superseded), `docs/SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md` (SHIPPED 2026-07-18). BUG-260 in `docs/BUG_BACKLOG.md` (FIXED this session).
+
+Peter, 2026-07-19: the scene setup panel "has been a huge mess … so many bugs, broken features, ugly UI, incorrect semantics, and intent. The goal was a 'Blender like' scene config panel that just routes 1:1 to the graph and nodes like the effect and generator cards — all one unified system. I think sometimes the scene panel hard-codes expected things in the graph." He asked for a full audit of the scene infra, UI, and UX, then discussion. This doc is that audit + the agreed direction.
+
+---
+
+## 1. The one-paragraph verdict
+
+The panel is not 1:1 with the graph. It is a curated projection that understands only the graph shapes its own commands and the importer emit (~20 hard-coded node type_ids), reverse-engineers semantics out of raw topology, and then maintains a **third, private param-addressing system** (synthesized `scene.{doc_id}.{param}` ids + a per-frame id map + two app-side resolution funnels) to imitate what the cards do natively. Nearly every bug of the past week lived in that translation layer: BUG-237 (dead scrubs), BUG-249 (decorative modulation), BUG-250 (dead enum clicks), the C-P1b dead D/E/A clicks, and BUG-260 (stale display, convicted + fixed in the audit session). The cards are reliable because they render the preset's declared param manifest — one flat, runtime-resolved list. The recommendation: **stop imitating exposure; use it.** §4.
+
+## 2. BUG-260 — convicted and FIXED in the audit session (landed `078375bb`)
+
+**Exposed scene rows displayed a frozen value — the write path worked, the read path lied.** Bound-row writes land in the binding's instance slot (`scene_bound_slot`, inspector.rs — BUG-237's fix: "a def write on a bound param is structurally dead"). The structural build's `display_value` (state_sync.rs ~:1610) reads the slot. But `sync_scene_row_values`'s `resolve` closure (state_sync.rs ~:902), which overwrites every built row's fill+text **every frame**, walked only the graph def — which bound writes never touch. Every importer pre-exposed param (Camera Orbit/Tilt/Distance/FOV, Sun Intensity/X/Y/Z, Environment section) plus anything exposed by arming modulation showed the def's import-time value mid-drag, post-commit, and under modulation. From the user's seat: "scrub does nothing" even though the render responds — the display half of BUG-237, and likely the real mechanism behind some observations logged as BUG-239 (harness "staleness"; not re-litigated, noted in the backlog entry).
+
+- **Proof:** conviction test `ui_bridge::state_sync::sync_scene_row_values_tests::bound_row_display_reads_the_binding_slot_not_the_def` — FAILED pre-fix, green post.
+- **Fix:** `resolve` checks the binding slot first (`binding_id_for_node_param` → `binding_id_for_node_param_in` for tracking instances → `get_base_param`), def walk as unbound fallback — mirroring `display_value`.
+- **Landed:** `078375bb` on main; workspace sweep 3,777/3,777, clippy clean, `bans ok`. Full entry: BUG-260 in `docs/BUG_BACKLOG.md`.
+
+## 3. Audit findings (as-built, verified 2026-07-19)
+
+### 3a. Structural — why it keeps producing bugs
+
+1. **Three parallel VM layers.** `scene_vm.rs` (2,137 lines, curated type_id vocabulary at :42-96) traces the def → `state_sync.rs` (~670 lines) transcribes to a second near-identical struct set (`LightRow` → `LightRowVm` → `LightKnownRow` — three copies of one light) → `scene_setup_panel.rs` DTOs. Every param touches 3–5 places.
+2. **Hand-copied param metadata.** `modifier_param_rows` (state_sync.rs:3856-3888) is a hand-typed table of every modifier atom's params — labels, defaults, ranges — with hand defaults used when the def doesn't serialize a value. Light enum labels are copy-pasted (`LIGHT_MODE_LABELS`, `SHADOW_SOFTNESS_LABELS`). The primitives' own `ParamDef`s already declare all of this; `resolve_mod_target` (inspector.rs:400-516) even reconstructs the real primitive to read the true `ParamDef` — two sources of truth for the same table, both in use.
+3. **One 6,163-line panel file, ~134 functions.** Five near-duplicate 60-line `match_param_row_click` dispatch blocks (world/object/light/camera/modifier) + five near-duplicate value lookups. Every dead-feature bug of the week was a click falling through this gauntlet. Manual u64 key budgeting (`OBJ_KEY_BASE 82_000` stride 44, `MODIFIER_CARD_ROW_KEY_OFFSET 100_000`, `OUTLINER_KEY_BASE 90_000_000`) — already collided twice (latent 4+-lights collision at `LIGHT_OFF_NAME+100`; the C-P1d object/modifier slot collision).
+4. **A third addressing system.** Cards address `(GraphParamTarget, exposed ParamId)`. Graph commands address `(scope_path, node_doc_id, param_id)`. The panel synthesized a third: opaque `scene.{doc}.{param}` ids resolved through a frame-local id map, with two app funnels (`resolve_scene_param`/`resolve_scene_write`, `resolve_mod_target`) mapping back to the first two. BUG-237/249/250 all lived here.
+5. **Verification rot.** BUG-252: 8 of 21 scene flow scripts silently dead at a "green" convergence landing. BUG-240 (OPEN): a flow asserting a retired gesture. `scene-setup-light-intensity-drag` fails in `target/` today (drags a value cell that is no longer drag-armable — the flow predates the card-row conversion). The `--script` harness cannot observe live modulation at all (BUG-239 family), so "value visibly modulates" has never been proven on this surface.
+
+### 3b. Semantics wrong even when "working"
+
+6. **Expose-then-arm floods the card.** Arming D/E/A on an unexposed row silently mints a permanent card exposure: two undo entries per arm, no panel path to un-expose, orphaned exposures after driver removal. The design docs explicitly rejected eager exposure ("floods the card") and BUG-249's fix adopted it anyway (Peter approved that specific call; the UX consequence stands).
+7. **Enum scrubs mutate storage type.** `SetGraphNodeParamCommand` writes `SerializedParamValue::Float` over params stored as `Enum` — def serialization drifts as a side effect of touching a slider. Primitives tolerate both; the file's shape shouldn't depend on their tolerance.
+8. **Unit inconsistency.** Rotation/camera rows display degrees (`is_degrees_param`, scene_setup_panel.rs:4467); modifier Angle rows display radians — same screen, two unit systems.
+9. **Environment Mode is a dead chip** in the panel ("Mode: Softbox", static text, scene_setup_panel.rs:2354-2364) while the card exposes the same param as a working control.
+
+### 3c. UI/UX (from snapshot PNGs)
+
+10. **14 full-width rows per object** (every axis of Position/Rotation/Scale/Color its own card row ≈ 420px before material/modifiers). The pre-convergence compact triplets were denser and more Blender-like; convergence traded density for dialect purity because "no compact multi-cell precedent existed in param_card.rs."
+11. **Unbounded params on slider tracks** (position ±10 soft range): near-empty fills at any sane value; the bar carries no information. (D5's hand-invented soft ranges.)
+12. **Color swatch detached** at the far-left margin (build_object_color_rows); emoji outliner glyphs; panel/card label duplication ("Intensity" vs "Sun Intensity" — same value, two names, both on screen).
+
+### 3d. Churn measure
+
+35 commits to `scene_setup_panel.rs` + `scene_vm.rs` in 3 days; ~246 scene/bug commits repo-wide since 2026-07-16. The bug history is whack-a-mole produced by §3a's structure, not by individual carelessness — the design docs themselves mandated the curated ceiling ("never a generic param-tree renderer").
+
+## 4. The recommendation: converge-on-exposure
+
+**Make exposure the panel's only param mechanism.** The importer already auto-exposes a curated set at import (that's why the card shows Camera/Sun/Environment). Extend that: every node the scene vocabulary cares about (transform_3d, material atoms, light, camera atoms, lens, atmosphere, bake_environment, modifier atoms, scene_object.visible) gets ALL its params exposed at node-creation time — import, AddSceneObject/AddLight, InsertMeshModifier, and a load migration for existing projects — named into collapsed card sections (the existing section machinery). Expose **every** param of those nodes: labels, ranges, enums, defaults then come from each primitive's own `ParamDef` — the hand tables don't get replaced by better tables, they become unnecessary (this also kills D5's invented soft ranges).
+
+The panel keeps what makes it a scene panel: the outliner (Camera · World · lights · objects), selection, eye toggles, the structural verbs (add/remove/duplicate/import/modifier stack — genuinely good commands, unchanged), empty states. Its rows become ordinary exposed params filtered by the selection (bindings already carry node identity + section), rendered and dispatched by the real card path.
+
+**What deletes (~6,000–7,000 lines):** the synthetic-id system + id map + both resolution funnels; the five dispatch-block copies and five lookup twins; the hand metadata tables; the dual write path (`scene_bound_slot` vs def writes — everything becomes a slot write); `SceneCardState`'s bespoke arrays (the panel reuses the card's row state). `scene_setup_panel.rs` → est. 1,500–2,000 lines (outliner, selection, verbs, empty states). `state_sync` scene section ~670 → ~100. `scene_vm.rs` shrinks to "what items exist" (identity/name/type/visibility + modifier-chain trace for the stack UI), roughly half.
+
+**Bug classes that die structurally, not by patch:** BUG-260's def-vs-slot split (one value home); BUG-249's decorative modulation (rows are real params from birth — modulation/MIDI/OSC/Ableton/undo all free); BUG-250-style dead click paths (one dispatch path, the card's); enum-type mutation (exposed enums write via the card command); label/default/range drift (single metadata source); key-budget collisions (card rows use card identity).
+
+## 5. Open decisions — Peter's to answer before APPROVED
+
+1. **Card length.** A dressed scene exposes dozens of params onto the generator card (the D8 "flooding" fear, now accepted as the price of one mechanism). Mitigation: collapsed named sections per scene item (existing machinery), scene sections collapsed by default. Accept?
+2. **Wire-driven params.** A param fed by a wire (port-shadow, e.g. an LFO wired in the graph) is read-only "driven" in today's panel. When such a param is exposed, the slot and the wire both claim it; the runtime semantic is wire-wins-at-eval. Presentation decision needed (show driven state on the card row exactly as the panel does today — the facts already exist in the VM).
+3. **Un-expose semantics.** Removing an exposure in the graph editor removes the row from the panel too. Proposed: accept as honest single-mechanism behavior (today's panel always shows curated rows regardless).
+4. **UI density follow-ups (separate small decisions, unblocked by this design):** a compact 3-cell vec3 row variant shared by card + panel (fixes the 14-row object body); swatch placement; outliner glyph treatment. Not in scope for the convergence itself.
+5. **Migration shape.** Load-time, idempotent, stamps curated exposures into existing projects' scenes (same posture as `migrate_scene_object_wires` — never silently dropping; scenes whose topology doesn't match the vocabulary get no new exposures and their rows simply don't appear — same honesty as today's custom rows).
+6. **Panel-side Ableton surface:** card rows expose Ableton mapping; today's scene rows don't (`ableton_config_ids` always `None`). After convergence the panel rows *could* show it — proposed: keep the panel minimal (T/∿/A only), map from the card; revisit if Peter reaches for it.
+
+## 6. Phasing sketch (only after §5 answers; per DESIGN_DOC_STANDARD)
+
+- **P1 — exposure stamping at creation + migration.** Importer/starter/AddSceneObject/AddLight/InsertMeshModifier stamp full-param exposures into named collapsed sections; idempotent load migration; round-trip + undo tests. No panel changes yet — the card simply shows everything (this is the truth the panel will read).
+- **P2 — panel rows read the manifest.** Scene rows become filtered exposed-param rows via the card's builders/dispatch; delete the synthetic-id system, id map, funnels, dispatch copies, hand tables, `scene_bound_slot`, and the per-family bespoke machinery. Negative gates: `rg 'synth_world_param_id|id_map|resolve_scene_param|scene_bound_slot|modifier_param_rows'` → 0 outside history.
+- **P3 — outliner/discovery slimming.** `scene_vm.rs` to item-discovery only; state_sync transcription to the thin section-filter query; eye toggle rides the exposed `visible` param.
+- **P4 — polish + flows.** Rewrite the scene flow suite against the real rows (kill BUG-240's retired-gesture flow and the stale light-intensity-drag flow); side-by-side dialect PNG; supersession sweep across the four prior scene design docs (their status headers must point here).
+- Gates per phase: focused nextest + scoped clippy; full sweep at landing; PNGs looked at, not asserted. No GPU work anywhere in this design.
+
+## 7. What this does NOT fix (named, not hidden)
+
+UI density (§5.4 follow-ups), the emoji glyphs, the BUG-239 harness staleness gap itself (flow scripts still can't observe live modulation — a harness fix, separate), BUG-240 (OPEN, flow rot), and the structural commands' own edge cases (none known open today — BUG-212/218 are FIXED).
