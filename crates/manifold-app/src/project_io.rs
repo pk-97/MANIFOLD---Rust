@@ -384,9 +384,16 @@ impl ProjectIOService {
                 // instantiation (`graph_loader.rs` handles that path
                 // separately, for runtime playback). Idempotent, per-layer;
                 // a def with no legacy wires is untouched.
+                // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): stamp every
+                // scene-vocabulary node's params into the def's card
+                // exposures at load, same idempotent per-layer posture as the
+                // wire migration above — an old project (or one edited before
+                // this migration shipped) gets working card rows without a
+                // re-import.
                 for layer in &mut project.timeline.layers {
                     if let Some(graph) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) {
                         manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+                        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
                     }
                 }
 
@@ -1184,6 +1191,83 @@ mod tests {
             notice.contains("overlapping clip"),
             "notice must name the overlap repair: {notice}"
         );
+    }
+
+    // ── P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): load migration ──
+    //
+    // An old-shape scene generator graph (saved before the exposure-stamping
+    // convergence, or hand-edited to strip `preset_metadata`) must gain
+    // working card exposures on open, same idempotent per-layer posture as
+    // `migrate_scene_object_wires` right above it in the real load path.
+    // Real save→load through the production seam, same recipe as
+    // `open_project_from_path_surfaces_repairs_as_a_notice` above.
+
+    #[test]
+    fn open_project_from_path_migrates_scene_exposures_for_old_shape_generator_graph() {
+        use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, EFFECT_GRAPH_VERSION};
+        use std::collections::BTreeMap;
+
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+
+        let mut layer = Layer::new("Scene 1".into(), LayerType::Generator, 0);
+        let old_shape_def = EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None, // pre-P1 shape: no exposures stamped at all
+            nodes: vec![EffectGraphNode {
+                id: 1,
+                node_id: manifold_core::NodeId::new("sun"),
+                type_id: "node.light".to_string(),
+                handle: Some("Sun".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: Default::default(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }],
+            wires: vec![],
+        };
+        layer.gen_params_or_init().graph = Some(old_shape_def);
+        project.timeline.insert_layer(0, layer);
+
+        let fixture_path = std::env::temp_dir().join(format!(
+            "manifold-scene-exposure-migration-{}.manifold",
+            std::process::id()
+        ));
+        manifold_io::saver::save_project_v1(&project, &fixture_path)
+            .expect("write V1 fixture with an old-shape scene generator graph");
+
+        let mut prefs = UserPrefs::load();
+        let mut service = ProjectIOService::new(&prefs);
+        let action = service.open_project_from_path(&fixture_path, &mut prefs);
+
+        let _ = std::fs::remove_file(&fixture_path);
+
+        let loaded = action.apply_project.expect("a valid fixture must open");
+        let (_, loaded_layer) = loaded
+            .timeline
+            .find_layer_by_id(&loaded.timeline.layers[0].layer_id)
+            .expect("the generator layer round-trips");
+        let graph = loaded_layer.generator_graph().expect("the generator graph override round-trips");
+
+        let meta = graph
+            .preset_metadata
+            .as_ref()
+            .expect("P1 load migration stamped exposures into the def's preset_metadata");
+        let sun = graph.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
+        assert!(
+            meta.bindings.iter().any(|b| matches!(
+                &b.target,
+                BindingTarget::Node { node_id, .. } if *node_id == sun.node_id
+            )),
+            "the sun's params are exposed after load, targeting its bare NodeId"
+        );
+        assert!(!meta.params.is_empty(), "at least one ParamSpecDef was stamped");
     }
 
     // ── PRESET_LIBRARY_DESIGN D5/P2 — snapshot-on-save ──────────────────

@@ -3355,6 +3355,9 @@ impl Application {
                             *render_scene_node_id,
                             *next_index,
                             *centroid,
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
@@ -3377,6 +3380,7 @@ impl Application {
                             *render_scene_node_id,
                             *next_index,
                             *pos,
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
