@@ -28,6 +28,7 @@ use manifold_core::effect_graph_def::{
     SerializedParamValue, SkipModeDef, StringBindingDef,
 };
 use manifold_core::project::Project;
+use manifold_core::scene_exposure::{stamp_scene_node_exposures_into, SceneParamMetadata};
 
 use crate::command::Command;
 
@@ -2197,9 +2198,20 @@ pub struct AddSceneObjectCommand {
     render_scene_node_id: u32,
     next_index: u32,
     centroid: (f32, f32),
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new material/
+    /// transform/scene_object nodes' full param manifests, computed by the
+    /// app-side caller via `manifold_renderer::node_graph::scene_exposure::
+    /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
+    /// stamps them into the def's top-level `preset_metadata` after minting
+    /// the new nodes' ids.
+    material_metadata: Vec<SceneParamMetadata>,
+    transform_metadata: Vec<SceneParamMetadata>,
+    scene_object_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
-    /// The level's `(nodes, wires)` before this edit. Set on execute.
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
+    /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
+    /// the scoped level). Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
 }
 
 impl AddSceneObjectCommand {
@@ -2209,6 +2221,9 @@ impl AddSceneObjectCommand {
         render_scene_node_id: u32,
         next_index: u32,
         centroid: (f32, f32),
+        material_metadata: Vec<SceneParamMetadata>,
+        transform_metadata: Vec<SceneParamMetadata>,
+        scene_object_metadata: Vec<SceneParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -2217,6 +2232,9 @@ impl AddSceneObjectCommand {
             render_scene_node_id,
             next_index,
             centroid,
+            material_metadata,
+            transform_metadata,
+            scene_object_metadata,
             catalog_default,
             prev: None,
         }
@@ -2242,95 +2260,166 @@ impl Command for AddSceneObjectCommand {
         let k = self.next_index;
         let centroid = self.centroid;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+            let prev_metadata = def.preset_metadata.clone();
 
-            nodes
-                .iter_mut()
-                .find(|n| n.id == render_id)?
-                .params
-                .insert(
-                    "objects".to_string(),
-                    SerializedParamValue::Float {
-                        value: (k + 1) as f32,
-                    },
+            // Build the group + wire it in, entirely within a nested block so
+            // the `nodes`/`wires` borrows (from `descend_level`) end before
+            // the P1 exposure stamping below touches `def.preset_metadata` —
+            // same "metadata vs. nodes/wires never overlap" discipline
+            // `ImportModelIntoSceneCommand` documents.
+            let (mat_id, mat_node_id, transform_id, transform_node_id, scene_object_id, scene_object_node_id, handle, prev) = {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
+
+                nodes
+                    .iter_mut()
+                    .find(|n| n.id == render_id)?
+                    .params
+                    .insert(
+                        "objects".to_string(),
+                        SerializedParamValue::Float {
+                            value: (k + 1) as f32,
+                        },
+                    );
+
+                let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                let mut fresh = move || {
+                    let v = next_id;
+                    next_id += 1;
+                    v
+                };
+                let mesh_id = fresh();
+                let mat_id = fresh();
+                let transform_id = fresh();
+                let scene_object_id = fresh();
+                let out_id = fresh();
+                let group_id = fresh();
+
+                let tint = scene_object_tint(k);
+                let mut mat_params = BTreeMap::new();
+                mat_params.insert("color_r".to_string(), SerializedParamValue::Float { value: tint.r });
+                mat_params.insert("color_g".to_string(), SerializedParamValue::Float { value: tint.g });
+                mat_params.insert("color_b".to_string(), SerializedParamValue::Float { value: tint.b });
+
+                let mesh_node = scene_build_node(mesh_id, "node.cube_mesh", Some(format!("mesh_{k}")), BTreeMap::new());
+                let mat_node = scene_build_node(mat_id, "node.phong_material", Some(format!("mat_{k}")), mat_params);
+                let mat_node_id = mat_node.node_id.clone();
+                let transform_node = scene_build_node(
+                    transform_id,
+                    "node.transform_3d",
+                    Some(format!("transform_{k}")),
+                    BTreeMap::new(),
                 );
+                let transform_node_id = transform_node.node_id.clone();
+                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
+                // material/transform triple into a single Object wire —
+                // handle-stamped so the outliner shows this object's own name,
+                // not a producer's. render_scene v2 (D4) has no mesh_k/
+                // material_k/transform_k ports any more; it takes object_k only.
+                let handle = format!("Object {}", k + 1);
+                let scene_object_node =
+                    scene_build_node(scene_object_id, "node.scene_object", Some(handle.clone()), BTreeMap::new());
+                let scene_object_node_id = scene_object_node.node_id.clone();
+                let out_node = scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
 
-            let mut next_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            let mut fresh = move || {
-                let v = next_id;
-                next_id += 1;
-                v
+                let group_wires = vec![
+                    scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
+                    scene_build_wire(mat_id, "out", scene_object_id, "material"),
+                    scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
+                    scene_build_wire(scene_object_id, "object", out_id, "object"),
+                ];
+
+                let mut group_node =
+                    scene_build_node(group_id, GROUP_TYPE_ID, Some(handle.clone()), BTreeMap::new());
+                group_node.editor_pos = Some(centroid);
+                group_node.group = Some(Box::new(GroupDef {
+                    interface: GroupInterface {
+                        inputs: Vec::new(),
+                        outputs: vec![InterfacePortDef {
+                            name: "object".to_string(),
+                            port_type: "Object".to_string(),
+                        }],
+                        params: Vec::new(),
+                    },
+                    nodes: vec![mesh_node, mat_node, transform_node, scene_object_node, out_node],
+                    wires: group_wires,
+                    tint: Some([tint.r, tint.g, tint.b, 1.0]),
+                }));
+
+                nodes.push(group_node);
+                wires.push(scene_build_wire(group_id, "object", render_id, &format!("object_{k}")));
+
+                (
+                    mat_id,
+                    mat_node_id,
+                    transform_id,
+                    transform_node_id,
+                    scene_object_id,
+                    scene_object_node_id,
+                    handle,
+                    prev,
+                )
             };
-            let mesh_id = fresh();
-            let mat_id = fresh();
-            let transform_id = fresh();
-            let scene_object_id = fresh();
-            let out_id = fresh();
-            let group_id = fresh();
 
-            let tint = scene_object_tint(k);
-            let mut mat_params = BTreeMap::new();
-            mat_params.insert("color_r".to_string(), SerializedParamValue::Float { value: tint.r });
-            mat_params.insert("color_g".to_string(), SerializedParamValue::Float { value: tint.g });
-            mat_params.insert("color_b".to_string(), SerializedParamValue::Float { value: tint.b });
-
-            let mesh_node = scene_build_node(mesh_id, "node.cube_mesh", Some(format!("mesh_{k}")), BTreeMap::new());
-            let mat_node = scene_build_node(mat_id, "node.phong_material", Some(format!("mat_{k}")), mat_params);
-            let transform_node = scene_build_node(
-                transform_id,
-                "node.transform_3d",
-                Some(format!("transform_{k}")),
-                BTreeMap::new(),
+            // P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+            // param of the freshly minted material/transform/scene_object
+            // nodes, into the def's TOP-LEVEL preset_metadata, targeting each
+            // node's bare NodeId — same convention the glTF importer uses.
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: SkipModeDef::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                mat_id,
+                &mat_node_id,
+                &format!("{handle} — Material"),
+                &self.material_metadata,
             );
-            // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D1/D3/P3: binds the mesh/
-            // material/transform triple into a single Object wire —
-            // handle-stamped so the outliner shows this object's own name,
-            // not a producer's. render_scene v2 (D4) has no mesh_k/
-            // material_k/transform_k ports any more; it takes object_k only.
-            let handle = format!("Object {}", k + 1);
-            let scene_object_node =
-                scene_build_node(scene_object_id, "node.scene_object", Some(handle.clone()), BTreeMap::new());
-            let out_node = scene_build_node(out_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                transform_id,
+                &transform_node_id,
+                &format!("{handle} — Transform"),
+                &self.transform_metadata,
+            );
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                scene_object_id,
+                &scene_object_node_id,
+                &handle,
+                &self.scene_object_metadata,
+            );
 
-            let group_wires = vec![
-                scene_build_wire(mesh_id, "vertices", scene_object_id, "vertices"),
-                scene_build_wire(mat_id, "out", scene_object_id, "material"),
-                scene_build_wire(transform_id, "transform", scene_object_id, "transform"),
-                scene_build_wire(scene_object_id, "object", out_id, "object"),
-            ];
-
-            let mut group_node =
-                scene_build_node(group_id, GROUP_TYPE_ID, Some(handle), BTreeMap::new());
-            group_node.editor_pos = Some(centroid);
-            group_node.group = Some(Box::new(GroupDef {
-                interface: GroupInterface {
-                    inputs: Vec::new(),
-                    outputs: vec![InterfacePortDef {
-                        name: "object".to_string(),
-                        port_type: "Object".to_string(),
-                    }],
-                    params: Vec::new(),
-                },
-                nodes: vec![mesh_node, mat_node, transform_node, scene_object_node, out_node],
-                wires: group_wires,
-                tint: Some([tint.r, tint.g, tint.b, 1.0]),
-            }));
-
-            nodes.push(group_node);
-            wires.push(scene_build_wire(group_id, "object", render_id, &format!("object_{k}")));
-
-            Some(prev)
+            Some((prev, prev_metadata))
         });
-        self.prev = result.flatten();
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -2357,8 +2446,15 @@ pub struct AddSceneLightCommand {
     render_scene_node_id: u32,
     next_index: u32,
     pos: (f32, f32),
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new light's full
+    /// param manifest, computed by the app-side caller via
+    /// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light")`
+    /// (this crate has no renderer dep).
+    light_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
+    /// whole-def `preset_metadata`. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
 }
 
 impl AddSceneLightCommand {
@@ -2368,6 +2464,7 @@ impl AddSceneLightCommand {
         render_scene_node_id: u32,
         next_index: u32,
         pos: (f32, f32),
+        light_metadata: Vec<SceneParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -2376,6 +2473,7 @@ impl AddSceneLightCommand {
             render_scene_node_id,
             next_index,
             pos,
+            light_metadata,
             catalog_default,
             prev: None,
         }
@@ -2389,62 +2487,103 @@ impl Command for AddSceneLightCommand {
         let k = self.next_index;
         let pos = self.pos;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+            let prev_metadata = def.preset_metadata.clone();
 
-            nodes
-                .iter_mut()
-                .find(|n| n.id == render_id)?
-                .params
-                .insert(
-                    "lights".to_string(),
-                    SerializedParamValue::Float {
-                        value: (k + 1) as f32,
-                    },
+            let (light_id, light_node_id, prev) = {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
+
+                nodes
+                    .iter_mut()
+                    .find(|n| n.id == render_id)?
+                    .params
+                    .insert(
+                        "lights".to_string(),
+                        SerializedParamValue::Float {
+                            value: (k + 1) as f32,
+                        },
+                    );
+
+                let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                // D7a defaults, transcribed from `node.light`'s own param defs
+                // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
+                // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
+                // match the primitive's own defaults — set explicitly anyway so
+                // the gesture's contract doesn't silently drift if those defaults
+                // ever change. pos is overridden for ~45° elevation (the
+                // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
+                // straight overhead, which flattens the scene); aim stays at the
+                // primitive's (0,0,0) default.
+                let mut params = BTreeMap::new();
+                params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
+                params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 0.0 });
+                params.insert("pos_y".to_string(), SerializedParamValue::Float { value: 7.0 });
+                params.insert("pos_z".to_string(), SerializedParamValue::Float { value: 7.0 });
+                params.insert("color_r".to_string(), SerializedParamValue::Float { value: 1.0 });
+                params.insert("color_g".to_string(), SerializedParamValue::Float { value: 1.0 });
+                params.insert("color_b".to_string(), SerializedParamValue::Float { value: 1.0 });
+                params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
+                params.insert("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 });
+
+                let mut light_node = scene_build_node(
+                    light_id,
+                    "node.light",
+                    Some(format!("light_{k}")),
+                    params,
                 );
+                light_node.editor_pos = Some(pos);
+                let light_node_id = light_node.node_id.clone();
+                nodes.push(light_node);
+                wires.push(scene_build_wire(light_id, "out", render_id, &format!("light_{k}")));
 
-            let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            // D7a defaults, transcribed from `node.light`'s own param defs
-            // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
-            // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
-            // match the primitive's own defaults — set explicitly anyway so
-            // the gesture's contract doesn't silently drift if those defaults
-            // ever change. pos is overridden for ~45° elevation (the
-            // primitive's own default is pos_y=30 with pos_x=pos_z=0, i.e.
-            // straight overhead, which flattens the scene); aim stays at the
-            // primitive's (0,0,0) default.
-            let mut params = BTreeMap::new();
-            params.insert("mode".to_string(), SerializedParamValue::Enum { value: 0 }); // Sun
-            params.insert("pos_x".to_string(), SerializedParamValue::Float { value: 0.0 });
-            params.insert("pos_y".to_string(), SerializedParamValue::Float { value: 7.0 });
-            params.insert("pos_z".to_string(), SerializedParamValue::Float { value: 7.0 });
-            params.insert("color_r".to_string(), SerializedParamValue::Float { value: 1.0 });
-            params.insert("color_g".to_string(), SerializedParamValue::Float { value: 1.0 });
-            params.insert("color_b".to_string(), SerializedParamValue::Float { value: 1.0 });
-            params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
-            params.insert("cast_shadows".to_string(), SerializedParamValue::Float { value: 1.0 });
+                (light_id, light_node_id, prev)
+            };
 
-            let mut light_node = scene_build_node(
+            // P1: expose every param of the freshly minted light node, into
+            // the def's TOP-LEVEL preset_metadata, targeting its bare NodeId.
+            // Section mirrors the D7a display convention ("Light N", 1-based)
+            // — independent of the node's own internal `handle` (`light_{k}`,
+            // 0-based, used only for wire/lookup bookkeeping).
+            let section = format!("Light {}", k + 1);
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: SkipModeDef::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
                 light_id,
-                "node.light",
-                Some(format!("light_{k}")),
-                params,
+                &light_node_id,
+                &section,
+                &self.light_metadata,
             );
-            light_node.editor_pos = Some(pos);
-            nodes.push(light_node);
-            wires.push(scene_build_wire(light_id, "out", render_id, &format!("light_{k}")));
 
-            Some(prev)
+            Some((prev, prev_metadata))
         });
-        self.prev = result.flatten();
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -4036,8 +4175,16 @@ pub struct InsertMeshModifierCommand {
     /// `None` = append at the end of the stack (D6 default); `Some(0)` =
     /// just after the mesh source.
     position: Option<usize>,
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new modifier
+    /// node's full param manifest, computed by the app-side caller via
+    /// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(&type_id)`
+    /// (this crate has no renderer dep).
+    modifier_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// The object group body's `(nodes, wires)` before this edit, plus the
+    /// pre-edit whole-def `preset_metadata` (exposures land there, outside
+    /// the scoped level). Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
 }
 
 impl InsertMeshModifierCommand {
@@ -4047,6 +4194,7 @@ impl InsertMeshModifierCommand {
         group_node_id: u32,
         type_id: String,
         position: Option<usize>,
+        modifier_metadata: Vec<SceneParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         debug_assert!(
@@ -4059,10 +4207,26 @@ impl InsertMeshModifierCommand {
             group_node_id,
             type_id,
             position,
+            modifier_metadata,
             catalog_default,
             prev: None,
         }
     }
+}
+
+/// Human-readable label for a mesh-modifier atom's card section — mirrors
+/// `manifold_renderer::node_graph::scene_exposure::section_name_for_node`'s
+/// modifier fallback convention (duplicated: this crate has no renderer dep,
+/// same reason `MESH_MODIFIER_TYPE_IDS` above is duplicated).
+fn modifier_section_label(type_id: &str) -> String {
+    type_id
+        .strip_prefix("node.")
+        .map(|s| {
+            let mut s = s.to_string();
+            s.replace_range(0..1, &s[0..1].to_uppercase());
+            s
+        })
+        .unwrap_or_else(|| "Modifier".to_string())
 }
 
 impl Command for InsertMeshModifierCommand {
@@ -4071,28 +4235,75 @@ impl Command for InsertMeshModifierCommand {
         let type_id = self.type_id.clone();
         let position = self.position;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
-            // Validate the chain is parseable BEFORE mutating anything — a
-            // custom/unparseable chain refuses the insert (D6), never a
-            // blind splice.
-            walk_mesh_modifier_chain(nodes, wires, out_id)?;
-            let prev = (nodes.clone(), wires.clone());
-            let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            nodes.push(scene_build_node(new_id, &type_id, None, BTreeMap::new()));
-            splice_modifier_into_chain(nodes, wires, out_id, new_id, position)
-                .expect("chain re-validated above via walk_mesh_modifier_chain; splice cannot fail here");
-            Some(prev)
+            let prev_metadata = def.preset_metadata.clone();
+            // The object group's own display name prefixes the section
+            // (e.g. "Object 1 — Bend"), mirroring the importer's modifier
+            // section convention — computed BEFORE the nested block below so
+            // this read of `def.nodes` doesn't overlap the block's `&mut`.
+            let section = match innermost_group_display_name(&def.nodes, &scope) {
+                Some(group_name) => format!("{group_name} — {}", modifier_section_label(&type_id)),
+                None => modifier_section_label(&type_id),
+            };
+
+            let (new_id, new_node_id, prev) = {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let out_id = nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?.id;
+                // Validate the chain is parseable BEFORE mutating anything — a
+                // custom/unparseable chain refuses the insert (D6), never a
+                // blind splice.
+                walk_mesh_modifier_chain(nodes, wires, out_id)?;
+                let prev = (nodes.clone(), wires.clone());
+                let new_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                let new_node = scene_build_node(new_id, &type_id, None, BTreeMap::new());
+                let new_node_id = new_node.node_id.clone();
+                nodes.push(new_node);
+                splice_modifier_into_chain(nodes, wires, out_id, new_id, position)
+                    .expect("chain re-validated above via walk_mesh_modifier_chain; splice cannot fail here");
+                (new_id, new_node_id, prev)
+            };
+
+            // P1: expose every param of the freshly minted modifier node,
+            // into the def's TOP-LEVEL preset_metadata, targeting its bare
+            // NodeId — same convention the glTF importer uses.
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: SkipModeDef::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                new_id,
+                &new_node_id,
+                &section,
+                &self.modifier_metadata,
+            );
+
+            Some((prev, prev_metadata))
         });
-        self.prev = result.flatten();
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
         let scope = full_modifier_scope(&self.scope_path, self.group_node_id);
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -7214,6 +7425,9 @@ mod tests {
             0,
             2, // next_index — matches the fixture's current `objects` (2)
             (100.0, 200.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -7263,6 +7477,101 @@ mod tests {
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
     }
 
+    /// A single-param `SceneParamMetadata` fixture — stands in for what
+    /// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type`
+    /// would compute from a real primitive's `ParamDef` (this crate can't
+    /// depend on the renderer, so the app-side caller is the real source —
+    /// see the cross-crate constraint note in
+    /// `docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` P1).
+    fn scene_param_meta(name: &str, label: &str) -> manifold_core::scene_exposure::SceneParamMetadata {
+        manifold_core::scene_exposure::SceneParamMetadata {
+            name: name.to_string(),
+            label: label.to_string(),
+            min: 0.0,
+            max: 1.0,
+            default_value: SerializedParamValue::Float { value: 0.5 },
+            is_angle: false,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            convert: manifold_core::effects::ParamConvert::Float,
+        }
+    }
+
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneObjectCommand`
+    /// stamps the material/transform/scene_object metadata the caller hands
+    /// it into the def's TOP-LEVEL `preset_metadata`, targeting each new
+    /// node's bare `NodeId`, with the section named per the convention
+    /// (`"{handle} — Material"` / `"{handle} — Transform"` / `handle`).
+    /// Undo restores `preset_metadata` verbatim; execute→undo→redo is stable.
+    #[test]
+    fn add_scene_object_command_stamps_exposures_and_undo_redo_are_stable() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+
+        let mut cmd = AddSceneObjectCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            vec![scene_param_meta("ambient", "Ambient")],
+            vec![scene_param_meta("pos_x", "X")],
+            vec![scene_param_meta("visible", "Visible")],
+            mirror_catalog_default(),
+        );
+
+        // Asserted after both the first execute and the redo: `execute`
+        // mints a fresh random NodeId every call (`scene_build_node` ->
+        // `manifold_core::short_id()`, pre-existing behavior, not a P1
+        // change), so graph IDENTITY isn't byte-stable across redo — only
+        // the STRUCTURE the stamping produces is. "Stable" here means the
+        // exposures always target whichever node currently sits in that
+        // role, not a frozen id.
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let group = def.nodes.iter().find(|n| n.handle.as_deref() == Some("Object 1")).unwrap();
+            let body = group.group.as_deref().unwrap();
+            let mat_node = body.nodes.iter().find(|n| n.type_id == "node.phong_material").unwrap();
+            let transform_node = body.nodes.iter().find(|n| n.type_id == "node.transform_3d").unwrap();
+            let scene_object_node = body.nodes.iter().find(|n| n.type_id == "node.scene_object").unwrap();
+
+            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
+            assert_eq!(meta.params.len(), 3, "one ParamSpecDef per exposed param");
+            assert_eq!(meta.bindings.len(), 3);
+
+            let has_binding = |node_id: &NodeId, param: &str, section: &str| {
+                meta.bindings.iter().any(|b| {
+                    matches!(&b.target, BindingTarget::Node { node_id: nid, param: p } if nid == node_id && p == param)
+                }) && meta.params.iter().any(|p| p.section.as_deref() == Some(section))
+            };
+            assert!(
+                has_binding(&mat_node.node_id, "ambient", "Object 1 — Material"),
+                "material exposure targets the grouped node's bare NodeId, section 'Object 1 — Material'"
+            );
+            assert!(
+                has_binding(&transform_node.node_id, "pos_x", "Object 1 — Transform"),
+                "transform exposure targets the grouped node's bare NodeId, section 'Object 1 — Transform'"
+            );
+            assert!(
+                has_binding(&scene_object_node.node_id, "visible", "Object 1"),
+                "scene_object exposure targets the grouped node's bare NodeId, section 'Object 1'"
+            );
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
+
+        cmd.execute(&mut project); // redo
+        assert_stamped(&project);
+    }
+
     #[test]
     fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
         let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
@@ -7274,6 +7583,7 @@ mod tests {
             0,
             1, // next_index — matches the fixture's current `lights` (1)
             (-260.0, 50.0),
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -7313,6 +7623,57 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneLightCommand`
+    /// stamps the caller-supplied light metadata into the def's TOP-LEVEL
+    /// `preset_metadata`, targeting the new light's bare `NodeId`, section
+    /// "Light N" (1-based display convention, independent of the node's own
+    /// internal `light_{k}` handle). Undo restores `preset_metadata`
+    /// verbatim; execute→undo→redo is structurally stable (see the
+    /// AddSceneObjectCommand sibling test for why redo isn't byte-identical:
+    /// `execute` mints a fresh random NodeId every call).
+    #[test]
+    fn add_scene_light_command_stamps_exposures_and_undo_redo_are_stable() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+
+        let mut cmd = AddSceneLightCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            0,
+            (-260.0, 50.0),
+            vec![scene_param_meta("intensity", "Intensity")],
+            mirror_catalog_default(),
+        );
+
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let light = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
+
+            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
+            assert_eq!(meta.params.len(), 1);
+            assert_eq!(meta.params[0].section.as_deref(), Some("Light 1"));
+            assert!(
+                meta.bindings.iter().any(|b| matches!(
+                    &b.target,
+                    BindingTarget::Node { node_id, param } if *node_id == light.node_id && param == "intensity"
+                )),
+                "light exposure targets the light's bare NodeId"
+            );
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
+
+        cmd.execute(&mut project); // redo
+        assert_stamped(&project);
     }
 
     // ── BUG-193: Remove Scene Object / Remove Scene Light ──
@@ -7423,6 +7784,7 @@ mod tests {
                 0,
                 0,
                 (-260.0, 50.0),
+                Vec::new(),
                 mirror_catalog_default(),
             );
             cmd.execute(&mut project);
@@ -7486,6 +7848,9 @@ mod tests {
             0,
             0,
             (0.0, 0.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             mirror_catalog_default(),
         )
         .execute(&mut project);
@@ -7595,6 +7960,9 @@ mod tests {
             0,
             0,
             (0.0, 0.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             mirror_catalog_default(),
         )
         .execute(&mut project);
@@ -7679,6 +8047,9 @@ mod tests {
             0,
             0,
             (0.0, 0.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
             mirror_catalog_default(),
         )
         .execute(&mut project);
@@ -7779,6 +8150,7 @@ mod tests {
             0,
             0,
             (0.0, 0.0),
+            Vec::new(),
             mirror_catalog_default(),
         )
         .execute(&mut project);
@@ -8365,6 +8737,7 @@ mod tests {
             1,
             "node.bend_mesh".to_string(),
             None,
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8378,6 +8751,66 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-insert graph exactly (inverse-pair)");
+    }
+
+    /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `InsertMeshModifierCommand`
+    /// stamps the caller-supplied modifier metadata into the def's TOP-LEVEL
+    /// `preset_metadata`, targeting the inserted node's bare `NodeId`,
+    /// section named `"{object group name} — {modifier label}"` (mirrors the
+    /// glTF importer's modifier section convention, duplicated in
+    /// `modifier_section_label` since this crate has no renderer dep). Undo
+    /// restores `preset_metadata` verbatim; execute→undo→redo is
+    /// structurally stable (see the AddSceneObjectCommand sibling test for
+    /// why redo isn't byte-identical: `execute` mints a fresh random NodeId
+    /// every call).
+    #[test]
+    fn insert_modifier_stamps_exposures_and_undo_redo_are_stable() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(object_group_scene(&[]));
+
+        let mut cmd = InsertMeshModifierCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            1,
+            "node.bend_mesh".to_string(),
+            None,
+            vec![scene_param_meta("amount", "Amount")],
+            mirror_catalog_default(),
+        );
+
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let ids = modifier_ids_in_wire_order(def, &[1]);
+            assert_eq!(ids.len(), 1);
+            let inserted = def.nodes.iter().find(|n| n.id == 1).unwrap().group.as_deref().unwrap().nodes.iter().find(|n| n.id == ids[0]).unwrap();
+            assert_eq!(inserted.type_id, "node.bend_mesh");
+
+            let meta = def.preset_metadata.as_ref().expect("P1 stamped into top-level preset_metadata");
+            assert_eq!(meta.params.len(), 1);
+            assert_eq!(
+                meta.params[0].section.as_deref(),
+                Some("Hero — Bend_mesh"),
+                "section = '{{object group name}} — {{modifier label}}' (the fixture's group is named 'Hero')"
+            );
+            assert!(
+                meta.bindings.iter().any(|b| matches!(
+                    &b.target,
+                    BindingTarget::Node { node_id, param } if *node_id == inserted.node_id && param == "amount"
+                )),
+                "modifier exposure targets the inserted node's bare NodeId"
+            );
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(def.preset_metadata.is_none(), "undo restores the pre-insert (empty) preset_metadata verbatim");
+
+        cmd.execute(&mut project); // redo
+        assert_stamped(&project);
     }
 
     /// BUG-218 escape: the migrated/starter shape (`migrate_scene_object_wires`
@@ -8397,6 +8830,7 @@ mod tests {
             1,
             "node.bend_mesh".to_string(),
             None,
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8471,6 +8905,7 @@ mod tests {
             1,
             "node.bend_mesh".to_string(),
             Some(0),
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8500,6 +8935,7 @@ mod tests {
             1,
             "node.bend_mesh".to_string(),
             None,
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8529,6 +8965,7 @@ mod tests {
             1,
             "node.rotate_3d".to_string(),
             None,
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8561,6 +8998,7 @@ mod tests {
             1,
             "node.bend_mesh".to_string(),
             None,
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
