@@ -802,7 +802,6 @@ pub struct ParamCardPanel {
     node_count: usize,
 
     // Card position (for effect drag-reorder hit testing)
-    card_y: f32,
 }
 
 /// D17 "spawn pop" geometry: the card's outer frame rect scaled by `s` about
@@ -907,7 +906,6 @@ impl ParamCardPanel {
             delete_fade: None,
             first_node: 0,
             node_count: 0,
-            card_y: 0.0,
         }
     }
 
@@ -1194,8 +1192,15 @@ impl ParamCardPanel {
     pub fn effect_name(&self) -> &str {
         &self.name
     }
-    pub fn card_y(&self) -> f32 {
-        self.card_y
+    /// Live, scroll-current, animation-current bounds of this card's full
+    /// frame — the border node's rect. `None` if the card has never been
+    /// built (no `border_id`) or the node has since gone stale. This is a
+    /// read-through into `UITree`, not a cache: nothing is stored on
+    /// `ParamCardPanel` here. Use for hit-testing (e.g. drag);
+    /// `compute_height()` is a build-time/animated value that goes stale
+    /// under in-place scroll (`ScrollContainer::offset_content`).
+    pub fn live_bounds(&self, tree: &UITree) -> Option<Rect> {
+        Some(tree.get_bounds(self.border_id?))
     }
     pub fn first_node(&self) -> usize {
         self.first_node
@@ -2210,7 +2215,6 @@ impl ParamCardPanel {
         // Stacking/hit-test position stays at the UNSCALED rect — only the
         // drawn geometry below pops; a card mid-pop must not jitter its
         // neighbors' reflow or its own drag-reorder hit test.
-        self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.label_cache.iter_mut().for_each(|v| *v = None);
 
@@ -2974,7 +2978,6 @@ impl ParamCardPanel {
 
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
-        self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
         self.label_cache.iter_mut().for_each(|v| *v = None);
