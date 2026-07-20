@@ -154,7 +154,7 @@ impl Primitive for FlattenToCameraPlane {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; cam_fwd_x/y/z as derived fields).
-            // flatten_to_camera_plane.wgsl is the parity oracle.
+            // flatten_to_camera_plane.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.flatten_to_camera_plane standalone codegen"),
@@ -247,103 +247,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — flatten_to_camera_plane had no
-    //! GPU test. The generated kernel (cam_fwd_x/y/z as three derived fields;
-    //! aliased in/out on slots 1 and 2) must reproduce the hand kernel particle-
-    //! for-particle (depth-collapse toward the camera plane, dead pass-through).
-    use super::*;
-    use crate::generators::compute_common::Particle;
-
-    fn dispatch_flatten(
-        wgsl: &str,
-        particles: &[Particle],
-        uniform: &[u8],
-        count: u32,
-        is_generated: bool,
-    ) -> Vec<Particle> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "flatten-oracle");
-        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
-        unsafe {
-            buf.write(0, bytemuck::cast_slice(particles));
-        }
-        let mut bindings = vec![
-            GpuBinding::Bytes { binding: 0, data: uniform },
-            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
-        ];
-        if is_generated {
-            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &buf, offset: 0 });
-        }
-        let mut enc = device.create_encoder("flatten-oracle");
-        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "flatten-oracle");
-        enc.commit_and_wait_completed();
-        let ptr = buf.mapped_ptr().expect("shared particle buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_flatten_matches_hand_kernel() {
-        let mk = |pos: [f32; 3], life: f32| Particle {
-            position: pos,
-            _pad0: 0.0,
-            velocity: [0.1, -0.2, 0.3],
-            life,
-            age: 0.5,
-            _pad1: [0.0; 3],
-            color: [0.2, 0.4, 0.6, 1.0],
-        };
-        let particles = [
-            mk([0.3, 0.7, 0.9], 1.0),
-            mk([0.8, 0.2, 0.1], 1.0),
-            mk([0.5, 0.5, 0.5], 1.0),
-            mk([0.4, 0.6, 0.2], 0.0), // dead → unchanged
-        ];
-        let n = particles.len() as u32;
-        let flatten = 0.7f32;
-        // A normalized-ish camera forward.
-        let (fx, fy, fz) = (0.3f32, -0.2f32, 0.93f32);
-
-        // Hand layout: active_count(u32), flatten(f32), cam_fwd_x/y/z(f32), pad, pad, pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&flatten.to_le_bytes());
-        for v in [fx, fy, fz] {
-            hand.extend_from_slice(&v.to_le_bytes());
-        }
-        hand.extend_from_slice(&[0u8; 12]);
-
-        // Generated layout: flatten(f32), active_count(i32), cam_fwd_x/y/z(f32),
-        //   dispatch_count(u32), pad, pad.
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&flatten.to_le_bytes());
-        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
-        for v in [fx, fy, fz] {
-            gen_bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        gen_bytes.extend_from_slice(&n.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 8]);
-
-        let hand_wgsl = include_str!("shaders/flatten_to_camera_plane.wgsl");
-        let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<FlattenToCameraPlane>()
-                .expect("flatten_to_camera_plane buffer codegen");
-
-        let from_hand = dispatch_flatten(hand_wgsl, &particles, &hand, n, false);
-        let from_gen = dispatch_flatten(&gen_wgsl, &particles, &gen_bytes, n, true);
-
-        for i in 0..particles.len() {
-            for c in 0..3 {
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "particle {i} position[{c}]: hand={} gen={}",
-                    from_hand[i].position[c],
-                    from_gen[i].position[c]
-                );
-            }
-            assert!((from_hand[i].life - from_gen[i].life).abs() < 1e-6, "particle {i} life");
-        }
-    }
-}

@@ -151,7 +151,7 @@ impl Primitive for ContainerRepelForce3D {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // multi-input coincident; SDF helpers inlined).
-            // container_repel_force_3d.wgsl is the parity oracle.
+            // container_repel_force_3d.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.push_from_walls_3d standalone codegen"),
@@ -249,105 +249,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain multi-input coincident parity oracle (freeze §12) — the
-    //! generated kernel reads the force `in` + `particles`, adds the SDF-wall
-    //! cushion to the force, writes it back (aliased). Must reproduce the hand
-    //! kernel force-for-force across the SDF container modes. The hand binds
-    //! particles@1/forces@2; the generated binds forces@1/particles@2/forces@3.
-    use super::*;
-    use crate::generators::compute_common::Particle;
-
-    fn dispatch_repel(
-        wgsl: &str,
-        forces: &[[f32; 3]],
-        particles: &[Particle],
-        uniform: &[u8],
-        count: u32,
-        generated: bool,
-    ) -> Vec<[f32; 3]> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "repel-oracle");
-        let f_buf = device.create_buffer_shared(std::mem::size_of_val(forces) as u64);
-        let p_buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
-        unsafe {
-            f_buf.write(0, bytemuck::cast_slice(forces));
-            p_buf.write(0, bytemuck::cast_slice(particles));
-        }
-        let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: uniform }];
-        if generated {
-            bindings.push(GpuBinding::Buffer { binding: 1, buffer: &f_buf, offset: 0 });
-            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &p_buf, offset: 0 });
-            bindings.push(GpuBinding::Buffer { binding: 3, buffer: &f_buf, offset: 0 });
-        } else {
-            bindings.push(GpuBinding::Buffer { binding: 1, buffer: &p_buf, offset: 0 });
-            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &f_buf, offset: 0 });
-        }
-        let mut enc = device.create_encoder("repel-oracle");
-        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "repel-oracle");
-        enc.commit_and_wait_completed();
-        let ptr = f_buf.mapped_ptr().expect("shared force buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const [f32; 3], forces.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_repel_matches_hand_kernel_all_modes() {
-        let mk = |pos: [f32; 3], life: f32| Particle {
-            position: pos,
-            _pad0: 0.0,
-            velocity: [0.0; 3],
-            life,
-            age: 0.0,
-            _pad1: [0.0; 3],
-            color: [0.0; 4],
-        };
-        // Positions near / past the container walls so the repel triggers.
-        let particles = [
-            mk([0.88, 0.5, 0.5], 1.0),
-            mk([0.5, 0.12, 0.5], 1.0),
-            mk([0.5, 0.5, 0.5], 1.0),   // centre → no repel
-            mk([0.92, 0.92, 0.92], 0.0), // dead → unchanged
-        ];
-        let forces: [[f32; 3]; 4] =
-            [[0.1, 0.2, 0.3], [-0.1, 0.0, 0.2], [0.05, 0.05, 0.05], [0.9, 0.9, 0.9]];
-        let n = particles.len() as u32;
-        let ctr_scale = 0.8f32;
-
-        for container in 1u32..4u32 {
-            // Hand layout: active_count(u32), container(u32), ctr_scale(f32), pad.
-            let mut hand = Vec::new();
-            hand.extend_from_slice(&n.to_le_bytes());
-            hand.extend_from_slice(&container.to_le_bytes());
-            hand.extend_from_slice(&ctr_scale.to_le_bytes());
-            hand.extend_from_slice(&0u32.to_le_bytes());
-
-            // Generated layout: container(u32), ctr_scale(f32), active_count(i32), dispatch_count(u32).
-            let mut gen_bytes = Vec::new();
-            gen_bytes.extend_from_slice(&container.to_le_bytes());
-            gen_bytes.extend_from_slice(&ctr_scale.to_le_bytes());
-            gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
-            gen_bytes.extend_from_slice(&n.to_le_bytes());
-
-            let hand_wgsl = include_str!("shaders/container_repel_force_3d.wgsl");
-            let gen_wgsl =
-                crate::node_graph::freeze::codegen::standalone_for_spec::<ContainerRepelForce3D>()
-                    .expect("container_repel_force_3d buffer codegen");
-
-            let from_hand = dispatch_repel(hand_wgsl, &forces, &particles, &hand, n, false);
-            let from_gen = dispatch_repel(&gen_wgsl, &forces, &particles, &gen_bytes, n, true);
-
-            for i in 0..forces.len() {
-                for c in 0..3 {
-                    assert!(
-                        (from_hand[i][c] - from_gen[i][c]).abs() < 1e-6,
-                        "container {container} force {i}[{c}]: hand={} gen={}",
-                        from_hand[i][c],
-                        from_gen[i][c]
-                    );
-                }
-            }
-        }
-    }
-}

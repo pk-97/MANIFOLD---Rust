@@ -233,61 +233,6 @@ mod gpu_tests {
         slice.to_vec()
     }
 
-    #[test]
-    fn generated_triangulate_matches_hand_kernel() {
-        const COLS: u32 = 3;
-        const ROWS: u32 = 3;
-        // 3x3 grid, row-major: idx = row*cols + col. Give heights so normals vary.
-        let mut grid = Vec::new();
-        for row in 0..ROWS {
-            for col in 0..COLS {
-                let x = col as f32 / (COLS - 1) as f32;
-                let y = row as f32 / (ROWS - 1) as f32;
-                let h = (x * 2.0).sin() * (y * 2.0).cos() * 0.3;
-                grid.push(grid_vertex([x, h, y], [x, y]));
-            }
-        }
-        // (3-1)*(3-1)*6 = 24 triangle verts; pad to 30 to exercise the padding.
-        const DST_CAP: u32 = 30;
-
-        // Hand layout: src_cols(u32), src_rows(u32), dst_capacity(u32), pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&COLS.to_le_bytes());
-        hand.extend_from_slice(&ROWS.to_le_bytes());
-        hand.extend_from_slice(&DST_CAP.to_le_bytes());
-        hand.extend_from_slice(&0u32.to_le_bytes());
-
-        // Generated layout: src_cols(i32), src_rows(i32), dispatch_count(u32), pad.
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&(COLS as i32).to_le_bytes());
-        gen_bytes.extend_from_slice(&(ROWS as i32).to_le_bytes());
-        gen_bytes.extend_from_slice(&DST_CAP.to_le_bytes());
-        gen_bytes.extend_from_slice(&0u32.to_le_bytes());
-
-        let hand_wgsl = include_str!("shaders/triangulate_grid.wgsl");
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
-            .expect("triangulate_grid buffer codegen");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "gather input is read-only global");
-
-        let from_hand = dispatch_tri(hand_wgsl, &grid, DST_CAP, &hand);
-        let from_gen = dispatch_tri(&gen_wgsl, &grid, DST_CAP, &gen_bytes);
-
-        for i in 0..DST_CAP as usize {
-            for c in 0..3 {
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "vertex {i} position[{c}]: hand={} gen={}",
-                    from_hand[i].position[c],
-                    from_gen[i].position[c]
-                );
-                assert!(
-                    (from_hand[i].normal[c] - from_gen[i].normal[c]).abs() < 1e-6,
-                    "vertex {i} normal[{c}]"
-                );
-            }
-            assert_eq!(from_hand[i].uv, from_gen[i].uv, "vertex {i} uv");
-        }
-    }
 
     /// BUG-120: on a flat XZ grid the per-vertex normal is always the
     /// declared +Y up-vector (`tg_compute_normal`'s finite difference has no

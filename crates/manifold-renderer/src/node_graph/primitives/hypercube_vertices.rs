@@ -223,7 +223,7 @@ mod gpu_tests {
     //! the legacy `generate_tesseract_vertices` produced (which baked
     //! `sign * 0.125` — i.e. exactly the `dimension = 4` case here).
     use manifold_core::{Beats, Seconds};
-    use manifold_gpu::{GpuBinding, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use crate::generators::mesh_common::Vec4Vertex;
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -389,69 +389,6 @@ mod gpu_tests {
             }
             let mag = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2] + p[3] * p[3]).sqrt();
             assert!((mag - 0.25).abs() < 1e-5, "vertex {i} magnitude {mag} != 0.25");
-        }
-    }
-
-    /// Buffer-domain SOURCE parity oracle (freeze §12) — direct hand-vs-generated
-    /// kernel comparison (the two `gpu_vertices_match_closed_form_at_each_dimension`
-    /// / `dimension_four_is_full_unit_corner` tests above already exercise the
-    /// generated kernel end-to-end via the real execution graph; this test isolates
-    /// the standalone-generated WGSL against the hand `hypercube_vertices.wgsl`
-    /// oracle directly, matching the `displace_mesh` / `generate_cube_mesh` pattern).
-    fn dispatch_hypercube(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<Vec4Vertex> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "hypercube-oracle");
-        let out_buf = device.create_buffer_shared(capacity as u64 * 16);
-        let mut enc = device.create_encoder("hypercube-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &out_buf, offset: 0 },
-            ],
-            [capacity.div_ceil(64), 1, 1],
-            "hypercube-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let slice =
-            unsafe { std::slice::from_raw_parts(ptr as *const Vec4Vertex, capacity as usize) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_hypercube_vertices_matches_hand_kernel() {
-        const CAPACITY: u32 = 16;
-        let dimension = 2.7f32;
-
-        // Hand layout: capacity(u32), dimension(f32), pad, pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&CAPACITY.to_le_bytes());
-        hand.extend_from_slice(&dimension.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 8]);
-
-        // Generated layout: dimension(f32), dispatch_count(u32), pad, pad.
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&dimension.to_le_bytes());
-        gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 8]);
-
-        let hand_wgsl = include_str!("shaders/hypercube_vertices.wgsl");
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<HypercubeVertices>()
-            .expect("hypercube_vertices buffer codegen");
-
-        let from_hand = dispatch_hypercube(hand_wgsl, CAPACITY, &hand);
-        let from_gen = dispatch_hypercube(&gen_wgsl, CAPACITY, &gen_bytes);
-
-        for i in 0..CAPACITY as usize {
-            for c in 0..4 {
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "vertex {i} component {c}: hand={} gen={}",
-                    from_hand[i].position[c],
-                    from_gen[i].position[c]
-                );
-            }
         }
     }
 }

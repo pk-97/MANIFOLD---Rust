@@ -563,46 +563,6 @@ mod gpu_tests {
         }
     }
 
-    /// **I1**: hand oracle (`coc_from_depth.wgsl`) vs the generated standalone
-    /// kernel (`standalone_for_spec::<CocFromDepth>()`) — both dispatched with
-    /// the IDENTICAL uniform bytes (the generated Params struct layout is
-    /// PARAMS-then-derived-fields, matching `CocFromDepthUniforms` field for
-    /// field, verified by `uniform_struct_is_32_bytes` above) on the same
-    /// synthetic depth ramp. Non-pinhole, non-trivial lens so every term in
-    /// the formula is exercised.
-    #[test]
-    fn generated_coc_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (16u32, 4u32);
-        let depth = depth_ramp(&device, w, h);
-        let uniforms = coc_uniforms(24.0, std::f32::consts::FRAC_PI_2, 0.1, 100.0, 2.0, 2.0);
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let hand_wgsl = include_str!("shaders/coc_from_depth.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "coc-hand");
-        let hand_out = dispatch_coc(&device, &hand_pipeline, &depth, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocFromDepth>()
-            .expect("node.coc_from_depth standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "coc-generated",
-        );
-        let gen_out = dispatch_coc(&device, &gen_pipeline, &depth, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..3 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 2e-3,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
 
     /// **I2a**: `f_stop = INFINITY` gives an exactly-zero CoC buffer,
     /// regardless of a non-uniform depth ramp underneath it — the generated

@@ -367,10 +367,10 @@ mod gpu_tests {
     //! uniform-depth plane equals the plain 9-tap gaussian; across a depth
     //! step it does not bleed. Three named tests per the invariant table:
     //! `bilateral_uniform_depth_matches_gaussian`, `bilateral_depth_edge_
-    //! no_bleed`, and the I1-pattern CPU-reference parity test. PLUS the
-    //! `docs/ADDING_PRIMITIVES.md` codegen-path mandate (generated-vs-hand
-    //! WGSL parity), mirroring `coc_from_depth.rs`'s / `ssao_from_depth.rs`'s
-    //! `generated_*_matches_hand_kernel`.
+    //! no_bleed`, and the I1-pattern CPU-reference parity test. (The
+    //! `docs/ADDING_PRIMITIVES.md` codegen-path generated-vs-hand-kernel
+    //! parity test was deleted 2026-07-20, W1-B, migration scaffolding
+    //! retired.)
     use half::f16;
 
     use manifold_gpu::{
@@ -680,46 +680,4 @@ mod gpu_tests {
         }
     }
 
-    /// **`docs/ADDING_PRIMITIVES.md` codegen-path mandate**: generated kernel
-    /// vs the hand-authored `bilateral_blur.wgsl` oracle — same fixture,
-    /// independent WGSL source, proves the codegen path itself (not just the
-    /// algorithm) is correct. Mirrors `coc_from_depth.rs` / `ssao_from_depth.rs`.
-    #[test]
-    fn generated_bilateral_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (20u32, 12u32);
-        let mut raw_depth = vec![0.0f32; (w * h) as usize];
-        for y in 0..h {
-            for x in 0..w {
-                let fx = x as f32 / (w.saturating_sub(1).max(1)) as f32;
-                raw_depth[(y * w + x) as usize] = 0.1 + 0.8 * fx;
-            }
-        }
-        let color = color_gradient(w, h);
-        let depth_tex = upload_depth(&device, w, h, &raw_depth);
-        let color_tex = upload_color(&device, w, h, &color);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-
-        let uniforms = BilateralBlurUniforms { axis: 0, depth_sigma: 0.2, near: 0.1, far: 100.0 };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let hand_wgsl = include_str!("shaders/bilateral_blur.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "bilateral-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes);
-
-        let gen_pipeline = generated_pipeline(&device, "bilateral-generated-vs-hand");
-        let gen_out = dispatch(&device, &gen_pipeline, &color_tex, &depth_tex, &sampler, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..4 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
 }

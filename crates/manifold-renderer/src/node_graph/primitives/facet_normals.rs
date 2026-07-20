@@ -182,11 +182,9 @@ mod tests {
 mod gpu_tests {
     //! Real-GPU value-level tests. Behavioral tests dispatch the GENERATED
     //! standalone kernel (the shipping runtime artifact, built by
-    //! `standalone_for_spec::<FacetNormals>()` from facet_normals_body.wgsl);
-    //! `generated_matches_hand_kernel` dispatches BOTH it and the hand
-    //! facet_normals.wgsl oracle and asserts element-wise equality — proving
-    //! this atom is genuinely on the codegen path (design D#10). Per
-    //! DECOMPOSING_GENERATORS.md §9's parity bar.
+    //! `standalone_for_spec::<FacetNormals>()` from facet_normals_body.wgsl).
+    //! (The generated-vs-hand-kernel parity test against `facet_normals.wgsl`
+    //! was deleted 2026-07-20, W1-B, migration scaffolding retired.)
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
@@ -239,47 +237,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        // Structural: buffer GATHER codegen — the input array global is bound
-        // (body indexes it) and NOT pre-read into an element arg.
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "input bound as read storage (gather)");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "output bound read_write");
-        assert!(!gen_wgsl.contains("let e_in = buf_in[idx]"), "gather input must NOT be pre-read");
-        let hand = include_str!("shaders/facet_normals.wgsl");
-
-        // 8 verts: two full triangles + a trailing partial pair (7,8th vertex).
-        let src = vec![
-            mk_vertex([0.0, 0.0, 0.0], [9.0, 9.0, 9.0], [0.0, 0.0]),
-            mk_vertex([4.0, 0.0, 0.0], [9.0, 9.0, 9.0], [1.0, 0.0]),
-            mk_vertex([0.0, 3.0, 0.0], [9.0, 9.0, 9.0], [0.0, 1.0]),
-            mk_vertex([1.0, 1.0, 1.0], [9.0, 9.0, 9.0], [0.2, 0.2]),
-            mk_vertex([2.0, 1.0, 1.0], [9.0, 9.0, 9.0], [0.4, 0.2]),
-            mk_vertex([1.0, 3.0, 1.0], [9.0, 9.0, 9.0], [0.2, 0.6]),
-            mk_vertex([5.0, 5.0, 5.0], [1.0, 2.0, 3.0], [0.9, 0.9]), // trailing partial
-            mk_vertex([6.0, 6.0, 6.0], [3.0, 2.0, 1.0], [0.8, 0.8]), // trailing partial
-        ];
-        let from_gen_wgsl = dispatch_facet(&device, &gen_wgsl, &src);
-        let from_hand = dispatch_facet(&device, hand, &src);
-        for i in 0..src.len() {
-            for c in 0..3 {
-                assert!(
-                    (from_gen_wgsl[i].position[c] - from_hand[i].position[c]).abs() < 1e-6,
-                    "vertex {i} pos[{c}]"
-                );
-                assert!(
-                    (from_gen_wgsl[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-6,
-                    "vertex {i} normal[{c}]: gen={} hand={}",
-                    from_gen_wgsl[i].normal[c],
-                    from_hand[i].normal[c]
-                );
-            }
-            assert_eq!(from_gen_wgsl[i].uv, from_hand[i].uv, "vertex {i} uv");
-        }
-    }
 
     #[test]
     fn analytic_normal_on_a_right_triangle() {

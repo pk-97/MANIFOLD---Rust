@@ -349,45 +349,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("var<storage, read> buf_path"), "path gather input read-only");
-        assert!(gen_wgsl.contains("var<storage, read> buf_lift"), "lift gather input read-only");
-        assert!(gen_wgsl.contains("var<storage, read> buf_radius_scale"), "radius_scale gather input read-only");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-
-        let hand = include_str!("shaders/tube_from_path.wgsl");
-        let path = vec![
-            mk_curve(0.0, 0.0),
-            mk_curve(1.0, 0.0),
-            mk_curve(2.0, 1.0),
-            mk_curve(2.0, 2.0),
-        ];
-        let lift = [0.0f32, 0.3, 0.6, 0.9];
-        let rscale = [1.0f32, 0.8, 0.5, 0.2];
-        const SIDES: i32 = 6;
-        const DST_CAP: u32 = 4 * 7 + 5;
-
-        for &(use_lift, use_rs) in &[(false, false), (true, false), (false, true), (true, true)] {
-            let l = if use_lift { Some(&lift[..]) } else { None };
-            let r = if use_rs { Some(&rscale[..]) } else { None };
-            let from_gen = dispatch_tube(&device, &gen_wgsl, &path, l, r, DST_CAP, 0.2, SIDES);
-            let from_hand = dispatch_tube(&device, hand, &path, l, r, DST_CAP, 0.2, SIDES);
-            for i in 0..DST_CAP as usize {
-                for c in 0..3 {
-                    assert!(
-                        (from_gen[i].position[c] - from_hand[i].position[c]).abs() < 1e-4,
-                        "lift={use_lift} rs={use_rs} vertex {i} position[{c}]: gen={} hand={}",
-                        from_gen[i].position[c],
-                        from_hand[i].position[c]
-                    );
-                }
-                assert_eq!(from_gen[i].uv, from_hand[i].uv, "lift={use_lift} rs={use_rs} vertex {i} uv");
-            }
-        }
-    }
 
     #[test]
     fn short_lift_and_radius_scale_degrade_to_identity_for_the_tail() {

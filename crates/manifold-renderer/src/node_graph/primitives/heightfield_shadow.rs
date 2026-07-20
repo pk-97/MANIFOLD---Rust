@@ -553,55 +553,6 @@ mod gpu_tests {
         readback_rgba(device, &out.texture, w, h)
     }
 
-    /// **Generated kernel vs the hand-authored `heightfield_shadow.wgsl`
-    /// oracle** (`docs/ADDING_PRIMITIVES.md` "The codegen path is
-    /// mandatory") — same fixture, independent WGSL source, at a
-    /// non-default `steps` to prove the dynamic loop bound agrees, not
-    /// just the default.
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (24u32, 16u32);
-        let raw = height_ramp_2d(w, h);
-        let height_tex = upload_height(&device, w, h, &raw);
-
-        let uniforms = HfShadowUniforms {
-            light_x: 0.5,
-            light_y: -0.3,
-            light_z: 0.6,
-            steps: 32.0,
-            strength: 1.0,
-            softness: 0.5,
-            relief: 0.25,
-            _pad0: 0.0,
-        };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let hand_wgsl = include_str!("shaders/heightfield_shadow.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "hfshadow-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &height_tex, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<HeightfieldShadow>()
-            .expect("node.heightfield_shadow standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "hfshadow-generated",
-        );
-        let gen_out = dispatch(&device, &gen_pipeline, &height_tex, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..3 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
 
     /// **Generated kernel vs CPU-Rust reference** — same house pattern as
     /// `ssao_gtao.rs`'s `gtao_matches_cpu_reference`: implement the

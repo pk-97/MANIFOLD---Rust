@@ -200,7 +200,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; two derived fields). The bespoke simplex is inlined
-            // in the body. apply_radial_burst_to_particles.wgsl is the parity oracle.
+            // in the body. apply_radial_burst_to_particles.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.add_burst standalone codegen"),
@@ -304,104 +304,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — apply_radial_burst had no GPU
-    //! test. The generated kernel (bespoke simplex inlined; two derived fields;
-    //! aliased in/out bound to slots 1 and 2) must reproduce the hand kernel
-    //! particle-for-particle: pushed positions for live in-radius particles,
-    //! unchanged for dead / out-of-radius. Deterministic simplex → bit-exact.
-    use super::*;
-
-    fn dispatch_burst(
-        wgsl: &str,
-        particles: &[Particle],
-        uniform: &[u8],
-        count: u32,
-        is_generated: bool,
-    ) -> Vec<Particle> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "burst-oracle");
-        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
-        unsafe {
-            buf.write(0, bytemuck::cast_slice(particles));
-        }
-        let mut bindings = vec![
-            GpuBinding::Bytes { binding: 0, data: uniform },
-            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
-        ];
-        if is_generated {
-            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &buf, offset: 0 });
-        }
-        let mut enc = device.create_encoder("burst-oracle");
-        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "burst-oracle");
-        enc.commit_and_wait_completed();
-        let ptr = buf.mapped_ptr().expect("shared particle buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_burst_matches_hand_kernel() {
-        let mk = |pos: [f32; 3], life: f32| Particle {
-            position: pos,
-            _pad0: 0.0,
-            velocity: [0.1, -0.2, 0.3],
-            life,
-            age: 0.5,
-            _pad1: [0.0; 3],
-            color: [0.2, 0.4, 0.6, 1.0],
-        };
-        let particles = [
-            mk([0.55, 0.52, 0.0], 1.0), // live, near point → pushed
-            mk([0.40, 0.45, 0.0], 1.0), // live, in radius → pushed
-            mk([0.95, 0.95, 0.0], 1.0), // live, far → no push
-            mk([0.50, 0.50, 0.0], 0.0), // dead → unchanged
-        ];
-        let n = particles.len() as u32;
-        let (px, py, amp, env, rad) = (0.5f32, 0.5f32, 1.0f32, 1.0f32, 0.4f32);
-        let (time_val, dt) = (1.3f32, 0.5f32);
-
-        // Hand layout: active_count(u32), pad, point_x, point_y, amplitude,
-        //   envelope, radius, time_val, dt_scaled, pad, pad, pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 4]);
-        for v in [px, py, amp, env, rad, time_val, dt] {
-            hand.extend_from_slice(&v.to_le_bytes());
-        }
-        hand.extend_from_slice(&[0u8; 12]);
-
-        // Generated layout: point_x, point_y, amplitude, envelope, radius,
-        //   active_count(i32), time_val, dt_scaled, dispatch_count(u32), 3 pad.
-        let mut gen_bytes = Vec::new();
-        for v in [px, py, amp, env, rad] {
-            gen_bytes.extend_from_slice(&v.to_le_bytes());
-        }
-        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
-        gen_bytes.extend_from_slice(&time_val.to_le_bytes());
-        gen_bytes.extend_from_slice(&dt.to_le_bytes());
-        gen_bytes.extend_from_slice(&n.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 12]);
-
-        let hand_wgsl = include_str!("shaders/apply_radial_burst_to_particles.wgsl");
-        let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<ApplyRadialBurstToParticles>()
-                .expect("apply_radial_burst_to_particles buffer codegen");
-
-        let from_hand = dispatch_burst(hand_wgsl, &particles, &hand, n, false);
-        let from_gen = dispatch_burst(&gen_wgsl, &particles, &gen_bytes, n, true);
-
-        for i in 0..particles.len() {
-            for c in 0..3 {
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "particle {i} position[{c}]: hand={} gen={}",
-                    from_hand[i].position[c],
-                    from_gen[i].position[c]
-                );
-            }
-            assert!((from_hand[i].life - from_gen[i].life).abs() < 1e-6, "particle {i} life");
-        }
-    }
-}

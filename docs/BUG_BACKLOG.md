@@ -56,7 +56,6 @@ or human can read it, and it needs no external tool.
 | BUG-243 | **analyzer-false-fires-on-sustained-pads** | sustained pad/swell material fires transient + kick events with zero real hits — analyzer false positives on non-percussive material — MED |
 | BUG-245 | **mapping-popover-trim-fields-dont-track-external-edits-after-open** | an open mapping popover's trim min/max fields don't track edits made elsewhere while it's open; reopen reseeds correctly — LOW |
 | BUG-244 | **graph-canvas-apply-live-values-skips-non-numeric-param-kinds** | the editor canvas's per-frame live-value overlay is scalar-only; enum/color/vec/table on-face values stay frozen until a graph_version bump — LOW-MED |
-| BUG-240 | **scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture** | `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no row family has supported since the card convergence — flow-script rot, not a live-app defect — LOW |
 | BUG-239 | **headless-script-harness-shows-stale-value-after-nontrivial-dispatch** | a `--script` flow's PNG/tree-dump keeps showing a param's PRE-write value after a real, correctly-dispatched write — headless-verification-only gap, live app unaffected — MED |
 | BUG-233 | **gizmo-move-scale-x-axis-color-collides-with-viewport-grid-x-axis** | the move/scale gizmo's red X-axis handle and the viewport grid's red X-axis line are near-identical colors, so the handle is hard to pick out with both overlays on — legibility only — LOW |
 | BUG-228 | **manifold-app-tests-gate-clippy-debt-recurrence** | `cargo clippy -p manifold-app --tests -- -D warnings` fails on 3 pre-existing unrelated lints, so the tests-profile clippy gate can't be enforced — LOW |
@@ -250,16 +249,6 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 **Root cause:** popover fields are seeded-at-open UI state with no membership in the per-frame value-sync plane (`sync_card_values` family).
 
 **Fix shape:** include the popover's non-focused fields in the per-frame value sync (skip the actively-edited field, same drag-guard convention `sync_card_values` documents), or resync on a mapping-version bump.
-
-### BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — `scene-setup-scrub-fine.json` asserts a Shift-held "fine drag" ratio on a scene param row that no family has supported since C-P1a, and none supports at all as of C-P1d — found 2026-07-18 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d closing session, re-verifying BUG-236's two flows
-
-**Status:** OPEN — LOW (flow-script rot describing a genuinely-retired gesture, not a live-app defect or regression this session introduced — the gesture was already gone for World's own Fog row since C-P1a; C-P1d's Modifier conversion just removed the LAST family that still had it, making the flow's premise fully, not partially, obsolete).
-
-**Symptom:** after fixing BUG-236's stale `"Outliner"` selector (this session), `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-scrub-fine.json` clears step 2 but fails at step 14: it drags `scene_setup.fog.density_value` (the Fog Density row's VALUE-TEXT cell) expecting the old `ValueDrag` delta-drag semantics (Shift = 0.1× rate), asserting the displayed value lands at a specific fractional read (`"0.30"`) after a plain drag and a smaller one (`"0.03"`) after a Shift-held drag. Fog moved onto the card protocol's `SliderDragState` (absolute-position track drag, no Shift-fine concept) back in C-P1a — the value-text cell isn't even drag-armable anymore (`SliderDragState::try_start_drag` only arms on `ids.track`), so the drag silently lands wherever a click-not-drag would, never reaching the asserted values.
-
-**Root cause:** design intent, not a bug in the shipped code — D4 (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md) deliberately replaced the old per-family delta-drag protocol (Shift = fine, `ValueDrag`) with the card's own absolute-position track-drag (no fine-shift mode) for every family, one family at a time (World/Object in C-P1a/b, Light/Camera in C-P1c, Modifier — the last holdout — in C-P1d). This flow was never updated across any of those four phases; C-P1d's own unit-test twin (`shift_drag_applies_a_tenth_the_delta`) was deleted this session for the identical reason (its target, Modifier's own bespoke delta-drag path, no longer exists to test).
-
-**Fix shape:** either delete `scene-setup-scrub-fine.json` outright (the gesture it tests is gone, not moved — there's no "fine drag" affordance left anywhere in the panel to re-target the flow at), or repurpose it to test something else entirely (e.g. the Shift-held fine-drag semantics of a DIFFERENT, still-live dock like `AudioSetupPanel`'s gain steppers, if that's a flow worth having). Not attempted this session — the flow isn't one of C-P1d's four required re-verify targets (fog/object-scrub/select-updates/modifier-stack), only its stale-text half was in scope via BUG-236.
 
 ### BUG-239 (headless-script-harness-shows-stale-value-after-nontrivial-dispatch) — a `--script` flow's PNG/tree-dump keeps showing a param's PRE-write value after a real, correctly-dispatched write — found 2026-07-17 during SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a
 
@@ -1299,6 +1288,7 @@ clean).
 
 ## Fixed
 
+- BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — FIXED 2026-07-20 (script deleted per its own fix shape, W1-B) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-186 (sheenwoodleathersofa-webp-error-message-misattribution) — FIXED @ IMPORT_ANYTHING_WAVE_DESIGN.md W1, 2026-07-17 — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-001 (pasting-effect-shares-sources-effectid) — FIXED — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-002 (clip-clone-new-id-doesnt-regenerate-nested-effect) — FIXED — full history in docs/archive/BUG_BACKLOG_CLOSED.md

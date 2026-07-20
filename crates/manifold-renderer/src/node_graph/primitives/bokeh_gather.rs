@@ -547,64 +547,6 @@ mod gpu_tests {
         );
     }
 
-    /// **I1b** (`docs/ADDING_PRIMITIVES.md` "The codegen path is
-    /// mandatory"): generated kernel vs the hand-authored `bokeh_gather.wgsl`
-    /// oracle — same fixture, independent WGSL source, proves the codegen
-    /// path itself (not just the algorithm) is correct. Same rare-
-    /// boundary-flip tolerance as I1a above and for the same reason (both
-    /// shaders implement the identical D5 spec; the divergence is
-    /// cross-shader-compile trig ULP amplified by the radius multiplier
-    /// before `step()`, not a codegen bug — see I1a's doc comment for the
-    /// empirical confirmation).
-    #[test]
-    fn generated_bokeh_gather_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (24u32, 16u32);
-        let (color_tex, _color_rgba) = color_gradient(&device, w, h);
-        let (coc_tex, _coc_rgba) = coc_ramp(&device, w, h);
-
-        let uniforms = bg_uniforms(24.0);
-        let bytes = bytemuck::bytes_of(&uniforms);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-
-        let hand_wgsl = include_str!("shaders/bokeh_gather.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "bokeh-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &sampler, &color_tex, &coc_tex, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<BokehGather>()
-            .expect("node.bokeh_gather standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "bokeh-generated-vs-hand",
-        );
-        let gen_out = dispatch(&device, &gen_pipeline, &sampler, &color_tex, &coc_tex, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        let mut sum_abs = 0.0f64;
-        let mut n = 0u32;
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..4 {
-                let d = (h_px[c] - g_px[c]).abs();
-                assert!(
-                    d < 0.05,
-                    "texel {i} channel {c}: hand={} gen={} diff={d} exceeds a whole-tap's \
-                     worth of contribution — looks like a real codegen mismatch, not trig \
-                     ULP rounding",
-                    h_px[c],
-                    g_px[c]
-                );
-                sum_abs += f64::from(d);
-                n += 1;
-            }
-        }
-        let mean = sum_abs / f64::from(n);
-        assert!(
-            mean < 0.01,
-            "mean abs diff {mean} is too high for isolated ULP-level boundary flips — \
-             suggests a systematic codegen mismatch"
-        );
-    }
 
     /// **I2**: a uniform-zero CoC field is an exact pass-through of `in` —
     /// mirrors `node.variable_blur`'s own in-focus (`center_coc < 0.005`)
