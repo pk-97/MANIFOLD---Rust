@@ -149,7 +149,7 @@ impl LiveTriggerState {
                 // sensitivity-scaled raw signal for edge detection.
                 let prev_raw_before_condition = follower.prev_raw;
                 // The return value is unused (firing AND the meter both read
-                // `edge_level` since the 2026-07-19 meter-honesty fix), but
+                // `edge_level`), but
                 // the call itself is load-bearing: it advances
                 // `follower.prev_raw`, which the rate-of-change arm of
                 // `edge_level` differences against next tick.
@@ -182,8 +182,7 @@ impl LiveTriggerState {
                 // the clip fires. Pushed before the edge check so the meter
                 // reflects the level every tick, not only on a fire — and,
                 // since BUG-109, whether or not `fire_enabled` is set, so the
-                // meter breathes with the music while stopped. Since
-                // 2026-07-19 (param-drawer unification) that signal is
+                // meter breathes with the music while stopped. That signal is
                 // `edge_level`, NOT `conditioned`: BUG-242 moved firing onto
                 // the sensitivity-scaled raw edge, and a meter showing the
                 // shaped envelope lied about where the threshold sat.
@@ -280,11 +279,7 @@ mod tests {
     fn two_impulses_80ms_apart_both_fire_with_default_shape_release() {
         // BUG-242: with the DEFAULT shape (release_ms = 120, untouched),
         // two onsets landing ~80ms apart — well inside the release tail —
-        // must both fire. Before the fix, `TransientEdge::advance` read the
-        // shape-CONDITIONED envelope, which was still decaying above the
-        // 0.5 * REARM_RATIO re-arm floor 80ms after the first onset (a
-        // 120ms release hasn't cleared that floor by then), so the second
-        // onset never re-armed the edge. After the fix the edge reads the
+        // must both fire. After the fix the edge reads the
         // sensitivity-scaled RAW signal, which drops straight back to 0 the
         // tick after each onset (mirroring the upstream transient
         // detector's own decaying-impulse-per-onset shape), clearing the

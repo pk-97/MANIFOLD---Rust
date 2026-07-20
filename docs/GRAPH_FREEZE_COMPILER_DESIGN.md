@@ -1,6 +1,6 @@
 # Graph Freeze / Fusion Compiler — Design
 
-**Status:** v1 LANDED 2026-06-03 (§12.3 steps 0–5; header corrected 2026-07-05 — it still read "DRAFT for review" a month after landing). **`docs/FREEZE_COMPILER_MAP.md` is the authoritative current-state map; this doc's body sections are partly superseded — read the MAP first.** Originally drafted 2026-06-02 on branch `freeze-compiler`. Companion to `GRAPH_FREEZE_PHASE0_FINDINGS.md` (the measurements this design is aimed at). This is the keystone design — the `wgsl_body` calling convention (§4) and the region model (§3) are the decisions to sign off before implementation rollout.
+**Status:** v1 LANDED 2026-06-03 (§12.3 steps 0–5). **`docs/FREEZE_COMPILER_MAP.md` is the authoritative current-state map; this doc's body sections are partly superseded — read the MAP first.** Originally drafted 2026-06-02 on branch `freeze-compiler`. Companion to `GRAPH_FREEZE_PHASE0_FINDINGS.md` (the measurements this design is aimed at). This is the keystone design — the `wgsl_body` calling convention (§4) and the region model (§3) are the decisions to sign off before implementation rollout.
 
 Authored autonomously overnight per Peter's mandate ("go as far as sensible; make high-quality/safe design decisions; state-of-the-art but friendly for AI agents to develop and debug"). Decisions here are proposals; nothing is rolled out across the atom library until reviewed.
 

@@ -44,9 +44,7 @@
 
 // SDR: apply the true piecewise sRGB OETF (compositor outputs linear light;
 // CAMetalLayer applies the sRGB transfer function for display, but export
-// needs it baked in). BUG-128: this used to be a plain pow(1/2.2) curve,
-// which diverges from what the display and the still exporter actually show
-// (worst in the shadows). `manifold_srgb_encode` (ColorTransferFunctions.h)
+// needs it baked in). `manifold_srgb_encode` (ColorTransferFunctions.h)
 // is the one shared definition, ported from the tested Rust reference —
 // still_exporter.rs's `linear_to_srgb`. Built by concatenating
 // kManifoldColorTransferFunctionsMSL with this kernel body in

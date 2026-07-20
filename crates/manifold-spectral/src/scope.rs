@@ -15,8 +15,7 @@
 /// lane. [`Self::LANE_COLORS`] and [`Self::lanes`] follow the same order —
 /// both are length-checked against the field count at compile time.
 ///
-/// **Kick lane removed** (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
-/// §7.2 item 1, 2026-07-11, P8): this struct is the scope's own tick-lane
+/// This struct is the scope's own tick-lane
 /// display only — the underlying ridge-only kick detector
 /// (`crates/manifold-audio/src/analysis.rs`'s `kick_ridges`/`KickRidges`,
 /// `AudioFeatureKind::Kick`, the drawer's Kick feature button) is completely

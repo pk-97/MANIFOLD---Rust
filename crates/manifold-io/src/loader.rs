@@ -30,10 +30,7 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
 /// project and the renderer's catalog) can install them into the catalog
 /// overlay + core definition registry BEFORE
 /// [`Project::reconcile_param_manifests`] rebuilds every instance's param
-/// manifest against the now-complete registry
-/// (`PARAM_STORAGE_BOUNDARIES_DESIGN.md` D1–D3 — supersedes the old
-/// pre-deserialize JSON pre-scan, which raced project-local preset types
-/// against their own file's layer data, BUG-036).
+/// manifest against the now-complete registry.
 pub fn load_project_with(
     path: &Path,
     register_embedded_presets: impl FnOnce(&[EmbeddedPreset]),
