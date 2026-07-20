@@ -24,6 +24,9 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-034 — WIDGET_TREE P3: card-drag L3 flow variant not authored; geometry proven at L1 math + generic drag flow only
+Landed 2026-07-20 (P3 lane `cb2347b6` + P1a, merged together). The P3 gate names "drag flow (the `drag-clip.json` pattern, card variant)"; no card-drag flow exists on disk, so the landing ran the existing `timeline` `drag-clip.json` (green, L3, proves the drag input path generally) plus the new pure-math drop-target family and the INV-3 pin (`inv3_drag_targets_follow_live_bounds_after_in_place_scroll`, which drives through to the dispatched `EffectReorder`). Burn-down: author the card-drag flow in WIDGET_TREE P5's flow sweep (which owns flow accounting for the inspector surface) and close this when it exits 0.
+
 ### VD-030 — editor-window surfaces (REALTIME_3D P5c viewport, P6 gizmos) reach L2 only
 Landed 2026-07-17 (`34a38a45`, `b4d2d448`; `docs/landings/2026-07-17-scene-3d-ux-wave.md`). The flow driver has no graph-editor-window routing, so navigation and gizmo drags are proven by production-function tests + orchestrator-reviewed PNGs, never a scripted real-input pass. Burn-down: extend UI_AUTOMATION to the editor window (flow-driver routing for the second window), or Peter's L4 pass on the click-script.
 
