@@ -24,6 +24,9 @@ Rules (normative home: `DESIGN_DOC_STANDARD.md` §10):
 
 ## Open
 
+### VD-035 — scene-setup-modifier-stack flow unrunnable headless (BUG-293); modifier add/reorder pinned at value level only
+Found 2026-07-21 during the scene-convergence P5 flow sweep (14/15 scene-setup flows green; this is the 1 failure). The flow's modifier add goes through a context-menu action, and the `--script` driver drops `host.pending_actions` on the floor (BUG-293), so "Twist" never appears and the flow fails at its first post-add assert — a harness gap, not an app regression (the flow was green 2026-07-17 under the pre-convergence add path; the live app is unaffected). Burn-down: fix BUG-293 (route `pending_actions` like `app_render.rs` does), then re-run this flow unmodified; it is deliberately NOT re-pointed or weakened in the meantime.
+
 ### VD-034 — WIDGET_TREE P3: card-drag L3 flow variant not authored; geometry proven at L1 math + generic drag flow only
 Landed 2026-07-20 (P3 lane `cb2347b6` + P1a, merged together). The P3 gate names "drag flow (the `drag-clip.json` pattern, card variant)"; no card-drag flow exists on disk, so the landing ran the existing `timeline` `drag-clip.json` (green, L3, proves the drag input path generally) plus the new pure-math drop-target family and the INV-3 pin (`inv3_drag_targets_follow_live_bounds_after_in_place_scroll`, which drives through to the dispatched `EffectReorder`). Burn-down: author the card-drag flow in WIDGET_TREE P5's flow sweep (which owns flow accounting for the inspector surface) and close this when it exits 0.
 

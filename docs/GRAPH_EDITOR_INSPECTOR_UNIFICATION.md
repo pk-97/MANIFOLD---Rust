@@ -6,6 +6,7 @@
 SHIPPED 2026-07-15 (`d85ab207`); P1 PARTIAL — D1/D2/D7 shipped in the same
 landing, D3 (fit-at-every-width: elide/chip-wrap) and the width-sweep
 containment test still owed — see the section at the end of this doc.
+**Supersession note (2026-07-21, WIDGET_TREE P5 sweep):** Change 1's `ParamCardConfig`/`UiParamSlot` adapter steps describe machinery deleted by WIDGET_TREE P1b — the editor card now rides the single projection `state_sync::param_surface` (`ParamSurface`/`ParamRow`). Read the Change 1 sections as historical; any revival targets the projection, not a config adapter.
 **Related:** `docs/GRAPH_EDITOR_REDESIGN.md`, `project_graph_editor_redesign`, `project_binding_unification_design`, `feedback_graph_editor_unified_surface`
 
 > **Shipped — selection-follows.** Clicking an effect/generator card in the main
