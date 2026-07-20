@@ -293,14 +293,73 @@ impl Default for RelightCardConfig {
     }
 }
 
+/// One param row's driver/envelope/automation modulation facts — the per-row
+/// struct `ParamCardConfig::rows_mod` carries. Collapses the former fourteen
+/// parallel per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one
+/// struct per row.
+#[derive(Debug, Clone)]
+pub struct RowMod {
+    /// Driver exists and is enabled.
+    pub driver_active: bool,
+    /// Envelope exists and is enabled.
+    pub envelope_active: bool,
+    /// Driver trim min (normalized). Defaults to 0.0.
+    pub trim_min: f32,
+    /// Driver trim max (normalized). Defaults to 1.0.
+    pub trim_max: f32,
+    /// Envelope target (the orange handle, normalized). Default 1.0.
+    pub target_norm: f32,
+    /// Envelope decay time in beats. Default 1.0.
+    pub env_decay: f32,
+    /// Driver beat division button index (0-10). -1 if no driver.
+    pub driver_beat_div_idx: i32,
+    /// Driver waveform index (0-4). -1 if no driver.
+    pub driver_waveform_idx: i32,
+    /// Driver reversed state.
+    pub driver_reversed: bool,
+    /// Driver dotted modifier active.
+    pub driver_dotted: bool,
+    /// Driver triplet modifier active.
+    pub driver_triplet: bool,
+    /// Driver free-running period in beats (`Some` => free mode).
+    pub driver_free_period: Option<f32>,
+    /// An enabled automation lane (≥1 point) exists on this instance for
+    /// this param — drives the red "automated" dot (P4 §7).
+    pub automation_active: bool,
+    /// That lane is currently overridden (latched) — the dot grays instead
+    /// of showing red.
+    pub automation_overridden: bool,
+}
+
+impl Default for RowMod {
+    fn default() -> Self {
+        Self {
+            driver_active: false,
+            envelope_active: false,
+            trim_min: 0.0,
+            trim_max: 1.0,
+            target_norm: 1.0,
+            env_decay: 1.0,
+            driver_beat_div_idx: -1,
+            driver_waveform_idx: -1,
+            driver_reversed: false,
+            driver_dotted: false,
+            driver_triplet: false,
+            driver_free_period: None,
+            automation_active: false,
+            automation_overridden: false,
+        }
+    }
+}
+
 /// Configuration for building / refreshing one parameter card.
 ///
 /// The union of what the effect and generator cards need. Effect-only fields
 /// (`effect_index`, `effect_id`, `enabled`, `supports_envelopes`, the badge
 /// aggregates, `has_graph_mod`) carry defaults for generators; the
 /// generator-only `string_params` / `layer_id` carry empty / `None` for
-/// effects. The `…_active` / `trim_*` / `env_*` / `driver_*` vectors are the
-/// shared per-param modulation state both kinds drive identically.
+/// effects. `rows_mod` is the shared per-param modulation state both kinds
+/// drive identically.
 #[derive(Debug, Clone)]
 pub struct ParamCardConfig {
     pub kind: ParamCardKind,
@@ -331,42 +390,15 @@ pub struct ParamCardConfig {
     pub layer_id: Option<LayerId>,
 
     // ── Shared per-param modulation state ──
-    /// Per-param: driver exists and is enabled.
-    pub driver_active: Vec<bool>,
-    /// Per-param: envelope exists and is enabled.
-    pub envelope_active: Vec<bool>,
-    /// Per-param driver trim min (normalized). Defaults to 0.0.
-    pub trim_min: Vec<f32>,
-    /// Per-param driver trim max (normalized). Defaults to 1.0.
-    pub trim_max: Vec<f32>,
-    /// Per-param envelope target (the orange handle, normalized). Default 1.0.
-    pub target_norm: Vec<f32>,
-    /// Per-param envelope decay time in beats. Default 1.0.
-    pub env_decay: Vec<f32>,
-    /// Per-param driver beat division button index (0-10). -1 if no driver.
-    pub driver_beat_div_idx: Vec<i32>,
-    /// Per-param driver waveform index (0-4). -1 if no driver.
-    pub driver_waveform_idx: Vec<i32>,
-    /// Per-param driver reversed state.
-    pub driver_reversed: Vec<bool>,
-    /// Per-param driver dotted modifier active.
-    pub driver_dotted: Vec<bool>,
-    /// Per-param driver triplet modifier active.
-    pub driver_triplet: Vec<bool>,
-    /// Per-param driver free-running period in beats (`Some` => free mode).
-    pub driver_free_period: Vec<Option<f32>>,
+    /// Per-param driver/envelope/automation modulation facts, one [`RowMod`]
+    /// per card row (D3).
+    pub rows_mod: Vec<RowMod>,
     /// Audio-modulation state (per-param active/send/feature + card-level send
     /// list). Bundled so the config grows by one field. An `is_trigger_gate`
     /// row's config rides this SAME state (§9 — a trigger-gate card's audio
     /// config is a normal `ParameterAudioMod`, not a separate per-instance
     /// field); `trigger_mode_idx` is the one extra piece it reads.
     pub audio: super::param_slider_shared::AudioCardState,
-    /// Per-param: an enabled automation lane (≥1 point) exists on this
-    /// instance for this param — drives the red "automated" dot (P4 §7).
-    pub automation_active: Vec<bool>,
-    /// Per-param: that lane is currently overridden (latched) — the dot
-    /// grays instead of showing red.
-    pub automation_overridden: Vec<bool>,
     /// The "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
     /// P5b) — see [`RelightCardConfig`]'s doc.
     pub relight: RelightCardConfig,
@@ -935,23 +967,7 @@ impl ParamCardPanel {
         self.state.has_env = config.has_env;
         self.state.has_abl = config.has_abl;
         self.state.has_graph_mod = config.has_graph_mod;
-        self.state.mod_state.sync_from_config(
-            n,
-            &config.driver_active,
-            &config.envelope_active,
-            &config.trim_min,
-            &config.trim_max,
-            &config.target_norm,
-            &config.env_decay,
-            &config.driver_beat_div_idx,
-            &config.driver_waveform_idx,
-            &config.driver_reversed,
-            &config.driver_dotted,
-            &config.driver_triplet,
-            &config.driver_free_period,
-            &config.automation_active,
-            &config.automation_overridden,
-        );
+        self.state.mod_state.sync_from_config(n, &config.rows_mod);
         self.state.mod_state.sync_audio(n, &config.audio);
         // AUD badge aggregate: any param has an armed audio modulation (parallels
         // has_drv / has_env). Derived after sync_audio populates audio_active.
@@ -4829,21 +4845,8 @@ mod tests {
             has_env: false,
             has_abl: false,
             has_graph_mod: false,
-            driver_active: vec![false; n],
-            envelope_active: vec![false; n],
-            trim_min: vec![0.0; n],
-            trim_max: vec![1.0; n],
-            target_norm: vec![1.0; n],
-            env_decay: vec![1.0; n],
-            driver_beat_div_idx: vec![-1; n],
-            driver_waveform_idx: vec![-1; n],
-            driver_reversed: vec![false; n],
-            driver_dotted: vec![false; n],
-            driver_triplet: vec![false; n],
-            driver_free_period: vec![None; n],
+            rows_mod: vec![RowMod::default(); n],
             audio: Default::default(),
-            automation_active: vec![false; n],
-            automation_overridden: vec![false; n],
             relight: RelightCardConfig::default(),
         }
     }
@@ -4893,20 +4896,7 @@ mod tests {
             section: None,
         });
         let n = c.params.len();
-        c.driver_active.resize(n, false);
-        c.envelope_active.resize(n, false);
-        c.trim_min.resize(n, 0.0);
-        c.trim_max.resize(n, 1.0);
-        c.target_norm.resize(n, 1.0);
-        c.env_decay.resize(n, 1.0);
-        c.driver_beat_div_idx.resize(n, -1);
-        c.driver_waveform_idx.resize(n, -1);
-        c.driver_reversed.resize(n, false);
-        c.driver_dotted.resize(n, false);
-        c.driver_triplet.resize(n, false);
-        c.driver_free_period.resize(n, None);
-        c.automation_active.resize(n, false);
-        c.automation_overridden.resize(n, false);
+        c.rows_mod.resize(n, RowMod::default());
         c
     }
 
@@ -5007,41 +4997,17 @@ mod tests {
             section: None,
         });
         let n = c.params.len();
-        c.driver_active.resize(n, false);
-        c.envelope_active.resize(n, false);
-        c.trim_min.resize(n, 0.0);
-        c.trim_max.resize(n, 1.0);
-        c.target_norm.resize(n, 1.0);
-        c.env_decay.resize(n, 1.0);
-        c.driver_beat_div_idx.resize(n, -1);
-        c.driver_waveform_idx.resize(n, -1);
-        c.driver_reversed.resize(n, false);
-        c.driver_dotted.resize(n, false);
-        c.driver_triplet.resize(n, false);
-        c.driver_free_period.resize(n, None);
-        c.automation_active.resize(n, false);
-        c.automation_overridden.resize(n, false);
+        c.rows_mod.resize(n, RowMod::default());
 
         c.audio.send_labels = vec!["Kick".into()];
         c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
-        c.audio.active = vec![false; n];
-        c.audio.send_id = vec![None; n];
-        c.audio.kind_idx = vec![0; n];
-        c.audio.band_idx = vec![0; n];
-        c.audio.range_min = vec![0.0; n];
-        c.audio.range_max = vec![1.0; n];
-        c.audio.invert = vec![false; n];
-        c.audio.rate = vec![false; n];
-        c.audio.sensitivity = vec![1.0; n];
-        c.audio.attack_ms = vec![5.0; n];
-        c.audio.release_ms = vec![120.0; n];
-        c.audio.trigger_mode_idx = vec![0; n];
+        c.audio.rows = vec![AudioRowState::default(); n];
         let gi = n - 1; // the clip_trigger row's index
-        c.audio.active[gi] = true;
-        c.audio.send_id[gi] = Some(manifold_foundation::AudioSendId::new("send-kick"));
-        c.audio.band_idx[gi] = 1; // Low
-        c.audio.sensitivity[gi] = 0.65;
-        c.audio.trigger_mode_idx[gi] = 2; // Both
+        c.audio.rows[gi].active = true;
+        c.audio.rows[gi].send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c.audio.rows[gi].band_idx = 1; // Low
+        c.audio.rows[gi].sensitivity = 0.65;
+        c.audio.rows[gi].trigger_mode_idx = 2; // Both
         c
     }
 
@@ -5088,7 +5054,7 @@ mod tests {
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_trigger_gate();
         let gi = cfg.params.len() - 1;
-        cfg.audio.active[gi] = false; // disarmed — drawer never builds
+        cfg.audio.rows[gi].active = false; // disarmed — drawer never builds
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
@@ -5193,7 +5159,7 @@ mod tests {
         // settles` above, but for the toggle/trigger row path specifically.
         let mut closed = effect_config_with_trigger_gate();
         let gi = closed.params.len() - 1;
-        closed.audio.active[gi] = false; // start disarmed — drawer closed
+        closed.audio.rows[gi].active = false; // start disarmed — drawer closed
         let mut panel = ParamCardPanel::new();
         panel.configure(&closed);
         let closed_h = panel.compute_height();
@@ -5381,7 +5347,10 @@ mod tests {
         let build_with_driver0 = |driver0: bool| {
             let mut tree = UITree::new();
             let mut c = effect_config_with_mappable(); // param[1] is mappable
-            c.driver_active = vec![driver0, false];
+            c.rows_mod = vec![
+                RowMod { driver_active: driver0, ..Default::default() },
+                RowMod::default(),
+            ];
             let mut panel = ParamCardPanel::new();
             panel.set_context(CardContext::Author);
             panel.configure(&c);
@@ -5865,23 +5834,9 @@ mod tests {
         let n = c.params.len();
         c.audio.send_labels = vec!["Kick".into()];
         c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
-        c.audio.active = vec![false; n];
-        c.audio.send_id = vec![None; n];
-        c.audio.kind_idx = vec![0; n];
-        c.audio.band_idx = vec![0; n];
-        c.audio.range_min = vec![0.0; n];
-        c.audio.range_max = vec![1.0; n];
-        c.audio.invert = vec![false; n];
-        c.audio.rate = vec![false; n];
-        c.audio.sensitivity = vec![1.0; n];
-        c.audio.attack_ms = vec![5.0; n];
-        c.audio.release_ms = vec![120.0; n];
-        c.audio.trigger_mode_idx = vec![0; n];
-        c.audio.action_idx = vec![0; n];
-        c.audio.step_amount = vec![1.0; n];
-        c.audio.wrap_idx = vec![0; n];
-        c.audio.active[0] = true;
-        c.audio.send_id[0] = Some(manifold_foundation::AudioSendId::new("send-kick"));
+        c.audio.rows = vec![AudioRowState::default(); n];
+        c.audio.rows[0].active = true;
+        c.audio.rows[0].send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
         c
     }
 
@@ -5928,7 +5883,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_audio_shape_armed();
-        cfg.audio.action_idx[0] = 1; // Step — the 4th drawer slider appears
+        cfg.audio.rows[0].action_idx = 1; // Step — the 4th drawer slider appears
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
@@ -6107,7 +6062,7 @@ mod tests {
         // drawer height and starts easing (Perform context eases; the param existed
         // across both configures, so it's a set_target, not a snap).
         let mut armed = effect_config();
-        armed.driver_active[0] = true;
+        armed.rows_mod[0].driver_active = true;
         panel.configure(&armed);
         assert!(
             panel.drawer_height_anim[0].is_animating(),
@@ -6170,7 +6125,7 @@ mod tests {
     #[test]
     fn configure_seeds_settled_height_when_drawer_already_armed_on_first_configure() {
         let mut armed = effect_config();
-        armed.driver_active[0] = true;
+        armed.rows_mod[0].driver_active = true;
 
         let mut panel = ParamCardPanel::new();
         panel.configure(&armed); // first-ever configure — drawer_height_anim starts empty
@@ -6602,21 +6557,8 @@ mod tests {
                 },
             ],
             string_params: vec![],
-            driver_active: vec![false; 3],
-            envelope_active: vec![false; 3],
-            trim_min: vec![0.0; 3],
-            trim_max: vec![1.0; 3],
-            target_norm: vec![1.0; 3],
-            env_decay: vec![1.0; 3],
-            driver_beat_div_idx: vec![-1; 3],
-            driver_waveform_idx: vec![-1; 3],
-            driver_reversed: vec![false; 3],
-            driver_dotted: vec![false; 3],
-            driver_triplet: vec![false; 3],
-            driver_free_period: vec![None; 3],
+            rows_mod: vec![RowMod::default(); 3],
             audio: Default::default(),
-            automation_active: vec![false; 3],
-            automation_overridden: vec![false; 3],
             relight: RelightCardConfig::default(),
         }
     }

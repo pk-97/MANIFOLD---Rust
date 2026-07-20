@@ -10,9 +10,9 @@ use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::param_card::{
-    ParamCardConfig, ParamCardKind, ParamCardStringInfo, ParamInfo,
+    ParamCardConfig, ParamCardKind, ParamCardStringInfo, ParamInfo, RowMod,
 };
-use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState};
+use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState, AudioRowState};
 use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
@@ -2510,31 +2510,15 @@ enum OscScope<'a> {
 /// exposed entry; hidden static slots and unchecked user-tail entries
 /// (the latter are removed from `user_param_bindings` rather than
 /// hidden, so they never reach this loop) are filtered at build time.
-/// The per-param driver + envelope display arrays for a card, all sized to `n`
-/// (the card's param count). Shared by the effect and generator card builders —
+/// Build the per-row driver + envelope + automation modulation facts for one
+/// preset instance's card, one [`RowMod`] per row (D3), all sized to `n` (the
+/// card's param count). Shared by the effect and generator card builders —
 /// the only thing that differs between them is `resolve`, the `param_id → slot
 /// index` mapping (an effect resolves via `param_id_to_value_index`, a generator
-/// via its graph/registry `id_to_index`). The arrays are identical; the
+/// via its graph/registry `id_to_index`). The rows are identical; the
 /// per-card `has_drv` / `has_env` summary flags stay with each caller (the
 /// generator card intentionally forces them false).
-pub(crate) struct CardModulation {
-    pub(crate) driver_active: Vec<bool>,
-    pub(crate) trim_min: Vec<f32>,
-    pub(crate) trim_max: Vec<f32>,
-    pub(crate) driver_beat_div_idx: Vec<i32>,
-    pub(crate) driver_waveform_idx: Vec<i32>,
-    pub(crate) driver_reversed: Vec<bool>,
-    pub(crate) driver_dotted: Vec<bool>,
-    pub(crate) driver_triplet: Vec<bool>,
-    pub(crate) driver_free_period: Vec<Option<f32>>,
-    pub(crate) envelope_active: Vec<bool>,
-    pub(crate) target_norm: Vec<f32>,
-    pub(crate) env_decay: Vec<f32>,
-    pub(crate) automation_active: Vec<bool>,
-    pub(crate) automation_overridden: Vec<bool>,
-}
-
-/// Build the driver + envelope display arrays for one preset instance's card.
+///
 /// `resolve` maps a modulation row's `param_id` to its card slot index.
 /// `latched` is `ContentState::automation_latched_params` — checked against
 /// `(inst.id, lane.param_id)` for the overridden-gray state (P4 §7's dot).
@@ -2549,23 +2533,8 @@ fn build_card_modulation(
     n: usize,
     resolve: impl Fn(&str) -> Option<usize>,
     latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> CardModulation {
-    let mut m = CardModulation {
-        driver_active: vec![false; n],
-        trim_min: vec![0.0; n],
-        trim_max: vec![1.0; n],
-        driver_beat_div_idx: vec![-1; n],
-        driver_waveform_idx: vec![-1; n],
-        driver_reversed: vec![false; n],
-        driver_dotted: vec![false; n],
-        driver_triplet: vec![false; n],
-        driver_free_period: vec![None; n],
-        envelope_active: vec![false; n],
-        target_norm: vec![1.0; n],
-        env_decay: vec![1.0; n],
-        automation_active: vec![false; n],
-        automation_overridden: vec![false; n],
-    };
+) -> Vec<RowMod> {
+    let mut rows = vec![RowMod::default(); n];
     if let Some(ref drivers) = inst.drivers {
         for d in drivers {
             if !d.enabled {
@@ -2574,15 +2543,16 @@ fn build_card_modulation(
             let Some(pi) = resolve(d.param_id.as_ref()).filter(|&pi| pi < n) else {
                 continue;
             };
-            m.driver_active[pi] = true;
-            m.trim_min[pi] = d.trim_min;
-            m.trim_max[pi] = d.trim_max;
-            m.driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
-            m.driver_waveform_idx[pi] = d.waveform as i32;
-            m.driver_reversed[pi] = d.reversed;
-            m.driver_dotted[pi] = d.beat_division.is_dotted();
-            m.driver_triplet[pi] = d.beat_division.is_triplet();
-            m.driver_free_period[pi] = d.free_period_beats;
+            let row = &mut rows[pi];
+            row.driver_active = true;
+            row.trim_min = d.trim_min;
+            row.trim_max = d.trim_max;
+            row.driver_beat_div_idx = beat_div_to_button_index(d.beat_division.base_division());
+            row.driver_waveform_idx = d.waveform as i32;
+            row.driver_reversed = d.reversed;
+            row.driver_dotted = d.beat_division.is_dotted();
+            row.driver_triplet = d.beat_division.is_triplet();
+            row.driver_free_period = d.free_period_beats;
         }
     }
     if let Some(ref envelopes) = inst.envelopes {
@@ -2593,9 +2563,10 @@ fn build_card_modulation(
             let Some(pi) = resolve(env.param_id.as_ref()).filter(|&pi| pi < n) else {
                 continue;
             };
-            m.envelope_active[pi] = true;
-            m.target_norm[pi] = env.target_normalized;
-            m.env_decay[pi] = env.decay_beats;
+            let row = &mut rows[pi];
+            row.envelope_active = true;
+            row.target_norm = env.target_normalized;
+            row.env_decay = env.decay_beats;
         }
     }
     if let Some(ref lanes) = inst.automation_lanes {
@@ -2609,13 +2580,14 @@ fn build_card_modulation(
             let Some(pi) = resolve(lane.param_id.as_ref()).filter(|&pi| pi < n) else {
                 continue;
             };
-            m.automation_active[pi] = true;
-            m.automation_overridden[pi] = latched
+            let row = &mut rows[pi];
+            row.automation_active = true;
+            row.automation_overridden = latched
                 .iter()
                 .any(|(eid, pid)| *eid == inst.id && *pid == lane.param_id);
         }
     }
-    m
+    rows
 }
 
 /// Build the per-param audio-modulation display state for a card from the
@@ -2635,21 +2607,7 @@ fn build_audio_card_state(
     resolve: impl Fn(&str) -> Option<usize>,
 ) -> AudioCardState {
     let mut a = AudioCardState {
-        active: vec![false; n],
-        send_id: vec![None; n],
-        kind_idx: vec![0; n],
-        band_idx: vec![0; n],
-        range_min: vec![0.0; n],
-        range_max: vec![1.0; n],
-        invert: vec![false; n],
-        rate: vec![false; n],
-        sensitivity: vec![1.0; n],
-        attack_ms: vec![5.0; n],
-        release_ms: vec![120.0; n],
-        trigger_mode_idx: vec![0; n],
-        action_idx: vec![0; n],
-        step_amount: vec![1.0; n],
-        wrap_idx: vec![0; n],
+        rows: vec![AudioRowState::default(); n],
         send_labels: Vec::new(),
         send_ids: Vec::new(),
     };
@@ -2660,17 +2618,18 @@ fn build_audio_card_state(
         let Some(pi) = resolve(am.param_id.as_ref()).filter(|&pi| pi < n) else {
             continue;
         };
-        a.active[pi] = true;
-        a.send_id[pi] = Some(am.source.send_id.clone());
-        a.range_min[pi] = am.shape.range_min;
-        a.range_max[pi] = am.shape.range_max;
-        a.invert[pi] = am.shape.invert;
-        a.rate[pi] = am.shape.rate_of_change;
-        a.sensitivity[pi] = am.shape.sensitivity;
-        a.attack_ms[pi] = am.shape.attack_ms;
-        a.release_ms[pi] = am.shape.release_ms;
-        a.kind_idx[pi] = am.source.feature.kind.index() as i32;
-        a.band_idx[pi] = am.source.feature.band.index() as i32;
+        let row = &mut a.rows[pi];
+        row.active = true;
+        row.send_id = Some(am.source.send_id.clone());
+        row.range_min = am.shape.range_min;
+        row.range_max = am.shape.range_max;
+        row.invert = am.shape.invert;
+        row.rate = am.shape.rate_of_change;
+        row.sensitivity = am.shape.sensitivity;
+        row.attack_ms = am.shape.attack_ms;
+        row.release_ms = am.shape.release_ms;
+        row.kind_idx = am.source.feature.kind.index() as i32;
+        row.band_idx = am.source.feature.band.index() as i32;
         // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
         // depends on the mod's action — a gate's (or a plain Continuous mod's)
         // arm-time default is `Both` (adding audio must not silently kill clip
@@ -2684,26 +2643,26 @@ fn build_audio_card_state(
         } else {
             manifold_core::audio_trigger::TriggerFireMode::Transient
         };
-        a.trigger_mode_idx[pi] = match am.trigger_mode.unwrap_or(default_mode) {
+        row.trigger_mode_idx = match am.trigger_mode.unwrap_or(default_mode) {
             manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
             manifold_core::audio_trigger::TriggerFireMode::Transient => 1,
             manifold_core::audio_trigger::TriggerFireMode::Both => 2,
         };
         match am.action {
             manifold_core::audio_mod::TriggerAction::Continuous => {
-                a.action_idx[pi] = 0;
+                row.action_idx = 0;
             }
             manifold_core::audio_mod::TriggerAction::Step { amount, wrap } => {
-                a.action_idx[pi] = 1;
-                a.step_amount[pi] = amount;
-                a.wrap_idx[pi] = match wrap {
+                row.action_idx = 1;
+                row.step_amount = amount;
+                row.wrap_idx = match wrap {
                     manifold_core::audio_mod::WrapMode::Wrap => 0,
                     manifold_core::audio_mod::WrapMode::Bounce => 1,
                     manifold_core::audio_mod::WrapMode::Clamp => 2,
                 };
             }
             manifold_core::audio_mod::TriggerAction::Random => {
-                a.action_idx[pi] = 2;
+                row.action_idx = 2;
             }
         }
     }
@@ -2719,7 +2678,7 @@ fn build_audio_card_state(
 /// audio-mod facts through this, instead of re-deriving the lookup a second
 /// time against the layer's generator `PresetInstance`.
 ///
-/// Returns `(CardModulation, AudioCardState)` sized to `n = 1` — index `0` is
+/// Returns `(Vec<RowMod>, AudioCardState)` sized to `n = 1` — index `0` is
 /// always the queried param, regardless of its real position in `inst.params`.
 /// `automation_latched` is `ContentState::automation_latched_params`, same as
 /// every other caller of `build_card_modulation`.
@@ -2732,7 +2691,7 @@ pub(crate) fn lookup_param_mod_for_id(
     inst: &PresetInstance,
     param_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> (CardModulation, AudioCardState) {
+) -> (Vec<RowMod>, AudioCardState) {
     let resolve = |id: &str| (id == param_id).then_some(0);
     (
         build_card_modulation(inst, 1, resolve, automation_latched),
@@ -2741,7 +2700,7 @@ pub(crate) fn lookup_param_mod_for_id(
 }
 
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): flatten
-/// [`lookup_param_mod_for_id`]'s sized-to-1 `(CardModulation, AudioCardState)`
+/// [`lookup_param_mod_for_id`]'s sized-to-1 `(Vec<RowMod>, AudioCardState)`
 /// into one scalar [`manifold_ui::panels::scene_setup_panel::RowModulation`]
 /// for a single Environment/Fog row. `inst = None` (no generator on the
 /// layer yet, or the layer isn't a generator) returns the idle default —
@@ -2788,36 +2747,38 @@ pub(crate) fn row_modulation_for_id(
         return RowModulation::default();
     };
     let (m, a) = lookup_param_mod_for_id(inst, param_id, automation_latched);
+    let row = &m[0];
+    let audio_row = &a.rows[0];
     RowModulation {
-        driver_active: m.driver_active[0],
-        trim_min: m.trim_min[0],
-        trim_max: m.trim_max[0],
-        driver_beat_div_idx: m.driver_beat_div_idx[0],
-        driver_waveform_idx: m.driver_waveform_idx[0],
-        driver_reversed: m.driver_reversed[0],
-        driver_dotted: m.driver_dotted[0],
-        driver_triplet: m.driver_triplet[0],
-        driver_free_period: m.driver_free_period[0],
-        envelope_active: m.envelope_active[0],
-        target_norm: m.target_norm[0],
-        env_decay: m.env_decay[0],
-        automation_active: m.automation_active[0],
-        automation_overridden: m.automation_overridden[0],
-        audio_active: a.active[0],
-        audio_send_id: a.send_id[0].clone(),
-        audio_kind_idx: a.kind_idx[0],
-        audio_band_idx: a.band_idx[0],
-        audio_range_min: a.range_min[0],
-        audio_range_max: a.range_max[0],
-        audio_invert: a.invert[0],
-        audio_rate: a.rate[0],
-        audio_sensitivity: a.sensitivity[0],
-        audio_attack_ms: a.attack_ms[0],
-        audio_release_ms: a.release_ms[0],
-        audio_trigger_mode_idx: a.trigger_mode_idx[0],
-        audio_action_idx: a.action_idx[0],
-        audio_step_amount: a.step_amount[0],
-        audio_wrap_idx: a.wrap_idx[0],
+        driver_active: row.driver_active,
+        trim_min: row.trim_min,
+        trim_max: row.trim_max,
+        driver_beat_div_idx: row.driver_beat_div_idx,
+        driver_waveform_idx: row.driver_waveform_idx,
+        driver_reversed: row.driver_reversed,
+        driver_dotted: row.driver_dotted,
+        driver_triplet: row.driver_triplet,
+        driver_free_period: row.driver_free_period,
+        envelope_active: row.envelope_active,
+        target_norm: row.target_norm,
+        env_decay: row.env_decay,
+        automation_active: row.automation_active,
+        automation_overridden: row.automation_overridden,
+        audio_active: audio_row.active,
+        audio_send_id: audio_row.send_id.clone(),
+        audio_kind_idx: audio_row.kind_idx,
+        audio_band_idx: audio_row.band_idx,
+        audio_range_min: audio_row.range_min,
+        audio_range_max: audio_row.range_max,
+        audio_invert: audio_row.invert,
+        audio_rate: audio_row.rate,
+        audio_sensitivity: audio_row.sensitivity,
+        audio_attack_ms: audio_row.attack_ms,
+        audio_release_ms: audio_row.release_ms,
+        audio_trigger_mode_idx: audio_row.trigger_mode_idx,
+        audio_action_idx: audio_row.action_idx,
+        audio_step_amount: audio_row.step_amount,
+        audio_wrap_idx: audio_row.wrap_idx,
     }
 }
 
@@ -2855,9 +2816,9 @@ mod param_mod_lookup_tests {
         inst.drivers = Some(vec![driver_for("intensity")]);
 
         let (modulation, _audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
-        assert_eq!(modulation.driver_active, vec![true]);
-        assert_eq!(modulation.trim_min, vec![0.1]);
-        assert_eq!(modulation.trim_max, vec![0.9]);
+        assert!(modulation[0].driver_active);
+        assert_eq!(modulation[0].trim_min, 0.1);
+        assert_eq!(modulation[0].trim_max, 0.9);
     }
 
     /// A driver on a DIFFERENT param id must not leak into this param's slot
@@ -2869,8 +2830,8 @@ mod param_mod_lookup_tests {
         inst.drivers = Some(vec![driver_for("fill")]);
 
         let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
-        assert_eq!(modulation.driver_active, vec![false]);
-        assert_eq!(audio.active, vec![false]);
+        assert!(!modulation[0].driver_active);
+        assert!(!audio.rows[0].active);
     }
 
     /// No drivers/envelopes/audio-mods at all → an idle single-slot result,
@@ -2880,9 +2841,9 @@ mod param_mod_lookup_tests {
     fn lookup_on_unmodulated_param_returns_idle_slot() {
         let inst = PresetInstance::new(PresetTypeId::new("digital_plants"));
         let (modulation, audio) = lookup_param_mod_for_id(&inst, "intensity", &[]);
-        assert_eq!(modulation.driver_active, vec![false]);
-        assert_eq!(modulation.envelope_active, vec![false]);
-        assert_eq!(audio.active, vec![false]);
+        assert!(!modulation[0].driver_active);
+        assert!(!modulation[0].envelope_active);
+        assert!(!audio.rows[0].active);
     }
 }
 
@@ -2998,21 +2959,8 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         layer_id: None,
         params: vec![],
         string_params: vec![],
-        driver_active: vec![],
-        envelope_active: vec![],
-        trim_min: vec![],
-        trim_max: vec![],
-        target_norm: vec![],
-        env_decay: vec![],
-        driver_beat_div_idx: vec![],
-        driver_waveform_idx: vec![],
-        driver_reversed: vec![],
-        driver_dotted: vec![],
-        driver_triplet: vec![],
-        driver_free_period: vec![],
+        rows_mod: vec![],
         audio: Default::default(),
-        automation_active: vec![],
-        automation_overridden: vec![],
         relight: crate::ui_translate::relight_card_config_from(inst),
     }
 }
@@ -3222,8 +3170,8 @@ fn preset_to_config(
         PresetKind::Effect => Vec::new(),
     };
 
-    let has_drv = m.driver_active.iter().any(|&b| b);
-    let has_env = m.envelope_active.iter().any(|&b| b);
+    let has_drv = m.iter().any(|row| row.driver_active);
+    let has_env = m.iter().any(|row| row.envelope_active);
     let has_abl = params.iter().any(|p| p.ableton_display.is_some());
     let (card_kind, effect_id, enabled, collapsed, has_graph_mod) = match kind {
         PresetKind::Effect => (
@@ -3279,21 +3227,8 @@ fn preset_to_config(
         has_env,
         has_abl,
         has_graph_mod,
-        driver_active: m.driver_active,
-        envelope_active: m.envelope_active,
-        trim_min: m.trim_min,
-        trim_max: m.trim_max,
-        target_norm: m.target_norm,
-        env_decay: m.env_decay,
-        driver_beat_div_idx: m.driver_beat_div_idx,
-        driver_waveform_idx: m.driver_waveform_idx,
-        driver_reversed: m.driver_reversed,
-        driver_dotted: m.driver_dotted,
-        driver_triplet: m.driver_triplet,
-        driver_free_period: m.driver_free_period,
+        rows_mod: m,
         audio,
-        automation_active: m.automation_active,
-        automation_overridden: m.automation_overridden,
         relight: crate::ui_translate::relight_card_config_from(inst),
     })
 }
@@ -3803,11 +3738,12 @@ mod build_audio_card_state_trigger_mode_tests {
         let params = ["amount", "clip_trigger"];
         let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
 
-        assert_eq!(cfg.active, vec![false, true]);
-        assert_eq!(cfg.send_id[0], None);
-        assert_eq!(cfg.send_id[1], Some(AudioSendId::new("send-kick")));
-        assert_eq!(cfg.band_idx[1], AudioBand::Low.index() as i32);
-        assert_eq!(cfg.trigger_mode_idx[1], 2); // Both
+        assert!(!cfg.rows[0].active);
+        assert!(cfg.rows[1].active);
+        assert_eq!(cfg.rows[0].send_id, None);
+        assert_eq!(cfg.rows[1].send_id, Some(AudioSendId::new("send-kick")));
+        assert_eq!(cfg.rows[1].band_idx, AudioBand::Low.index() as i32);
+        assert_eq!(cfg.rows[1].trigger_mode_idx, 2); // Both
     }
 
     /// A disabled mod (armed once, then disarmed via the "A" button, which
@@ -3828,7 +3764,7 @@ mod build_audio_card_state_trigger_mode_tests {
 
         let params = ["clip_trigger"];
         let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
-        assert_eq!(cfg.active, vec![false]);
+        assert!(!cfg.rows[0].active);
     }
 
     /// No `trigger_mode` set on the mod (defensive — §9 U3 always arms with
@@ -3849,7 +3785,7 @@ mod build_audio_card_state_trigger_mode_tests {
 
         let params = ["clip_trigger"];
         let cfg = build_audio_card_state(&inst, params.len(), resolve(&params));
-        assert_eq!(cfg.trigger_mode_idx[0], 2); // Both
+        assert_eq!(cfg.rows[0].trigger_mode_idx, 2); // Both
     }
 }
 

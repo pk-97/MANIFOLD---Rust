@@ -7,7 +7,7 @@
 
 use super::DriverConfigAction;
 use super::TrimKind;
-use super::param_card::ParamInfo;
+use super::param_card::{ParamInfo, RowMod};
 use super::{AudioShapeParam, GraphParamTarget, PanelAction};
 use crate::chrome::{Theme, View};
 use crate::color;
@@ -565,43 +565,75 @@ pub(crate) fn clip_trigger_drawer_height() -> f32 {
     crate::panels::drawer::uniform_rows_height(4) + crate::panels::drawer::METER_STRIP_H
 }
 
+/// One param row's audio-modulation display state — the per-row facts
+/// [`AudioCardState::rows`] carries. Collapses the former fifteen parallel
+/// per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per
+/// row.
+#[derive(Debug, Clone)]
+pub struct AudioRowState {
+    /// Mod exists and is enabled.
+    pub active: bool,
+    /// The mod's send id, if any. Resolved to an index into `send_ids` by
+    /// [`ParamModState::sync_audio`].
+    pub send_id: Option<manifold_foundation::AudioSendId>,
+    /// Selected feature `kind` and `band` indices (the matrix axes).
+    pub kind_idx: i32,
+    pub band_idx: i32,
+    /// The mod's output sub-range (`AudioModShape::range_min/max`).
+    pub range_min: f32,
+    pub range_max: f32,
+    /// The mod's invert flag (`AudioModShape::invert`).
+    pub invert: bool,
+    /// The mod's rate-of-change flag (`AudioModShape::rate_of_change`).
+    pub rate: bool,
+    /// The mod's shaping values (sensitivity, attack ms, release ms).
+    pub sensitivity: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    /// Fire-mode index (`ParameterAudioMod.trigger_mode`, §9 U3), into
+    /// `[ClipEdge, Transient, Both]`. Only meaningful on an `is_trigger_gate`
+    /// target; a harmless default elsewhere.
+    pub trigger_mode_idx: i32,
+    /// Fire ACTION index (`ParameterAudioMod.action`, D2), into
+    /// `[Continuous, Step, Random]`.
+    pub action_idx: i32,
+    /// The Step action's `amount` (D2). Meaningful only while
+    /// `action_idx == 1`.
+    pub step_amount: f32,
+    /// The Step action's wrap-mode index (D2), into `[Wrap, Bounce, Clamp]`.
+    /// Meaningful only while `action_idx == 1`.
+    pub wrap_idx: i32,
+}
+
+impl Default for AudioRowState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            send_id: None,
+            kind_idx: 0,
+            band_idx: 0,
+            range_min: 0.0,
+            range_max: 1.0,
+            invert: false,
+            rate: false,
+            sensitivity: 1.0,
+            attack_ms: 5.0,
+            release_ms: 120.0,
+            trigger_mode_idx: 0,
+            action_idx: 0,
+            step_amount: 1.0,
+            wrap_idx: 0,
+        }
+    }
+}
+
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
 /// `ParamCardConfig` gains one field, not five.
 #[derive(Debug, Default, Clone)]
 pub struct AudioCardState {
-    /// Per-param: mod exists and is enabled.
-    pub active: Vec<bool>,
-    /// Per-param: the mod's send id, if any. Resolved to an index into
-    /// `send_ids` by [`ParamModState::sync_audio`].
-    pub send_id: Vec<Option<manifold_foundation::AudioSendId>>,
-    /// Per-param: selected feature `kind` and `band` indices (the matrix axes).
-    pub kind_idx: Vec<i32>,
-    pub band_idx: Vec<i32>,
-    /// Per-param: the mod's output sub-range (`AudioModShape::range_min/max`).
-    pub range_min: Vec<f32>,
-    pub range_max: Vec<f32>,
-    /// Per-param: the mod's invert flag (`AudioModShape::invert`).
-    pub invert: Vec<bool>,
-    /// Per-param: the mod's rate-of-change flag (`AudioModShape::rate_of_change`).
-    pub rate: Vec<bool>,
-    /// Per-param: the mod's shaping values (sensitivity, attack ms, release ms).
-    pub sensitivity: Vec<f32>,
-    pub attack_ms: Vec<f32>,
-    pub release_ms: Vec<f32>,
-    /// Per-param: fire-mode index (`ParameterAudioMod.trigger_mode`, §9 U3),
-    /// into `[ClipEdge, Transient, Both]`. Only meaningful on an
-    /// `is_trigger_gate` target; a harmless default elsewhere.
-    pub trigger_mode_idx: Vec<i32>,
-    /// Per-param: fire ACTION index (`ParameterAudioMod.action`, D2), into
-    /// `[Continuous, Step, Random]`.
-    pub action_idx: Vec<i32>,
-    /// Per-param: the Step action's `amount` (D2). Meaningful only while
-    /// `action_idx == 1`.
-    pub step_amount: Vec<f32>,
-    /// Per-param: the Step action's wrap-mode index (D2), into
-    /// `[Wrap, Bounce, Clamp]`. Meaningful only while `action_idx == 1`.
-    pub wrap_idx: Vec<i32>,
+    /// Per-param audio-mod facts, one [`AudioRowState`] per card row (D3).
+    pub rows: Vec<AudioRowState>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -666,25 +698,26 @@ impl ParamModState {
         // since `allocate` never has a dead "Custom" toggle. Never overwritten
         // from the model — it's not a mirrored field.
         self.audio_matrix_open.resize(n, false);
+        let default_row = AudioRowState::default();
         for i in 0..n {
-            self.audio_active[i] = audio.active.get(i).copied().unwrap_or(false);
-            self.audio_kind_idx[i] = audio.kind_idx.get(i).copied().unwrap_or(0);
-            self.audio_band_idx[i] = audio.band_idx.get(i).copied().unwrap_or(0);
-            self.audio_range_min[i] = audio.range_min.get(i).copied().unwrap_or(0.0);
-            self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
-            self.audio_invert[i] = audio.invert.get(i).copied().unwrap_or(false);
-            self.audio_rate[i] = audio.rate.get(i).copied().unwrap_or(false);
-            self.audio_sensitivity[i] = audio.sensitivity.get(i).copied().unwrap_or(1.0);
-            self.audio_attack_ms[i] = audio.attack_ms.get(i).copied().unwrap_or(5.0);
-            self.audio_release_ms[i] = audio.release_ms.get(i).copied().unwrap_or(120.0);
-            self.audio_mode_idx[i] = audio.trigger_mode_idx.get(i).copied().unwrap_or(0);
-            self.audio_action_idx[i] = audio.action_idx.get(i).copied().unwrap_or(0);
-            self.audio_step_amount[i] = audio.step_amount.get(i).copied().unwrap_or(1.0);
-            self.audio_wrap_idx[i] = audio.wrap_idx.get(i).copied().unwrap_or(0);
-            self.audio_send_idx[i] = audio
+            let row = audio.rows.get(i).unwrap_or(&default_row);
+            self.audio_active[i] = row.active;
+            self.audio_kind_idx[i] = row.kind_idx;
+            self.audio_band_idx[i] = row.band_idx;
+            self.audio_range_min[i] = row.range_min;
+            self.audio_range_max[i] = row.range_max;
+            self.audio_invert[i] = row.invert;
+            self.audio_rate[i] = row.rate;
+            self.audio_sensitivity[i] = row.sensitivity;
+            self.audio_attack_ms[i] = row.attack_ms;
+            self.audio_release_ms[i] = row.release_ms;
+            self.audio_mode_idx[i] = row.trigger_mode_idx;
+            self.audio_action_idx[i] = row.action_idx;
+            self.audio_step_amount[i] = row.step_amount;
+            self.audio_wrap_idx[i] = row.wrap_idx;
+            self.audio_send_idx[i] = row
                 .send_id
-                .get(i)
-                .and_then(|o| o.as_ref())
+                .as_ref()
                 .and_then(|sid| audio.send_ids.iter().position(|s| s == sid))
                 .map(|p| p as i32)
                 .unwrap_or(-1);
@@ -693,42 +726,27 @@ impl ParamModState {
         self.audio_send_ids = audio.send_ids.clone();
     }
 
-    /// Sync driver/envelope/trim/target/decay state from config vectors.
-    /// `n` is the param count. Reads from config slices with fallback defaults.
-    #[allow(clippy::too_many_arguments)]
-    pub fn sync_from_config(
-        &mut self,
-        n: usize,
-        driver_active: &[bool],
-        envelope_active: &[bool],
-        trim_min: &[f32],
-        trim_max: &[f32],
-        target_norm: &[f32],
-        env_decay: &[f32],
-        driver_beat_div_idx: &[i32],
-        driver_waveform_idx: &[i32],
-        driver_reversed: &[bool],
-        driver_dotted: &[bool],
-        driver_triplet: &[bool],
-        driver_free_period: &[Option<f32>],
-        automation_active: &[bool],
-        automation_overridden: &[bool],
-    ) {
+    /// Sync driver/envelope/trim/target/decay state from the config's per-row
+    /// modulation facts. `n` is the param count. Reads `rows` with a
+    /// fallback default for any row past its end.
+    pub fn sync_from_config(&mut self, n: usize, rows: &[RowMod]) {
+        let default_row = RowMod::default();
         for i in 0..n {
-            self.driver_expanded[i] = driver_active.get(i).copied().unwrap_or(false);
-            self.envelope_expanded[i] = envelope_active.get(i).copied().unwrap_or(false);
-            self.trim_min[i] = trim_min.get(i).copied().unwrap_or(0.0);
-            self.trim_max[i] = trim_max.get(i).copied().unwrap_or(1.0);
-            self.target_norm[i] = target_norm.get(i).copied().unwrap_or(1.0);
-            self.env_decay[i] = env_decay.get(i).copied().unwrap_or(DEFAULT_ENV_DECAY);
-            self.driver_beat_div_idx[i] = driver_beat_div_idx.get(i).copied().unwrap_or(-1);
-            self.driver_waveform_idx[i] = driver_waveform_idx.get(i).copied().unwrap_or(-1);
-            self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
-            self.driver_dotted[i] = driver_dotted.get(i).copied().unwrap_or(false);
-            self.driver_triplet[i] = driver_triplet.get(i).copied().unwrap_or(false);
-            self.driver_free_period[i] = driver_free_period.get(i).copied().flatten();
-            self.automation_active[i] = automation_active.get(i).copied().unwrap_or(false);
-            self.automation_overridden[i] = automation_overridden.get(i).copied().unwrap_or(false);
+            let row = rows.get(i).unwrap_or(&default_row);
+            self.driver_expanded[i] = row.driver_active;
+            self.envelope_expanded[i] = row.envelope_active;
+            self.trim_min[i] = row.trim_min;
+            self.trim_max[i] = row.trim_max;
+            self.target_norm[i] = row.target_norm;
+            self.env_decay[i] = row.env_decay;
+            self.driver_beat_div_idx[i] = row.driver_beat_div_idx;
+            self.driver_waveform_idx[i] = row.driver_waveform_idx;
+            self.driver_reversed[i] = row.driver_reversed;
+            self.driver_dotted[i] = row.driver_dotted;
+            self.driver_triplet[i] = row.driver_triplet;
+            self.driver_free_period[i] = row.driver_free_period;
+            self.automation_active[i] = row.automation_active;
+            self.automation_overridden[i] = row.automation_overridden;
         }
     }
 
