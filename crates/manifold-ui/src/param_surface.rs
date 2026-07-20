@@ -128,6 +128,119 @@ pub struct ParamSurface {
     pub relight: RelightCardConfig,
 }
 
+/// Every interactive element class a row can build — the vocabulary the
+/// gesture router speaks (WIDGET_TREE_DESIGN D5). One enum, both card kinds.
+/// Extend HERE (recipe step 1) — never as a new id-hoard field or a new
+/// id-match chain in a `handle_*` body.
+///
+/// Coarse by design: a multi-node widget bundle (slider, driver-config
+/// drawer, trim pair…) maps ALL its interactive nodes to one role; the
+/// bundle's own `resolve(NodeId)` names the sub-element (the widget-contract
+/// split — behavior lives in the widget, identity in the row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowRole {
+    /// The slider bundle (track / fill / thumb / value cell / label lane).
+    Slider,
+    /// The row's full-width click catcher (focus / drawer toggle surface).
+    RowCatcher,
+    /// Param label (OSC copy-to-clipboard when an address exists).
+    Label,
+    /// "D" driver arm/disarm button.
+    DriverBtn,
+    /// "E" envelope arm/disarm button.
+    EnvelopeBtn,
+    /// "A" audio-mod arm/disarm button.
+    AudioBtn,
+    /// Toggle / trigger button row (`is_toggle` / `is_trigger` decide the action).
+    ToggleBtn,
+    /// Driver config drawer (all its sub-buttons; `DriverConfigIds::resolve`).
+    DriverConfig,
+    /// Envelope config drawer (target handle, decay… `EnvelopeConfigIds`).
+    EnvelopeConfig,
+    /// Audio config drawer (send/chip/matrix… the audio bundle resolves).
+    AudioConfig,
+    /// Ableton mapping sub-section (invert, trim handles).
+    AbletonConfig,
+    /// Modulation-config tab strip entry (tab index resolved by the bundle).
+    ModTab,
+    /// Sideways mapping-drawer chevron (`CardContext::Author`).
+    MappingChevron,
+    /// D5 section fold header (row = first row of the section).
+    SectionHeader,
+    /// Relight: header toggle ("3D Shading") — row is unused (card-level).
+    RelightToggle,
+    /// Relight: one of the Height From option buttons (0..3; index resolved
+    /// positionally by the relight bundle).
+    RelightHeightBtn,
+    /// Relight: one of the six knob slider bundles.
+    RelightSlider,
+}
+
+/// Reverse map from durable widget identity to `(row index, role)` —
+/// populated during `build()` from the same rows being rendered, so routing
+/// agrees with rendering by construction (D5). Rebuilt with the tree; never
+/// serialized; never consulted across a rebuild (WidgetId handles that).
+#[derive(Debug, Default)]
+pub struct RowIndex {
+    map: ahash::AHashMap<crate::node::WidgetId, (usize, RowRole)>,
+}
+
+impl RowIndex {
+    pub fn clear(&mut self) {
+        self.map.clear();
+    }
+
+    /// Register one interactive node's widget under `(row, role)`. Called at
+    /// mint time inside the row builders.
+    pub fn insert(&mut self, widget: crate::node::WidgetId, row: usize, role: RowRole) {
+        self.map.insert(widget, (row, role));
+    }
+
+    /// Resolve a hit node's widget to its row + role. The ONLY sanctioned
+    /// way a `handle_*` body identifies a row element.
+    pub fn get(&self, widget: crate::node::WidgetId) -> Option<(usize, RowRole)> {
+        self.map.get(&widget).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// Pinned, process-stable key for identity-bearing widget salts (D4): FNV-1a
+/// over the id's bytes, finalized splitmix64-style. NEVER replace with
+/// `DefaultHasher`/seeded ahash — dumps expose raw `Widget(u64)` values that
+/// flow scripts hold across runs; a run-varying hash silently breaks them.
+pub fn stable_key(id: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    // splitmix64 finalizer — spreads short ids apart.
+    let mut z = h.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+#[cfg(test)]
+mod stable_key_tests {
+    /// INV-4's cross-process pin: known bytes → known salt, forever. If this
+    /// test ever needs updating, held dump `Widget(u64)` values in flow
+    /// scripts break — that is a breaking change to the automation surface,
+    /// not a refactor.
+    #[test]
+    fn stable_key_is_pinned() {
+        assert_eq!(super::stable_key("intensity"), 9_466_175_151_710_844_563_u64);
+        assert_ne!(super::stable_key("intensity"), super::stable_key("speed"));
+    }
+}
+
 impl ParamSurface {
     /// The card's wire identity — derived, never stored twice.
     pub fn target(&self) -> GraphParamTarget {
