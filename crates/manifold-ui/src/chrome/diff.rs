@@ -72,7 +72,23 @@ pub fn materialize(tree: &mut UITree, root: &View, rect: Rect) -> Vec<(u64, Node
         if n.disabled {
             extra |= UIFlags::DISABLED;
         }
-        let id = tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra);
+        // `View::identity` (opt-in, distinct from the lookup-only `key`)
+        // pins the node's durable WidgetId — reorder-stable identity for
+        // roots whose siblings can shift (card roots, D4). Plain `key`
+        // deliberately does NOT salt the WidgetId: keys are only
+        // sibling-unique per host, and hosts can share a tree parent.
+        let id = match n.identity {
+            Some(k) => tree.add_node_keyed(
+                parent_id,
+                n.rect,
+                n.kind,
+                n.style,
+                n.text.as_deref(),
+                extra,
+                k,
+            ),
+            None => tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra),
+        };
         if !n.visible {
             tree.set_visible(id, false);
         }
@@ -147,7 +163,22 @@ impl ChromeHost {
                 if n.disabled {
                     extra |= UIFlags::DISABLED;
                 }
-                tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra)
+                // `View::identity` pins the durable WidgetId (D4 card-root
+                // identity) — see the materialize loop's twin note above.
+                match n.identity {
+                    Some(k) => tree.add_node_keyed(
+                        parent_id,
+                        n.rect,
+                        n.kind,
+                        n.style,
+                        n.text.as_deref(),
+                        extra,
+                        k,
+                    ),
+                    None => {
+                        tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra)
+                    }
+                }
             };
             if !self.scratch[i].visible {
                 tree.set_visible(id, false);
@@ -180,6 +211,7 @@ impl ChromeHost {
                 spec.label_width,
                 spec.default,
                 spec.reset.clone(),
+                None,
             );
             if let Some(k) = key {
                 self.slider_ids.push((k, built.ids, built.reset));

@@ -3815,7 +3815,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.world_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.world_card.enum_value_cell_action(pi, *node_id)
                             }
@@ -3889,7 +3889,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.object_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.object_card.enum_value_cell_action(pi, *node_id)
                             }
@@ -3963,7 +3963,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.light_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.light_card.enum_value_cell_action(pi, *node_id)
                             }
@@ -4037,7 +4037,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.camera_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.camera_card.enum_value_cell_action(pi, *node_id)
                             }
@@ -4111,7 +4111,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.modifier_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.modifier_card.enum_value_cell_action(pi, *node_id)
                             }
