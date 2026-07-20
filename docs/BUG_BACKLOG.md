@@ -50,6 +50,7 @@ or human can read it, and it needs no external tool.
 
 | ID | Nickname | One line |
 |---|---|---|
+| BUG-296 | **script-driver-effect-cards-never-rebuild-after-structural-dispatch** | a structural `PanelAction` dispatch (`EffectReorder`, `structural=true`) mutates the project under `--script`, but `advance_frame` never rebuilds the cached inspector cards, so the widget tree stays stale across frames — blocks any flow asserting a structural inspector change (VD-034's card-drag flow) — LOW-MED (harness gap) |
 | BUG-294 | **scene-setup-dock-scroll-headless-noop** | `Scroll` gesture is wired only for the timeline viewport; the Scene Setup dock's own scroll is a no-op under the `--script` driver, so content below the dock viewport is unreachable by flows — LOW-MED (harness gap) |
 | BUG-293 | **script-driver-discards-context-menu-actions** | the `--script` driver's overlay dispatch (`ui_snapshot/script.rs:780`) drops `host.pending_actions` on the floor instead of routing them like the live app's `app_render.rs` loop does — any flow needing a context-menu action (e.g. the modifier-stack right-click add) is unrunnable headless; live app unaffected — LOW-MED (harness gap) |
 | BUG-283 | **manifold-app-clippy-tests-target-drift** | `cargo clippy -p manifold-app --tests -- -D warnings` fails on three pre-existing files (doc_lazy_continuation / cloned_ref_to_slice_refs / approx_constant); the standard gates never compile the test target so the drift is invisible — LOW |
@@ -193,6 +194,14 @@ workflow journal at
 System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
 
 ## Open
+
+### BUG-296 (script-driver-effect-cards-never-rebuild-after-structural-dispatch) — a structural `PanelAction` (e.g. `EffectReorder`) mutates the project but the `--script` driver's inspector cards stay stale forever — found 2026-07-21, WIDGET_TREE P5 flow sweep (VD-034 attempt)
+**Status:** OPEN (logged 2026-07-21).
+**Severity:** LOW-MED — harness gap, not a live-app bug (the live app rebuilds on the content-thread round trip). Blocks the VD-034 card-drag L3 flow and any future flow asserting a structural inspector change (add/remove/reorder effect).
+**Symptom:** in the `inspector` fixture scene, dragging Mirror's drag-handle past Bloom onto Strobe fires the real input path — harness log shows `dispatched EffectReorder(0, 2) (structural=true)` — and the dispatch mutates `data.project` synchronously, but every subsequent Dump (3+ forced frames) still shows Mirror/Bloom/Strobe at their original node ids and rects. No assertion proving reorder can pass against a structurally stale tree.
+**Root cause (suspected):** the driver's `advance_frame` (`crates/manifold-app/src/ui_snapshot/script.rs:844-880`) never rebuilds the cached `Vec<ParamCardPanel>` from the mutated project after a `structural=true` dispatch — the `needs_structural_sync` path that the live app's frame loop honors is not exercised (same family as BUG-234's missing content-thread tick and BUG-293's dropped `pending_actions`).
+**Fix shape:** in `advance_frame`, after a structural dispatch, run the same card-rebuild the live app runs (or honor `needs_structural_sync` before the next Dump). Sibling flow-driver gaps BUG-234/293/294 — a single verification-infra lane should take the family.
+**Repro note (for the eventual flow):** dropping onto the immediately-next card is a designed no-op (`to_fx != from + 1`, inspector.rs) — a reorder flow must drop past the adjacent card.
 
 ### BUG-294 (scene-setup-dock-scroll-headless-noop) — the Scene Setup dock's own scroll is a no-op under the `--script` driver; content below the dock viewport is unreachable by flows — found 2026-07-21, SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md R1/R2 lane
 **Status:** OPEN (logged 2026-07-21).
