@@ -4870,6 +4870,79 @@ mod tests {
         }
     }
 
+    /// W2-A gap fill: env/fog rows previously had only "+ Add Fog" button
+    /// coverage — the World-card twin of
+    /// `modifier_angle_card_row_sweeps_full_range_with_one_commit`/
+    /// `roughness_card_row_sweeps_full_range_and_value_box_opens_typein`,
+    /// proving the Fog Density row's slider track is drag-armable and
+    /// sweeps full-range in one undo-sized gesture (PointerDown snapshots +
+    /// jumps, Drag continues live, PointerUp commits exactly once).
+    #[test]
+    fn fog_density_card_row_sweeps_full_range_with_one_commit() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
+            layer_id: LayerId::new("layer-1"),
+            scene_name: "Scene".to_string(),
+            multiple_scenes: false,
+            object_count: 0,
+            light_count: 0,
+            shadow_caster_count: 0,
+            scene_root_node_id: 0,
+            environment: EnvironmentRowVm::Bare {
+                intensity: mrow(RowValue { addr: RowAddr::root(3, "intensity"), value: 1.0, min: 0.0, max: 4.0, driven: false, exposed: false }),
+                fill: mrow(RowValue { addr: RowAddr::root(3, "fill"), value: 0.5, min: 0.0, max: 2.0, driven: false, exposed: false }),
+            },
+            atmosphere: AtmosphereRowVm::Wired {
+                density: mrow(RowValue { addr: RowAddr::root(9, "density"), value: 0.2, min: 0.0, max: 1.0, driven: false, exposed: false }),
+                height_falloff: mrow(RowValue { addr: RowAddr::root(9, "height_falloff"), value: 0.7, min: 0.0, max: 2.0, driven: false, exposed: false }),
+            },
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
+            objects: Vec::new(),
+            lights: Vec::new(),
+            camera: CameraRowVm::None,
+        })));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let ids = panel.world_card.slider_ids[WORLD_FOG_DENSITY].expect("Fog Density renders a card slider");
+        let track = tree.get_bounds(ids.track);
+        let target = GraphParamTarget::Generator;
+        let pid = panel.world_card.pid_at(WORLD_FOG_DENSITY);
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::PointerDown {
+            node_id: ids.track,
+            pos: Vec2::new(track.x, 0.0),
+            modifiers: crate::input::Modifiers::default(),
+        });
+        assert!(consumed, "the Fog Density row's slider track must be drag-armable");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::ParamSnapshot(t, p), PanelAction::ParamChanged(_, _, low)]
+                if *t == target && *p == pid && *low < 0.05
+        ), "PointerDown at the track's left edge must snapshot + land near min, got {actions:?}");
+
+        let (drag_consumed, drag_actions) = panel.handle_event(&UIEvent::Drag {
+            node_id: Some(ids.track),
+            pos: Vec2::new(track.x + track.width, 0.0),
+            delta: Vec2::ZERO,
+        });
+        assert!(drag_consumed);
+        assert!(matches!(
+            drag_actions.as_slice(),
+            [PanelAction::ParamChanged(_, _, high)] if *high > 0.95
+        ), "dragging to the track's right edge must land near max, got {drag_actions:?}");
+
+        let (up_consumed, up_actions) = panel
+            .handle_event(&UIEvent::PointerUp { node_id: Some(ids.track), pos: Vec2::new(track.x + track.width, 0.0) });
+        assert!(up_consumed);
+        assert!(
+            matches!(up_actions.as_slice(), [PanelAction::ParamCommit(t, p)] if *t == target && *p == pid),
+            "release must commit ONE ParamCommit, got {up_actions:?}"
+        );
+        assert!(!panel.world_card.drag_sliders[WORLD_FOG_DENSITY].is_dragging(), "PointerUp ends the drag");
+    }
+
     /// C-P1b (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): id-map totality for
     /// the Object family — the twin of `world_id_map_is_total_over_every_
     /// built_row` above, extended over `object_card`. The azalea fixture's
@@ -5209,6 +5282,61 @@ mod tests {
         assert_eq!(panel.object_card.id_map.len(), OBJ_ROW_COUNT, "every Object card row is wired for a PBR object");
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+    }
+
+    /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
+    /// zero click->dispatch coverage — every "eye" hit in this file before
+    /// this test was a comment. A click on a Known object row's eye emits
+    /// `SceneSetupParamChanged` carrying the row's own write address and the
+    /// flipped [0,1] value; a second click on the now-off eye flips back.
+    #[test]
+    fn object_eye_toggle_click_emits_scene_setup_param_changed_and_flips_back() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.outliner_eye_ids.len(), 1, "one Known object row renders a live eye");
+        let (eye_id, row_value) = panel.outliner_eye_ids[0].clone();
+        assert_eq!(row_value.value, 1.0, "azalea fixture starts visible");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: eye_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed, "the eye toggle must be clickable");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::SceneSetupParamChanged(layer, scope, node, param, value)]
+                if *layer == LayerId::new("layer-1")
+                    && *scope == vec![42]
+                    && *node == 40
+                    && param == "visible"
+                    && *value == 0.0
+        ), "visible eye click must flip to 0.0 at the object's own write address, got {actions:?}");
+
+        // Re-configure with the flipped value (mirrors the real per-frame
+        // sync landing the write) and click again — must flip back to 1.0.
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.visible.value = 0.0;
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (eye_id_2, _) = panel.outliner_eye_ids[0].clone();
+
+        let (consumed_2, actions_2) = panel.handle_event(&UIEvent::Click {
+            node_id: eye_id_2,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed_2);
+        assert!(matches!(
+            actions_2.as_slice(),
+            [PanelAction::SceneSetupParamChanged(_, _, _, param, value)]
+                if param == "visible" && *value == 1.0
+        ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary
