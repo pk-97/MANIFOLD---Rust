@@ -97,8 +97,8 @@ pub struct ParamRow {
 }
 
 /// The complete queryable description of one manifest-backed param surface.
-/// Replaces `ParamCardConfig` (P1b): rows are id-keyed structs, aggregates
-/// are derived, positional index maps do not exist.
+/// Replaces the former parallel-vecs card config (P1b): rows are id-keyed
+/// structs, aggregates are derived, positional index maps do not exist.
 #[derive(Debug, Clone)]
 pub struct ParamSurface {
     pub kind: ParamCardKind,
@@ -138,7 +138,7 @@ impl ParamSurface {
     }
 
     /// DRV badge: any row has an active driver. Derived (the stored
-    /// aggregate mirrors died with `ParamCardConfig`).
+    /// aggregate mirrors died with the old parallel-vecs card config).
     pub fn has_drv(&self) -> bool {
         self.rows.iter().any(|r| r.modulation.driver_active)
     }

@@ -9,10 +9,9 @@ use manifold_core::Beats;
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
-use manifold_ui::panels::param_card::{
-    ParamCardConfig, ParamCardKind, ParamCardStringInfo, ParamInfo, RowMod,
-};
+use manifold_ui::panels::param_card::{ParamCardKind, ParamCardStringInfo, RowMod};
 use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState, AudioRowState};
+use manifold_ui::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
 use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
@@ -2306,7 +2305,7 @@ pub fn sync_inspector_data(
     }
 
     // Master effects → inspector (envelopes ride on each instance)
-    let mut master_configs = effects_to_configs(
+    let mut master_configs = effects_to_surfaces(
         &project.settings.master_effects,
         OscScope::Master,
         automation_latched,
@@ -2358,7 +2357,7 @@ pub fn sync_inspector_data(
             let mut layer_effects = layer
                 .effects
                 .as_ref()
-                .map(|e| effects_to_configs(e, OscScope::Layer(lid), automation_latched))
+                .map(|e| effects_to_surfaces(e, OscScope::Layer(lid), automation_latched))
                 .unwrap_or_default();
             attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector
@@ -2376,7 +2375,7 @@ pub fn sync_inspector_data(
                 .gen_params()
                 .filter(|gp| *gp.generator_type() != PresetTypeId::NONE)
                 .map(|gp| {
-                    gen_params_to_config(
+                    gen_params_to_surface(
                         gp,
                         lid,
                         clip_string_params,
@@ -2501,11 +2500,11 @@ enum OscScope<'a> {
     Layer(&'a str),
 }
 
-/// Convert a slice of `PresetInstance` into [`ParamCardConfig`]s for the UI.
+/// Convert a slice of `PresetInstance` into [`ParamSurface`]s for the UI.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
 ///
 /// Iterates BOTH the def-declared static block AND the per-instance
-/// user-tail bindings, producing one [`ParamInfo`] per slot in
+/// user-tail bindings, producing one [`ParamRow`] per slot in
 /// `effect.param_values` order. The card renders a slider for every
 /// exposed entry; hidden static slots and unchecked user-tail entries
 /// (the latter are removed from `user_param_bindings` rather than
@@ -2515,7 +2514,7 @@ enum OscScope<'a> {
 /// card's param count). Shared by the effect and generator card builders —
 /// the only thing that differs between them is `resolve`, the `param_id → slot
 /// index` mapping (an effect resolves via `param_id_to_value_index`, a generator
-/// via its graph/registry `id_to_index`). The rows are identical; the
+/// via its graph/registry `row_index_of`). The rows are identical; the
 /// per-card `has_drv` / `has_env` summary flags stay with each caller (the
 /// generator card intentionally forces them false).
 ///
@@ -2879,7 +2878,7 @@ fn channel_label(
 /// Stamp the card-level available-send list (labels + ids) onto every card
 /// config, from the project's `AudioSetup`. One pass after the configs are
 /// built, so the per-instance builders stay project-agnostic.
-fn attach_audio_sends(configs: &mut [ParamCardConfig], setup: &manifold_core::audio_setup::AudioSetup) {
+fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_core::audio_setup::AudioSetup) {
     if setup.sends.is_empty() {
         return;
     }
@@ -2893,17 +2892,17 @@ fn attach_audio_sends(configs: &mut [ParamCardConfig], setup: &manifold_core::au
 
 /// Thin adapter: build a card config for each effect in `effects`, skipping
 /// any whose preset def is missing. The real work is the unified
-/// [`preset_to_config`].
-fn effects_to_configs(
+/// [`param_surface`].
+fn effects_to_surfaces(
     effects: &[PresetInstance],
     osc_scope: OscScope<'_>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> Vec<ParamCardConfig> {
+) -> Vec<ParamSurface> {
     effects
         .iter()
         .enumerate()
         .filter_map(|(i, fx)| {
-            preset_to_config(
+            param_surface(
                 fx,
                 manifold_core::preset_def::PresetKind::Effect,
                 i,
@@ -2915,51 +2914,24 @@ fn effects_to_configs(
         .collect()
 }
 
-/// One normalized param row, sourced per-kind, then rendered uniformly into a
-/// [`ParamInfo`] by [`preset_to_config`]. Bridges the two spec shapes
-/// (registry `ParamDef` and graph-metadata `ParamSpecDef`) into one.
-struct SpecRow {
-    id: String,
-    name: String,
-    min: f32,
-    max: f32,
-    default: f32,
-    whole_numbers: bool,
-    is_angle: bool,
-    is_toggle: bool,
-    is_trigger: bool,
-    /// §8 D6 — see `ParamInfo::is_trigger_gate`.
-    is_trigger_gate: bool,
-    value_labels: Option<Vec<String>>,
-    exposed: bool,
-    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
-    /// D5) — straight off the manifest spec, never derived from graph
-    /// structure at display time.
-    section: Option<String>,
-}
-
 /// The empty generator card (no resolvable param source). Mirrors the old
-/// `gen_params_to_config` fallback exactly.
-fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
-    ParamCardConfig {
+/// `gen_params_to_surface` fallback exactly.
+fn empty_generator_surface(inst: &PresetInstance) -> ParamSurface {
+    ParamSurface {
         kind: ParamCardKind::Generator,
-        name: inst.generator_type().to_string(),
+        title: inst.generator_type().to_string(),
         collapsed: false,
         effect_index: 0,
-        // Stays blank (unlike the real-id arm in `preset_to_config` below):
-        // zero params means zero audio-mod rows, so nothing on this card ever
+        // Stays blank (unlike the real-id arm in `param_surface` below):
+        // zero rows means zero audio-mod rows, so nothing on this card ever
         // hosts a fire-meter lookup — there's no divergence risk to fix here.
         effect_id: manifold_core::EffectId::new(""),
         enabled: true,
         supports_envelopes: true,
-        has_drv: false,
-        has_env: false,
-        has_abl: false,
         has_graph_mod: false,
         layer_id: None,
-        params: vec![],
+        rows: vec![],
         string_params: vec![],
-        rows_mod: vec![],
         audio: Default::default(),
         relight: crate::ui_translate::relight_card_config_from(inst),
     }
@@ -2978,132 +2950,96 @@ fn warn_provisional_manifest_once(id: &manifold_core::EffectId) {
     let mut warned = warned.lock().unwrap_or_else(|e| e.into_inner());
     if warned.insert(id.clone()) {
         log::warn!(
-            "BUG-080: provisional manifest reached rows_from_manifest for effect_id={id:?} \
+            "BUG-080: provisional manifest reached param_surface for effect_id={id:?} \
              — a load/ingest path skipped reconcile_param_manifests()"
         );
     }
 }
 
-/// One `SpecRow` per manifest entry, in card order (PARAM_STORAGE_BOUNDARIES
-/// D4: the manifest is the single owner of every card-row fact — descriptor +
-/// state, id-keyed). Shared by both kinds; the id/name/whole_numbers fields
-/// come straight off `Param.spec` unchanged by calibration or exposure.
-fn rows_from_manifest(inst: &PresetInstance) -> Vec<SpecRow> {
-    // BUG-080 seam: a provisional manifest (built against an incomplete
-    // registry, not yet reconciled) reaching UI row translation means a
-    // load/ingest path skipped `reconcile_param_manifests()`. Loud in dev,
-    // throttled-once in release. See docs/PARAM_MANIFEST_GATE_DESIGN.md D2.
-    debug_assert!(
-        !inst.manifest_provisional(),
-        "BUG-080: provisional manifest reached rows_from_manifest — a load/ingest path \
-         skipped reconcile_param_manifests() (effect_id={:?})",
-        inst.id,
-    );
-    if inst.manifest_provisional() {
-        warn_provisional_manifest_once(&inst.id);
-    }
-    inst.params
-        .iter()
-        .map(|p| SpecRow {
-            id: p.id().to_string(),
-            name: p.spec.name.clone(),
-            min: p.spec.min,
-            max: p.spec.max,
-            default: p.spec.default_value,
-            whole_numbers: p.spec.whole_numbers,
-            is_angle: p.spec.is_angle,
-            is_toggle: p.spec.is_toggle,
-            is_trigger: p.spec.is_trigger,
-            is_trigger_gate: p.spec.is_trigger_gate,
-            value_labels: if p.spec.value_labels.is_empty() {
-                None
-            } else {
-                Some(p.spec.value_labels.clone())
-            },
-            exposed: p.exposed,
-            section: p.spec.section.clone(),
-        })
-        .collect()
-}
-
-/// Unified card-config builder for any [`PresetInstance`] (effect or
-/// generator). Fork #9: the two parallel builders (`effects_to_configs` body
-/// and `gen_params_to_config`) collapse here — the kind fork is confined to
-/// the "skip this card" guard (effects: def-less; generators: no resolvable
-/// param source) and a handful of card fields; row-sourcing itself is now
-/// ONE path for both kinds ([`rows_from_manifest`], P2 of
-/// PARAM_STORAGE_BOUNDARIES_DESIGN.md). Everything downstream — the
-/// `ParamInfo` construction, the `id->index` lookup,
-/// [`build_card_modulation`], the `ParamCardConfig` assembly — is shared.
-/// Returns `None` only for an effect whose preset def is missing (skipped as
-/// a card); a generator with no source returns the empty card.
-fn preset_to_config(
+/// THE projection (D1, `docs/WIDGET_TREE_DESIGN.md` — replaces the former
+/// two-pass builder and its per-call id-to-index map). ONE manifest walk
+/// builds [`ParamRow`]s directly — descriptor
+/// (`spec`) verbatim from the manifest's `ParamSpecDef` fields, state
+/// (`value`) alongside; display-value resolution (D7) happens here and
+/// nowhere else. Returns `None` only for an effect whose preset def is
+/// missing (skipped as a card); a generator with no source returns the empty
+/// card.
+fn param_surface(
     inst: &PresetInstance,
     kind: manifold_core::preset_def::PresetKind,
     effect_index: usize,
     osc_scope: OscScope<'_>,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> Option<ParamCardConfig> {
+) -> Option<ParamSurface> {
     use manifold_core::preset_def::PresetKind;
     let preset_type = inst.effect_type();
     let reg_def = manifold_core::preset_definition_registry::try_get(preset_type);
 
-    // ── Source the normalized spec rows: ONE walk over the manifest, for
-    // both kinds (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). `inst.params`
-    // already carries every fact a row needs — descriptor (spec) + state
-    // (exposed), id-keyed, insertion order IS card order — because
-    // `build_param_manifest` resolved the registry-vs-graph-metadata
-    // authority chain ONCE at instantiation/load. State_sync reads that
-    // result; it does not re-derive the authority chain or re-read a
-    // per-instance graph override live (that override, `meta.params`, is a
-    // save-time-derived shadow now — D12 — not a second live source).
-    let rows: Vec<SpecRow> = match kind {
+    match kind {
         PresetKind::Effect => {
             reg_def.as_deref()?; // skip cards for def-less effects
-            rows_from_manifest(inst)
         }
         PresetKind::Generator => {
             if inst.params.is_empty() {
                 // No resolvable param source (mirrors the old
                 // graph-metadata-empty + registry-empty fallback chain,
                 // now resolved once inside `build_param_manifest`).
-                return Some(empty_generator_config(inst));
+                return Some(empty_generator_surface(inst));
             }
-            rows_from_manifest(inst)
         }
-    };
+    }
 
-    // ── Shared: ParamInfo construction + id->index lookup ──
-    // Card position == value index for both kinds (effect static prefix then
-    // user tail; generator graph/registry order), so the same map drives
-    // build_card_modulation that `param_id_to_value_index` would for effects.
-    let mut id_to_index = ahash::AHashMap::with_capacity(rows.len());
-    let params: Vec<ParamInfo> = rows
+    // BUG-080 seam: a provisional manifest (built against an incomplete
+    // registry, not yet reconciled) reaching UI row translation means a
+    // load/ingest path skipped `reconcile_param_manifests()`. Loud in dev,
+    // throttled-once in release. See docs/PARAM_MANIFEST_GATE_DESIGN.md D2.
+    debug_assert!(
+        !inst.manifest_provisional(),
+        "BUG-080: provisional manifest reached param_surface — a load/ingest path \
+         skipped reconcile_param_manifests() (effect_id={:?})",
+        inst.id,
+    );
+    if inst.manifest_provisional() {
+        warn_provisional_manifest_once(&inst.id);
+    }
+
+    // ── ONE walk over the manifest (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4):
+    // `inst.params` already carries every fact a row needs — descriptor
+    // (spec) + state (exposed), id-keyed, insertion order IS card order —
+    // because `build_param_manifest` resolved the registry-vs-graph-metadata
+    // authority chain ONCE at instantiation/load. This walk reads that
+    // result; it does not re-derive the authority chain or re-read a
+    // per-instance graph override live (that override, `meta.params`, is a
+    // save-time-derived shadow now — D12 — not a second live source).
+    let row_index_of: ahash::AHashMap<String, usize> =
+        inst.params.iter().enumerate().map(|(i, p)| (p.id().to_string(), i)).collect();
+
+    let mut rows: Vec<ParamRow> = inst
+        .params
         .iter()
-        .enumerate()
-        .map(|(pi, row)| {
-            id_to_index.insert(row.id.clone(), pi);
+        .map(|p| {
+            let id = p.id().to_string();
             let osc_address = match osc_scope {
                 OscScope::Master => {
                     manifold_core::preset_definition_registry::get_osc_address_by_id(
                         preset_type,
-                        &row.id,
+                        &id,
                     )
                 }
                 OscScope::Layer(lid) => {
                     manifold_core::preset_definition_registry::get_osc_address_for_layer_by_id(
                         preset_type,
                         lid,
-                        &row.id,
+                        &id,
                     )
                 }
             };
             let abl_mapping = inst.ableton_mappings.as_ref().and_then(|mappings| {
-                if row.id.is_empty() {
+                if id.is_empty() {
                     return None;
                 }
-                mappings.iter().find(|m| m.param_id == row.id)
+                mappings.iter().find(|m| m.param_id == id)
             });
             let ableton_display = abl_mapping.map(|mapping| AbletonMappingDisplay {
                 macro_name: mapping.address.macro_name.clone(),
@@ -3113,36 +3049,48 @@ fn preset_to_config(
                 inverted: mapping.inverted,
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));
-            ParamInfo {
-                param_id: std::borrow::Cow::Owned(row.id.clone()),
-                name: row.name.clone(),
-                min: row.min,
-                max: row.max,
-                default: row.default,
-                whole_numbers: row.whole_numbers,
-                is_angle: row.is_angle,
-                exposed: row.exposed,
-                is_toggle: row.is_toggle,
-                is_trigger: row.is_trigger,
-                is_trigger_gate: row.is_trigger_gate,
-                value_labels: row.value_labels.clone(),
-                osc_address,
-                ableton_display,
-                ableton_range,
-                mappable: true,
-                section: row.section.clone(),
+            let value_labels = if p.spec.value_labels.is_empty() {
+                None
+            } else {
+                Some(p.spec.value_labels.clone())
+            };
+            ParamRow {
+                id: std::borrow::Cow::Owned(id),
+                spec: RowSpec {
+                    name: p.spec.name.clone(),
+                    min: p.spec.min,
+                    max: p.spec.max,
+                    default: p.spec.default_value,
+                    whole_numbers: p.spec.whole_numbers,
+                    is_angle: p.spec.is_angle,
+                    is_toggle: p.spec.is_toggle,
+                    is_trigger: p.spec.is_trigger,
+                    is_trigger_gate: p.spec.is_trigger_gate,
+                    value_labels,
+                    section: p.spec.section.clone(),
+                },
+                // D7: display-value resolution decided here — base/effective
+                // straight off the manifest slot, `driven` false (state_sync
+                // has no wire-fed presentation case; only the editor snapshot
+                // path sets it).
+                value: RowValue { base: p.base, effective: p.value, exposed: p.exposed, driven: false },
+                modulation: RowMod::default(),
+                mapping: RowMapping { osc_address, ableton_display, ableton_range, mappable: true },
             }
         })
         .collect();
-    let n = params.len();
+    let n = rows.len();
 
-    let m = build_card_modulation(
+    let mod_rows = build_card_modulation(
         inst,
         n,
-        |id| id_to_index.get(id).copied(),
+        |id| row_index_of.get(id).copied(),
         automation_latched,
     );
-    let audio = build_audio_card_state(inst, n, |id| id_to_index.get(id).copied());
+    for (row, rm) in rows.iter_mut().zip(mod_rows) {
+        row.modulation = rm;
+    }
+    let audio = build_audio_card_state(inst, n, |id| row_index_of.get(id).copied());
 
     // String params are a generator-only surface (text inputs, font dropdowns),
     // sourced from the registry def.
@@ -3170,9 +3118,6 @@ fn preset_to_config(
         PresetKind::Effect => Vec::new(),
     };
 
-    let has_drv = m.iter().any(|row| row.driver_active);
-    let has_env = m.iter().any(|row| row.envelope_active);
-    let has_abl = params.iter().any(|p| p.ableton_display.is_some());
     let (card_kind, effect_id, enabled, collapsed, has_graph_mod) = match kind {
         PresetKind::Effect => (
             ParamCardKind::Effect,
@@ -3204,7 +3149,7 @@ fn preset_to_config(
         ),
     };
 
-    Some(ParamCardConfig {
+    Some(ParamSurface {
         kind: card_kind,
         effect_index,
         effect_id,
@@ -3214,7 +3159,7 @@ fn preset_to_config(
         // display-based, so no id-format parsing is needed to render one).
         // Falls back to the static registry name for stock/user presets not
         // (yet) reflected in the overlay snapshot.
-        name: reg_def.as_deref().map(|d| d.display_name.clone()).unwrap_or_else(|| {
+        title: reg_def.as_deref().map(|d| d.display_name.clone()).unwrap_or_else(|| {
             manifold_core::preset_type_registry::display_name(preset_type).to_string()
         }),
         enabled,
@@ -3222,12 +3167,8 @@ fn preset_to_config(
         supports_envelopes: true,
         string_params,
         layer_id: None,
-        params,
-        has_drv,
-        has_env,
-        has_abl,
+        rows,
         has_graph_mod,
-        rows_mod: m,
         audio,
         relight: crate::ui_translate::relight_card_config_from(inst),
     })
@@ -3255,13 +3196,13 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 /// [`preset_to_config`]. The generator branch always yields a config (a real
 /// one, or the empty fallback when no param source resolves), so the `expect`
 /// never fires.
-fn gen_params_to_config(
+fn gen_params_to_surface(
     gp: &manifold_core::effects::PresetInstance,
     layer_id: &str,
     clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
-) -> ParamCardConfig {
-    preset_to_config(
+) -> ParamSurface {
+    param_surface(
         gp,
         manifold_core::preset_def::PresetKind::Generator,
         0,
@@ -3269,7 +3210,7 @@ fn gen_params_to_config(
         clip_string_params,
         automation_latched,
     )
-    .expect("generator preset_to_config always yields a config")
+    .expect("generator param_surface always yields a config")
 }
 
 /// Build a human-readable description for a macro mapping target.
@@ -3291,7 +3232,7 @@ fn describe_macro_mapping(
             // Effect display name is type-level template metadata (a boundary
             // read); the param name comes off the LIVE manifest so user-added /
             // glb params resolve instead of rendering "?" (was a registry
-            // id_to_index miss, the UI twin of the P4 blind spot).
+            // id-lookup miss, the UI twin of the P4 blind spot).
             let effect_name = manifold_core::preset_definition_registry::try_get(effect_type)
                 .map(|d| d.display_name.clone())
                 .unwrap_or_else(|| effect_type.as_str().to_string());
@@ -3373,7 +3314,7 @@ mod param_label_tests {
 
     /// P5: a macro-mapping label resolves a param's display name from the LIVE
     /// manifest, so a user-added param shows its name instead of "?" (before,
-    /// the registry `id_to_index` lookup missed it — the UI twin of the P4
+    /// the registry id-lookup missed it — the UI twin of the P4
     /// blind spot).
     #[test]
     fn describe_macro_mapping_uses_live_manifest_param_name() {
@@ -3720,8 +3661,8 @@ mod build_audio_card_state_trigger_mode_tests {
     /// (`ParameterAudioMod.trigger_mode`), not a separate per-instance
     /// config — `build_audio_card_state` reads it into `trigger_mode_idx`
     /// in the SAME walk that populates `active`/`send_id`/`band_idx`/etc.
-    /// This is the function `preset_to_config` calls to populate
-    /// `ParamCardConfig.audio`, so a green test here is the proof the
+    /// This is the function `param_surface` calls to populate
+    /// `ParamSurface.audio`, so a green test here is the proof the
     /// config the card sees actually carries the project's live mode, not
     /// just that the model round-trips in isolation.
     #[test]
