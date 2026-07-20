@@ -1,0 +1,52 @@
+# System Upgrade Plan — 2026-07-20
+
+**Status: ACTIVE — Step 1 in progress (Fable, solo). Peter approved 2026-07-20.**
+This is the reviewed plan artifact for the codebase + orchestration upgrade. Briefs are cut from THIS doc, never from chat. Adversarially reviewed by a Fable fork 2026-07-20; its 8 findings are folded in below.
+
+## Diagnosis (short)
+
+The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built parallel infrastructure instead of riding existing systems (scene panel's imitation exposure layer, hand-copied param tables), and the gate verified the imitation (PNG/flow tests green while click paths were dead). Sonnet-orchestrating-Sonnet rubber-stamped green. The god files (param_card, inspector, state_sync, scene_setup_panel) are transcription code at the UI↔engine boundary — the same disease. Full autopsies: `SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`, `INSPECTOR_DRAG_TAB_FINDINGS.md`, undo baseline `1bdb69a9`/`573b50ea`, `VERIFICATION_DEBT.md`.
+
+## Operating model (supersedes prior practice; AGENT_ROUTING.md carries the rules)
+
+- Fable (or K3 when Fable is out of window) is the ONLY orchestrator. Never Sonnet-over-Sonnet.
+- Fable **steers**: chooses the approach, names the reuse target and conviction test in every brief, checks each lane's first commit.
+- Lanes make **exactly one commit, then STOP and report**. Lanes have NO landing rights — only the top session merges to main.
+- "Existing system doesn't cover X" is a report up, never a license to build. Any new helper module/harness = stop.
+- Up to 8 lanes allowed; **review is the throttle** — diffs queue for Fable review, review never queues for diffs.
+- Every wave's briefs get an adversarial Fable-fork pass before spawning.
+- Each brief carries a resume-note: if the top session dies, lane state = branch + findings doc, recoverable.
+
+## Step 1 — Fable solo, main session, BEFORE any lane (in progress)
+
+1. This plan doc. ✔
+2. CLAUDE.md rewrite: rules kept, incident stories stripped to pointers (~35KB → ~10KB).
+3. MEMORY.md → true index (no status phrasing).
+4. AGENT_ROUTING.md + FLEET_ORCHESTRATION.md: fold in the operating model above.
+5. BUG_BACKLOG.md split: closed entries → `docs/BUG_ARCHIVE.md` (solo because every lane writes to the backlog — not laneable).
+6. Hook trim: DEFERRED to its own careful pass — behavior changes under live protocol are riskier than the bloat.
+
+## Wave 1 — lanes (after Step 1; briefs adversarially checked)
+
+- **W1-A doc cull:** move superseded docs to `docs/archive/` from a list Fable writes; regen index.
+- **W1-B gate cleanup:** delete dead flow scripts (BUG-252's 8, BUG-240) and demote PNG assertions from the default gate — from an EXACT delete-list + keep-list (GPU parity tests, freeze proofs, headless render oracle are untouchable).
+- **W1-C BUG-266:** tab pin dies on incidental selection changes — decouple pin invalidation from `selection_version` (disjoint: `ui_state.rs`/`state_sync.rs`).
+- **W1-D BUG-267:** unify master/layer card vecs in `inspector.rs` (the wave's real-code lane; structural, goes BEFORE BUG-265 which touches the same lines).
+
+## Wave 2 — lanes
+
+- **W2-A test families:** state-level UI tests copied from exemplars Fable hand-writes (hit-test geometry math; click→command dispatch; display-value resolution à la BUG-260 conviction test). Lanes replicate patterns; zero new infrastructure permitted.
+- **W2-B BUG-265:** hit-test against live tree bounds (root fix), atop W1-D, turning W2-A's red baseline green.
+- **W2-C drag scoping:** Peter reported drag-and-drop broken beyond cards — survey clip/timeline/other drag surfaces, findings doc only.
+
+## Ongoing, non-delegable
+
+- **Fable:** widget-tree / queryable-UI-layer design doc (the load-bearing structural fix; explicitly NOT laneable — a Sonnet lane here recreates the scene panel at 10× scale). Rides on UI_HARNESS_UNIFICATION groundwork.
+- **Peter:** in-app acceptance pass on the undo fixes (`573b50ea` — never user-verified); scene-panel §5 decisions.
+
+## Later (blocked/queued)
+
+- K3 verification lanes per surface when K3 usage resets.
+- Hook trim pass (Step 1.6).
+- `manifold-core/effects.rs` dead-mass audit.
+- God-file decomposition follows the widget-tree design — splitting before killing the duplication just spreads the mess.

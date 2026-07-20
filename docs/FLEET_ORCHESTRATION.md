@@ -24,7 +24,7 @@ Peter ── approves ──▶ Fable (map + briefs + landing)
 1. **Propose.** Fable identifies an independent, tightly-specced lane and asks Peter to approve opening it. No pane opens without approval.
 2. **Brief.** On approval, Fable writes the lane brief: file:line anchors, exact scope, gate command, definition of done. Acquires a worktree slot.
 3. **Spawn.** One `team` pane = one lane. Lane orchestrator opens on its slot, verifies base tip, works.
-4. **Report up.** Lane pushes a short status only — `done` / `blocked: <reason>` / `gate: <result>`. Never a transcript.
+4. **First-commit checkpoint (2026-07-20).** The lane makes exactly one commit, then STOPS and reports. Fable reviews that diff before the lane continues. Thereafter: short status only — `done` / `blocked: <reason>` / `gate: <result>`. Never a transcript. Decisions flow up: "existing system doesn't cover X" is a report, not a license to build.
 5. **Decide.** Fable reacts: land it, re-brief, or fetch the full transcript *only if blocked*.
 6. **Land.** Fable owns the landing protocol (fetch, merge origin/main, gate, `--no-ff`, push). Releases the slot.
 
