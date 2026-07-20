@@ -85,8 +85,8 @@ impl Command for AddLayerCommand {
 ///
 /// The model's assembled graph is registered as a project-embedded preset
 /// (`origin: Saved`) and the new layer **tracks** it (`gen_params.graph =
-/// None`), exactly like a drop from the browser resolves a catalog id
-/// (`PRESET_LIBRARY_DESIGN` D9). An id that resolves in no catalog is not a
+/// None`), exactly like a drop from the browser resolves a catalog id.
+/// An id that resolves in no catalog is not a
 /// representable state: the earlier version stashed the def as a per-instance
 /// override on the layer, which left every type-keyed UI surface blind (card
 /// params empty, string params invisible, editor catalog-default `None` —

@@ -365,9 +365,6 @@ mod srgb_shader_parity_tests {
 
     #[test]
     fn shader_encode_diverges_from_old_pow_2_2_approximation_in_shadows() {
-        // Documents *why* BUG-128 mattered: the old `pow(1/2.2)` curve the
-        // shader used to apply is measurably different from the true
-        // piecewise function specifically in the shadow region.
         let old_approx = |x: f32| x.max(0.0).powf(1.0 / 2.2);
         let x = 0.02_f32; // well below the shadow knee
         let true_srgb = shader_srgb_encode(x);

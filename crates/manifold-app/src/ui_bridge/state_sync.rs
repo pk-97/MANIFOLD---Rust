@@ -1474,9 +1474,8 @@ pub fn sync_inspector_data(
                 // Read-only source view: the full routing lines (capture device +
                 // each feeding layer) for the Inputs section. Routing is edited
                 // elsewhere — layers from the layer header, channels from the
-                // channel control (§7.2 items 6/7, P8, 2026-07-11: the row-level
-                // "Cap" chip and its click-to-reveal dropdown are gone; this is
-                // the one place the detail lives now).
+                // channel control (the row-level "Cap" chip and its click-to-reveal
+                // dropdown are gone; this is the one place the detail lives now).
                 let ch_label = channel_label(device.as_ref(), is_tap, &s.channels);
                 let cap = s.has_capture();
                 let layer_name = |lid: &manifold_core::LayerId| {
@@ -1570,10 +1569,6 @@ pub fn sync_inspector_data(
             status_warning,
         );
 
-        // The matrix's trigger-row layer-dropdown cache (`set_audio_trigger_layers`)
-        // is deleted with the matrix (P3, D2). The Inputs section's "+ Layer"
-        // candidate cache (`set_audio_layers`) is deleted with the section's
-        // authoring (§7.2 item 7, P8, 2026-07-11).
     }
 
     // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md) ──
@@ -1627,8 +1622,7 @@ pub fn sync_inspector_data(
                             // `scoped_row` gets a correct lit state for free,
                             // not just the rows P3a actually wires a mod
                             // button onto.
-                            // Bound-row value override (importer-camera fix,
-                            // 2026-07-18): a row whose inner (node, param) is
+                            // Bound-row value override: a row whose inner (node, param) is
                             // covered by a card/user binding LIVES in the
                             // binding's instance slot — the write path edits
                             // that slot (inspector.rs `scene_bound_slot`), so

@@ -1,12 +1,8 @@
 //! Windowless render of a built `UIRoot` to a PNG. Mirrors the proven headless
 //! pattern in `manifold-renderer/tests/...` (`GpuDevice::new()` has no window).
 //!
-//! P2 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`, D1/D3): Pass 1 (the panel
-//! chrome — headers, ruler, lane backgrounds) used to be a fresh
-//! `renderer.render_tree(&ui.tree, None)` every call — the exact "whole-tree
-//! fresh every frame" lookalike the design's audit named as structurally
-//! blind to a stale-atlas-pixel bug (no `UICacheManager` in the loop at all).
-//! It now goes through the real cache: build a `UICacheManager`, `ensure_atlas`,
+//! Pass 1 (the panel chrome — headers, ruler, lane backgrounds)
+//! goes through the real cache: build a `UICacheManager`, `ensure_atlas`,
 //! `invalidate_all` (this function is always a fresh device/cache/renderer per
 //! call — no state persists across calls — so `invalidate_all`'s full-clear
 //! path is the correct behavior, not a lesser substitute for the incremental
@@ -19,11 +15,8 @@
 //! passes` (clip bodies, optional injected thumbnails, clip names,
 //! automation lanes, top-level overlays) are now `crate::ui_frame::
 //! render_main_ui_passes` — the SAME function `present_all_windows` calls,
-//! not a parallel re-implementation. This closes BUG-097 (this module's old
-//! overlay pass called the root-scan tree-range renderer, which renders
-//! NOTHING over an `overlay_draw` range that deliberately excludes its own
-//! region root; the live app's `render_sub_region` does not have that blind
-//! spot) by construction — there is no longer a second copy that could pick
+//! not a parallel re-implementation. This closes BUG-097 by construction —
+//! there is no longer a second copy that could pick
 //! the wrong call. What's genuinely different here vs. the live app is INPUT, resolved
 //! below and handed to the shared seam: clip bodies come from `selection`
 //! (no live drag state exists headless), thumbnail atlas+quads come from
@@ -285,12 +278,7 @@ pub fn render_graph_to_png(
 /// editor shows before a click, not faked. No node is pre-selected, so the
 /// inner-node list shows its own empty state — the editor's state on open.
 ///
-/// P3 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`): this used to build the
-/// sidebar into a throwaway scratch `UITree` and the inspector into a
-/// *second* throwaway `UIRoot`'s tree, then paint them with two separate
-/// `render_tree` calls plus a third for the canvas — the exact lookalike
-/// topology the design's audit named (three render passes where the live
-/// window issues one). It now builds ONE `UIRoot` (sidebar + inspector
+/// This builds ONE `UIRoot` (sidebar + inspector
 /// merged, same as `present_graph_editor_window`'s `ws.ui_root`) and paints
 /// it through `crate::editor_frame::composite_editor_frame` — the identical
 /// function the live window calls. See `editor_frame.rs`'s module doc for

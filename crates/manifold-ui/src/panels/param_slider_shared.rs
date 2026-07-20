@@ -109,11 +109,10 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 /// [`clip_trigger_drawer_height`] — its drawer is a different, smaller row
 /// set built by [`build_clip_trigger_drawer`].
 ///
-/// Adds [`crate::panels::drawer::METER_STRIP_H`] unconditionally (2026-07-11):
+/// Adds [`crate::panels::drawer::METER_STRIP_H`] unconditionally:
 /// `build_audio_mod_drawer`'s Sensitivity row carries a live meter on EVERY
 /// audio-mod drawer, so the reserved height must always include the strip
-/// too — this used to omit it, so a metered drawer overflowed its reserved
-/// slot by `METER_STRIP_H` (6px) every time one showed.
+/// too.
 /// Row budget (must mirror `build_audio_mod_drawer`'s row order exactly):
 /// Source + Listen (chips) + Sensitivity always; the Feature/Band matrix rows
 /// only while the "Custom" cell is open; Invert + Attack + Release only where

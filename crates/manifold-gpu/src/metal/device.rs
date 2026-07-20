@@ -55,7 +55,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
 }
 
 /// Pre-compiled compute clear pipelines for all storage-capable texture formats.
-/// Eliminates the empty render encoder that was previously used for non-Rgba16Float clears.
 pub(super) struct ClearPipelines {
     rgba16float: GpuComputePipeline,
     rgba8unorm: GpuComputePipeline,

@@ -1,6 +1,6 @@
 # UI Transform Stack — general 2D affine capability for the bitmap UI
 
-**Status:** SHIPPED 2026-07-04 (`transform2d.rs`, `UIRenderer.transform_stack`, `push_transform`/`pop_transform`, `Painter::push_transform` all live in-tree; status corrected 2026-07-05, it still read "APPROVED capability") · approved by Peter 2026-07-04, scoped from live investigation
+**Status:** SHIPPED 2026-07-04 (`transform2d.rs`, `UIRenderer.transform_stack`, `push_transform`/`pop_transform`, `Painter::push_transform` all live in-tree) · approved by Peter 2026-07-04, scoped from live investigation
 **Motivating consumer:** caret rotate (P2). **Longer arc:** UI-wide scale/rotation for motion + future tilted/rotated chrome.
 
 ## The decision this records

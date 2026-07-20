@@ -142,7 +142,7 @@ pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
 pub const SHADOW_BLUR: f32 = 18.0;
 pub const SHADOW_OFFSET_Y: f32 = 4.0;
 
-/// Peter, 2026-07-14: no shadows anywhere for now — dark-on-dark shadows read
+/// no shadows anywhere for now — dark-on-dark shadows read
 /// as smudge, not elevation. Flip to re-enable; call sites are gated, the
 /// draw_shadow primitive stays.
 pub const SHADOWS_ENABLED: bool = false;
@@ -316,7 +316,7 @@ pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 22.0;
 /// Margin (logical px) the thumbnail is inset from the preview-well edges on the
 /// top/left/right, plus the gap it leaves above the name strip. The darker well
 /// then frames the thumbnail as a dedicated panel rather than the image bleeding
-/// to the clip border (Peter, 2026-06-28).
+/// to the clip border.
 pub const CLIP_THUMB_INSET: f32 = 4.0;
 /// The preview well = the identity colour scaled toward black by this factor
 /// (hue-preserving), standing in for the thumbnail until §F populates it. Keeps
@@ -1016,7 +1016,7 @@ pub const CARD_RADIUS: f32 = 5.0;
 pub const SQUARE_RADIUS: f32 = 0.0;
 pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
-/// Peter, 2026-07-14: the dropdown/menu-item hover-or-checked highlight —
+/// the dropdown/menu-item hover-or-checked highlight —
 /// up from `SMALL_RADIUS` now that unchecked rows are transparent (see
 /// `DropdownPanel::build_nodes`) and the highlight needs to read as a
 /// distinct rounded chip rather than a flush-edged box.

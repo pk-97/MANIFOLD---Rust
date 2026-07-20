@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 /// `is_active` as an independent stored flag that gestures forgot to clear.
 /// Derived conveniences (region bounds of a clip selection, etc.) are computed
 /// on demand by callers that have the project, never stored here.
-/// What "the same selection" means for the inspector tab pin (BUG-266): the
+/// What "the same selection" means for the inspector tab pin: the
 /// primary layer, primary clip, and the layer selection set. Two syncs with
 /// an equal tuple are the same selection even if `selection_version` moved
 /// between them (a command side effect touched the version, not the
@@ -211,7 +211,7 @@ impl UIState {
     /// The inspector scope currently pinned by a tab click, if the pin is still
     /// live. `None` ⇒ fall back to the selection-derived default scope.
     ///
-    /// BUG-266: live means selection *identity*, not `selection_version` — a
+    /// live means selection *identity*, not `selection_version` — a
     /// version bump alone (a command side effect, e.g. add-effect's
     /// behind-the-scenes selection touch) does not clear the pin. It clears
     /// only when the identity changes to a different, NON-EMPTY value; a

@@ -311,8 +311,7 @@ impl GraphCanvas {
     /// canvas alone). A right-click anywhere first dismisses an open
     /// popover.
     ///
-    /// BUG-105 (now unified via UI_WIDGET_UNIFICATION_DESIGN.md P1's slider
-    /// contract): mirrors the card slider's own hit-zone split — a
+    /// mirrors the card slider's own hit-zone split — a
     /// right-click on a numeric ranged param row's TRACK zone (right of the
     /// label cell, same boundary `param_slider_track_x` sources from
     /// `BitmapSlider::zones()`) resets that param to its default in place

@@ -812,10 +812,8 @@ mod tests {
 
     /// BUG-087 regression: a fresh controller that has NEVER received timecode
     /// must not report receiving — nor trip a spurious follow-transport PLAY —
-    /// in the first `transport_timeout` window of a session. Under the old
-    /// `Seconds::ZERO` default this FAILED: at boot `now ≈ 0` and `last = 0`,
-    /// so `(now - last) < transport_timeout` read true and stopped transport
-    /// played. The far-past sentinel default fixes it.
+    /// in the first `transport_timeout` window of a session. The far-past
+    /// sentinel default fixes it.
     #[test]
     fn osc_update_no_false_receive_at_startup_before_any_timecode() {
         let mut ctrl = OscSyncController::new();

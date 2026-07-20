@@ -27,16 +27,10 @@
 //! Generic widget clicks route through the full, REAL `ui_bridge::dispatch`
 //! against driver-owned scratch state (see `Runner`'s snapshot fields).
 //! Determinism (D7) holds because prefs are `UserPrefs::in_memory()` —
-//! empty, host-independent, never the user's file. (Pre-2026-07-07 this
-//! driver mirrored a single `LayerClicked` arm and logged everything else
-//! unapplied, which made every transport/inspector action invisible to
-//! headless verification — the seam the dead-LANES investigation exposed.)
+//! empty, host-independent, never the user's file.
 //!
-//! ── P2 (`docs/UI_HARNESS_UNIFICATION_DESIGN.md`, D3) — the drift this
-//! driver used to be is killed here. `Runner` no longer reimplements the
-//! App's invalidate/rebuild decision (its old private `rebuild()` was a
-//! straight, unconditional `sync_build` — full `ui.build()` every call,
-//! never touching a `UICacheManager` at all) and no longer renders through
+//! `Runner` no longer reimplements the
+//! App's invalidate/rebuild decision and no longer renders through
 //! `render_ui_to_png`'s full-repaint lookalike. It now owns a persistent
 //! [`RenderState`] (one `UICacheManager` + composited offscreen for the
 //! whole script run) and drives every frame through
@@ -718,8 +712,7 @@ impl Runner {
         // structural drag folds into `needs_structural_sync` below (the seam
         // ORs the two identically); per-layer bitmap invalidation is a
         // live-app-only Pass-4c mechanism this harness never renders, so
-        // it's a dead sink here exactly as it always was (previously a
-        // Runner field nothing ever read).
+        // it's a dead sink here exactly as it always was.
         let mut rebuild_flag = false;
         let mut layer_bitmap_scratch: Vec<usize> = Vec::new();
         let mut host = AppEditingHost::new(
@@ -847,9 +840,7 @@ impl Runner {
     /// reconcile display state, THEN composite — matching `sync_build`'s own
     /// order (`ui.build()` before `push_state`/`ui.update()`) and the live
     /// tick's order (the invalidation decision before `present_all_windows`,
-    /// which is the actual atlas paint). Replaces the old private
-    /// `rebuild()`, which was a straight, unconditional `sync_build` that
-    /// never touched a `UICacheManager` at all.
+    /// which is the actual atlas paint).
     fn advance_frame(
         &mut self,
         ui: &mut UIRoot,

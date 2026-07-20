@@ -324,11 +324,11 @@ pub enum PanelAction {
     /// forward or back), same "read the live count off the Vm" convention
     /// `SceneSetupAddObject`'s `next_index` already uses.
     SceneSetupMoveModifier(LayerId, u32, u32, u32),
-    /// BUG-193 per-row "✕" in the Objects section: `(layer_id,
+    /// per-row "✕" in the Objects section: `(layer_id,
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
     SceneSetupRemoveObject(LayerId, u32, u32),
-    /// BUG-193 per-row "✕" in the Lights section: `(layer_id,
+    /// per-row "✕" in the Lights section: `(layer_id,
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
     SceneSetupRemoveLight(LayerId, u32, u32),
@@ -554,7 +554,7 @@ pub enum PanelAction {
     ParamSnapshot(GraphParamTarget, ParamId),
     ParamChanged(GraphParamTarget, ParamId, f32),
     ParamCommit(GraphParamTarget, ParamId),
-    /// BUG-250: click on an enum (`value_labels`) row's value cell with 3+
+    /// click on an enum (`value_labels`) row's value cell with 3+
     /// labels opens the shared `panels::dropdown` overlay — items = the
     /// row's label set anchored under the cell (`cell_node_id`, same
     /// resolve-at-open convention as `SceneSetupEnumClicked`), checked at
@@ -569,22 +569,17 @@ pub enum PanelAction {
         current_index: u32,
         cell_node_id: crate::node::NodeId,
     },
-    /// BUG-250: one atomic enum write (a dropdown pick). Dispatch runs the
+    /// one atomic enum write (a dropdown pick). Dispatch runs the
     /// existing `ParamSnapshot`/`ParamChanged`/`ParamCommit` trio in
     /// sequence, so the scene id_map interception and the one-undo-unit
     /// granularity come free — no new mutation path.
     ParamEnumSet(GraphParamTarget, ParamId, f32),
     /// Toggle a boolean (`isToggle`) param's ON/OFF button — a 0↔1 flip.
-    /// Was `GenParamToggle(ParamId)` (generator-only); joined the unified
-    /// group (§8.4 P3b) once effect cards gained the same toggle-row
-    /// rendering generators already had — see `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`
-    /// §8. Same `ChangeGraphParamCommand` write path as `ParamChanged`, but
+    /// Same `ChangeGraphParamCommand` write path as `ParamChanged`, but
     /// atomic (no snapshot/commit pair — a click isn't a drag).
     ParamToggle(GraphParamTarget, ParamId),
     /// Fire a monotonic `isTrigger` param's "▶" button — increments the
-    /// underlying counter by one instead of flipping it. Was
-    /// `GenParamFire(ParamId)`; unified alongside `ParamToggle` for the same
-    /// reason (D5b: `is_trigger` cards now exist on effect chains too).
+    /// underlying counter by one instead of flipping it.
     ParamFire(GraphParamTarget, ParamId),
     /// Toggle the "3D Shading" header icon (`docs/DEPTH_RELIGHT_DESIGN.md`
     /// D2/P5). Atomic like `ParamToggle` — a click, not a drag.

@@ -142,8 +142,7 @@ enum DragTarget {
 
 /// Which field is being typed into. The four numeric fields parse as `f32`;
 /// `Label` is a free-text rename committed via `EffectMappingLabel`; `Section`
-/// is a free-text (or empty-to-clear) commit via `EffectMappingSection`
-/// (P5c, closes BUG-102).
+/// is a free-text (or empty-to-clear) commit via `EffectMappingSection`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditField {
     Min,
@@ -580,15 +579,13 @@ impl MappingPopover {
             self.enter_edit(EditField::Label);
             return true;
         }
-        // Section field — click to type/clear the card section (P5c, closes
-        // BUG-102).
+        // Section field — click to type/clear the card section.
         if Self::point_in(self.section_field_rect(), sx, sy) {
             self.enter_edit(EditField::Section);
             return true;
         }
         // Min / Max value fields — click to type an exact bound (including past
-        // the param's nominal range). The range is set numerically now; the
-        // old trim track + drag handles are gone.
+        // the param's nominal range).
         for which in [DragTarget::Min, DragTarget::Max] {
             if Self::point_in(self.value_field_rect(which), sx, sy) {
                 self.enter_edit(which.into());
@@ -774,8 +771,8 @@ impl MappingPopover {
             return;
         }
 
-        // Section: free-text, empty clears back to unsectioned (P5c, closes
-        // BUG-102). Outer touched-ness is implicit in emitting the action at
+        // Section: free-text, empty clears back to unsectioned.
+        // Outer touched-ness is implicit in emitting the action at
         // all; the inner `Option<String>` carries value-vs-clear.
         if field == EditField::Section {
             let trimmed = buffer.trim();
@@ -1110,7 +1107,7 @@ impl MappingPopover {
             self.draw_value_field(ui, panel.x, which, name, format_affine(val));
         }
 
-        // ── Section field (P5c, closes BUG-102) ──
+        // ── Section field ──
         self.draw_section_field(ui, panel.x);
 
         // ── Go to node ──
@@ -1383,7 +1380,7 @@ mod tests {
         ));
     }
 
-    // ── P5c: Section field (closes BUG-102) ───────────────────────────
+    // ── Section field ───────────────────────────
 
     #[test]
     fn click_section_field_enters_edit_and_types_a_value() {

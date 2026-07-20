@@ -138,8 +138,7 @@ pub trait TimelineEditingHost {
     /// Unity: InputHandler.HandleEmptyAreaRightClick → ShowLayerContextMenu.
     fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, screen_pos: Vec2);
 
-    /// Show an automation-lane context menu (BUG-184: `ClearLaneCommand`/
-    /// `RemoveLaneCommand` had zero UI callers). Fired on right-click
+    /// Show an automation-lane context menu. Fired on right-click
     /// anywhere on a lane's strip/segment/dot — `on_pointer_click` resolves
     /// which lane was hit before calling this, same as `on_track_right_click`
     /// resolves the layer index.
