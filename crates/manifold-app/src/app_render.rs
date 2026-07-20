@@ -3697,13 +3697,7 @@ impl Application {
         // (today: the D11 toast's enter/hold/fade), force `offscreen_dirty`
         // so the overlay pass (gated on it, `present_all_windows`) keeps
         // recomposing every frame instead of freezing the moment an
-        // unrelated input stops re-dirtying the frame. Supersedes the old
-        // per-popup poll here (`UI_CRAFT_AND_MOTION_PLAN.md` §5 item 4,
-        // BUG-026's fix): the popup professional pass deleted the browser /
-        // Ableton picker / settings popups' entrance tweens, so that poll's
-        // three `is_animating()` calls were permanently `false` — dead code
-        // this replaces with the general aggregate rather than leaving in
-        // place.
+        // unrelated input stops re-dirtying the frame.
         if self.ws.ui_root.overlay_redraw_needed() {
             self.ws.offscreen_dirty = true;
         }
@@ -4445,15 +4439,10 @@ impl Application {
 
         // Overlays (node picker + any other top-level overlay open on this
         // window's `UIRoot`) build at the tail of the tree via the SAME
-        // driver the main window uses (`EDITOR_WINDOW_UNIFICATION_DESIGN.md`
-        // D1/D2, P1 fix-shape spec 2026-07-14) — `build_overlays_for_screen`
+        // driver the main window uses — `build_overlays_for_screen`
         // sets `screen_width`/`screen_height` (this `UIRoot` never gets
         // `resize()`) then runs `build_overlays()`, which records
-        // `overlay_draw`/`overlay_region_start` for real. Replaces the old
-        // hand-rolled `begin_region`/`browser_popup.build`/`end_region`
-        // block that bypassed the overlay system entirely — that block is
-        // BUG-151's root cause: `overlay_draw` was permanently empty for the
-        // editor, so the shared tree-overlay pass (D1) had nothing to draw.
+        // `overlay_draw`/`overlay_region_start` for real.
         // Built last, same as before, so its nodes sit on top of
         // palette/sidebar/preview column.
         ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
@@ -4612,11 +4601,6 @@ impl Application {
             true,
             "Editor Offscreen → Drawable",
         );
-
-        // Node output previews are now drawn INLINE by the canvas at each node's
-        // depth band (see the atlas-registration block above `canvas.render`),
-        // so the old flat post-pass blit-over-the-drawable is gone — that pass
-        // ignored node z-order, which was BUG-027.
 
         // ── Sidebar-top preview monitors ──
         // Composite the captured node texture (top) and the master compositor
@@ -4920,7 +4904,7 @@ impl Application {
             // failure mode impossible regardless of how the gate below
             // evaluates.
             self.clip_body_scratch.clear();
-            // BUG-028 P2: while an audio file is being dragged in from
+            // While an audio file is being dragged in from
             // Finder, show a full-length ghost clip at the lane/beat it
             // would land on — the same targeting the DroppedFile arm in
             // app.rs resolves, computed independently here (read-only
