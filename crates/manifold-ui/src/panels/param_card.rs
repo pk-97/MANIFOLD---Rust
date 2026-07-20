@@ -2948,9 +2948,9 @@ impl ParamCardPanel {
             let default_norm = BitmapSlider::value_to_normalized(spec.default, spec.min, spec.max);
             let value_text = format!("{value:.2}");
             let reset = PanelAction::slider_reset(
-                PanelAction::RelightParamSnapshot(target, spec.field),
-                PanelAction::RelightParamChanged(target, spec.field, spec.default),
-                PanelAction::RelightParamCommit(target, spec.field),
+                PanelAction::RelightParamSnapshot(target.clone(), spec.field),
+                PanelAction::RelightParamChanged(target.clone(), spec.field, spec.default),
+                PanelAction::RelightParamCommit(target.clone(), spec.field),
             );
             let slider = BitmapSlider::build(
                 tree,
@@ -4001,7 +4001,7 @@ impl ParamCardPanel {
                         let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
                         let pid = self.rows[row].id.clone();
                         return vec![
-                            PanelAction::EnvDecaySnapshot(target, pid.clone()),
+                            PanelAction::EnvDecaySnapshot(target.clone(), pid.clone()),
                             PanelAction::EnvDecayChanged(target, pid, decay),
                         ];
                     }
@@ -4023,7 +4023,7 @@ impl ParamCardPanel {
                                 self.drag.begin(ParamDragTarget::AudioShape { index: row, param: which }, pos);
                                 let pid = self.rows[row].id.clone();
                                 return vec![
-                                    PanelAction::AudioModShapeSnapshot(target, pid.clone()),
+                                    PanelAction::AudioModShapeSnapshot(target.clone(), pid.clone()),
                                     PanelAction::AudioModShapeParamChanged(target, pid, which, value),
                                 ];
                             }
@@ -4044,7 +4044,7 @@ impl ParamCardPanel {
                             self.drag.begin(ParamDragTarget::StepAmount { index: row }, pos);
                             let pid = self.rows[row].id.clone();
                             return vec![
-                                PanelAction::AudioModStepAmountSnapshot(target, pid.clone()),
+                                PanelAction::AudioModStepAmountSnapshot(target.clone(), pid.clone()),
                                 PanelAction::AudioModStepAmountChanged(target, pid, value),
                             ];
                         }
@@ -4139,7 +4139,7 @@ impl ParamCardPanel {
                     let val = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
                     let val = if info.spec.whole_numbers { val.round() } else { val };
                     vec![
-                        PanelAction::ParamSnapshot(target, self.rows[row].id.clone()),
+                        PanelAction::ParamSnapshot(target.clone(), self.rows[row].id.clone()),
                         PanelAction::ParamChanged(target, self.rows[row].id.clone(), val),
                     ]
                 }
@@ -4161,7 +4161,7 @@ impl ParamCardPanel {
                     let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
                     let val = BitmapSlider::normalized_to_value(norm, spec.min, spec.max);
                     return vec![
-                        PanelAction::RelightParamSnapshot(target, field),
+                        PanelAction::RelightParamSnapshot(target.clone(), field),
                         PanelAction::RelightParamChanged(target, field, val),
                     ];
                 }
@@ -4500,7 +4500,7 @@ impl ParamCardPanel {
         // descendant without a more specific intent folds here.
         if let Some(border_id) = self.border_id {
             intents.claim_area(border_id);
-            intents.on(border_id, RightClick, PanelAction::CardRightClicked(target));
+            intents.on(border_id, RightClick, PanelAction::CardRightClicked(target.clone()));
         }
 
         // Every materialised slider's right-click reset — main rows AND every
@@ -4557,7 +4557,7 @@ impl ParamCardPanel {
             // value cell + gaps, so a right-click anywhere on the row that isn't
             // the track reliably opens the param menu — no narrow-target lottery.
             if self.context == CardContext::Perform {
-                let menu = PanelAction::ParamLabelRightClick(target, self.rows[pi].id.clone());
+                let menu = PanelAction::ParamLabelRightClick(target.clone(), self.rows[pi].id.clone());
                 // Label registration goes through the contract (P3/D14).
                 BitmapSlider::register_label_mapping(ids, &menu, intents);
                 // The row catcher is a second node carrying the SAME action

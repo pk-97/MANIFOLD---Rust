@@ -980,8 +980,8 @@ pub(crate) fn enum_value_cell_actions(
         let next = (current_index + 1) % count;
         let new_value = min + next as f32;
         vec![
-            PanelAction::ParamSnapshot(target, param_id.clone()),
-            PanelAction::ParamChanged(target, param_id.clone(), new_value),
+            PanelAction::ParamSnapshot(target.clone(), param_id.clone()),
+            PanelAction::ParamChanged(target.clone(), param_id.clone(), new_value),
             PanelAction::ParamCommit(target, param_id),
         ]
     } else {
@@ -1270,8 +1270,8 @@ pub(crate) fn build_envelope_config(
     // the same EnvDecay Snapshot/Changed/Commit trio the drag path already
     // emits, reset to `DEFAULT_ENV_DECAY`.
     let reset = PanelAction::slider_reset(
-        PanelAction::EnvDecaySnapshot(target, pid.clone()),
-        PanelAction::EnvDecayChanged(target, pid.clone(), DEFAULT_ENV_DECAY),
+        PanelAction::EnvDecaySnapshot(target.clone(), pid.clone()),
+        PanelAction::EnvDecayChanged(target.clone(), pid.clone(), DEFAULT_ENV_DECAY),
         PanelAction::EnvDecayCommit(target, pid),
     );
     let spec = DrawerSpec {
@@ -1941,8 +1941,8 @@ fn param_shape_reset(
     default: f32,
 ) -> PanelAction {
     PanelAction::slider_reset(
-        PanelAction::AudioModShapeSnapshot(gpt, pid.clone()),
-        PanelAction::AudioModShapeParamChanged(gpt, pid.clone(), which, default),
+        PanelAction::AudioModShapeSnapshot(gpt.clone(), pid.clone()),
+        PanelAction::AudioModShapeParamChanged(gpt.clone(), pid.clone(), which, default),
         PanelAction::AudioModShapeCommit(gpt, pid),
     )
 }
@@ -2134,8 +2134,9 @@ pub(crate) fn build_audio_mod_drawer(
     // Each shaping slider's right-click reset — AudioModShape's own default.
     // BUG-070: these never had a reset gesture before this (the drawer only
     // opens when armed, gated the same way the drag hit-test already is).
-    let shape_reset =
-        |which: AudioShapeParam, default: f32| param_shape_reset(gpt, pid.clone(), which, default);
+    let shape_reset = |which: AudioShapeParam, default: f32| {
+        param_shape_reset(gpt.clone(), pid.clone(), which, default)
+    };
     // Modifier toggle below the band row: "Invert" (loud → low). Flat index
     // sits one past the bands. Delta (rate-of-change) removed from the UI
     // (§7.2 item 2, 2026-07-11: "not very useful and adds a lot of clutter")
@@ -2231,9 +2232,9 @@ pub(crate) fn build_audio_mod_drawer(
                 format!("{amount:.2}")
             };
             let step_reset = PanelAction::slider_reset(
-                PanelAction::AudioModStepAmountSnapshot(gpt, pid.clone()),
-                PanelAction::AudioModStepAmountChanged(gpt, pid.clone(), default_amount),
-                PanelAction::AudioModStepAmountCommit(gpt, pid.clone()),
+                PanelAction::AudioModStepAmountSnapshot(gpt.clone(), pid.clone()),
+                PanelAction::AudioModStepAmountChanged(gpt.clone(), pid.clone(), default_amount),
+                PanelAction::AudioModStepAmountCommit(gpt.clone(), pid.clone()),
             );
             rows.push(shape_slider(
                 "Step",
@@ -2583,9 +2584,9 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::ParamSnapshot(target, info.id.clone()),
-        PanelAction::ParamChanged(target, info.id.clone(), info.spec.default),
-        PanelAction::ParamCommit(target, info.id.clone()),
+        PanelAction::ParamSnapshot(target.clone(), info.id.clone()),
+        PanelAction::ParamChanged(target.clone(), info.id.clone(), info.spec.default),
+        PanelAction::ParamCommit(target.clone(), info.id.clone()),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -2932,7 +2933,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target, info.id.clone(),
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target.clone(), info.id.clone(),
             row_key_base.map(|b| b | ROW_ROLE_ENVELOPE_CONFIG),
         ));
         cy += ENV_CONFIG_HEIGHT;

@@ -90,11 +90,19 @@ pub enum DriverConfigAction {
 /// kind by construction. `Effect` carries the chain-positional effect
 /// index (the card's `effect_index`); `Generator` carries nothing (a layer
 /// hosts one generator, resolved from the active layer at dispatch time,
-/// exactly as the old `Gen*` arms did).
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// exactly as the old `Gen*` arms did). `GeneratorOf` carries an explicit
+/// `LayerId` for dispatch sites that must NOT resolve through the active
+/// layer — BUG-292: the scene panel's rows edit its own bound layer
+/// (`ScenePanel::live_layer_id`), which can legitimately differ from the
+/// app's `active_layer`; routing those rows through plain `Generator`
+/// silently wrote to the wrong layer. `LayerId` wraps an `Arc<str>` (not
+/// `Copy`), so this variant costs the enum its `Copy` impl — every other
+/// call site keeps using `Generator`/`Effect` unchanged.
+#[derive(Debug, Clone, PartialEq)]
 pub enum GraphParamTarget {
     Effect(usize),
     Generator,
+    GeneratorOf(LayerId),
 }
 
 /// D3's six "3D Shading" relight knobs (`docs/DEPTH_RELIGHT_DESIGN.md`

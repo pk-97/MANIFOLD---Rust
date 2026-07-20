@@ -2563,7 +2563,7 @@ impl UIRoot {
                     };
                     // Typed (2b.11): item i maps the param to macro i.
                     items.push(DropdownItem::new(&label).with_action(
-                        PanelAction::MapParamToMacro(*gpt, param_id.clone(), i),
+                        PanelAction::MapParamToMacro(gpt.clone(), param_id.clone(), i),
                     ));
                 }
                 // Ableton picker entry
@@ -2573,7 +2573,7 @@ impl UIRoot {
                 let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
                     items.push(DropdownItem::new("Map to Ableton Macro…").with_action(
-                        PanelAction::OpenAbletonPickerForParam(*gpt, param_id.clone()),
+                        PanelAction::OpenAbletonPickerForParam(gpt.clone(), param_id.clone()),
                     ));
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
@@ -2586,13 +2586,20 @@ impl UIRoot {
                         *fx_idx,
                         param_id.as_ref(),
                     ),
-                    GraphParamTarget::Generator => {
+                    // `is_gen_ableton_mapped` reads the perform inspector's
+                    // OWN generator card state (layer-agnostic — no `LayerId`
+                    // param) — `GeneratorOf` never actually reaches this arm
+                    // in practice (only card-shaped actions like
+                    // `ParamLabelRightClick` land here, and the scene panel's
+                    // `GeneratorOf` rows never emit them), but the same query
+                    // applies if it ever does.
+                    GraphParamTarget::Generator | GraphParamTarget::GeneratorOf(_) => {
                         self.inspector.is_gen_ableton_mapped(param_id.as_ref())
                     }
                 };
                 if is_ableton_mapped {
                     items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
-                        PanelAction::UnmapParamAbleton(*gpt, param_id.clone()),
+                        PanelAction::UnmapParamAbleton(gpt.clone(), param_id.clone()),
                     ));
                 }
                 self.dropdown
@@ -2673,7 +2680,7 @@ impl UIRoot {
                 }
                 items.push(
                     DropdownItem::new("Make Unique")
-                        .with_action(PanelAction::MakePresetUnique(*gpt)),
+                        .with_action(PanelAction::MakePresetUnique(gpt.clone())),
                 );
                 // Divergence actions (PRESET_LIBRARY_DESIGN D3, P4): only
                 // meaningful once the instance has diverged from its library
@@ -2686,12 +2693,17 @@ impl UIRoot {
                     GraphParamTarget::Effect(fx_idx) => {
                         self.inspector.effect_has_graph_mod(self.inspector.last_effect_tab(), *fx_idx)
                     }
-                    GraphParamTarget::Generator => self.inspector.gen_has_graph_mod(),
+                    // Same rationale as `is_ableton_mapped` above: card-only
+                    // state, `GeneratorOf` doesn't reach `CardRightClicked` in
+                    // practice, same query applies if it ever does.
+                    GraphParamTarget::Generator | GraphParamTarget::GeneratorOf(_) => {
+                        self.inspector.gen_has_graph_mod()
+                    }
                 };
                 if has_graph_mod {
                     items.push(
                         DropdownItem::new("Revert to Library")
-                            .with_action(PanelAction::RevertToLibrary(*gpt)),
+                            .with_action(PanelAction::RevertToLibrary(gpt.clone())),
                     );
                     // Wording states the blast radius WITHOUT computing it
                     // (PRESET_LIBRARY_DESIGN §4/§6: counting how many
@@ -2699,24 +2711,24 @@ impl UIRoot {
                     // design deletes) — "instances", not a computed N.
                     items.push(
                         DropdownItem::new("Push to Library — updates instances tracking this preset")
-                            .with_action(PanelAction::PushToLibrary(*gpt)),
+                            .with_action(PanelAction::PushToLibrary(gpt.clone())),
                     );
                 }
                 // Library doors (PRESET_LIBRARY_DESIGN D4) — explicit "publish a
                 // copy" actions, distinct from Make Unique's divergence/retarget.
                 items.push(
                     DropdownItem::new("Save to Library…")
-                        .with_action(PanelAction::SaveToLibrary(*gpt)),
+                        .with_action(PanelAction::SaveToLibrary(gpt.clone())),
                 );
                 items.push(
                     DropdownItem::new("Save to Project…")
-                        .with_action(PanelAction::SaveToProject(*gpt)),
+                        .with_action(PanelAction::SaveToProject(gpt.clone())),
                 );
                 items.push(
-                    DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(*gpt)),
+                    DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(gpt.clone())),
                 );
                 items.push(
-                    DropdownItem::new("Import Preset…").with_action(PanelAction::ImportPreset(*gpt)),
+                    DropdownItem::new("Import Preset…").with_action(PanelAction::ImportPreset(gpt.clone())),
                 );
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
@@ -2729,7 +2741,7 @@ impl UIRoot {
                     // target + inspector tab are resolved at dispatch time, the
                     // same path the unmap action uses — no kind fork here.
                     self.ableton_picker_context = Some(AbletonPickerContext::Param {
-                        gpt: *gpt,
+                        gpt: gpt.clone(),
                         param_id: param_id.clone(),
                     });
                     self.ableton_picker
@@ -2808,7 +2820,7 @@ impl UIRoot {
                         DropdownItem::new(label)
                             .with_check(i as u32 == *current_index)
                             .with_action(PanelAction::ParamEnumSet(
-                                *target,
+                                target.clone(),
                                 param_id.clone(),
                                 i as f32,
                             ))

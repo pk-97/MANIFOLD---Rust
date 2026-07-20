@@ -804,11 +804,15 @@ impl SceneCardState {
 
     /// BUG-250: map a [`RowClick::EnumValueCell`] hit to the shared
     /// cycle-or-dropdown action set (`enum_value_cell_actions`), targeting
-    /// the layer's generator like every other scene-row card action. The
-    /// current value comes from this pass's `id_map` snapshot (D1: rebuilt
-    /// every build, never stale); the cell node id anchors the dropdown
-    /// under the row's own value text.
-    fn enum_value_cell_action(&self, i: usize, clicked: NodeId) -> Vec<PanelAction> {
+    /// the layer's generator like every other scene-row card action —
+    /// `target` is the caller's `GraphParamTarget::GeneratorOf(vm.layer_id)`
+    /// (BUG-292), passed in the same way `audio_toggle_action`/
+    /// `audio_set_source_action` already take it (`SceneCardState` has no
+    /// `live_layer_id` of its own to derive it from). The current value
+    /// comes from this pass's `id_map` snapshot (D1: rebuilt every build,
+    /// never stale); the cell node id anchors the dropdown under the row's
+    /// own value text.
+    fn enum_value_cell_action(&self, target: GraphParamTarget, i: usize, clicked: NodeId) -> Vec<PanelAction> {
         let info = &self.rows[i];
         let labels = info.spec.value_labels.clone().unwrap_or_default();
         let pid = self.pid_at(i);
@@ -829,7 +833,7 @@ impl SceneCardState {
             .and_then(|s| s.as_ref())
             .map(|s| s.value_text)
             .unwrap_or(clicked);
-        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.spec.min, cell)
+        enum_value_cell_actions(target, pid, &labels, value, info.spec.min, cell)
     }
 
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
@@ -1836,6 +1840,18 @@ impl ScenePanel {
             self.properties_retained.clear();
             return cy;
         };
+        // BUG-292: every row this pass builds must dispatch to the panel's
+        // OWN bound layer (`GeneratorOf`), never the active-layer-resolved
+        // plain `Generator` — `full_params` is only ever populated alongside
+        // `SceneSetupState::Live` (state_sync.rs's `configure`/
+        // `configure_params` call together), so `live_layer_id()` is always
+        // `Some` here in practice; guarded explicitly rather than assumed,
+        // mirroring the `full_params` guard above.
+        let Some(target) = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf) else {
+            self.properties_card.resize(0);
+            self.properties_retained.clear();
+            return cy;
+        };
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
@@ -1861,7 +1877,7 @@ impl ScenePanel {
                 cy += ROW_H;
             }
             while i < retained.len() && config.rows[retained[i]].spec.section == cur_section {
-                cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w);
+                cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w, target.clone());
                 i += 1;
             }
         }
@@ -1881,6 +1897,7 @@ impl ScenePanel {
         slot: usize,
         label_width: f32,
         slider_w: f32,
+        target: GraphParamTarget,
     ) -> f32 {
         let info = self.properties_card.rows[slot].clone();
         let built = build_param_row(
@@ -1892,7 +1909,7 @@ impl ScenePanel {
             &info,
             &self.properties_card.mod_state,
             slot,
-            GraphParamTarget::Generator,
+            target,
             &crate::slider::SliderColors::default_slider(),
             color::FONT_LABEL,
             true,
@@ -2517,13 +2534,15 @@ impl ScenePanel {
                     ) {
                         // P2 slice 2a: the ONE unified properties card's D/E/A
                         // buttons + config drawers — the SAME dispatch shape
-                        // `ParamCardPanel::handle_click_generator` uses,
-                        // targeting `GraphParamTarget::Generator` (a scene
-                        // row always lives on the layer's own generator).
-                        // Replaces the five near-duplicate per-family blocks
-                        // (world/object/light/camera/modifier `_card`) this
-                        // slice deleted.
-                        let target = GraphParamTarget::Generator;
+                        // `ParamCardPanel::handle_click_generator` uses. BUG-292:
+                        // targets `GeneratorOf(vm.layer_id)`, the panel's own
+                        // bound layer, NOT the active-layer-resolved plain
+                        // `Generator` — a scene row always lives on the
+                        // layer its panel is docked to, which can differ from
+                        // the app's active layer. Replaces the five
+                        // near-duplicate per-family blocks (world/object/
+                        // light/camera/modifier `_card`) this slice deleted.
+                        let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                         actions.extend(match rc {
                             RowClick::DriverToggle(pi) => {
                                 self.properties_card.focus_mod_tab(pi, ModTab::Driver);
@@ -2575,7 +2594,7 @@ impl ScenePanel {
                             }
                             RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
-                                self.properties_card.enum_value_cell_action(pi, *node_id)
+                                self.properties_card.enum_value_cell_action(target, pi, *node_id)
                             }
                         });
                     } else if let Some((pi, tab)) = self.properties_card.mod_tab_hit(*node_id) {
@@ -2639,12 +2658,14 @@ impl ScenePanel {
                         .find_map(|(pi, sl)| sl.try_start_drag(*node_id, pos.x).map(|v| (pi, v)))
                     {
                         self.drag_layer_id = Some(vm.layer_id.clone());
-                        let target = GraphParamTarget::Generator;
+                        // BUG-292: the panel's own bound layer, not the
+                        // active-layer-resolved plain `Generator`.
+                        let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
                         let pid = self.properties_card.pid_at(pi);
                         return (
                             true,
                             vec![
-                                PanelAction::ParamSnapshot(target, pid.clone()),
+                                PanelAction::ParamSnapshot(target.clone(), pid.clone()),
                                 PanelAction::ParamChanged(target, pid, new_value),
                             ],
                         );
@@ -2660,7 +2681,10 @@ impl ScenePanel {
                 // P2 slice 2a: continue an active slider drag. Live
                 // `ParamChanged` only, no undo unit (the card cadence: one
                 // `ParamCommit` fires on release, below).
-                if self.drag_layer_id.is_some()
+                // BUG-292: the layer captured at drag-start (`vm.layer_id`
+                // via `PointerDown` above), not the active-layer-resolved
+                // plain `Generator`.
+                if let Some(lid) = self.drag_layer_id.clone()
                     && let Some((pi, new_value)) = self
                         .properties_card
                         .drag_sliders
@@ -2668,7 +2692,7 @@ impl ScenePanel {
                         .enumerate()
                         .find_map(|(pi, sl)| slider_drag_value(sl, pos.x).map(|v| (pi, v)))
                 {
-                    let target = GraphParamTarget::Generator;
+                    let target = GraphParamTarget::GeneratorOf(lid);
                     let pid = self.properties_card.pid_at(pi);
                     return (true, vec![PanelAction::ParamChanged(target, pid, new_value)]);
                 }
@@ -2677,12 +2701,16 @@ impl ScenePanel {
             UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                 // P2 slice 2a (D4): release commits ONE undo unit for
                 // whichever row was mid-drag, if any — the card protocol's
-                // Commit step.
+                // Commit step. BUG-292: the layer captured at drag-start
+                // (read before it's cleared below), not `Generator`.
+                let lid = self.drag_layer_id.clone();
                 let mut actions = Vec::new();
                 for pi in 0..self.properties_card.drag_sliders.len() {
-                    if self.properties_card.drag_sliders[pi].end_drag() {
+                    if self.properties_card.drag_sliders[pi].end_drag()
+                        && let Some(lid) = lid.clone()
+                    {
                         let pid = self.properties_card.pid_at(pi);
-                        actions.push(PanelAction::ParamCommit(GraphParamTarget::Generator, pid));
+                        actions.push(PanelAction::ParamCommit(GraphParamTarget::GeneratorOf(lid), pid));
                     }
                 }
                 self.drag_layer_id = None;

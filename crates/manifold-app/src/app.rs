@@ -1449,7 +1449,7 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap().clone();
                         use manifold_ui::panels::PanelAction;
                         for act in [
-                            PanelAction::ParamChanged(ctx.target, ctx.param_id.clone(), v),
+                            PanelAction::ParamChanged(ctx.target.clone(), ctx.param_id.clone(), v),
                             PanelAction::ParamCommit(ctx.target, ctx.param_id.clone()),
                         ] {
                             let _ = crate::ui_bridge::dispatch(

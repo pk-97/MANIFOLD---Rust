@@ -239,6 +239,13 @@ fn resolve_graph_target(
             let lid = project.timeline.layers.get(layer_idx)?.layer_id.clone();
             Some(manifold_core::GraphTarget::Generator(lid))
         }
+        // BUG-292: resolve by the CARRIED layer id, never `active_layer` —
+        // the scene panel's rows must land on the panel's own bound layer
+        // even when it isn't the app's active layer.
+        GraphParamTarget::GeneratorOf(lid) => {
+            project.timeline.find_layer_index_by_id(lid.as_str())?;
+            Some(manifold_core::GraphTarget::Generator(lid.clone()))
+        }
     }
 }
 
@@ -4808,6 +4815,58 @@ mod scene_card_convergence_tests {
         #[test]
         fn card_param_stomp() {
             card_param_case(true);
+        }
+
+        /// Two SceneStarter generator layers (same structural preset, so a
+        /// P1-stamped exposed param id resolves in either instance).
+        fn two_scene_layer_project() -> (Project, LayerId, LayerId) {
+            let mut project = Project::default();
+            let idx_a = project.timeline.add_layer(
+                "A",
+                LayerType::Generator,
+                PresetTypeId::from_string("SceneStarter".to_string()),
+            );
+            let layer_a = project.timeline.layers[idx_a].layer_id.clone();
+            let idx_b = project.timeline.add_layer(
+                "B",
+                LayerType::Generator,
+                PresetTypeId::from_string("SceneStarter".to_string()),
+            );
+            let layer_b = project.timeline.layers[idx_b].layer_id.clone();
+            (project, layer_a, layer_b)
+        }
+
+        /// BUG-292: the scene panel's rows dispatch via
+        /// `GraphParamTarget::GeneratorOf(<the panel's own bound layer>)`,
+        /// never plain `Generator` (which `resolve_graph_target` resolves
+        /// through `active_layer`). Panel bound to layer A, app active layer
+        /// B — a scene-row write must land on A and leave B untouched, the
+        /// exact mismatch the old plain-`Generator` dispatch silently wrote
+        /// to the wrong layer under.
+        #[test]
+        fn bug_292_scene_row_writes_target_the_panels_bound_layer_not_active() {
+            let (mut project, layer_a, layer_b) = two_scene_layer_project();
+            let mut h = Harness::new(Some(layer_b.clone()));
+            let pid = materialized_param(&mut h, &mut project, &layer_a);
+            let before_a = gen_inst(&project, &layer_a).get_base_param(pid.as_ref());
+            let before_b = gen_inst(&project, &layer_b).get_base_param(pid.as_ref());
+            let after = before_a + 0.25;
+
+            let target = manifold_ui::GraphParamTarget::GeneratorOf(layer_a.clone());
+            h.dispatch(&PanelAction::ParamSnapshot(target.clone(), pid.clone()), &mut project);
+            h.dispatch(&PanelAction::ParamChanged(target.clone(), pid.clone(), after), &mut project);
+            h.dispatch(&PanelAction::ParamCommit(target, pid.clone()), &mut project);
+
+            assert_eq!(
+                gen_inst(&project, &layer_a).get_base_param(pid.as_ref()),
+                after,
+                "scene row write must land on the panel's BOUND layer (A), not the active layer (B)"
+            );
+            assert_eq!(
+                gen_inst(&project, &layer_b).get_base_param(pid.as_ref()),
+                before_b,
+                "the active layer (B) must be untouched by a scene row write bound to layer A"
+            );
         }
 
         // ── Modulation trims + envelope handles ──────────────────
