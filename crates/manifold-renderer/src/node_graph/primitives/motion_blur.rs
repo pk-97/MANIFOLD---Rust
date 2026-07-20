@@ -592,47 +592,6 @@ mod gpu_tests {
         }
     }
 
-    /// **I1b** (`docs/ADDING_PRIMITIVES.md` "The codegen path is
-    /// mandatory"): generated kernel vs the hand-authored `motion_blur.wgsl`
-    /// oracle — same fixture, independent WGSL source, proves the codegen
-    /// path itself (not just the algorithm) is correct.
-    #[test]
-    fn generated_motion_blur_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (24u32, 16u32);
-        let velocity = velocity_ramp(w, h);
-        let velocity_tex = upload_velocity(&device, w, h, &velocity);
-        let (color_tex, _color_rgba) = color_gradient(&device, w, h);
-
-        let uniforms = mb_uniforms(32.0, 180.0);
-        let bytes = bytemuck::bytes_of(&uniforms);
-        let sampler = device.create_sampler(&GpuSamplerDesc::default());
-
-        let hand_wgsl = include_str!("shaders/motion_blur.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "motion-blur-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MotionBlur>()
-            .expect("node.motion_blur standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "motion-blur-generated-vs-hand",
-        );
-        let gen_out = dispatch(&device, &gen_pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..4 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
 
     /// **I2**: `shutter_angle = 0` is an exact pass-through of `in` — every
     /// tap collapses onto the center texel regardless of the velocity

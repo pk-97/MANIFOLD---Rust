@@ -392,52 +392,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel_all_axes() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "in bound read storage");
-        assert!(gen_wgsl.contains("var<storage, read> buf_weights"), "weights bound read storage");
-        assert!(gen_wgsl.contains("weights_len: u32"), "derived weights_len injected");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-        // Confirms the "length" WGSL-builtin collision is resolved via the
-        // codegen RESERVED-word rename (freeze/codegen.rs wgsl_safe_field).
-        assert!(gen_wgsl.contains("p_length"), "length param renamed to avoid the WGSL length() builtin");
-        let hand = include_str!("shaders/taper_mesh.wgsl");
-
-        let src = vec![
-            mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
-            mk_vertex([1.0, 2.0, -1.0], [0.577, 0.577, 0.577], [0.5, 0.25]),
-            mk_vertex([-3.0, 1.0, 2.0], [0.0, 0.0, 1.0], [0.75, 0.9]),
-            mk_vertex([2.0, -1.0, 0.5], [1.0, 0.0, 0.0], [0.2, 0.8]),
-        ];
-        let weights = [0.3f32, 0.8, 1.0, 0.5];
-        for axis in [0u32, 1, 2] {
-            for &use_w in &[false, true] {
-                let w = if use_w { Some(&weights[..]) } else { None };
-                let from_gen = dispatch_taper(&device, &gen_wgsl, &src, w, None, axis, 0.3, 0.1, 2.0);
-                let from_hand = dispatch_taper(&device, hand, &src, w, None, axis, 0.3, 0.1, 2.0);
-                for i in 0..src.len() {
-                    for c in 0..3 {
-                        assert!(
-                            (from_gen[i].position[c] - from_hand[i].position[c]).abs() < 1e-5,
-                            "axis={axis} w={use_w} vertex {i} pos[{c}]: gen={} hand={}",
-                            from_gen[i].position[c],
-                            from_hand[i].position[c]
-                        );
-                        assert!(
-                            (from_gen[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-4,
-                            "axis={axis} w={use_w} vertex {i} normal[{c}]: gen={} hand={}",
-                            from_gen[i].normal[c],
-                            from_hand[i].normal[c]
-                        );
-                    }
-                    assert_eq!(from_gen[i].uv, from_hand[i].uv);
-                }
-            }
-        }
-    }
 
     #[test]
     fn matches_hand_formula_analytically() {

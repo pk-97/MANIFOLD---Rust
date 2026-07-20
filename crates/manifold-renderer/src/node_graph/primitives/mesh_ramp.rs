@@ -310,11 +310,9 @@ mod gpu_tests {
     //! Real-GPU value-level tests. Behavioral tests dispatch the GENERATED
     //! standalone kernel (the shipping runtime artifact, built by
     //! `standalone_for_spec::<MeshRamp>()` from mesh_ramp_body.wgsl) and compare
-    //! against a hand-written Rust reference of the committed formula. The
-    //! `generated_matches_hand_kernel` parity test dispatches BOTH the generated
-    //! kernel and the hand mesh_ramp.wgsl oracle and asserts element-wise
-    //! equality — the invariant that proves this atom is genuinely on the
-    //! codegen/fusion path (design D#10), per DECOMPOSING_GENERATORS.md §9.
+    //! against a hand-written Rust reference of the committed formula.
+    //! (The generated-vs-hand-kernel parity test against `mesh_ramp.wgsl`
+    //! was deleted 2026-07-20, W1-B, migration scaffolding retired.)
     use super::*;
 
     fn mk_vertex(y: f32) -> MeshVertex {
@@ -403,38 +401,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const f32, vertices.len()) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let ys = [0.0f32, 0.7, 1.3, 2.1, 2.8, 3.0];
-        let vertices: Vec<MeshVertex> = ys.iter().map(|&y| mk_vertex(y)).collect();
-        let gen_wgsl = generated_wgsl();
-        // Structural: the buffer codegen synthesized the element struct + storage
-        // bindings + 1D dispatch — i.e. this atom really is on the codegen path.
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "input bound as read storage");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_weights"), "weights output bound read_write");
-        assert!(gen_wgsl.contains("@workgroup_size(256)"), "1D buffer dispatch");
-
-        let hand = include_str!("shaders/mesh_ramp.wgsl");
-        let (phase, feather, bound_min, bound_max) = (0.2f32, 0.3f32, -1.0f32, 2.0f32);
-        for &(axis, invert) in &[(0u32, false), (1, false), (2, false), (3, false), (4, false), (1, true)] {
-            let from_gen_wgsl = dispatch_ramp(
-                &device, &gen_wgsl, &vertices, axis, [0.1, -0.2, 0.3], phase, feather, bound_min, bound_max, invert,
-            );
-            let from_hand = dispatch_ramp(
-                &device, hand, &vertices, axis, [0.1, -0.2, 0.3], phase, feather, bound_min, bound_max, invert,
-            );
-            for i in 0..vertices.len() {
-                assert!(
-                    (from_gen_wgsl[i] - from_hand[i]).abs() < 1e-6,
-                    "axis={axis} invert={invert} vertex {i}: gen={} hand={}",
-                    from_gen_wgsl[i],
-                    from_hand[i]
-                );
-            }
-        }
-    }
 
     #[test]
     fn axis_y_ramp_matches_hand_formula_and_is_monotonic() {

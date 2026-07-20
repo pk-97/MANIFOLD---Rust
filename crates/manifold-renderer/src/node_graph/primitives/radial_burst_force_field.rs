@@ -143,7 +143,7 @@ impl Primitive for RadialBurstForceField {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (texture source
             // path; NOISE_COMMON prepended via wgsl_includes for simplex3d).
-            // radial_burst_force_field.wgsl is the parity oracle.
+            // radial_burst_force_field.wgsl (the hand-kernel parity oracle) was deleted 2026-07-20 (W1-B, migration scaffolding retired).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.explosion_force standalone codegen"),
@@ -236,104 +236,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Texture-domain SOURCE parity oracle (freeze §12) — generated-vs-hand
-    //! kernel comparison (`docs/ADDING_PRIMITIVES.md` "The codegen path is
-    //! mandatory"). The standalone kernel `run()` actually dispatches (built
-    //! via `standalone_for_spec::<RadialBurstForceField>()`, with NOISE_COMMON
-    //! threaded through `wgsl_includes` for `simplex3d` — BUG-135/BUG-141
-    //! fixed this path for texture SOURCE atoms) must reproduce
-    //! `radial_burst_force_field.wgsl` (the hand oracle, also NOISE_COMMON-
-    //! prepended) texel-for-texel, including the noise-perturbed radial
-    //! direction inside the burst radius and the zero-force region outside it.
-    use half::f16;
-    use manifold_gpu::{GpuBinding, GpuDevice, GpuTextureFormat};
-
-    use super::*;
-    use crate::render_target::RenderTarget;
-
-    fn readback_rgba(device: &GpuDevice, tex: &manifold_gpu::GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
-        let bytes_per_row = w * 8;
-        let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer_shared(total);
-        let mut enc = device.create_encoder("burst-readback");
-        enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
-        let ptr = readback.mapped_ptr().expect("shared readback buffer");
-        let halves: &[u16] =
-            unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
-        (0..(w * h) as usize)
-            .map(|i| {
-                let o = i * 4;
-                [
-                    f16::from_bits(halves[o]).to_f32(),
-                    f16::from_bits(halves[o + 1]).to_f32(),
-                    f16::from_bits(halves[o + 2]).to_f32(),
-                    f16::from_bits(halves[o + 3]).to_f32(),
-                ]
-            })
-            .collect()
-    }
-
-    fn dispatch_burst(device: &GpuDevice, wgsl: &str, w: u32, h: u32, uniform: &[u8]) -> Vec<[f32; 4]> {
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "burst-oracle");
-        let out = RenderTarget::new(device, w, h, GpuTextureFormat::Rgba16Float, "burst-out");
-        let mut enc = device.create_encoder("burst-dispatch");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Texture { binding: 1, texture: &out.texture },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "burst-dispatch",
-        );
-        enc.commit_and_wait_completed();
-        readback_rgba(device, &out.texture, w, h)
-    }
-
-    #[test]
-    fn generated_explosion_force_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (32u32, 32u32);
-        let point_x = 0.4f32;
-        let point_y = 0.6f32;
-        let amplitude = 2.0f32;
-        let envelope = 0.8f32;
-        let radius = 0.35f32;
-        let time_val = 1.75f32;
-
-        let mut uniform = Vec::new();
-        uniform.extend_from_slice(&point_x.to_le_bytes());
-        uniform.extend_from_slice(&point_y.to_le_bytes());
-        uniform.extend_from_slice(&amplitude.to_le_bytes());
-        uniform.extend_from_slice(&envelope.to_le_bytes());
-        uniform.extend_from_slice(&radius.to_le_bytes());
-        uniform.extend_from_slice(&time_val.to_le_bytes());
-        uniform.extend_from_slice(&[0u8; 8]);
-
-        let hand_wgsl = format!(
-            "{}\n{}",
-            NOISE_COMMON,
-            include_str!("shaders/radial_burst_force_field.wgsl")
-        );
-        let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<RadialBurstForceField>()
-                .expect("radial_burst_force_field standalone codegen");
-
-        let from_hand = dispatch_burst(&device, &hand_wgsl, w, h, &uniform);
-        let from_gen = dispatch_burst(&device, &gen_wgsl, w, h, &uniform);
-
-        for i in 0..(w * h) as usize {
-            for c in 0..4 {
-                assert!(
-                    (from_hand[i][c] - from_gen[i][c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    from_hand[i][c],
-                    from_gen[i][c]
-                );
-            }
-        }
-    }
-}

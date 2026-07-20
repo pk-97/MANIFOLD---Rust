@@ -113,8 +113,9 @@ impl Primitive for NeighborSmooth {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: the kernel is generated from the `wgsl_body` (buffer
-            // standalone codegen). neighbor_smooth.wgsl is retained as the parity
-            // oracle. Bindings match: uniform(0), buf_in(1), buf_out(2).
+            // standalone codegen). `neighbor_smooth.wgsl` (the hand-kernel parity
+            // oracle) was deleted 2026-07-20 (W1-B, migration scaffolding
+            // retired). Bindings match: uniform(0), buf_in(1), buf_out(2).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.neighbor_smooth standalone codegen"),
@@ -188,122 +189,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12, buffer path). The GENERATED
-    //! standalone kernel — built from `neighbor_smooth_body.wgsl` by the buffer
-    //! codegen — must reproduce the hand `neighbor_smooth.wgsl` element-for-
-    //! element on an identical `Array<InstanceTransform>`. Once green, the hand
-    //! shader is a deletable parity reference (single-source cutover). This is
-    //! the buffer analogue of the texture `TextureDiff` oracle: dispatch both
-    //! kernels, read both output buffers back via `mapped_ptr`, compare.
-    use super::*;
-    use crate::generators::mesh_common::InstanceTransform;
-
-    /// Dispatch a neighbor-smooth kernel (uniform(0), in(1), out(2)) over
-    /// `instances` and read the output buffer back. `uniform` is the packed
-    /// payload in that kernel's own layout (hand vs generated differ).
-    fn dispatch_smooth(
-        wgsl: &str,
-        instances: &[InstanceTransform],
-        uniform: &[u8],
-        instance_count: u32,
-    ) -> Vec<InstanceTransform> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "neighbor-smooth-oracle");
-        let bytes = std::mem::size_of_val(instances) as u64;
-        let in_buf = device.create_buffer_shared(bytes);
-        let out_buf = device.create_buffer_shared(bytes);
-        unsafe {
-            in_buf.write(0, bytemuck::cast_slice(instances));
-        }
-        let mut enc = device.create_encoder("neighbor-smooth-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
-            ],
-            [instance_count.div_ceil(256), 1, 1],
-            "neighbor-smooth-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared output buffer");
-        let slice =
-            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, instances.len()) };
-        slice.to_vec()
-    }
-
-    /// The generated buffer kernel reproduces neighbor_smooth.wgsl on a 4×4 grid
-    /// of distinct instances — same smoothed xyz, same passed-through scale +
-    /// rotation, including the border self-fallback. Same WGSL ops both ways, so
-    /// the result is bit-identical (1e-6 guards only against compiler reorder).
-    #[test]
-    fn generated_neighbor_smooth_matches_hand_kernel() {
-        const GRID: u32 = 4;
-        const N: usize = (GRID * GRID) as usize;
-        let center_weight = 0.6f32;
-
-        // Distinct positions + scale + rotation so smoothing actually moves
-        // values and the pass-through channels are exercised.
-        let mut instances = [InstanceTransform { pos_scale: [0.0; 4], rot_pad: [0.0; 4] }; N];
-        for (i, inst) in instances.iter_mut().enumerate() {
-            let f = i as f32;
-            *inst = InstanceTransform {
-                pos_scale: [f * 0.1, f * 0.2 - 1.0, (f * 0.05).sin(), 1.0 + f * 0.01],
-                rot_pad: [f * 0.3, -f * 0.2, f * 0.1, 0.0],
-            };
-        }
-
-        // Hand layout: grid_size(u32), instance_count(u32), center_weight(f32), pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&GRID.to_le_bytes());
-        hand.extend_from_slice(&(N as u32).to_le_bytes());
-        hand.extend_from_slice(&center_weight.to_le_bytes());
-        hand.extend_from_slice(&0u32.to_le_bytes());
-
-        // Generated layout: grid_size(i32), center_weight(f32), dispatch_count(u32), pad.
-        let mut generated = Vec::new();
-        generated.extend_from_slice(&(GRID as i32).to_le_bytes());
-        generated.extend_from_slice(&center_weight.to_le_bytes());
-        generated.extend_from_slice(&(N as u32).to_le_bytes());
-        generated.extend_from_slice(&0u32.to_le_bytes());
-
-        let hand_wgsl = include_str!("shaders/neighbor_smooth.wgsl");
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<NeighborSmooth>()
-            .expect("neighbor_smooth buffer codegen");
-        // Structural: the buffer codegen synthesized the Element struct + storage
-        // bindings + 1D dispatch (not a texture wrapper).
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(
-            gen_wgsl.contains("var<storage, read> buf_in"),
-            "input bound as read storage array"
-        );
-        assert!(
-            gen_wgsl.contains("var<storage, read_write> buf_out"),
-            "output bound as read_write storage array"
-        );
-        assert!(gen_wgsl.contains("@workgroup_size(256)"), "1D buffer dispatch");
-
-        let from_hand = dispatch_smooth(hand_wgsl, &instances, &hand, N as u32);
-        let from_gen = dispatch_smooth(&gen_wgsl, &instances, &generated, N as u32);
-
-        for i in 0..N {
-            for c in 0..4 {
-                assert!(
-                    (from_hand[i].pos_scale[c] - from_gen[i].pos_scale[c]).abs() < 1e-6,
-                    "instance {i} pos_scale[{c}]: hand={} gen={}",
-                    from_hand[i].pos_scale[c],
-                    from_gen[i].pos_scale[c]
-                );
-                assert!(
-                    (from_hand[i].rot_pad[c] - from_gen[i].rot_pad[c]).abs() < 1e-6,
-                    "instance {i} rot_pad[{c}]: hand={} gen={}",
-                    from_hand[i].rot_pad[c],
-                    from_gen[i].rot_pad[c]
-                );
-            }
-        }
-    }
-}

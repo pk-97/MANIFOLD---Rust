@@ -435,47 +435,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel_all_modes() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "in bound read storage");
-        assert!(gen_wgsl.contains("var<storage, read> buf_weights"), "weights bound read storage");
-        assert!(gen_wgsl.contains("tex_field"), "optional field texture bound");
-        assert!(gen_wgsl.contains("use_field: u32"), "optional-texture use flag injected");
-        assert!(gen_wgsl.contains("weights_len: u32"), "derived weights_len injected");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-        let hand = include_str!("shaders/push_along_normals.wgsl");
-
-        let tex = uniform_field_tex(&device, 8, 8, 0.6);
-        let src = vec![
-            mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
-            mk_vertex([1.0, 2.0, -1.0], [0.577, 0.577, 0.577], [0.5, 0.25]),
-            mk_vertex([-3.0, 1.0, 2.0], [0.0, 0.0, 1.0], [0.75, 0.9]),
-            mk_vertex([2.0, -1.0, 0.5], [1.0, 0.0, 0.0], [0.2, 0.8]),
-        ];
-        let weights = [0.3f32, 0.8, 1.0, 0.5];
-        // Sweep: (weights?, field?) across all four wire combinations.
-        for &(use_w, use_f) in &[(false, false), (true, false), (false, true), (true, true)] {
-            let w = if use_w { Some(&weights[..]) } else { None };
-            let f = if use_f { Some(&tex) } else { None };
-            let from_gen_wgsl = dispatch_push(&device, &gen_wgsl, &src, w, None, f, 0.6, 0.4);
-            let from_hand = dispatch_push(&device, hand, &src, w, None, f, 0.6, 0.4);
-            for i in 0..src.len() {
-                for c in 0..3 {
-                    assert!(
-                        (from_gen_wgsl[i].position[c] - from_hand[i].position[c]).abs() < 1e-6,
-                        "w={use_w} f={use_f} vertex {i} pos[{c}]: gen={} hand={}",
-                        from_gen_wgsl[i].position[c],
-                        from_hand[i].position[c]
-                    );
-                    assert!((from_gen_wgsl[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-6);
-                }
-                assert_eq!(from_gen_wgsl[i].uv, from_hand[i].uv);
-            }
-        }
-    }
 
     #[test]
     fn count_order_and_uv_are_preserved() {
