@@ -4793,3 +4793,15 @@ to FIXED, pending Peter's own confirmation on a richer scene** (same posture as 
 
 **Fix shape:** either delete `scene-setup-scrub-fine.json` outright (the gesture it tests is gone, not moved — there's no "fine drag" affordance left anywhere in the panel to re-target the flow at), or repurpose it to test something else entirely (e.g. the Shift-held fine-drag semantics of a DIFFERENT, still-live dock like `AudioSetupPanel`'s gain steppers, if that's a flow worth having). Not attempted this session — the flow isn't one of C-P1d's four required re-verify targets (fog/object-scrub/select-updates/modifier-stack), only its stale-text half was in scope via BUG-236.
 
+### BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — tab scope pin was versioned one-shot; command side effects silently cleared it → snap back to Layer default
+**Status:** FIXED 2026-07-20 (W1-C lane, `fcd4c084`, merged `43c9d3d1`).
+**Severity:** MEDIUM — user-visible: "tabs change randomly, especially when adding effects."
+**Root cause:** `pin_scope` recorded `(tab, selection_version)`; any version bump (incl. add-effect side effects) killed the pin; state_sync then fell back to Layer default. Second path: pin filtered against per-sync recomputed tab set.
+**Fix:** pin keyed to selection IDENTITY `(primary_selected_layer_id, primary_selected_clip_id, selected_layer_ids)`; `pinned_scope()` is a pure read — holds on equal identity or transient-empty, yields None on genuine change. state_sync's existing tab-set filter already gave keep-pin-while-absent semantics. 3 regression tests (`bug_266_tab_pin`) on the real sync path; red-before-fix shown for 2 (the third was already-correct behavior, kept as guard).
+**Residue:** because the pin is a pure read and storage isn't cleared on a genuine change, re-selecting the ORIGINAL identity later resurrects the pinned tab. Flagged for Peter's in-app feel-pass; trivial to tighten if it feels wrong on stage.
+
+### BUG-267 (inspector-duplicated-card-lists) — `master_effects` / `layer_effects` were two parallel `Vec<ParamCardPanel>` with duplicated match arms at every touchpoint
+**Status:** FIXED 2026-07-20 (W1-D lane, `717f8910`, merged `726de5a0`).
+**Severity:** MEDIUM (structural debt, standing bug class) — every card behavior had to be written twice; "fixed for Master, forgot Layer."
+**Root cause:** two storage fields with hand-mirrored match arms at ~127 sites in `inspector.rs` (cards_for_tab, find_drag_handle, selection sets, skip_to_settled, press routing, …); Layer/Group/Clip all aliased `layer_effects`.
+**Fix:** one `effects: [Vec<ParamCardPanel>; 2]` indexed by `scope_idx(tab)` (Layer/Group/Clip canonicalize to SCOPE_LAYER); `cards_for_tab(_mut)` is the single accessor path; `configure_master_effects`/`configure_layer_effects` public signatures unchanged (state_sync untouched). Pure refactor, existing card test suite as parity oracle (assertions unchanged, 3828 green on merged tree). Note: `ProjectSettings.master_effects` hits elsewhere in the workspace are an unrelated data-model field, not debt from this fix. Cleared the ground for BUG-265 (tree-bounds drag hit-testing, Wave 2).

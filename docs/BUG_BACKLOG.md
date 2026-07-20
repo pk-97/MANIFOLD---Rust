@@ -1287,6 +1287,8 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+- BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — FIXED 2026-07-20 on `lane/w1c-bug266-tab-pin` (`fcd4c084`, merged `43c9d3d1`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md; residue: pin resurrection-on-reselect quirk for Peter's feel-pass
+- BUG-267 (inspector-duplicated-card-lists) — FIXED 2026-07-20 on `lane/w1d-bug267-card-vecs` (`717f8910`, merged `726de5a0`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 
 - BUG-240 (scrub-fine-flow-tests-a-retired-shift-fine-delta-drag-gesture) — FIXED 2026-07-20 (script deleted per its own fix shape, W1-B) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-186 (sheenwoodleathersofa-webp-error-message-misattribution) — FIXED @ IMPORT_ANYTHING_WAVE_DESIGN.md W1, 2026-07-17 — full history in docs/archive/BUG_BACKLOG_CLOSED.md
@@ -1574,19 +1576,6 @@ when one is fixed).
 **Symptom:** undo after a mapping-sidebar range or scale/offset drag intermittently does nothing (depends on a snapshot landing mid-drag).
 **Root cause:** the last unfixed family of the 2026-07-19 undo audit's cluster C. The drag trios live in `app_render.rs`'s pending_actions loop (`EffectMappingRangeSnapshot/Changed/Commit`, `…Affine…` at ~1650-1800) with `mapping_range_snapshot`/`mapping_affine_snapshot` fields, but no `ActiveInspectorDrag` variant covered them, so the commit's `watched_reshape(binding_id)` read saw the stomped (pre-drag) value: old == new → no command.
 **Note on the test:** these two families dispatch through app_render's pending_actions loop, not the inspector host the `undo_baseline` matrix drives, so `trio_cycle` can't reach them. The regression proves the load-bearing fix directly — the `ActiveInspectorDrag::apply` restore that the whole bug reduces to — rather than the set/update/clear wiring (mechanical mirror of the ten cluster-C families). A full app-level harness driving the pending_actions loop end-to-end is still owed if that wiring ever needs coverage.
-
-### BUG-267 (inspector-duplicated-card-lists) — `master_effects` / `layer_effects` are two parallel `Vec<ParamCardPanel>` with duplicated match arms at every touchpoint
-**Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation).
-**Severity:** MEDIUM (structural debt, standing bug class) — every new card behavior must be written twice; "fixed for Master, forgot Layer."
-**Symptom:** not a live defect — the duplication itself. Parallel arms at `cards_for_tab`/`cards_for_tab_mut` (inspector.rs:1836-1848), `find_drag_handle` (:1810-1834), selection sets (:1101-1125), `skip_to_settled` (:349-353), press routing (:1492-1501, :1530-1539). Layer/Group/Clip all alias `layer_effects`.
-**Fix shape:** one vec keyed by scope (or one vec + scope field on the card). Mechanical but wide — dedicated lane, don't fold into BUG-265.
-
-### BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — tab scope pin is versioned one-shot; add-effect and other command side effects silently clear it → snap back to Layer default
-**Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation). Peter confirmed the Layer default itself is correct and stays.
-**Severity:** MEDIUM — user-visible: "tabs change randomly, especially when adding effects."
-**Symptom:** clicked inspector tab (e.g. Master) spontaneously reverts to Layer after unrelated actions.
-**Root cause:** `pin_scope` records `(tab, selection_version)` (ui_state.rs:203-209); `pinned_scope()` only honors it while the version matches (:193-197). Any selection mutation bumps the version — including add-effect's behind-the-scenes selection change — killing the pin. state_sync.rs:2293-2310 then falls back to the Layer default. Second path: the pin is filtered against a per-sync recomputed tab set (:2295); selection drift can remove the pinned tab from the set without a version bump.
-**Fix shape:** sticky pin — clear only on explicit user action (another tab click, genuine timeline selection change), decoupled from `selection_version`; key invalidation to selection-identity changes. Scope of "genuine" is a design call.
 
 ### BUG-265 (inspector-card-drag-indicator-stale-geometry) — blue drop indicator/target index wrong after any in-place scroll; hit-test uses snapshot `card_y` + live `compute_height()`
 **Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation).
