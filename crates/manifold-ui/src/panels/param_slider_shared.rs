@@ -7,7 +7,8 @@
 
 use super::DriverConfigAction;
 use super::TrimKind;
-use super::param_card::{ParamInfo, RowMod};
+use super::param_card::RowMod;
+use crate::param_surface::ParamRow;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction};
 use crate::chrome::{Theme, View};
 use crate::color;
@@ -118,15 +119,15 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 /// only while the "Custom" cell is open; Invert + Attack + Release only where
 /// they act — an `is_trigger_gate` target fires on the raw sensitivity-scaled
 /// edge (BUG-242), so those three are placebo there and not built.
-pub(crate) fn audio_config_height(info: &ParamInfo, mod_state: &ParamModState, i: usize) -> f32 {
+pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i: usize) -> f32 {
     let mut n = 3; // Source, Listen (chips + Custom), Sensitivity
-    if !info.is_trigger_gate {
+    if !info.spec.is_trigger_gate {
         n += 3; // Invert, Attack, Release
     }
     if mod_state.audio_matrix_open.get(i).copied().unwrap_or(false) {
         n += 2; // Feature + Band (the Custom matrix)
     }
-    let show_action = !info.is_toggle && !info.is_trigger;
+    let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
     if show_action {
         n += 1; // Action row
@@ -134,7 +135,7 @@ pub(crate) fn audio_config_height(info: &ParamInfo, mod_state: &ParamModState, i
             n += 2; // Step-Amount slider + Wrap row
         }
     }
-    if info.is_trigger_gate || (show_action && action_idx != 0) {
+    if info.spec.is_trigger_gate || (show_action && action_idx != 0) {
         n += 1; // Mode row
     }
     crate::panels::drawer::uniform_rows_height(n) + crate::panels::drawer::METER_STRIP_H
@@ -629,7 +630,7 @@ impl Default for AudioRowState {
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
-/// `ParamCardConfig` gains one field, not five.
+/// the card config gains one field, not five.
 #[derive(Debug, Default, Clone)]
 pub struct AudioCardState {
     /// Per-param audio-mod facts, one [`AudioRowState`] per card row (D3).
@@ -809,7 +810,7 @@ pub(crate) enum ParamDragTarget {
     StepAmount { index: usize },
     /// A D3 "3D Shading" relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md`
     /// P5b) — the six always-visible rows below the normal params, not
-    /// indexed into `param_info`/`ParamId` at all.
+    /// indexed into `rows`/`ParamId` at all.
     Relight { field: crate::panels::UiRelightField },
 }
 
@@ -1620,7 +1621,7 @@ pub(crate) struct ParamRowIds {
 
 /// The modulation configs active on param `i`, in tab display order (E, →, A,
 /// ABL). Drives both the build and the height calc, so they can't drift.
-pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamInfo, i: usize) -> Vec<ModTab> {
+pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usize) -> Vec<ModTab> {
     let mut v = Vec::new();
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
         v.push(ModTab::Envelope);
@@ -1631,7 +1632,7 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamInfo, i: us
     if mod_state.audio_active.get(i).copied().unwrap_or(false) {
         v.push(ModTab::Audio);
     }
-    if info.ableton_display.is_some() {
+    if info.mapping.ableton_display.is_some() {
         v.push(ModTab::Ableton);
     }
     // §9: a trigger-gate row's config is a normal `ParameterAudioMod`, so
@@ -1659,7 +1660,7 @@ pub(crate) fn resolve_active_tab(active: &[ModTab], stored: ModTab) -> Option<Mo
 /// slider row armed to Step/Random).
 pub(crate) fn mod_config_height(
     tab: ModTab,
-    info: &ParamInfo,
+    info: &ParamRow,
     mod_state: &ParamModState,
     i: usize,
 ) -> f32 {
@@ -1996,11 +1997,11 @@ pub(crate) fn build_audio_mod_drawer(
     mod_state: &ParamModState,
     i: usize,
     config_font: u16,
-    info: &ParamInfo,
+    info: &ParamRow,
     gpt: GraphParamTarget,
 ) -> (crate::panels::drawer::DrawerIds, usize) {
     use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
-    let pid = info.param_id.clone();
+    let pid = info.id.clone();
     let send_count = mod_state.audio_send_labels.len();
     let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
     let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
@@ -2024,7 +2025,7 @@ pub(crate) fn build_audio_mod_drawer(
     // (BUG-242): Invert/Attack/Release never reach the Schmitt trigger, so
     // the drawer doesn't offer them there. Continuous, `is_trigger`, and
     // Step/Random mods all read the shaped envelope and keep them.
-    let shaping_offered = !info.is_trigger_gate;
+    let shaping_offered = !info.spec.is_trigger_gate;
     // The Feature/Band matrix rows, only while "Custom" is open.
     let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
         .iter()
@@ -2141,7 +2142,7 @@ pub(crate) fn build_audio_mod_drawer(
     // continues right after Invert (the three Slider rows above contribute
     // no buttons) — see `match_param_row_click`, which must stay in
     // lockstep with this row order.
-    let show_action = !info.is_toggle && !info.is_trigger;
+    let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
     let action_idx = mod_state.audio_action_idx.get(i).copied().unwrap_or(0);
     if show_action {
         let action_buttons: Vec<DrawerButton> = audio_action_labels()
@@ -2157,9 +2158,9 @@ pub(crate) fn build_audio_mod_drawer(
         // While armed to Step: the Amount slider (a 4th `DrawerRow::Slider`,
         // `DrawerIds.sliders[3]`) then the Wrap row.
         if action_idx == 1 {
-            let default_amount = default_step_amount(info.min, info.max, info.whole_numbers);
+            let default_amount = default_step_amount(info.spec.min, info.spec.max, info.spec.whole_numbers);
             let amount = mod_state.audio_step_amount.get(i).copied().unwrap_or(default_amount);
-            let value_text = if info.whole_numbers {
+            let value_text = if info.spec.whole_numbers {
                 format!("{amount:.0}")
             } else {
                 format!("{amount:.2}")
@@ -2171,8 +2172,8 @@ pub(crate) fn build_audio_mod_drawer(
             );
             rows.push(shape_slider(
                 "Step",
-                step_amount_to_norm(amount, info.min, info.max),
-                step_amount_to_norm(default_amount, info.min, info.max),
+                step_amount_to_norm(amount, info.spec.min, info.spec.max),
+                step_amount_to_norm(default_amount, info.spec.min, info.spec.max),
                 value_text,
                 step_reset,
                 false,
@@ -2194,7 +2195,7 @@ pub(crate) fn build_audio_mod_drawer(
     // row always shows it; a slider row shows it once armed to Step or
     // Random — a step/random mod fires from the same clip-edge/audio-edge
     // sources a gate does, gated the same way (D3).
-    let show_mode = info.is_trigger_gate || (show_action && action_idx != 0);
+    let show_mode = info.spec.is_trigger_gate || (show_action && action_idx != 0);
     if show_mode {
         let mode_sel = mod_state.audio_mode_idx.get(i).copied().unwrap_or(0);
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
@@ -2265,7 +2266,7 @@ pub(crate) fn build_toggle_trigger_row(
     x: f32,
     cy: f32,
     slider_w: f32,
-    info: &ParamInfo,
+    info: &ParamRow,
     mod_state: &ParamModState,
     i: usize,
     target: GraphParamTarget,
@@ -2289,7 +2290,7 @@ pub(crate) fn build_toggle_trigger_row(
     // current mode has anything to show there — so the name label's width
     // (and therefore where its text can wrap/clip) never shifts when the
     // mode changes.
-    let name_label_w = if info.is_trigger_gate {
+    let name_label_w = if info.spec.is_trigger_gate {
         (slider_w - TOGGLE_BTN_W - GAP - TRIGGER_GATE_BADGE_W - GAP).max(0.0)
     } else {
         (slider_w - TOGGLE_BTN_W - GAP).max(0.0)
@@ -2300,7 +2301,7 @@ pub(crate) fn build_toggle_trigger_row(
         cy,
         name_label_w,
         ROW_HEIGHT,
-        &info.name,
+        &info.spec.name,
         UIStyle {
             text_color: color::SLIDER_TEXT_C32,
             font_size: FONT_SIZE,
@@ -2312,8 +2313,8 @@ pub(crate) fn build_toggle_trigger_row(
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
     }
 
-    let on = info.default > 0.5;
-    let (button_text, button_style) = if info.is_trigger {
+    let on = info.spec.default > 0.5;
+    let (button_text, button_style) = if info.spec.is_trigger {
         // Trigger renders as a momentary button — always neutral.
         ("▶", toggle_btn_style(false))
     } else {
@@ -2345,7 +2346,7 @@ pub(crate) fn build_toggle_trigger_row(
     // and additionally gets the drawer's trailing Mode row + the collapsed-
     // row mode badge. Plain toggles keep zero lane space (no button, no
     // drawer) — the row-label branch above is unchanged for them.
-    if info.is_trigger || info.is_trigger_gate {
+    if info.spec.is_trigger || info.spec.is_trigger_gate {
         let env_arm_w = if build_env_button { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
         let btn_x = x + slider_w + MOD_LANE_GAP;
         let drv_btn_x = btn_x + env_arm_w;
@@ -2411,7 +2412,7 @@ pub(crate) fn build_toggle_trigger_row(
             audio_config = Some((dids, send_count));
         }
 
-        if info.is_trigger_gate {
+        if info.spec.is_trigger_gate {
             // Collapsed-row mode indicator (§9, carried over from §8 D6):
             // "Transient mode silently ignores clip launches... the drawer
             // must show the mode on the collapsed card row" — shown whether
@@ -2463,7 +2464,7 @@ pub(crate) fn build_param_row(
     x: f32,
     cy: f32,
     slider_w: f32,
-    info: &ParamInfo,
+    info: &ParamRow,
     mod_state: &ParamModState,
     i: usize,
     target: GraphParamTarget,
@@ -2501,9 +2502,9 @@ pub(crate) fn build_param_row(
     // seed both `ids.slider_reset` (below) and the `BitmapSlider::build` call
     // that materialises the track it fires on.
     let reset = PanelAction::slider_reset(
-        PanelAction::ParamSnapshot(target, info.param_id.clone()),
-        PanelAction::ParamChanged(target, info.param_id.clone(), info.default),
-        PanelAction::ParamCommit(target, info.param_id.clone()),
+        PanelAction::ParamSnapshot(target, info.id.clone()),
+        PanelAction::ParamChanged(target, info.id.clone(), info.spec.default),
+        PanelAction::ParamCommit(target, info.id.clone()),
     );
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -2527,13 +2528,13 @@ pub(crate) fn build_param_row(
     };
     let mut cy = cy;
 
-    let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
+    let norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
     let val_text = format_param_value(
-        info.default,
-        info.min,
-        info.whole_numbers,
-        info.is_angle,
-        info.value_labels.as_deref(),
+        info.spec.default,
+        info.spec.min,
+        info.spec.whole_numbers,
+        info.spec.is_angle,
+        info.spec.value_labels.as_deref(),
     );
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
 
@@ -2611,7 +2612,7 @@ pub(crate) fn build_param_row(
         tree,
         parent,
         slider_rect,
-        Some(&info.name),
+        Some(&info.spec.name),
         norm,
         &val_text,
         slider_colors,
@@ -2683,7 +2684,7 @@ pub(crate) fn build_param_row(
     }
 
     // Ableton trim handles (when the param has an Ableton mapping).
-    if let Some((amin, amax)) = info.ableton_range {
+    if let Some((amin, amax)) = info.mapping.ableton_range {
         ids.ableton_trim = Some(build_trim_handles_explicit(
             tree,
             slider.track,
@@ -2826,7 +2827,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target, info.param_id.clone(),
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i, target, info.id.clone(),
         ));
         cy += ENV_CONFIG_HEIGHT;
     }
@@ -2849,7 +2850,7 @@ pub(crate) fn build_param_row(
     // Ableton config drawer. ModTab::Ableton is only in the active set when a
     // mapping exists, so the let-binding always resolves here.
     if shown_tab == Some(ModTab::Ableton)
-        && let Some(ref display) = info.ableton_display
+        && let Some(ref display) = info.mapping.ableton_display
     {
         ids.ableton_config = Some(build_ableton_config(tree, drawer_parent, drawer_x, cy, drawer_w, display));
         cy += ABL_CONFIG_HEIGHT;
@@ -2962,16 +2963,16 @@ pub(crate) fn match_param_row_click(
     audio_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
-    param_info: &[ParamInfo],
+    rows: &[ParamRow],
     mod_state: &ParamModState,
 ) -> Option<RowClick> {
     // D/E buttons never apply to toggle OR trigger params — neither a sticky
     // on/off nor a fire-once count has a continuous value an LFO/envelope
     // could drive.
     let skip_driver_envelope = |pi: usize| {
-        param_info
+        rows
             .get(pi)
-            .map(|p| p.is_toggle || p.is_trigger)
+            .map(|p| p.spec.is_toggle || p.spec.is_trigger)
             .unwrap_or(false)
     };
     // The "A" audio button applies to `is_trigger` (D5b: a fire-button rides
@@ -2980,7 +2981,7 @@ pub(crate) fn match_param_row_click(
     // Mode row and the collapsed-row badge). Only a PLAIN toggle stays
     // unreachable — a sticky on/off has no audio-mod semantics.
     let skip_audio =
-        |pi: usize| param_info.get(pi).map(|p| p.is_toggle && !p.is_trigger_gate).unwrap_or(false);
+        |pi: usize| rows.get(pi).map(|p| p.spec.is_toggle && !p.spec.is_trigger_gate).unwrap_or(false);
 
     // D/E buttons (skip toggle/trigger params).
     for (pi, &btn_id) in driver_btn_ids.iter().enumerate() {
@@ -3079,16 +3080,16 @@ pub(crate) fn match_param_row_click(
                 }
                 f -= AUDIO_BAND_COUNT;
             }
-            let is_gate = param_info.get(pi).map(|p| p.is_trigger_gate).unwrap_or(false);
+            let is_gate = rows.get(pi).map(|p| p.spec.is_trigger_gate).unwrap_or(false);
             if !is_gate {
                 if f == 0 {
                     return Some(RowClick::AudioToggleInvert(pi));
                 }
                 f -= 1;
             }
-            let show_action = param_info
+            let show_action = rows
                 .get(pi)
-                .map(|p| !p.is_toggle && !p.is_trigger)
+                .map(|p| !p.spec.is_toggle && !p.spec.is_trigger)
                 .unwrap_or(false);
             if show_action {
                 if f < AUDIO_ACTION_COUNT {
@@ -3113,9 +3114,9 @@ pub(crate) fn match_param_row_click(
     for (pi, slider) in slider_ids.iter().enumerate() {
         if let Some(ids) = slider
             && ids.value_text == id
-            && param_info
+            && rows
                 .get(pi)
-                .and_then(|p| p.value_labels.as_ref())
+                .and_then(|p| p.spec.value_labels.as_ref())
                 .is_some()
         {
             return Some(RowClick::EnumValueCell(pi));

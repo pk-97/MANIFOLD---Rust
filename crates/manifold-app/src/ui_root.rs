@@ -3954,32 +3954,36 @@ mod tick_parity_tests {
     /// A minimal one-param effect card config, built from scratch (not
     /// reused from `manifold-ui`'s own private `mk_config` test helper,
     /// which isn't reachable across the crate boundary) — every field is
-    /// `pub` on `ParamCardConfig`, so this fixture is a direct, honest
+    /// `pub` on `ParamSurface`, so this fixture is a direct, honest
     /// construction of the same shape `ui_bridge::state_sync` builds from
     /// real project state.
-    fn fixture_config(collapsed: bool) -> manifold_ui::ParamCardConfig {
-        let n = 1;
-        manifold_ui::ParamCardConfig {
+    fn fixture_config(collapsed: bool) -> manifold_ui::ParamSurface {
+        manifold_ui::ParamSurface {
             kind: manifold_ui::ParamCardKind::Effect,
-            name: "Fixture".into(),
-            params: vec![manifold_ui::ParamInfo {
-                param_id: std::borrow::Cow::Borrowed("amount"),
-                name: "Amount".into(),
-                min: 0.0,
-                max: 1.0,
-                default: 0.5,
-                whole_numbers: false,
-                is_angle: false,
-                exposed: true,
-                is_toggle: false,
-                is_trigger: false,
-                is_trigger_gate: false,
-                value_labels: None,
-                osc_address: None,
-                ableton_display: None,
-                ableton_range: None,
-                mappable: false,
-                section: None,
+            title: "Fixture".into(),
+            rows: vec![manifold_ui::ParamRow {
+                id: std::borrow::Cow::Borrowed("amount"),
+                spec: manifold_ui::RowSpec {
+                    name: "Amount".into(),
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    whole_numbers: false,
+                    is_angle: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    is_trigger_gate: false,
+                    value_labels: None,
+                    section: None,
+                },
+                value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                modulation: manifold_ui::RowMod::default(),
+                mapping: manifold_ui::RowMapping {
+                    osc_address: None,
+                    ableton_display: None,
+                    ableton_range: None,
+                    mappable: false,
+                },
             }],
             string_params: Vec::new(),
             collapsed,
@@ -3987,12 +3991,8 @@ mod tick_parity_tests {
             effect_id: manifold_core::EffectId::new("bug160-fixture"),
             enabled: true,
             supports_envelopes: true,
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            rows_mod: vec![manifold_ui::RowMod::default(); n],
             audio: Default::default(),
             relight: manifold_ui::RelightCardConfig::default(),
         }

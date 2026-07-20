@@ -5056,7 +5056,7 @@ mod scene_card_convergence_tests {
     /// degrees-display contract (`is_angle`) don't interfere with each other:
     /// `ParamChanged`/`ParamCommit` carry the RAW RADIANS value throughout
     /// (the degrees conversion is a display/drag-scaling concern that lives
-    /// entirely inside `build_camera_card_row`'s `ParamInfo.is_angle` and the
+    /// entirely inside `build_camera_card_row`'s `ParamRow.spec.is_angle` and the
     /// UI-level drag math, never the dispatched payload).
     #[test]
     fn camera_orbit_commit_writes_the_layer_instance_def_at_root_scope() {

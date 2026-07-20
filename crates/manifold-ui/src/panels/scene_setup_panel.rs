@@ -29,7 +29,8 @@ use manifold_foundation::{AudioSendId, LayerId};
 
 use super::{GraphParamTarget, PanelAction};
 use super::drawer::DrawerIds;
-use super::param_card::{ParamInfo, RowGeometry};
+use super::param_card::{RowGeometry, RowMod};
+use crate::param_surface::{ParamRow, RowMapping, RowSpec};
 use super::param_slider_shared::{
     AbletonConfigIds, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab, ParamModState,
     RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions, match_param_row_click,
@@ -438,7 +439,7 @@ const fn world_row_driver_btn_automation_name(slot: usize) -> Option<&'static st
 // (2) — even though a given object may only populate a subset (`Other`/
 // `None` material skip Metallic/Roughness; an object with no `transform`
 // skips the first 9). Unpopulated slots for the CURRENT object are simply
-// never written this frame (their `param_info`/`id_map` entries carry no
+// never written this frame (their `rows`/`id_map` entries carry no
 // row) — same "only every WIRED row lands in the map" contract D2 already
 // established for World's `EnvironmentRowVm::None`/`Custom` cases.
 const OBJ_ROW_POS_X: usize = 0;
@@ -569,7 +570,7 @@ impl RowAddr {
 /// row's stable owned `ParamId` from its write address's `node_doc_id` +
 /// the graph node's own param name. The ONE definition both sides of the
 /// UI/app boundary use: `ScenePanel::build_world_param_row` (this crate)
-/// calls it when building the row's `ParamInfo`/id map; `state_sync`'s VM
+/// calls it when building the row's `ParamRow`/id map; `state_sync`'s VM
 /// construction (`manifold-app`, no access to this synthesis logic
 /// otherwise) calls it to look up that same row's driver/envelope/audio-mod
 /// state on `PresetInstance` — a driver armed via `DriverToggle` is stored
@@ -816,7 +817,7 @@ pub struct EnumRowValue {
 /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the modulation-carrying
 /// twin of [`EnumRowValue`] — same shape, but `row` is a [`ModulatedRow`] so
 /// enum/axis rows can carry driver/envelope/audio-mod facts through
-/// `build_param_row`'s `ParamInfo.value_labels` path (the card row core
+/// `build_param_row`'s `ParamRow.value_labels` path (the card row core
 /// already supports labeled/enum rows — no bespoke stepper needed, D1's
 /// "check for a card enum row first"). Light's Mode/Cast Shadows/Shadow
 /// Softness rows were the first consumer (C-P1c); C-P1d moved Modifier's
@@ -935,7 +936,7 @@ pub struct SceneSetupVm {
     /// C-P1a: every project audio send, card-level (same for every
     /// converted row on this layer) — the `AudioCardState.send_labels`/
     /// `send_ids` pair the shared `build_audio_mod_drawer`'s Source row
-    /// needs. Mirrors `ParamCardConfig.audio.send_labels`/`send_ids`.
+    /// needs. Mirrors `ParamSurface.audio.send_labels`/`send_ids`.
     pub audio_send_labels: Vec<String>,
     pub audio_send_ids: Vec<AudioSendId>,
     /// P2: the Objects section's rows, in `mesh_k` order.
@@ -1029,7 +1030,7 @@ fn driven_text(value: f32, fmt: &DrivenFmt) -> String {
 }
 
 struct SceneCardState {
-    param_info: Vec<ParamInfo>,
+    rows: Vec<ParamRow>,
     mod_state: ParamModState,
     /// D2: synthesized owned `ParamId` → `(write address, snapshot value)`.
     /// Rebuilt fresh every `build_nodes` pass (D1 of SCENE_PANEL_UX_DESIGN.md:
@@ -1075,7 +1076,7 @@ struct SceneCardState {
 impl SceneCardState {
     fn new() -> Self {
         Self {
-            param_info: Vec::new(),
+            rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
             id_map: ahash::AHashMap::new(),
             slider_ids: Vec::new(),
@@ -1112,7 +1113,7 @@ impl SceneCardState {
     /// `mod_active_tab.resize(n, ..)`, adapted for this fixed-index family
     /// where `n` isn't monotonic across frames.
     fn resize(&mut self, n: usize) {
-        self.param_info.resize(n, placeholder_param_info());
+        self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.slider_ids.resize(n, None);
         self.slider_resets.resize_with(n, || None);
@@ -1145,15 +1146,15 @@ impl SceneCardState {
         self.slider_ids.iter().enumerate().any(|(pi, s)| {
             s.as_ref().is_some_and(|ids| ids.value_text == node_id)
                 && self
-                    .param_info
+                    .rows
                     .get(pi)
-                    .and_then(|p| p.value_labels.as_ref())
+                    .and_then(|p| p.spec.value_labels.as_ref())
                     .is_some()
         })
     }
 
     fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
-        self.param_info[i].param_id.clone()
+        self.rows[i].id.clone()
     }
 
     /// Replay every materialised slider's `Track + RightClick → reset` intent
@@ -1188,21 +1189,21 @@ impl SceneCardState {
     /// every build, never stale); the cell node id anchors the dropdown
     /// under the row's own value text.
     fn enum_value_cell_action(&self, i: usize, clicked: NodeId) -> Vec<PanelAction> {
-        let info = &self.param_info[i];
-        let labels = info.value_labels.clone().unwrap_or_default();
+        let info = &self.rows[i];
+        let labels = info.spec.value_labels.clone().unwrap_or_default();
         let pid = self.pid_at(i);
         let value = self
             .id_map
             .get(&pid)
             .map(|(_, v)| *v)
-            .unwrap_or(info.default);
+            .unwrap_or(info.spec.default);
         let cell = self
             .slider_ids
             .get(i)
             .and_then(|s| s.as_ref())
             .map(|s| s.value_text)
             .unwrap_or(clicked);
-        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.min, cell)
+        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.spec.min, cell)
     }
 
     fn focus_mod_tab(&mut self, i: usize, tab: ModTab) {
@@ -1292,29 +1293,34 @@ impl SceneCardState {
     }
 }
 
-/// Placeholder `ParamInfo` used only to size `SceneCardState::resize`'s
+/// Placeholder `ParamRow` used only to size `SceneCardState::resize`'s
 /// grow step before the real per-row info is written by the build pass —
 /// never observed by a click/drag (every live index is overwritten before
 /// `build_nodes` returns).
-fn placeholder_param_info() -> ParamInfo {
-    ParamInfo {
-        param_id: manifold_foundation::ParamId::from(""),
-        name: String::new(),
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        whole_numbers: false,
-        is_angle: false,
-        exposed: false,
-        is_toggle: false,
-        is_trigger: false,
-        is_trigger_gate: false,
-        value_labels: None,
-        osc_address: None,
-        ableton_display: None,
-        ableton_range: None,
-        mappable: false,
-        section: None,
+fn placeholder_param_info() -> ParamRow {
+    ParamRow {
+        id: manifold_foundation::ParamId::from(""),
+        spec: RowSpec {
+            name: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            whole_numbers: false,
+            is_angle: false,
+            is_toggle: false,
+            is_trigger: false,
+            is_trigger_gate: false,
+            value_labels: None,
+            section: None,
+        },
+        value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
+        modulation: RowMod::default(),
+        mapping: RowMapping {
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        },
     }
 }
 
@@ -1563,16 +1569,16 @@ impl ScenePanel {
         ] {
             for (slot, ids) in card.slider_ids.iter().enumerate() {
                 let Some(ids) = ids else { continue };
-                let info = &card.param_info[slot];
-                let Some((addr, _)) = card.id_map.get(&info.param_id) else { continue };
+                let info = &card.rows[slot];
+                let Some((addr, _)) = card.id_map.get(&info.id) else { continue };
                 let Some(v) = resolve(addr) else { continue };
-                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.min, info.max);
+                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.spec.min, info.spec.max);
                 let text = super::param_slider_shared::format_param_value(
                     v,
-                    info.min,
-                    info.whole_numbers,
-                    info.is_angle,
-                    info.value_labels.as_deref(),
+                    info.spec.min,
+                    info.spec.whole_numbers,
+                    info.spec.is_angle,
+                    info.spec.value_labels.as_deref(),
                 );
                 crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
             }
@@ -2181,7 +2187,7 @@ impl ScenePanel {
         // `build_world_properties`'s `self.world_card.resize(WORLD_ROW_COUNT)`.
         // A slot this object doesn't populate this frame (e.g. `Other`/
         // `None` material skips Metallic/Roughness) simply never gets a
-        // `build_object_card_row` call — its `param_info`/`slider_ids` stay
+        // `build_object_card_row` call — its `rows`/`slider_ids` stay
         // at the placeholder `resize` wrote, same "unpopulated slot, never
         // clicked" contract World's `EnvironmentRowVm::None` case already
         // established.
@@ -2522,32 +2528,37 @@ impl ScenePanel {
             self.world_card.slider_ids[slot] = None;
             self.world_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
-            self.world_card.param_info[slot] = placeholder_param_info();
+            self.world_card.rows[slot] = placeholder_param_info();
             return cy + ROW_H;
         }
 
         let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
         let (min, max) = (row.value.min, row.value.max);
-        let info = ParamInfo {
-            param_id: param_id.clone(),
-            name: label.to_string(),
-            min,
-            max,
-            default: row.value.value,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: row.value.exposed,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        let info = ParamRow {
+            id: param_id.clone(),
+            spec: RowSpec {
+                name: label.to_string(),
+                min,
+                max,
+                default: row.value.value,
+                whole_numbers: false,
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: crate::param_surface::RowValue { base: row.value.value, effective: row.value.value, exposed: row.value.exposed, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         };
-        self.world_card.param_info[slot] = info.clone();
+        self.world_card.rows[slot] = info.clone();
         self.world_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_world_modulation(slot, &row.modulation);
 
@@ -2686,32 +2697,37 @@ impl ScenePanel {
             self.object_card.slider_ids[slot] = None;
             self.object_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
-            self.object_card.param_info[slot] = placeholder_param_info();
+            self.object_card.rows[slot] = placeholder_param_info();
             return cy + ROW_H;
         }
 
         let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
         let (min, max) = (row.value.min, row.value.max);
-        let info = ParamInfo {
-            param_id: param_id.clone(),
-            name: label.to_string(),
-            min,
-            max,
-            default: row.value.value,
-            whole_numbers: false,
-            is_angle,
-            exposed: row.value.exposed,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        let info = ParamRow {
+            id: param_id.clone(),
+            spec: RowSpec {
+                name: label.to_string(),
+                min,
+                max,
+                default: row.value.value,
+                whole_numbers: false,
+                is_angle,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: crate::param_surface::RowValue { base: row.value.value, effective: row.value.value, exposed: row.value.exposed, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         };
-        self.object_card.param_info[slot] = info.clone();
+        self.object_card.rows[slot] = info.clone();
         self.object_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_object_modulation(slot, &row.modulation);
 
@@ -2847,7 +2863,7 @@ impl ScenePanel {
     /// through the shared card row core — the Light-family twin of
     /// `build_object_card_row`, generalized with `labels: Option<&[&str]>`
     /// for the enum rows (Mode/Cast Shadows/Shadow Softness): the card row
-    /// core already renders a labeled stepper when `ParamInfo.value_labels`
+    /// core already renders a labeled stepper when `ParamRow.value_labels`
     /// is set (`format_param_value`), so no bespoke enum builder is needed
     /// (D1's "check for a card enum row first and use it if one exists").
     /// `slot` is the row's FIXED index into `self.light_card`
@@ -2887,32 +2903,37 @@ impl ScenePanel {
             self.light_card.slider_ids[slot] = None;
             self.light_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
-            self.light_card.param_info[slot] = placeholder_param_info();
+            self.light_card.rows[slot] = placeholder_param_info();
             return cy + ROW_H;
         }
 
         let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
         let (min, max) = (row.value.min, row.value.max);
-        let info = ParamInfo {
-            param_id: param_id.clone(),
-            name: label.to_string(),
-            min,
-            max,
-            default: row.value.value,
-            whole_numbers: labels.is_some(),
-            is_angle: false,
-            exposed: row.value.exposed,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: labels.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        let info = ParamRow {
+            id: param_id.clone(),
+            spec: RowSpec {
+                name: label.to_string(),
+                min,
+                max,
+                default: row.value.value,
+                whole_numbers: labels.is_some(),
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: labels.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
+                section: None,
+            },
+            value: crate::param_surface::RowValue { base: row.value.value, effective: row.value.value, exposed: row.value.exposed, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         };
-        self.light_card.param_info[slot] = info.clone();
+        self.light_card.rows[slot] = info.clone();
         self.light_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_light_modulation(slot, &row.modulation);
 
@@ -3118,32 +3139,37 @@ impl ScenePanel {
             self.camera_card.slider_ids[slot] = None;
             self.camera_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
-            self.camera_card.param_info[slot] = placeholder_param_info();
+            self.camera_card.rows[slot] = placeholder_param_info();
             return cy + ROW_H;
         }
 
         let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
         let (min, max) = (row.value.min, row.value.max);
-        let info = ParamInfo {
-            param_id: param_id.clone(),
-            name: label.to_string(),
-            min,
-            max,
-            default: row.value.value,
-            whole_numbers: false,
-            is_angle,
-            exposed: row.value.exposed,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        let info = ParamRow {
+            id: param_id.clone(),
+            spec: RowSpec {
+                name: label.to_string(),
+                min,
+                max,
+                default: row.value.value,
+                whole_numbers: false,
+                is_angle,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: crate::param_surface::RowValue { base: row.value.value, effective: row.value.value, exposed: row.value.exposed, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         };
-        self.camera_card.param_info[slot] = info.clone();
+        self.camera_card.rows[slot] = info.clone();
         self.camera_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_camera_modulation(slot, &row.modulation);
 
@@ -3386,32 +3412,37 @@ impl ScenePanel {
             self.modifier_card.slider_ids[slot] = None;
             self.modifier_card.driven_value_ids[slot] =
                 Some(DrivenValueLabel { label: value_label, addr: row.value.addr.clone(), fmt });
-            self.modifier_card.param_info[slot] = placeholder_param_info();
+            self.modifier_card.rows[slot] = placeholder_param_info();
             return cy + ROW_H;
         }
 
         let param_id = synth_world_param_id(row.value.addr.node_doc_id, param_key);
         let (min, max) = (row.value.min, row.value.max);
-        let info = ParamInfo {
-            param_id: param_id.clone(),
-            name: label.to_string(),
-            min,
-            max,
-            default: row.value.value,
-            whole_numbers: labels.is_some(),
-            is_angle: false,
-            exposed: row.value.exposed,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: labels.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        let info = ParamRow {
+            id: param_id.clone(),
+            spec: RowSpec {
+                name: label.to_string(),
+                min,
+                max,
+                default: row.value.value,
+                whole_numbers: labels.is_some(),
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: labels.map(|ls| ls.iter().map(|s| s.to_string()).collect()),
+                section: None,
+            },
+            value: crate::param_surface::RowValue { base: row.value.value, effective: row.value.value, exposed: row.value.exposed, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         };
-        self.modifier_card.param_info[slot] = info.clone();
+        self.modifier_card.rows[slot] = info.clone();
         self.modifier_card.id_map.insert(param_id, (row.value.addr.clone(), row.value.value));
         self.sync_modifier_modulation(slot, &row.modulation);
 
@@ -3726,7 +3757,7 @@ impl ScenePanel {
                         &self.world_card.audio_configs,
                         &self.world_card.slider_ids,
                         &self.world_card.osc_addresses,
-                        &self.world_card.param_info,
+                        &self.world_card.rows,
                         &self.world_card.mod_state,
                     ) {
                         // C-P1a: the converted Environment/Fog family's D/E/A
@@ -3802,7 +3833,7 @@ impl ScenePanel {
                         &self.object_card.audio_configs,
                         &self.object_card.slider_ids,
                         &self.object_card.osc_addresses,
-                        &self.object_card.param_info,
+                        &self.object_card.rows,
                         &self.object_card.mod_state,
                     ) {
                         // C-P1b: the converted Object family's D/E/A buttons
@@ -3876,7 +3907,7 @@ impl ScenePanel {
                         &self.light_card.audio_configs,
                         &self.light_card.slider_ids,
                         &self.light_card.osc_addresses,
-                        &self.light_card.param_info,
+                        &self.light_card.rows,
                         &self.light_card.mod_state,
                     ) {
                         // C-P1c: the converted Light family's D/E/A buttons +
@@ -3950,7 +3981,7 @@ impl ScenePanel {
                         &self.camera_card.audio_configs,
                         &self.camera_card.slider_ids,
                         &self.camera_card.osc_addresses,
-                        &self.camera_card.param_info,
+                        &self.camera_card.rows,
                         &self.camera_card.mod_state,
                     ) {
                         // C-P1c: the converted Camera family's D/E/A buttons
@@ -4024,7 +4055,7 @@ impl ScenePanel {
                         &self.modifier_card.audio_configs,
                         &self.modifier_card.slider_ids,
                         &self.modifier_card.osc_addresses,
-                        &self.modifier_card.param_info,
+                        &self.modifier_card.rows,
                         &self.modifier_card.mod_state,
                     ) {
                         // C-P1d: the converted Modifier family's D/E/A
@@ -5995,7 +6026,7 @@ mod tests {
     }
 
     /// C-P1c: Mode/Cast Shadows/Shadow Softness build through the shared
-    /// card row core with `ParamInfo.value_labels` set (D1's "check for a
+    /// card row core with `ParamRow.value_labels` set (D1's "check for a
     /// card enum row first and use it if one exists" — it does, no bespoke
     /// enum stepper needed) — `whole_numbers` is derived from `labels.is_some()`
     /// and each row's label count matches the VM's own `labels` field.
@@ -6012,14 +6043,14 @@ mod tests {
             (LIGHT_ROW_CAST_SHADOWS, 2),
             (LIGHT_ROW_SHADOW_SOFTNESS, 4),
         ] {
-            let info = &panel.light_card.param_info[slot];
-            assert!(info.whole_numbers, "slot {slot} must be whole_numbers (labeled) — enum row");
-            let labels = info.value_labels.as_ref().unwrap_or_else(|| panic!("slot {slot} must carry value_labels"));
+            let info = &panel.light_card.rows[slot];
+            assert!(info.spec.whole_numbers, "slot {slot} must be whole_numbers (labeled) — enum row");
+            let labels = info.spec.value_labels.as_ref().unwrap_or_else(|| panic!("slot {slot} must carry value_labels"));
             assert_eq!(labels.len(), expected_labels, "slot {slot} label count must match the VM's own labels");
         }
         // Color/Position/Aim/Intensity/Light Size are plain numeric — no labels.
         for slot in [LIGHT_ROW_COLOR_R, LIGHT_ROW_INTENSITY, LIGHT_ROW_POS_X, LIGHT_ROW_LIGHT_SIZE] {
-            assert!(panel.light_card.param_info[slot].value_labels.is_none(), "slot {slot} must be plain numeric");
+            assert!(panel.light_card.rows[slot].spec.value_labels.is_none(), "slot {slot} must be plain numeric");
         }
     }
 
@@ -6038,7 +6069,7 @@ mod tests {
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(
-            panel.light_card.param_info[LIGHT_ROW_LIGHT_SIZE].param_id.contains("light_size"),
+            panel.light_card.rows[LIGHT_ROW_LIGHT_SIZE].id.contains("light_size"),
             "light_size card row exists regardless of shadow_softness mode"
         );
     }
@@ -6238,9 +6269,9 @@ mod tests {
 
                 let is_enum = panel
                     .modifier_card
-                    .param_info
+                    .rows
                     .get(pi)
-                    .and_then(|p| p.value_labels.as_ref())
+                    .and_then(|p| p.spec.value_labels.as_ref())
                     .is_some();
                 if is_enum {
                     // BUG-250: an enum cell's click-to-change is single-click
@@ -6289,7 +6320,7 @@ mod tests {
 
     /// C-P1c supersedes the old P4/D9 dropdown-on-click mechanism for Light:
     /// Mode/Cast Shadows/Shadow Softness now build through the shared card
-    /// row core (`ParamInfo.value_labels`, proven by
+    /// row core (`ParamRow.value_labels`, proven by
     /// `light_enum_rows_carry_value_labels_on_the_card_row`) — the SAME
     /// drag/type-in interaction every other card row uses, not a bespoke
     /// click-to-open dropdown. C-P1d converted Modifier's Axis rows onto the
@@ -6341,14 +6372,14 @@ mod tests {
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let rot_x_row = panel
             .object_card
-            .param_info
+            .rows
             .get(OBJ_ROW_ROT_X)
             .expect("Rotation X is a wired card row");
-        assert!(rot_x_row.is_angle, "Rotation X's card row must set is_angle");
+        assert!(rot_x_row.spec.is_angle, "Rotation X's card row must set is_angle");
         let (_, rot_x_stored_value) = panel
             .object_card
             .id_map
-            .get(&rot_x_row.param_id)
+            .get(&rot_x_row.id)
             .expect("Rotation X's synthesized id resolves in the id map");
         assert!((rot_x_stored_value - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "stored value stays radians");
         let rot_x_ids = panel.object_card.slider_ids[OBJ_ROW_ROT_X].expect("Rotation X renders a slider");

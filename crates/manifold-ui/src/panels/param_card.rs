@@ -4,7 +4,7 @@
 //! Effects and generators present the same instrument to the user — a card
 //! with a header, a column of parameter rows (each a slider plus optional
 //! driver / envelope / Ableton modulation drawers), and a few kind-specific
-//! affordances. Historically each side carried its own `…ParamInfo` /
+//! affordances. Historically each side carried its own `…ParamRow` /
 //! `…Config` structs that were field-for-field near-duplicates. This module
 //! is the single source of truth for that data contract; both panels consume
 //! it.
@@ -24,6 +24,7 @@ use crate::anim::{AnimF32, Transient};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
+use crate::param_surface::{ParamRow, ParamSurface};
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds, TrackSpan};
 use crate::transform2d::Affine2;
 use crate::tree::UITree;
@@ -110,74 +111,6 @@ pub enum CardContext {
     Author,
 }
 
-/// Per-parameter configuration info provided by the app layer. One per slot
-/// in the host's `param_values`, in declaration order (static prefix, then
-/// user-exposed tail for effects).
-#[derive(Debug, Clone)]
-pub struct ParamInfo {
-    /// Stable [`ParamId`](manifold_foundation::ParamId) for this slot — for
-    /// static-tier params the `&'static str` declared in the preset's
-    /// `ParamSpec`; for user-tier (graph-editor-exposed) effect params the
-    /// owned id from `PresetInstance.user_param_bindings[j].id`. Carried on
-    /// the wire when a widget emits a [`PanelAction`](super::PanelAction) so
-    /// the bridge never does a positional `pi → ParamId` lookup.
-    pub param_id: manifold_foundation::ParamId,
-    pub name: String,
-    pub min: f32,
-    pub max: f32,
-    pub default: f32,
-    pub whole_numbers: bool,
-    /// Angle presentation hint. Storage stays radians (drivers / Ableton /
-    /// envelopes write radians every frame, unchanged); the slider value cell
-    /// displays and reads back DEGREES, converting only at the text boundary.
-    /// Mirrors `whole_numbers` as a display-only flag. See `ParamType::Angle`.
-    pub is_angle: bool,
-    /// Whether this slot is exposed as a slider on the card. `false` hides the
-    /// slider widget while preserving slot-index semantics (drivers / Ableton
-    /// mappings keep working — just no visible slider). Defaults to `true`.
-    /// Effects have always carried this; generators gained it with the
-    /// `ParamSlot` storage unification.
-    pub exposed: bool,
-    /// Generator toggle param — renders as a boolean ON/OFF button row instead
-    /// of a slider. Always `false` for effect params today.
-    pub is_toggle: bool,
-    /// Momentary "fire once" button — renders as a `▶` button row (no slider).
-    /// Click increments the underlying monotonic counter by one; consumed via
-    /// the same `ParamConvert::Trigger` plumbing as wired trigger inputs.
-    pub is_trigger: bool,
-    /// This is the outer-card gate for a generator's/effect's audio trigger
-    /// response (the `clip_trigger` toggle on the 11 trigger-responsive
-    /// generators and Strobe). Always paired with `is_toggle: true,
-    /// is_trigger: false` — a toggle row that additionally reaches the
-    /// standard per-param audio-mod "A" drawer (§9) instead of the plain
-    /// zero-lane toggle. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §9.
-    pub is_trigger_gate: bool,
-    /// Named value labels for discrete params (e.g. `["Horiz","Vert","Both"]`).
-    /// When present the slider shows the label instead of a numeric value.
-    pub value_labels: Option<Vec<String>>,
-    /// OSC address for this parameter (e.g. `/master/bloom/amount`). When
-    /// present, clicking the param label copies this address to the clipboard.
-    pub osc_address: Option<String>,
-    /// When set, an Ableton mapping sub-section is shown below the slider.
-    pub ableton_display: Option<AbletonMappingDisplay>,
-    /// Ableton trim range `(range_min, range_max)`. When present, trim handles
-    /// are shown on the slider track.
-    pub ableton_range: Option<(f32, f32)>,
-    /// This row carries a per-instance editable reshape (range / scale / offset
-    /// / invert / curve). After the card-target unification every exposed card
-    /// param is remappable — effect static + user-tail bindings AND generator
-    /// params — via `EditParamMappingCommand` on the watched graph target, so
-    /// `editor_card_config` sets this `true` for both kinds. Drives the sideways
-    /// mapping-drawer chevron, which only appears in [`CardContext::Author`].
-    pub mappable: bool,
-    /// Card-bundling section name (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2
-    /// D5). Contiguous runs of rows sharing the same `Some(name)` draw under
-    /// one collapsible header; `None` rows render exactly as today (a flat
-    /// slider, no header). Comes straight off the manifest spec — never
-    /// derived from graph structure here.
-    pub section: Option<String>,
-}
-
 /// A generator string parameter — rendered as a clickable text-field row
 /// below the slider rows. Generator-only; effects carry an empty list.
 #[derive(Debug, Clone)]
@@ -190,7 +123,7 @@ pub struct ParamCardStringInfo {
 }
 
 /// Config for the "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
-/// P5b) — the union `ParamCardConfig` carries for both effect and generator
+/// P5b) — the union `ParamSurface` carries for both effect and generator
 /// cards. Always present (mirrors `PresetInstance.relight`/`relight_params`
 /// always being live on the instance): the card renders the six knobs +
 /// Height From row greyed rather than hidden when `enabled` is false
@@ -293,10 +226,9 @@ impl Default for RelightCardConfig {
     }
 }
 
-/// One param row's driver/envelope/automation modulation facts — the per-row
-/// struct `ParamCardConfig::rows_mod` carries. Collapses the former fourteen
-/// parallel per-param vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one
-/// struct per row.
+/// One param row's driver/envelope/automation modulation facts — carried as
+/// `ParamRow::modulation`. Collapses the former fourteen parallel per-param
+/// vecs (D3, `docs/WIDGET_TREE_DESIGN.md` P1a) into one struct per row.
 #[derive(Debug, Clone)]
 pub struct RowMod {
     /// Driver exists and is enabled.
@@ -352,57 +284,8 @@ impl Default for RowMod {
     }
 }
 
-/// Configuration for building / refreshing one parameter card.
-///
-/// The union of what the effect and generator cards need. Effect-only fields
-/// (`effect_index`, `effect_id`, `enabled`, `supports_envelopes`, the badge
-/// aggregates, `has_graph_mod`) carry defaults for generators; the
-/// generator-only `string_params` / `layer_id` carry empty / `None` for
-/// effects. `rows_mod` is the shared per-param modulation state both kinds
-/// drive identically.
-#[derive(Debug, Clone)]
-pub struct ParamCardConfig {
-    pub kind: ParamCardKind,
-    /// Display name — the effect name or the generator type name.
-    pub name: String,
-    pub params: Vec<ParamInfo>,
-    /// Generator string params (clickable text-field rows). Empty for effects.
-    pub string_params: Vec<ParamCardStringInfo>,
-    pub collapsed: bool,
-
-    // ── Effect-only identity + flags (defaults for generators) ──
-    pub effect_index: usize,
-    pub effect_id: EffectId,
-    pub enabled: bool,
-    pub supports_envelopes: bool,
-    /// Aggregate: any param has an active driver (DRV badge).
-    pub has_drv: bool,
-    /// Aggregate: any param has an active envelope (ENV badge).
-    pub has_env: bool,
-    /// Aggregate: any param has an Ableton mapping (ABL badge).
-    pub has_abl: bool,
-    /// The effect instance carries a per-card graph override
-    /// (`PresetInstance.graph.is_some()`) — drives the pink "MOD" badge +
-    /// header tint.
-    pub has_graph_mod: bool,
-
-    // ── Generator-only identity ──
-    pub layer_id: Option<LayerId>,
-
-    // ── Shared per-param modulation state ──
-    /// Per-param driver/envelope/automation modulation facts, one [`RowMod`]
-    /// per card row (D3).
-    pub rows_mod: Vec<RowMod>,
-    /// Audio-modulation state (per-param active/send/feature + card-level send
-    /// list). Bundled so the config grows by one field. An `is_trigger_gate`
-    /// row's config rides this SAME state (§9 — a trigger-gate card's audio
-    /// config is a normal `ParameterAudioMod`, not a separate per-instance
-    /// field); `trigger_mode_idx` is the one extra piece it reads.
-    pub audio: super::param_slider_shared::AudioCardState,
-    /// The "3D Shading" toggle + D3 knobs (`docs/DEPTH_RELIGHT_DESIGN.md`
-    /// P5b) — see [`RelightCardConfig`]'s doc.
-    pub relight: RelightCardConfig,
-}
+// `ParamSurface` replaced by [`crate::param_surface::ParamSurface`] (P1b,
+// `docs/WIDGET_TREE_DESIGN.md`). See that module for the row model.
 
 // ── Layout constants ─────────────────────────────────────────────
 //
@@ -624,7 +507,7 @@ pub struct ParamCardPanel {
     collapse_configured: bool,
     is_selected: bool,
     supports_envelopes: bool,
-    param_info: Vec<ParamInfo>,
+    rows: Vec<ParamRow>,
     string_param_info: Vec<ParamCardStringInfo>,
 
     // ── State ──
@@ -773,7 +656,7 @@ pub struct ParamCardPanel {
     /// the graph canvas's `GraphCanvas::collapsed` (survives rebuilds of
     /// this panel instance, never serialized to the project; folds reset on
     /// app restart, persistence Deferred). Missing entry = unfolded
-    /// (default). A section not present in the current `param_info` is
+    /// (default). A section not present in the current `rows` is
     /// simply never consulted — no pruning needed.
     section_folded: ahash::AHashMap<String, bool>,
     /// Rebuilt every build pass: `(header_node_id, section_name)` for every
@@ -865,7 +748,7 @@ impl ParamCardPanel {
             collapse_configured: false,
             is_selected: false,
             supports_envelopes: true,
-            param_info: Vec::new(),
+            rows: Vec::new(),
             string_param_info: Vec::new(),
             state: ParamCardState::new(0),
             host: ChromeHost::new(),
@@ -948,34 +831,35 @@ impl ParamCardPanel {
     /// same call serves either kind. The owning `layer_id` is NOT touched here
     /// — it is set independently via [`set_layer_id`](Self::set_layer_id)
     /// before configure (the generator config doesn't carry it).
-    pub fn configure(&mut self, config: &ParamCardConfig) {
+    pub fn configure(&mut self, config: &ParamSurface) {
         self.kind = config.kind;
         self.effect_index = config.effect_index;
         self.effect_id = config.effect_id.clone();
-        self.name = config.name.clone();
+        self.name = config.title.clone();
         self.enabled = config.enabled;
         self.relight = config.relight;
         self.is_collapsed = config.collapsed;
         self.sync_collapse_anim();
         self.supports_envelopes = config.supports_envelopes;
-        self.param_info = config.params.clone();
+        self.rows = config.rows.clone();
         self.string_param_info = config.string_params.clone();
 
-        let n = config.params.len();
+        let n = config.rows.len();
         self.state = ParamCardState::new(n);
-        self.state.has_drv = config.has_drv;
-        self.state.has_env = config.has_env;
-        self.state.has_abl = config.has_abl;
+        self.state.has_drv = config.has_drv();
+        self.state.has_env = config.has_env();
+        self.state.has_abl = config.has_abl();
         self.state.has_graph_mod = config.has_graph_mod;
-        self.state.mod_state.sync_from_config(n, &config.rows_mod);
+        let rows_mod: Vec<RowMod> = config.rows.iter().map(|r| r.modulation.clone()).collect();
+        self.state.mod_state.sync_from_config(n, &rows_mod);
         self.state.mod_state.sync_audio(n, &config.audio);
         // AUD badge aggregate: any param has an armed audio modulation (parallels
         // has_drv / has_env). Derived after sync_audio populates audio_active.
         self.state.has_audio = self.state.mod_state.audio_active.iter().any(|&a| a);
         self.osc_addresses = config
-            .params
+            .rows
             .iter()
-            .map(|p| p.osc_address.clone())
+            .map(|r| r.mapping.osc_address.clone())
             .collect();
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
@@ -1095,18 +979,18 @@ impl ParamCardPanel {
             if ids.value_text != node_id {
                 continue;
             }
-            let info = self.param_info.get(pi)?;
-            if info.value_labels.is_some() {
+            let info = self.rows.get(pi)?;
+            if info.spec.value_labels.is_some() {
                 return None;
             }
             return Some(PanelAction::BeginParamTextInput {
                 target: self.param_target(),
                 param_id: self.pid_at(pi),
                 anchor: tree.get_bounds(ids.value_text),
-                value: self.base_values.get(pi).copied().unwrap_or(info.default),
-                min: info.min,
-                max: info.max,
-                whole_numbers: info.whole_numbers,
+                value: self.base_values.get(pi).copied().unwrap_or(info.spec.default),
+                min: info.spec.min,
+                max: info.spec.max,
+                whole_numbers: info.spec.whole_numbers,
             });
         }
         None
@@ -1162,11 +1046,11 @@ impl ParamCardPanel {
     ) {
         for (pi, cfg) in self.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
-            let Some(info) = self.param_info.get(pi) else { continue };
+            let Some(info) = self.rows.get(pi) else { continue };
             let Some(Some(meter)) = dids.meters.first() else { continue };
             let key = manifold_foundation::fire_meter_key_for_param(
                 self.effect_id.as_str(),
-                info.param_id.as_ref(),
+                info.id.as_ref(),
             );
             let level = fire_level(key).unwrap_or(0.0);
             meter.update(tree, level, AUDIO_MOD_ACTIVE_C32, dt);
@@ -1183,8 +1067,8 @@ impl ParamCardPanel {
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
         self.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
             cfg.as_ref()?;
-            let info = self.param_info.get(pi)?;
-            info.is_trigger_gate.then_some(pi)
+            let info = self.rows.get(pi)?;
+            info.spec.is_trigger_gate.then_some(pi)
         })
     }
 
@@ -1365,14 +1249,14 @@ impl ParamCardPanel {
     /// for its own unit tests below. A no-op if `param_id` isn't one of this
     /// card's rows (stale/mismatched target).
     pub fn begin_value_snapback(&mut self, param_id: &manifold_foundation::ParamId, from: f32, to: f32) {
-        let Some(pi) = self.param_info.iter().position(|p| &p.param_id == param_id) else {
+        let Some(pi) = self.rows.iter().position(|p| &p.id == param_id) else {
             return;
         };
-        let Some(info) = self.param_info.get(pi) else {
+        let Some(info) = self.rows.get(pi) else {
             return;
         };
-        let from_norm = BitmapSlider::value_to_normalized(from, info.min, info.max);
-        let to_norm = BitmapSlider::value_to_normalized(to, info.min, info.max);
+        let from_norm = BitmapSlider::value_to_normalized(from, info.spec.min, info.spec.max);
+        let to_norm = BitmapSlider::value_to_normalized(to, info.spec.min, info.spec.max);
         if let Some(anim) = self.value_snapback.get_mut(pi) {
             anim.snap(from_norm);
             anim.set_target(to_norm);
@@ -1406,7 +1290,7 @@ impl ParamCardPanel {
     /// instead of allocating a fresh one — so transient UI-only state (the
     /// modulation config tab, drag, copy-flash) survives. Matches on effect
     /// identity; effect lists never carry the default id, so this is exact.
-    pub(crate) fn matches_effect_config(&self, config: &ParamCardConfig) -> bool {
+    pub(crate) fn matches_effect_config(&self, config: &ParamSurface) -> bool {
         self.kind == config.kind && self.effect_id == config.effect_id
     }
 
@@ -1504,10 +1388,10 @@ impl ParamCardPanel {
     /// mapping. Keyed by stable id so user-exposed inner-graph params resolve
     /// transparently (no positional `pi` lookup that would miss the user tail).
     pub fn param_has_ableton_mapping(&self, param_id: &str) -> bool {
-        self.param_info
+        self.rows
             .iter()
-            .find(|p| p.param_id == param_id)
-            .is_some_and(|p| p.ableton_display.is_some())
+            .find(|p| p.id == param_id)
+            .is_some_and(|p| p.mapping.ableton_display.is_some())
     }
 
     /// Whether `node_id` is this card's drag handle (effect kind only).
@@ -1542,7 +1426,7 @@ impl ParamCardPanel {
     /// it. `None` when the param isn't mappable, isn't built, or no chevron was
     /// drawn (Perform context).
     pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
-        let pi = self.param_info.iter().position(|p| p.param_id == param_id)?;
+        let pi = self.rows.iter().position(|p| p.id == param_id)?;
         let cid = (*self.mapping_chevron_ids.get(pi)?)?;
         Some(tree.get_bounds(cid))
     }
@@ -1559,7 +1443,7 @@ impl ParamCardPanel {
         sy: f32,
     ) -> Option<manifold_foundation::ParamId> {
         let pos = Vec2::new(sx, sy);
-        for (i, info) in self.param_info.iter().enumerate() {
+        for (i, info) in self.rows.iter().enumerate() {
             let label_id = self
                 .slider_ids
                 .get(i)
@@ -1574,7 +1458,7 @@ impl ParamCardPanel {
             if let Some(lid) = label_id
                 && tree.get_bounds(lid).contains(pos)
             {
-                return Some(info.param_id.clone());
+                return Some(info.id.clone());
             }
         }
         None
@@ -1603,7 +1487,7 @@ impl ParamCardPanel {
     /// assertion over the REAL painted row, e.g. BUG-108's "+ Add Effect
     /// never overlaps the last card row" class-kill.
     pub fn param_row_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
-        let i = self.param_info.iter().position(|p| p.param_id == param_id)?;
+        let i = self.rows.iter().position(|p| p.id == param_id)?;
         let label_id = self
             .slider_ids
             .get(i)
@@ -1647,7 +1531,7 @@ impl ParamCardPanel {
     /// clip-reveal region to it while `collapse_anim` is mid-flight.
     ///
     /// BUG-108: walks `section_runs()` — mirroring `build_effect`'s own draw
-    /// loop exactly — instead of summing `param_info` linearly. A linear sum
+    /// loop exactly — instead of summing `rows` linearly. A linear sum
     /// is blind to the D5 section-header bar every section run draws
     /// (`build_section_header`, `ROW_HEIGHT + ROW_SPACING`) and to a folded
     /// section's rows drawing nothing at all; either one made this height
@@ -1670,7 +1554,7 @@ impl ParamCardPanel {
             }
             for i in start..start + len {
                 // Hidden params consume zero vertical space.
-                if !self.param_info[i].exposed {
+                if !self.rows[i].value.exposed {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
@@ -1681,7 +1565,7 @@ impl ParamCardPanel {
                 // config → 0" on its own; is_trigger only ever has Audio active,
                 // per D5b). `is_trigger_gate` is ALSO an `is_toggle` row (D6) but
                 // reaches its own `AudioTrigger` tab through the same path.
-                if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
+                if !self.rows[i].spec.is_toggle || self.rows[i].spec.is_trigger_gate {
                     h += self.animated_drawer_height(i);
                 }
             }
@@ -1729,7 +1613,7 @@ impl ParamCardPanel {
                     // audio-mod drawer (D5b), `is_trigger_gate` reaches the
                     // audio-TRIGGER-mod drawer (D6) — both via the same general
                     // height path every slider row uses.
-                    if !self.param_info[i].is_toggle || self.param_info[i].is_trigger_gate {
+                    if !self.rows[i].spec.is_toggle || self.rows[i].spec.is_trigger_gate {
                         h += self.animated_drawer_height(i);
                     }
                 }
@@ -1759,7 +1643,7 @@ impl ParamCardPanel {
         if self.compact {
             return 0.0;
         }
-        let Some(info) = self.param_info.get(i) else {
+        let Some(info) = self.rows.get(i) else {
             return 0.0;
         };
         let active = active_mod_tabs(&self.state.mod_state, info, i);
@@ -2558,21 +2442,21 @@ impl ParamCardPanel {
         self.reposition_effect_badges(tree);
     }
 
-    /// Contiguous runs of `param_info[..].section` — the D5 display-grouping
+    /// Contiguous runs of `rows[..].section` — the D5 display-grouping
     /// unit (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): a run is a maximal
     /// span of consecutive rows sharing the same section value (`None`
     /// included — an unsectioned run renders with no header at all). A
     /// repeated section name after a gap is intentionally a SECOND run/header
     /// (display grouping only groups contiguous rows; forbidden move: do not
     /// reorder rows to force contiguity). Returns `(start_index, len,
-    /// section)` triples covering `0..param_info.len()` with no gaps.
+    /// section)` triples covering `0..rows.len()` with no gaps.
     fn section_runs(&self) -> Vec<(usize, usize, Option<String>)> {
         let mut runs = Vec::new();
         let mut i = 0;
-        while i < self.param_info.len() {
-            let section = self.param_info[i].section.clone();
+        while i < self.rows.len() {
+            let section = self.rows[i].spec.section.clone();
             let mut j = i + 1;
-            while j < self.param_info.len() && self.param_info[j].section == section {
+            while j < self.rows.len() && self.rows[j].spec.section == section {
                 j += 1;
             }
             runs.push((i, j - i, section));
@@ -2751,12 +2635,12 @@ impl ParamCardPanel {
             // Hidden params: leave slider_ids[i] = None and skip widget
             // construction entirely. Slot-index semantics for any attached
             // driver/Ableton mapping/envelope are preserved.
-            if !self.param_info[i].exposed {
+            if !self.rows[i].value.exposed {
                 continue;
             }
-            let info = self.param_info[i].clone();
+            let info = self.rows[i].clone();
 
-            if info.is_toggle || info.is_trigger {
+            if info.spec.is_toggle || info.spec.is_trigger {
                 // Toggle / Trigger row — shared builder (Task A of §8.4 P3b:
                 // effect cards previously had no branch for this at all and
                 // fell through to `build_param_row`, rendering a boolean/
@@ -2791,7 +2675,7 @@ impl ParamCardPanel {
                     label_id: row.label_id,
                     button_id: row.button_id,
                 });
-                self.toggle_cache[i] = info.default > 0.5;
+                self.toggle_cache[i] = info.spec.default > 0.5;
                 self.audio_btn_ids[i] = row.audio_btn;
                 self.audio_configs[i] = row.audio_config;
                 self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
@@ -2848,7 +2732,7 @@ impl ParamCardPanel {
             // A subtle ">" that opens the sideways range/scale/offset/invert/
             // curve drawer for this binding. Sits past the D/E buttons in the
             // reserved lane; click resolves via `mapping_chevron_ids`.
-            if author && info.mappable {
+            if author && info.mapping.mappable {
                 let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
                 let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
                 // Keyed by (row | chevron role): the chevron's identity must not
@@ -3041,7 +2925,7 @@ impl ParamCardPanel {
             let author = self.context == CardContext::Author;
             let RowGeometry { label_width, slider_w } = row_geometry(content_w, author);
 
-            if !self.param_info.is_empty() {
+            if !self.rows.is_empty() {
             self.section_header_ids.clear();
             let runs = self.section_runs();
             for (start, len, section) in runs {
@@ -3071,9 +2955,9 @@ impl ParamCardPanel {
                 }
 
             for i in start..start + len {
-                let info = self.param_info[i].clone();
+                let info = self.rows[i].clone();
 
-                if info.is_toggle || info.is_trigger {
+                if info.spec.is_toggle || info.spec.is_trigger {
                     // Toggle / Trigger row — shared builder (Task A of §8.4
                     // P3b unified this with the effect card's toggle/trigger
                     // rendering; see `build_toggle_trigger_row`'s doc comment).
@@ -3107,7 +2991,7 @@ impl ParamCardPanel {
                         label_id: row.label_id,
                         button_id: row.button_id,
                     });
-                    self.toggle_cache[i] = info.default > 0.5;
+                    self.toggle_cache[i] = info.spec.default > 0.5;
                     self.audio_btn_ids[i] = row.audio_btn;
                     self.audio_configs[i] = row.audio_config;
                     self.audio_trigger_mode_badge_ids[i] = row.mode_badge_id;
@@ -3161,7 +3045,7 @@ impl ParamCardPanel {
                     // mappable) — identical to the effect card. Opens the same
                     // sideways range/scale/offset/invert/curve drawer; click
                     // resolves via the shared `mapping_chevron_ids`.
-                    if author && info.mappable {
+                    if author && info.mapping.mappable {
                         let ch_x = cx + content_w - MAP_CHEVRON_W;
                         let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
                         self.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
@@ -3188,7 +3072,7 @@ impl ParamCardPanel {
                 }
             }
             }
-            } // end if !self.param_info.is_empty()
+            } // end if !self.rows.is_empty()
 
             // ── String param rows (clickable text fields) ──
             for (si, sp) in self.string_param_info.iter().enumerate() {
@@ -3345,7 +3229,7 @@ impl ParamCardPanel {
 
         // Per-param slider/toggle/trigger values + label — shared with
         // `sync_values_generator` (`sync_param_value`).
-        for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
+        for (i, slot) in values.iter().enumerate().take(self.rows.len()) {
             if let Some(b) = self.base_values.get_mut(i) {
                 *b = slot.base;
             }
@@ -3360,23 +3244,23 @@ impl ParamCardPanel {
     /// apart the way `build_effect_sliders` and `build_generator`'s toggle
     /// rendering did (§8.4 P3b Task A).
     fn sync_param_value(&mut self, tree: &mut UITree, i: usize, val: f32) {
-        let info = &self.param_info[i];
+        let info = &self.rows[i];
 
         // Label dirty-check (slider rows only — toggle/trigger rows have
         // their label baked into the row at build time).
-        if !info.is_toggle && !info.is_trigger {
-            let new_label = Some(info.name.clone());
+        if !info.spec.is_toggle && !info.spec.is_trigger {
+            let new_label = Some(info.spec.name.clone());
             if self.label_cache[i] != new_label {
                 self.label_cache[i] = new_label;
                 if let Some(ref ids) = self.slider_ids[i]
                     && let Some(label) = ids.label
                 {
-                    tree.set_text(label, &info.name);
+                    tree.set_text(label, &info.spec.name);
                 }
             }
         }
 
-        if info.is_toggle {
+        if info.spec.is_toggle {
             let on = val > 0.5;
             if on != self.toggle_cache[i] {
                 self.toggle_cache[i] = on;
@@ -3385,7 +3269,7 @@ impl ParamCardPanel {
                     tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
                 }
             }
-        } else if info.is_trigger {
+        } else if info.spec.is_trigger {
             // Trigger button stays neutral — the counter value isn't
             // user-visible; nothing to re-render per frame.
         } else if val != self.param_cache[i] || self.param_cache[i].is_nan() {
@@ -3400,13 +3284,13 @@ impl ParamCardPanel {
             }
             self.param_cache[i] = val;
             if let Some(ref ids) = self.slider_ids[i] {
-                let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
+                let norm = BitmapSlider::value_to_normalized(val, info.spec.min, info.spec.max);
                 let text = format_param_value(
                     val,
-                    info.min,
-                    info.whole_numbers,
-                    info.is_angle,
-                    info.value_labels.as_deref(),
+                    info.spec.min,
+                    info.spec.whole_numbers,
+                    info.spec.is_angle,
+                    info.spec.value_labels.as_deref(),
                 );
                 // P2 value snap-back (D15): a reset just retargeted this
                 // row's `value_snapback` (`begin_value_snapback`, same
@@ -3439,7 +3323,7 @@ impl ParamCardPanel {
             .unwrap_or_default();
         self.copied_flash.sync(tree, FONT_SIZE, &copied_label);
 
-        for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
+        for (i, slot) in values.iter().enumerate().take(self.rows.len()) {
             if let Some(b) = self.base_values.get_mut(i) {
                 *b = slot.base;
             }
@@ -3454,9 +3338,9 @@ impl ParamCardPanel {
                 && ids.label == Some(label_id)
             {
                 return self
-                    .param_info
+                    .rows
                     .get(pi)
-                    .map(|p| p.name.clone())
+                    .map(|p| p.spec.name.clone())
                     .unwrap_or_default();
             }
         }
@@ -3465,9 +3349,9 @@ impl ParamCardPanel {
                 && ids.label_id == Some(label_id)
             {
                 return self
-                    .param_info
+                    .rows
                     .get(pi)
-                    .map(|p| p.name.clone())
+                    .map(|p| p.spec.name.clone())
                     .unwrap_or_default();
             }
         }
@@ -3513,11 +3397,11 @@ impl ParamCardPanel {
     /// Resolve the panel-local positional `pi` back to its stable
     /// [`ParamId`](manifold_foundation::ParamId) for outbound
     /// [`PanelAction`] emission. The panel's per-widget bookkeeping is
-    /// legitimately positional (it indexes `param_info`, `driver_btn_ids`,
+    /// legitimately positional (it indexes `rows`, `driver_btn_ids`,
     /// etc.); this is the one helper that keeps that off the wire format.
     #[inline]
     fn pid_at(&self, pi: usize) -> manifold_foundation::ParamId {
-        self.param_info[pi].param_id.clone()
+        self.rows[pi].id.clone()
     }
 
     /// Match a clicked node against this card's modulation-config tab strips
@@ -3550,16 +3434,16 @@ impl ParamCardPanel {
         pi: usize,
         clicked: NodeId,
     ) -> Vec<PanelAction> {
-        let info = &self.param_info[pi];
-        let labels = info.value_labels.clone().unwrap_or_default();
+        let info = &self.rows[pi];
+        let labels = info.spec.value_labels.clone().unwrap_or_default();
         let cell = self
             .slider_ids
             .get(pi)
             .and_then(|s| s.as_ref())
             .map(|s| s.value_text)
             .unwrap_or(clicked);
-        let value = self.base_values.get(pi).copied().unwrap_or(info.default);
-        enum_value_cell_actions(target, self.pid_at(pi), &labels, value, info.min, cell)
+        let value = self.base_values.get(pi).copied().unwrap_or(info.spec.default);
+        enum_value_cell_actions(target, self.pid_at(pi), &labels, value, info.spec.min, cell)
     }
 
     /// The "A" audio-mod button action — always opens (arms) or closes
@@ -3742,7 +3626,7 @@ impl ParamCardPanel {
             if let Some(t) = toggle
                 && t.button_id == id
             {
-                let is_trigger = self.param_info.get(pi).map(|i| i.is_trigger).unwrap_or(false);
+                let is_trigger = self.rows.get(pi).map(|i| i.spec.is_trigger).unwrap_or(false);
                 let target = GraphParamTarget::Effect(ei);
                 let action = if is_trigger {
                     PanelAction::ParamFire(target, self.pid_at(pi))
@@ -3765,7 +3649,7 @@ impl ParamCardPanel {
             &self.audio_configs,
             &self.slider_ids,
             &self.osc_addresses,
-            &self.param_info,
+            &self.rows,
             &self.state.mod_state,
         ) {
             return match rc {
@@ -3914,9 +3798,9 @@ impl ParamCardPanel {
                 && t.button_id == id
             {
                 let is_trigger = self
-                    .param_info
+                    .rows
                     .get(pi)
-                    .map(|i| i.is_trigger)
+                    .map(|i| i.spec.is_trigger)
                     .unwrap_or(false);
                 let target = GraphParamTarget::Generator;
                 let action = if is_trigger {
@@ -3947,7 +3831,7 @@ impl ParamCardPanel {
             &self.audio_configs,
             &self.slider_ids,
             &self.osc_addresses,
-            &self.param_info,
+            &self.rows,
             &self.state.mod_state,
         ) {
             return match rc {
@@ -4057,7 +3941,7 @@ impl ParamCardPanel {
     /// The current `[min, max]` output sub-range a kind's trim handles
     /// represent at param index `pi`. Driver/audio read card `mod_state` and
     /// default to the full range; Ableton reads the mapping range on
-    /// `param_info` and returns `None` when the param has no mapping — the old
+    /// `rows` and returns `None` when the param has no mapping — the old
     /// `ableton_range` guard, preserved so an Ableton drag can't proceed
     /// without a mapping to edit.
     fn trim_range(&self, kind: TrimKind, pi: usize) -> Option<(f32, f32)> {
@@ -4066,7 +3950,7 @@ impl ParamCardPanel {
                 self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0),
                 self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0),
             )),
-            TrimKind::Ableton => self.param_info[pi].ableton_range,
+            TrimKind::Ableton => self.rows[pi].mapping.ableton_range,
             TrimKind::Audio => Some((
                 self.state
                     .mod_state
@@ -4097,7 +3981,7 @@ impl ParamCardPanel {
                 }
             }
             TrimKind::Ableton => {
-                self.param_info[pi].ableton_range = Some((min, max));
+                self.rows[pi].mapping.ableton_range = Some((min, max));
             }
             TrimKind::Audio => {
                 if let Some(v) = self.state.mod_state.audio_range_min.get_mut(pi) {
@@ -4185,10 +4069,10 @@ impl ParamCardPanel {
             if let Some(sl) = dids.sliders.get(3)
                 && node_id == sl.track
             {
-                let info = &self.param_info[pi];
+                let info = &self.rows[pi];
                 let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(sl.track)), pos.x).clamp(0.0, 1.0);
-                let mut value = norm_to_step_amount(norm, info.min, info.max);
-                if info.whole_numbers {
+                let mut value = norm_to_step_amount(norm, info.spec.min, info.spec.max);
+                if info.spec.whole_numbers {
                     value = value.round();
                 }
                 self.drag.begin(ParamDragTarget::StepAmount { index: pi }, pos);
@@ -4229,9 +4113,9 @@ impl ParamCardPanel {
         // through to a normal param drag.
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self
-                .param_info
+                .rows
                 .get(pi)
-                .map(|i| i.is_toggle || i.is_trigger)
+                .map(|i| i.spec.is_toggle || i.spec.is_trigger)
                 .unwrap_or(false)
             {
                 continue;
@@ -4333,9 +4217,9 @@ impl ParamCardPanel {
                 // No trim/target handle nearby — normal param slider drag
                 self.drag.begin(ParamDragTarget::Param { index: pi }, pos);
                 let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
-                let info = &self.param_info[pi];
-                let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
-                let val = if info.whole_numbers { val.round() } else { val };
+                let info = &self.rows[pi];
+                let val = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
+                let val = if info.spec.whole_numbers { val.round() } else { val };
                 return vec![
                     PanelAction::ParamSnapshot(target, self.pid_at(pi)),
                     PanelAction::ParamChanged(target, self.pid_at(pi), val),
@@ -4487,22 +4371,22 @@ impl ParamCardPanel {
                 .and_then(|(d, _)| d.sliders.get(3))
                 .map(|sl| sl.track);
             if let Some(track_id) = track_id {
-                let info = &self.param_info[pi];
+                let info = &self.rows[pi];
                 let norm = BitmapSlider::x_to_normalized(
                     TrackSpan::of(tree.get_bounds(track_id)),
                     pos.x,
                 )
                 .clamp(0.0, 1.0);
-                let mut value = norm_to_step_amount(norm, info.min, info.max);
-                if info.whole_numbers {
+                let mut value = norm_to_step_amount(norm, info.spec.min, info.spec.max);
+                if info.spec.whole_numbers {
                     value = value.round();
                 }
                 if let Some(v) = self.state.mod_state.audio_step_amount.get_mut(pi) {
                     *v = value;
                 }
                 let text =
-                    if info.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") };
-                let display_norm = step_amount_to_norm(value, info.min, info.max);
+                    if info.spec.whole_numbers { format!("{value:.0}") } else { format!("{value:.2}") };
+                let display_norm = step_amount_to_norm(value, info.spec.min, info.spec.max);
                 if let Some((d, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref())
                     && let Some(sl) = d.sliders.get(3)
                 {
@@ -4571,17 +4455,17 @@ impl ParamCardPanel {
         if let Some(pi) = self.drag.param_index()
             && let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
         {
-            let info = &self.param_info[pi];
+            let info = &self.rows[pi];
             let norm = BitmapSlider::x_to_normalized(TrackSpan::of(tree.get_bounds(ids.track)), pos.x);
-            let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
-            let val = if info.whole_numbers { val.round() } else { val };
-            let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
+            let val = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
+            let val = if info.spec.whole_numbers { val.round() } else { val };
+            let display_norm = BitmapSlider::value_to_normalized(val, info.spec.min, info.spec.max);
             let text = format_param_value(
                 val,
-                info.min,
-                info.whole_numbers,
-                info.is_angle,
-                info.value_labels.as_deref(),
+                info.spec.min,
+                info.spec.whole_numbers,
+                info.spec.is_angle,
+                info.spec.value_labels.as_deref(),
             );
             BitmapSlider::update_value(tree, ids, display_norm, &text);
             self.param_cache[pi] = val;
@@ -4594,7 +4478,7 @@ impl ParamCardPanel {
 
         // D3 relight-knob drag (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) — mirrors
         // the plain param-slider drag above exactly, minus the value cache
-        // (relight knobs have no per-row `param_info`/`param_cache` slot).
+        // (relight knobs have no per-row `rows`/`param_cache` slot).
         if let Some(field) = self.drag.relight_field()
             && let Some(i) = RELIGHT_FIELD_SPECS.iter().position(|s| s.field == field)
             && let Some(ids) = self.relight_slider_ids[i].as_ref()
@@ -4738,9 +4622,9 @@ impl ParamCardPanel {
             // through to the card claim like any other dead zone.
             if matches!(self.kind, ParamCardKind::Generator)
                 && self
-                    .param_info
+                    .rows
                     .get(pi)
-                    .map(|i| i.is_toggle || i.is_trigger)
+                    .map(|i| i.spec.is_toggle || i.spec.is_trigger)
                     .unwrap_or(false)
             {
                 continue;
@@ -4785,67 +4669,73 @@ impl Default for ParamCardPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param_surface::{RowMapping, RowSpec, RowValue};
     use crate::tree::UITree;
 
     // ── Effect-card fixtures + tests ──────────────────────────────
 
-    fn effect_config() -> ParamCardConfig {
-        let n = 2;
-        ParamCardConfig {
+    fn effect_config() -> ParamSurface {
+        ParamSurface {
             kind: ParamCardKind::Effect,
             effect_index: 0,
             effect_id: EffectId::new("test-effect-0"),
-            name: "Blur".into(),
+            title: "Blur".into(),
             enabled: true,
             collapsed: false,
             supports_envelopes: true,
             string_params: Vec::new(),
             layer_id: None,
-            params: vec![
-                ParamInfo {
-                    param_id: std::borrow::Cow::Borrowed("radius"),
-                    name: "Radius".into(),
-                    min: 0.0,
-                    max: 100.0,
-                    default: 10.0,
-                    whole_numbers: true,
-                    is_angle: false,
-                    exposed: true,
-                    is_toggle: false,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                    section: None,
+            rows: vec![
+                ParamRow {
+                    id: std::borrow::Cow::Borrowed("radius"),
+                    spec: RowSpec {
+                        name: "Radius".into(),
+                        min: 0.0,
+                        max: 100.0,
+                        default: 10.0,
+                        whole_numbers: true,
+                        is_angle: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        is_trigger_gate: false,
+                        value_labels: None,
+                        section: None,
+                    },
+                    value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
+                    modulation: RowMod::default(),
+                    mapping: RowMapping {
+                        osc_address: None,
+                        ableton_display: None,
+                        ableton_range: None,
+                        mappable: false,
+                    },
                 },
-                ParamInfo {
-                    param_id: std::borrow::Cow::Borrowed("strength"),
-                    name: "Strength".into(),
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.5,
-                    whole_numbers: false,
-                    is_angle: false,
-                    exposed: true,
-                    is_toggle: false,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                    section: None,
+                ParamRow {
+                    id: std::borrow::Cow::Borrowed("strength"),
+                    spec: RowSpec {
+                        name: "Strength".into(),
+                        min: 0.0,
+                        max: 1.0,
+                        default: 0.5,
+                        whole_numbers: false,
+                        is_angle: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        is_trigger_gate: false,
+                        value_labels: None,
+                        section: None,
+                    },
+                    value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                    modulation: RowMod::default(),
+                    mapping: RowMapping {
+                        osc_address: None,
+                        ableton_display: None,
+                        ableton_range: None,
+                        mappable: false,
+                    },
                 },
             ],
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
-            rows_mod: vec![RowMod::default(); n],
             audio: Default::default(),
             relight: RelightCardConfig::default(),
         }
@@ -4855,48 +4745,56 @@ mod tests {
     /// exercises the effect card's toggle/trigger row rendering + click
     /// dispatch (§8.4 P3b: effect cards previously had no branch for either
     /// and rendered them as raw sliders — the Task A bug).
-    fn effect_config_with_toggle_and_trigger() -> ParamCardConfig {
+    fn effect_config_with_toggle_and_trigger() -> ParamSurface {
         let mut c = effect_config();
-        c.params.push(ParamInfo {
-            param_id: std::borrow::Cow::Borrowed("invert"),
-            name: "Invert".into(),
-            min: 0.0,
-            max: 1.0,
-            default: 0.0,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: true,
-            is_toggle: true,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        c.rows.push(ParamRow {
+            id: std::borrow::Cow::Borrowed("invert"),
+            spec: RowSpec {
+                name: "Invert".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                whole_numbers: false,
+                is_angle: false,
+                is_toggle: true,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         });
-        c.params.push(ParamInfo {
-            param_id: std::borrow::Cow::Borrowed("reset"),
-            name: "Reset".into(),
-            min: 0.0,
-            max: 0.0,
-            default: 0.0,
-            whole_numbers: true,
-            is_angle: false,
-            exposed: true,
-            is_toggle: false,
-            is_trigger: true,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        c.rows.push(ParamRow {
+            id: std::borrow::Cow::Borrowed("reset"),
+            spec: RowSpec {
+                name: "Reset".into(),
+                min: 0.0,
+                max: 0.0,
+                default: 0.0,
+                whole_numbers: true,
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: true,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         });
-        let n = c.params.len();
-        c.rows_mod.resize(n, RowMod::default());
         c
     }
 
@@ -4975,29 +4873,33 @@ mod tests {
     /// the SAME standard audio-mod drawer `effect_config_with_toggle_and_
     /// trigger`'s `is_trigger` (D5b) coverage above exercises, plus the
     /// trailing Mode row.
-    fn effect_config_with_trigger_gate() -> ParamCardConfig {
+    fn effect_config_with_trigger_gate() -> ParamSurface {
         let mut c = effect_config();
-        c.params.push(ParamInfo {
-            param_id: std::borrow::Cow::Borrowed("clip_trigger"),
-            name: "Clip Trigger".into(),
-            min: 0.0,
-            max: 1.0,
-            default: 0.0,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: true,
-            is_toggle: true,
-            is_trigger: false,
-            is_trigger_gate: true,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+        c.rows.push(ParamRow {
+            id: std::borrow::Cow::Borrowed("clip_trigger"),
+            spec: RowSpec {
+                name: "Clip Trigger".into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                whole_numbers: false,
+                is_angle: false,
+                is_toggle: true,
+                is_trigger: false,
+                is_trigger_gate: true,
+                value_labels: None,
+                section: None,
+            },
+            value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         });
-        let n = c.params.len();
-        c.rows_mod.resize(n, RowMod::default());
+        let n = c.rows.len();
 
         c.audio.send_labels = vec!["Kick".into()];
         c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
@@ -5018,7 +4920,7 @@ mod tests {
         panel.configure(&effect_config_with_trigger_gate());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let gi = panel.param_info.len() - 1;
+        let gi = panel.rows.len() - 1;
         // Renders as a toggle row (not a slider), same as a plain toggle —
         // but ALSO reaches the standard audio-mod "A" button + drawer, which
         // a plain toggle never does.
@@ -5053,7 +4955,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_trigger_gate();
-        let gi = cfg.params.len() - 1;
+        let gi = cfg.rows.len() - 1;
         cfg.audio.rows[gi].active = false; // disarmed — drawer never builds
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
@@ -5069,13 +4971,13 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_trigger_gate();
-        let gi = cfg.params.len() - 1;
+        let gi = cfg.rows.len() - 1;
         // Same armed row, reshaped into a plain continuous (non-toggle,
         // non-trigger) param — a genuine non-gate shape (not just a flag flip
         // on the toggle-row fixture), which still shows an Amount meter but
         // must never re-tap the scope send/band.
-        cfg.params[gi].is_trigger_gate = false;
-        cfg.params[gi].is_toggle = false;
+        cfg.rows[gi].spec.is_trigger_gate = false;
+        cfg.rows[gi].spec.is_toggle = false;
         panel.configure(&cfg);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
@@ -5090,7 +4992,7 @@ mod tests {
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config_with_trigger_gate());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let gi = panel.param_info.len() - 1;
+        let gi = panel.rows.len() - 1;
 
         // The "A" button toggles the mod (armed → disarm, since the fixture
         // starts active) through the SAME `AudioModToggle` every other
@@ -5158,7 +5060,7 @@ mod tests {
         // shape as `drawer_open_tween_reserves_interpolated_height_clips_then_
         // settles` above, but for the toggle/trigger row path specifically.
         let mut closed = effect_config_with_trigger_gate();
-        let gi = closed.params.len() - 1;
+        let gi = closed.rows.len() - 1;
         closed.audio.rows[gi].active = false; // start disarmed — drawer closed
         let mut panel = ParamCardPanel::new();
         panel.configure(&closed);
@@ -5279,9 +5181,9 @@ mod tests {
     }
 
     /// Config with the second param marked mappable (a user-tail binding).
-    fn effect_config_with_mappable() -> ParamCardConfig {
+    fn effect_config_with_mappable() -> ParamSurface {
         let mut c = effect_config();
-        c.params[1].mappable = true;
+        c.rows[1].mapping.mappable = true;
         c
     }
 
@@ -5347,10 +5249,7 @@ mod tests {
         let build_with_driver0 = |driver0: bool| {
             let mut tree = UITree::new();
             let mut c = effect_config_with_mappable(); // param[1] is mappable
-            c.rows_mod = vec![
-                RowMod { driver_active: driver0, ..Default::default() },
-                RowMod::default(),
-            ];
+            c.rows[0].modulation = RowMod { driver_active: driver0, ..Default::default() };
             let mut panel = ParamCardPanel::new();
             panel.set_context(CardContext::Author);
             panel.configure(&c);
@@ -5397,10 +5296,10 @@ mod tests {
     /// Generator config with the second param marked mappable — generators are
     /// remappable too, so the Author-context mapping chevron must appear, same
     /// as effects (the unified surface).
-    fn generator_config_with_mappable() -> ParamCardConfig {
+    fn generator_config_with_mappable() -> ParamSurface {
         let mut c = effect_config();
         c.kind = ParamCardKind::Generator;
-        c.params[1].mappable = true;
+        c.rows[1].mapping.mappable = true;
         c
     }
 
@@ -5829,9 +5728,9 @@ mod tests {
 
     /// Fixture with param 0's audio mod armed and Continuous — exercises the
     /// shaping sliders (Sensitivity/Attack/Release, `DrawerIds.sliders[0..3]`).
-    fn effect_config_with_audio_shape_armed() -> ParamCardConfig {
+    fn effect_config_with_audio_shape_armed() -> ParamSurface {
         let mut c = effect_config();
-        let n = c.params.len();
+        let n = c.rows.len();
         c.audio.send_labels = vec!["Kick".into()];
         c.audio.send_ids = vec![manifold_foundation::AudioSendId::new("send-kick")];
         c.audio.rows = vec![AudioRowState::default(); n];
@@ -6062,7 +5961,7 @@ mod tests {
         // drawer height and starts easing (Perform context eases; the param existed
         // across both configures, so it's a set_target, not a snap).
         let mut armed = effect_config();
-        armed.rows_mod[0].driver_active = true;
+        armed.rows[0].modulation.driver_active = true;
         panel.configure(&armed);
         assert!(
             panel.drawer_height_anim[0].is_animating(),
@@ -6125,7 +6024,7 @@ mod tests {
     #[test]
     fn configure_seeds_settled_height_when_drawer_already_armed_on_first_configure() {
         let mut armed = effect_config();
-        armed.rows_mod[0].driver_active = true;
+        armed.rows[0].modulation.driver_active = true;
 
         let mut panel = ParamCardPanel::new();
         panel.configure(&armed); // first-ever configure — drawer_height_anim starts empty
@@ -6380,7 +6279,7 @@ mod tests {
         // share this column by construction; pinning the card side here guards the
         // whole alignment (it trips if PADDING drifts off SPACE_M or the border
         // changes).
-        let label_x = |cfg: &ParamCardConfig| -> f32 {
+        let label_x = |cfg: &ParamSurface| -> f32 {
             let mut tree = UITree::new();
             let mut panel = ParamCardPanel::new();
             panel.configure(cfg);
@@ -6478,10 +6377,10 @@ mod tests {
         );
     }
 
-    fn gen_config() -> ParamCardConfig {
-        ParamCardConfig {
+    fn gen_config() -> ParamSurface {
+        ParamSurface {
             kind: ParamCardKind::Generator,
-            name: "Plasma".into(),
+            title: "Plasma".into(),
             collapsed: false,
             effect_index: 0,
             // Real id (fixed 2026-07-11) — a populated generator card carries
@@ -6492,72 +6391,83 @@ mod tests {
             effect_id: EffectId::new("gen-plasma-1"),
             enabled: true,
             supports_envelopes: true,
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            params: vec![
-                ParamInfo {
-                    param_id: std::borrow::Cow::Borrowed("speed"),
-                    name: "Speed".into(),
-                    min: 0.0,
-                    max: 10.0,
-                    default: 1.0,
-                    whole_numbers: false,
-                    is_angle: false,
-                    exposed: true,
-                    is_toggle: false,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                    section: None,
+            rows: vec![
+                ParamRow {
+                    id: std::borrow::Cow::Borrowed("speed"),
+                    spec: RowSpec {
+                        name: "Speed".into(),
+                        min: 0.0,
+                        max: 10.0,
+                        default: 1.0,
+                        whole_numbers: false,
+                        is_angle: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        is_trigger_gate: false,
+                        value_labels: None,
+                        section: None,
+                    },
+                    value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    modulation: RowMod::default(),
+                    mapping: RowMapping {
+                        osc_address: None,
+                        ableton_display: None,
+                        ableton_range: None,
+                        mappable: false,
+                    },
                 },
-                ParamInfo {
-                    param_id: std::borrow::Cow::Borrowed("invert"),
-                    name: "Invert".into(),
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.0,
-                    whole_numbers: false,
-                    is_angle: false,
-                    exposed: true,
-                    is_toggle: true,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                    section: None,
+                ParamRow {
+                    id: std::borrow::Cow::Borrowed("invert"),
+                    spec: RowSpec {
+                        name: "Invert".into(),
+                        min: 0.0,
+                        max: 1.0,
+                        default: 0.0,
+                        whole_numbers: false,
+                        is_angle: false,
+                        is_toggle: true,
+                        is_trigger: false,
+                        is_trigger_gate: false,
+                        value_labels: None,
+                        section: None,
+                    },
+                    value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
+                    modulation: RowMod::default(),
+                    mapping: RowMapping {
+                        osc_address: None,
+                        ableton_display: None,
+                        ableton_range: None,
+                        mappable: false,
+                    },
                 },
-                ParamInfo {
-                    param_id: std::borrow::Cow::Borrowed("scale"),
-                    name: "Scale".into(),
-                    min: 0.1,
-                    max: 5.0,
-                    default: 1.0,
-                    whole_numbers: false,
-                    is_angle: false,
-                    exposed: true,
-                    is_toggle: false,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                    section: None,
+                ParamRow {
+                    id: std::borrow::Cow::Borrowed("scale"),
+                    spec: RowSpec {
+                        name: "Scale".into(),
+                        min: 0.1,
+                        max: 5.0,
+                        default: 1.0,
+                        whole_numbers: false,
+                        is_angle: false,
+                        is_toggle: false,
+                        is_trigger: false,
+                        is_trigger_gate: false,
+                        value_labels: None,
+                        section: None,
+                    },
+                    value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
+                    modulation: RowMod::default(),
+                    mapping: RowMapping {
+                        osc_address: None,
+                        ableton_display: None,
+                        ableton_range: None,
+                        mappable: false,
+                    },
                 },
             ],
             string_params: vec![],
-            rows_mod: vec![RowMod::default(); 3],
             audio: Default::default(),
             relight: RelightCardConfig::default(),
         }
@@ -6599,11 +6509,11 @@ mod tests {
 
     /// D5 card sections (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2): Speed +
     /// Invert sectioned under "Leaf" (a contiguous run), Scale unsectioned.
-    fn gen_config_with_sections() -> ParamCardConfig {
+    fn gen_config_with_sections() -> ParamSurface {
         let mut c = gen_config();
-        c.params[0].section = Some("Leaf".to_string());
-        c.params[1].section = Some("Leaf".to_string());
-        c.params[2].section = None;
+        c.rows[0].spec.section = Some("Leaf".to_string());
+        c.rows[1].spec.section = Some("Leaf".to_string());
+        c.rows[2].spec.section = None;
         c
     }
 
@@ -6760,7 +6670,7 @@ mod tests {
 
         assert!(expanded_h > base_h);
         let audio_h = crate::panels::param_slider_shared::audio_config_height(
-            &panel.param_info[0],
+            &panel.rows[0],
             &panel.state.mod_state,
             0,
         );
@@ -6855,7 +6765,7 @@ mod tests {
         panel.configure(&effect_config_with_trigger_gate());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
 
-        let gi = panel.param_info.len() - 1;
+        let gi = panel.rows.len() - 1;
         assert!(panel.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
 
         let mut reg = crate::intent::IntentRegistry::new();

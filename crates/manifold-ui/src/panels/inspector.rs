@@ -3,7 +3,8 @@ use super::layer_chrome::LayerChromePanel;
 use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
-use super::param_card::{CardContext, ParamCardConfig, ParamCardPanel};
+use super::param_card::{CardContext, ParamCardPanel};
+use crate::param_surface::ParamSurface;
 use super::{InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
 use crate::color;
@@ -615,13 +616,13 @@ impl InspectorCompositePanel {
         ranges
     }
 
-    pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
+    pub fn configure_master_effects(&mut self, configs: &[ParamSurface]) {
         let existing = std::mem::take(&mut self.effects[Self::SCOPE_MASTER]);
         self.effects[Self::SCOPE_MASTER] =
             Self::reconcile_cards(existing, configs, &mut self.master_dying, self.card_context);
     }
 
-    pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig], scope: Option<&LayerId>) {
+    pub fn configure_layer_effects(&mut self, configs: &[ParamSurface], scope: Option<&LayerId>) {
         // A change of scope is navigation, not an edit of the current chain:
         // the previously-shown layer's effects weren't removed from the model,
         // so they must not play the delete-collapse exit animation.
@@ -642,7 +643,7 @@ impl InspectorCompositePanel {
 
     pub fn configure_gen_params(
         &mut self,
-        config: Option<&ParamCardConfig>,
+        config: Option<&ParamSurface>,
         layer_id: Option<LayerId>,
     ) {
         // The generator card is a single optional, distinct from the effect
@@ -716,7 +717,7 @@ impl InspectorCompositePanel {
     /// state every sync and re-allocated every panel each frame.
     fn reconcile_cards(
         mut existing: Vec<ParamCardPanel>,
-        configs: &[ParamCardConfig],
+        configs: &[ParamSurface],
         dying: &mut Vec<ParamCardPanel>,
         card_context: CardContext,
     ) -> Vec<ParamCardPanel> {
@@ -2666,36 +2667,42 @@ mod tests {
         assert_eq!(panel.active_tab(), InspectorTab::Clip);
     }
 
-    fn mk_param(id: &'static str, name: &str) -> super::super::param_card::ParamInfo {
-        super::super::param_card::ParamInfo {
-            param_id: std::borrow::Cow::Borrowed(id),
-            name: name.into(),
-            min: 0.0,
-            max: 1.0,
-            default: 0.5,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: true,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+    fn mk_param(id: &'static str, name: &str) -> crate::param_surface::ParamRow {
+        use crate::param_surface::{ParamRow, RowMapping, RowSpec, RowValue};
+        ParamRow {
+            id: std::borrow::Cow::Borrowed(id),
+            spec: RowSpec {
+                name: name.into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                whole_numbers: false,
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         }
     }
 
-    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamCardConfig {
-        let params: Vec<_> = (0..n)
+    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamSurface {
+        let rows: Vec<_> = (0..n)
             .map(|i| mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}")))
             .collect();
-        ParamCardConfig {
+        ParamSurface {
             kind,
-            name: name.into(),
-            params,
+            title: name.into(),
+            rows,
             string_params: vec![],
             collapsed: false,
             effect_index: 0,
@@ -2706,12 +2713,8 @@ mod tests {
             effect_id: EffectId::new(name),
             enabled: true,
             supports_envelopes: true,
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            rows_mod: vec![RowMod::default(); n],
             audio: Default::default(),
             relight: RelightCardConfig::default(),
         }
@@ -2859,8 +2862,8 @@ mod tests {
         };
 
         let mut config = mk_config(ParamCardKind::Effect, "Mirror", 2);
-        config.params[1].mappable = true;
-        let mappable_id = config.params[1].param_id.to_string();
+        config.rows[1].mapping.mappable = true;
+        let mappable_id = config.rows[1].id.to_string();
 
         // Author-context host (the graph-editor window's inspector).
         let mut author_tree = UITree::new();
@@ -2908,7 +2911,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 400.0, 600.0);
 
         let config = mk_config(ParamCardKind::Effect, "Mirror", 2);
-        let param_id = config.params[0].param_id.to_string();
+        let param_id = config.rows[0].id.to_string();
 
         let mut author_tree = UITree::new();
         let mut author_panel = InspectorCompositePanel::new();
@@ -3013,9 +3016,9 @@ mod tests {
         // section header — the reported card's exact shape (a section run
         // covering the card's tail, header stacked above its own rows).
         let mut config = mk_config(ParamCardKind::Effect, "SceneFX", 4);
-        config.params[2].section = Some("Sun".to_string());
-        config.params[3].section = Some("Sun".to_string());
-        let last_param_id = config.params[3].param_id.to_string();
+        config.rows[2].spec.section = Some("Sun".to_string());
+        config.rows[3].spec.section = Some("Sun".to_string());
+        let last_param_id = config.rows[3].id.to_string();
         panel.configure_layer_effects(&[config], None);
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],

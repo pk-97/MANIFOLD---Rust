@@ -455,7 +455,7 @@ fn run_graph_preset(preset: &str) {
 /// Render the FULL graph-editor window (preview sidebar + canvas + card lane)
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
-/// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
+/// real `ParamSurface`, not synthesized — see `render::render_graph_editor_to_png`.
 fn run_editor_preset(
     preset: &str,
     want_dump: bool,
