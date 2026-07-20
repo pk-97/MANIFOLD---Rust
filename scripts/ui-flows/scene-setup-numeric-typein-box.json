@@ -18,13 +18,13 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.light.intensity_value" } },
+      "selector": { "Query": { "text": "Intensity", "nth": 1 } },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.light.intensity_value" } },
+      "target": { "Point": { "x": 822.0, "y": 744.0 } },
       "gesture": "DoubleClick"
     }
   },

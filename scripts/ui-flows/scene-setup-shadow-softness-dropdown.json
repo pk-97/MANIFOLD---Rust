@@ -18,13 +18,13 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.light.shadow_softness_value" } },
+      "selector": { "Query": { "text": "Shadow Softness", "nth": 1 } },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.light.shadow_softness_value" } },
+      "target": { "Point": { "x": 822.0, "y": 834.0 } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
@@ -50,7 +50,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "name": "scene_setup.light.shadow_softness_value", "text": "Contact" } },
+      "selector": { "Query": { "text": "Contact", "nth": 1 } },
       "check": "Exists"
     }
   }
