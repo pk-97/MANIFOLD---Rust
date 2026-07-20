@@ -91,7 +91,11 @@ fn sg_blur_dynamic(uv: vec2<f32>, axis_dir: vec2<f32>, radius: f32) -> vec4<f32>
     var result = fetch_in(uv);
     var total_weight = 1.0;
 
-    let radius_int = i32(radius);
+    // BUG-290: cap the tap loop. `radius` is port-shadowed, so a wired
+    // control can deliver values far past the 0-256 param range (inf casts
+    // to i32::MAX = a firmware-watchdog-length loop). 2048 admits every
+    // canvas-scaled radius (256 * bw/640 = 1536 at 4K) and bounds garbage.
+    let radius_int = min(i32(radius), 2048);
     var j: i32 = 1;
     loop {
         if j > radius_int { break; }
