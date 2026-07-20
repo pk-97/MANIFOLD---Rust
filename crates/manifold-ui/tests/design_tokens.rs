@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 // `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
 // status dot. From here the radius guard is absolute — any raw literal fails.
 // COLOR is still grandfathered pending the §15 ramp.
+// DEBT: tokenize the graph-editor redesign's 69 raw literals before that
+// redesign closes, then ratchet the baseline back down toward the §15 ramp.
 const COLOR_BASELINE: usize = 214;
 const RADIUS_BASELINE: usize = 0;
 
