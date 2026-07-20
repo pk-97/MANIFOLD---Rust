@@ -43,7 +43,16 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.light.cast_shadows_value",
+          "text": "Cast Shadows"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
           "text": "On"
         }
       },
@@ -52,10 +61,22 @@
   },
   {
     "Pointer": {
-      "target": { "Query": { "name": "scene_setup.light.cast_shadows_value" } },
+      "target": {
+        "Query": {
+          "under_text": "Cast Shadows",
+          "type": "Button",
+          "nth": 1
+        }
+      },
       "gesture": {
-        "Click": {
-          "modifiers": {}
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 664.0,
+              "y": 804.0
+            }
+          },
+          "steps": 8
         }
       }
     }
@@ -65,7 +86,6 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.light.cast_shadows_value",
           "text": "Off"
         }
       },

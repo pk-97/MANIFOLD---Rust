@@ -58,11 +58,15 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
             let whole_numbers = matches!(pd.ty, ParamType::Int | ParamType::Enum);
             let is_toggle = matches!(pd.ty, ParamType::Bool);
             let is_trigger = matches!(pd.ty, ParamType::Trigger);
-            let value_labels = if matches!(pd.ty, ParamType::Enum) {
-                pd.enum_values.iter().map(|s| s.to_string()).collect()
-            } else {
-                Vec::new()
-            };
+            // R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): display labels
+            // aren't Enum-exclusive — a modulatable `Float` threshold param
+            // (e.g. `node.light`'s `cast_shadows`, kept `Float` on purpose so
+            // it stays LFO/trigger-modulatable) can declare `enum_values` as
+            // display-only text for the outer-card slider
+            // (`format_param_value` substitutes by index regardless of the
+            // param's real type). Read straight off whatever the primitive
+            // declared, not gated by `ty`.
+            let value_labels = pd.enum_values.iter().map(|s| s.to_string()).collect();
             let convert = match pd.ty {
                 ParamType::Bool => manifold_core::effects::ParamConvert::BoolThreshold,
                 ParamType::Int => manifold_core::effects::ParamConvert::IntRound,
@@ -166,9 +170,64 @@ mod tests {
         ));
     }
 
+    /// R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `cast_shadows` stays
+    /// `Float`/0..1 (modulatable by an LFO/trigger — `ParamType::Bool` would
+    /// lose that) but declares `enum_values: ["Off", "On"]` as display-only
+    /// labels; `metadata_for_node_type` must carry them into `value_labels`
+    /// even though the param's real type isn't `Enum`. Regression coverage
+    /// for the R2 bug: the scene panel's Cast Shadows row showed the raw
+    /// float ("1.00") instead of "On"/"Off" because `value_labels` was
+    /// previously populated ONLY for `ParamType::Enum`.
+    #[test]
+    fn metadata_for_light_carries_cast_shadows_display_labels_despite_float_type() {
+        let meta = metadata_for_node_type("node.light");
+        let cast_shadows = meta
+            .iter()
+            .find(|m| m.name == "cast_shadows")
+            .expect("cast_shadows present");
+        assert!(
+            matches!(cast_shadows.convert, manifold_core::effects::ParamConvert::Float),
+            "stays a modulatable Float param, not converted to Bool"
+        );
+        assert_eq!(
+            cast_shadows.value_labels,
+            vec!["Off".to_string(), "On".to_string()],
+            "display labels carried through despite the Float type"
+        );
+    }
+
     #[test]
     fn metadata_for_unknown_type_is_empty() {
         assert!(metadata_for_node_type("node.definitely_not_real").is_empty());
+    }
+
+    /// R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md), manifest level: the
+    /// REAL production metadata (`metadata_for_node_type`, not a synthetic
+    /// fixture) stamped through `stamp_scene_node_exposures_into` (the exact
+    /// call `AddSceneLightCommand::execute` makes) must produce a
+    /// `ParamSpecDef` for `cast_shadows` carrying `value_labels`, so the
+    /// scene panel's `format_param_value` (which reads straight off the
+    /// manifest's `ParamSpecDef.value_labels`) substitutes "On"/"Off" text
+    /// instead of the raw float.
+    #[test]
+    fn stamped_light_manifest_carries_cast_shadows_value_labels() {
+        use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
+
+        let node_id = NodeId::new("light_0");
+        let light_metadata = metadata_for_node_type("node.light");
+        let mut params = Vec::new();
+        let mut bindings = Vec::new();
+        stamp_scene_node_exposures_into(&mut params, &mut bindings, 1, &node_id, "Light 1", &light_metadata);
+
+        let cast_shadows_spec = params
+            .iter()
+            .find(|p| p.name == "Cast Shadows")
+            .expect("cast_shadows exposed onto the manifest");
+        assert_eq!(
+            cast_shadows_spec.value_labels,
+            vec!["Off".to_string(), "On".to_string()],
+            "the stamped manifest ParamSpecDef carries the display labels"
+        );
     }
 
     #[test]

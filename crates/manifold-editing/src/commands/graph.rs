@@ -3140,8 +3140,16 @@ pub struct AddSceneEnvironmentCommand {
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
     pos: (f32, f32),
+    /// P1/R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new
+    /// environment node's full param manifest, computed by the app-side
+    /// caller via `manifold_renderer::node_graph::scene_exposure::
+    /// metadata_for_node_type("node.bake_environment")` (this crate has no
+    /// renderer dep) — same convention `AddSceneLightCommand` uses.
+    env_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
+    /// whole-def `preset_metadata`. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
 }
 
 impl AddSceneEnvironmentCommand {
@@ -3150,9 +3158,18 @@ impl AddSceneEnvironmentCommand {
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
         pos: (f32, f32),
+        env_metadata: Vec<SceneParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self { target, scope_path, render_scene_node_id, pos, catalog_default, prev: None }
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            pos,
+            env_metadata,
+            catalog_default,
+            prev: None,
+        }
     }
 }
 
@@ -3162,37 +3179,83 @@ impl Command for AddSceneEnvironmentCommand {
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+            let prev_metadata = def.preset_metadata.clone();
 
-            let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            // Primitive defaults (`node.bake_environment`) match the importer's
-            // OWN softbox default (F-P4) so a freshly-added environment reads
-            // as a sane, lit studio rather than a black void — explicit here
-            // anyway so the gesture's contract doesn't silently drift if the
-            // primitive's defaults ever change.
-            let mut params = BTreeMap::new();
-            params.insert("mode".to_string(), SerializedParamValue::Enum { value: 1 }); // Softbox
-            params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
-            params.insert("fill".to_string(), SerializedParamValue::Float { value: 0.0 });
+            let (env_id, env_node_id, prev) = {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            let mut env_node =
-                scene_build_node(env_id, "node.bake_environment", Some("environment".to_string()), params);
-            env_node.editor_pos = Some(pos);
-            nodes.push(env_node);
-            wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
+                let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                // Primitive defaults (`node.bake_environment`) match the importer's
+                // OWN softbox default (F-P4) so a freshly-added environment reads
+                // as a sane, lit studio rather than a black void — explicit here
+                // anyway so the gesture's contract doesn't silently drift if the
+                // primitive's defaults ever change.
+                let mut params = BTreeMap::new();
+                params.insert("mode".to_string(), SerializedParamValue::Enum { value: 1 }); // Softbox
+                params.insert("intensity".to_string(), SerializedParamValue::Float { value: 1.0 });
+                params.insert("fill".to_string(), SerializedParamValue::Float { value: 0.0 });
 
-            Some(prev)
+                let mut env_node = scene_build_node(
+                    env_id,
+                    "node.bake_environment",
+                    Some("environment".to_string()),
+                    params,
+                );
+                env_node.editor_pos = Some(pos);
+                let env_node_id = env_node.node_id.clone();
+                nodes.push(env_node);
+                wires.push(scene_build_wire(env_id, "envmap", render_id, "envmap"));
+
+                (env_id, env_node_id, prev)
+            };
+
+            // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+            // param of the freshly minted environment node — same P1 stamp
+            // AddSceneLightCommand performs for its own node, into the def's
+            // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
+            // this the panel's `world_sections` lookup (`state_sync.rs`'s
+            // `sections_for_doc_ids`) comes back empty and
+            // `build_filtered_properties` renders nothing for the row.
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: SkipModeDef::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                env_id,
+                &env_node_id,
+                "Environment",
+                &self.env_metadata,
+            );
+
+            Some((prev, prev_metadata))
         });
-        self.prev = result.flatten();
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -3214,8 +3277,16 @@ pub struct AddSceneFogCommand {
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
     pos: (f32, f32),
+    /// P1/R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new fog
+    /// (atmosphere) node's full param manifest, computed by the app-side
+    /// caller via `manifold_renderer::node_graph::scene_exposure::
+    /// metadata_for_node_type("node.atmosphere")` (this crate has no
+    /// renderer dep) — same convention `AddSceneLightCommand` uses.
+    fog_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
-    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>)>,
+    /// The level's `(nodes, wires)` before this edit, plus the pre-edit
+    /// whole-def `preset_metadata`. Set on execute.
+    prev: Option<(Vec<EffectGraphNode>, Vec<EffectGraphWire>, Option<PresetMetadata>)>,
 }
 
 impl AddSceneFogCommand {
@@ -3224,9 +3295,18 @@ impl AddSceneFogCommand {
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
         pos: (f32, f32),
+        fog_metadata: Vec<SceneParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
-        Self { target, scope_path, render_scene_node_id, pos, catalog_default, prev: None }
+        Self {
+            target,
+            scope_path,
+            render_scene_node_id,
+            pos,
+            fog_metadata,
+            catalog_default,
+            prev: None,
+        }
     }
 }
 
@@ -3236,32 +3316,76 @@ impl Command for AddSceneFogCommand {
         let render_id = self.render_scene_node_id;
         let pos = self.pos;
         let result = with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
-            let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
-            let prev = (nodes.clone(), wires.clone());
+            let prev_metadata = def.preset_metadata.clone();
 
-            let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
-            // A freshly-added fog node starts at density 0 (the primitive's own
-            // default — "subtle" is authored by hand in the starter preset, not
-            // stamped here) so adding it is never a visible surprise; the
-            // performer dials density up from the panel immediately after.
-            let params = BTreeMap::new();
+            let (fog_id, fog_node_id, prev) = {
+                let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev = (nodes.clone(), wires.clone());
 
-            let mut fog_node = scene_build_node(fog_id, "node.atmosphere", Some("fog".to_string()), params);
-            fog_node.editor_pos = Some(pos);
-            nodes.push(fog_node);
-            wires.push(scene_build_wire(fog_id, "atmosphere", render_id, "atmosphere"));
+                let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+                // A freshly-added fog node starts at density 0 (the primitive's own
+                // default — "subtle" is authored by hand in the starter preset, not
+                // stamped here) so adding it is never a visible surprise; the
+                // performer dials density up from the panel immediately after.
+                let params = BTreeMap::new();
 
-            Some(prev)
+                let mut fog_node =
+                    scene_build_node(fog_id, "node.atmosphere", Some("fog".to_string()), params);
+                fog_node.editor_pos = Some(pos);
+                let fog_node_id = fog_node.node_id.clone();
+                nodes.push(fog_node);
+                wires.push(scene_build_wire(fog_id, "atmosphere", render_id, "atmosphere"));
+
+                (fog_id, fog_node_id, prev)
+            };
+
+            // R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): expose every
+            // param of the freshly minted fog node — same P1 stamp
+            // AddSceneLightCommand performs for its own node, into the def's
+            // TOP-LEVEL preset_metadata, targeting its bare NodeId. Without
+            // this the panel's `world_sections` lookup (`state_sync.rs`'s
+            // `sections_for_doc_ids`) comes back empty and
+            // `build_filtered_properties` renders nothing for the row —
+            // the R1 bug: freshly-added fog was structurally invisible.
+            let meta = def.preset_metadata.get_or_insert_with(|| PresetMetadata {
+                id: manifold_core::PresetTypeId::from_string("UnnamedScene".to_string()),
+                display_name: "Scene".to_string(),
+                category: "Geometry".to_string(),
+                osc_prefix: "scene".to_string(),
+                legacy_discriminant: None,
+                available: true,
+                is_line_based: false,
+                params: Vec::new(),
+                bindings: Vec::new(),
+                skip_mode: SkipModeDef::default(),
+                param_aliases: Vec::new(),
+                value_aliases: Vec::new(),
+                string_params: Vec::new(),
+                string_bindings: Vec::new(),
+            });
+            stamp_scene_node_exposures_into(
+                &mut meta.params,
+                &mut meta.bindings,
+                fog_id,
+                &fog_node_id,
+                "Atmosphere",
+                &self.fog_metadata,
+            );
+
+            Some((prev, prev_metadata))
         });
-        self.prev = result.flatten();
+        if let Some((pnw, pmeta)) = result.flatten() {
+            self.prev = Some((pnw.0, pnw.1, pmeta));
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let Some((pn, pw)) = self.prev.clone() else {
+        let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };
         let scope = self.scope_path.clone();
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            def.preset_metadata = pmeta;
             if let Some((nodes, wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
                 *nodes = pn;
                 *wires = pw;
@@ -8189,6 +8313,7 @@ mod tests {
             vec![],
             0,
             (10.0, 20.0),
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8221,6 +8346,7 @@ mod tests {
             vec![],
             0,
             (30.0, 40.0),
+            Vec::new(),
             mirror_catalog_default(),
         );
         cmd.execute(&mut project);
@@ -8240,6 +8366,110 @@ mod tests {
         cmd.undo(&mut project);
         let def = graph_of(&project, &fx);
         assert_eq!(def, &before, "undo restores the pre-add graph exactly (inverse-pair)");
+    }
+
+    /// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneEnvironmentCommand`
+    /// stamps the caller-supplied environment metadata into the def's
+    /// TOP-LEVEL `preset_metadata`, targeting the new environment node's bare
+    /// `NodeId`, section "Environment" — same P1 stamp shape
+    /// `AddSceneLightCommand` performs for its own node. Regression coverage
+    /// for the R1 bug: a freshly-added environment was structurally invisible
+    /// in the scene panel because `world_sections` (`state_sync.rs`'s
+    /// `sections_for_doc_ids`) came back empty with nothing stamped. Undo
+    /// restores `preset_metadata` verbatim; execute→undo→redo is stable.
+    #[test]
+    fn add_scene_environment_command_stamps_exposures_and_undo_redo_are_stable() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+
+        let mut cmd = AddSceneEnvironmentCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (10.0, 20.0),
+            vec![scene_param_meta("intensity", "Intensity")],
+            mirror_catalog_default(),
+        );
+
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let env = def.nodes.iter().find(|n| n.type_id == "node.bake_environment").unwrap();
+
+            let meta = def.preset_metadata.as_ref().expect("R1 stamped into top-level preset_metadata");
+            assert_eq!(meta.params.len(), 1);
+            assert_eq!(meta.params[0].section.as_deref(), Some("Environment"));
+            assert!(
+                meta.bindings.iter().any(|b| matches!(
+                    &b.target,
+                    BindingTarget::Node { node_id, param } if *node_id == env.node_id && param == "intensity"
+                )),
+                "environment exposure targets the environment node's bare NodeId"
+            );
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
+
+        cmd.execute(&mut project); // redo
+        assert_stamped(&project);
+    }
+
+    /// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneFogCommand`
+    /// stamps the caller-supplied fog metadata into the def's TOP-LEVEL
+    /// `preset_metadata`, targeting the new fog node's bare `NodeId`, section
+    /// "Atmosphere" — same P1 stamp shape `AddSceneLightCommand` performs for
+    /// its own node. Regression coverage for the R1 bug this lane fixes: a
+    /// freshly-added fog node was structurally invisible in the scene panel
+    /// (not even the fallback row rendered) because `world_sections`
+    /// (`state_sync.rs`'s `sections_for_doc_ids`) came back empty with
+    /// nothing stamped, and `build_filtered_properties` iterates an empty
+    /// section list. Undo restores `preset_metadata` verbatim; execute→undo→
+    /// redo is stable.
+    #[test]
+    fn add_scene_fog_command_stamps_exposures_and_undo_redo_are_stable() {
+        use manifold_core::effect_graph_def::BindingTarget;
+
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+
+        let mut cmd = AddSceneFogCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            0,
+            (30.0, 40.0),
+            vec![scene_param_meta("density", "Density")],
+            mirror_catalog_default(),
+        );
+
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let fog = def.nodes.iter().find(|n| n.type_id == "node.atmosphere").unwrap();
+
+            let meta = def.preset_metadata.as_ref().expect("R1 stamped into top-level preset_metadata");
+            assert_eq!(meta.params.len(), 1);
+            assert_eq!(meta.params[0].section.as_deref(), Some("Atmosphere"));
+            assert!(
+                meta.bindings.iter().any(|b| matches!(
+                    &b.target,
+                    BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "density"
+                )),
+                "fog exposure targets the fog node's bare NodeId"
+            );
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+
+        cmd.undo(&mut project);
+        let def = graph_of(&project, &fx);
+        assert!(def.preset_metadata.is_none(), "undo restores the pre-add (empty) preset_metadata verbatim");
+
+        cmd.execute(&mut project); // redo
+        assert_stamped(&project);
     }
 
     // ── REALTIME_3D_DESIGN P6: Add Object Transform (gizmo auto-create) ──

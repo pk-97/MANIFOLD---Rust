@@ -320,6 +320,7 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.bake_environment"),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
@@ -336,6 +337,7 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
+                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"),
                     default,
                 );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
