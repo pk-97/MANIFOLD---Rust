@@ -1311,6 +1311,7 @@ clean).
 **Status:** OPEN
 
 ## Fixed
+- BUG-265 (inspector-card-drag-indicator-stale-geometry) — FIXED 2026-07-20 on `lane/w2b-bug265-drag-geometry` (`8cb1c437` + `94632d65` card_y removal, merged `f2ac71d9`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 - BUG-266 (inspector-tab-pin-dies-on-incidental-selection-change) — FIXED 2026-07-20 on `lane/w1c-bug266-tab-pin` (`fcd4c084`, merged `43c9d3d1`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md; residue: pin resurrection-on-reselect quirk for Peter's feel-pass
 - BUG-267 (inspector-duplicated-card-lists) — FIXED 2026-07-20 on `lane/w1d-bug267-card-vecs` (`717f8910`, merged `726de5a0`) — full history in docs/archive/BUG_BACKLOG_CLOSED.md
 
@@ -1601,12 +1602,6 @@ when one is fixed).
 **Root cause:** the last unfixed family of the 2026-07-19 undo audit's cluster C. The drag trios live in `app_render.rs`'s pending_actions loop (`EffectMappingRangeSnapshot/Changed/Commit`, `…Affine…` at ~1650-1800) with `mapping_range_snapshot`/`mapping_affine_snapshot` fields, but no `ActiveInspectorDrag` variant covered them, so the commit's `watched_reshape(binding_id)` read saw the stomped (pre-drag) value: old == new → no command.
 **Note on the test:** these two families dispatch through app_render's pending_actions loop, not the inspector host the `undo_baseline` matrix drives, so `trio_cycle` can't reach them. The regression proves the load-bearing fix directly — the `ActiveInspectorDrag::apply` restore that the whole bug reduces to — rather than the set/update/clear wiring (mechanical mirror of the ten cluster-C families). A full app-level harness driving the pending_actions loop end-to-end is still owed if that wiring ever needs coverage.
 
-### BUG-265 (inspector-card-drag-indicator-stale-geometry) — blue drop indicator/target index wrong after any in-place scroll; hit-test uses snapshot `card_y` + live `compute_height()`
-**Status:** OPEN (logged 2026-07-20, K3 investigation — findings doc `docs/INSPECTOR_DRAG_TAB_FINDINGS.md`; PENDING Fable review before implementation).
-**Severity:** HIGH — user-visible on the perform surface; recurs after every card-UI change (three geometry sources kept in sync by hand).
-**Symptom:** drop indicator lands above/below the true position; drops target the wrong slot. Correct right after a rebuild, wrong after scrolling — off by exactly the scroll delta.
-**Root cause:** `update_card_drag` (inspector.rs:1692-1708) hit-tests against `card.card_y()`, a snapshot written only at `build()` (param_card.rs:2213, :2977). Wheel/scrollbar scroll moves tree nodes in place via `offset_content` (inspector.rs:1477) without a rebuild and without updating `card_y`. Compounding: heights come from live `compute_height()` (param_card.rs:1611) which tracks animated state (`collapse_frac`, `animated_drawer_height`) and exists in two parallel variants (:1618, :1690) that must mirror the build draw loop — BUG-108 was this same drift. Latent third: drop-index mapping (inspector.rs:1762-1769) assumes tab cards are a contiguous run of the flat effects list.
-**Fix shape:** root fix = hit-test against actual tree node bounds (the only scroll-current source), deleting the `card_y`/`compute_height` path. Stopgap = update `card_y` in the in-place scroll path. Adjacent improvements in the findings doc: drag auto-scroll, multi-select drop footprint, Esc/drop-outside cancel, geometry unit tests.
 
 ### BUG-264 (param-step-action-ui-flow-stale-asserts) — `scripts/ui-flows/param-step-action.json` step 6/last assert an "A"/"S" button `under_text: "Amount"`; finds 0 on MAIN (pre-existing, fails identically before the param-drawer unification)
 **Status:** OPEN (found 2026-07-19, param-drawer-unification lane). Repro: `cargo xtask ui-snap inspector --script scripts/ui-flows/param-step-action.json` — steps 0–5 pass, step 6 `Count(1)` gets 0 on main AND on the lane.
@@ -1620,3 +1615,10 @@ when one is fixed).
 **Symptom:** a regression in the `pending_actions` mapping-drag wiring (guard set on Snapshot, updated on Changed, cleared on Commit, `commit_mapping_with_reverse` bookkeeping) would not be caught by any test; the 46-test `undo_baseline` matrix drives the inspector host, which the mapping trios bypass.
 **Root cause:** the mapping drags dispatch through the `pending_actions` loop on the monolithic `Application` struct (`app_render.rs` ~1650–1830), reaching for `self.watched_reshape`, `self.mapping_target`, `self.commit_mapping_with_reverse`. No test can stand up enough of `Application` to drive that loop, and no mid-gesture `data_version` bump can be injected.
 **Fix shape:** an app-level harness — construct `Application` (or a factored mapping-drag slice of it) headless with a real `EditingService` + `Project`, feed the Snapshot/Changed/Commit action sequence with an injected mid-gesture snapshot acceptance, assert one undo entry. Cheaper now that the pattern (44+2 tests) exists in `ui_bridge/inspector.rs`. Justified when the next gesture-lifecycle bug lands in this area; until then the `apply` round-trip tests (BUG-262) cover the mechanism.
+
+### BUG-290 (gpu-proofs-test-binary-faults-gpu-firmware) — a `manifold_renderer` test binary triggered an AGX GPU fault/restart; whole-display freezes on Peter's machine correlate with GPU test runs
+**Status:** OPEN (logged 2026-07-20, orchestrator session — investigation not started).
+**Severity:** HIGH — stage risk by class: a compute dispatch that can fault GPU firmware in a test could do the same from the live app mid-show. Also the likely cause of Peter's "whole screen freezes, machine still alive" reports.
+**Symptom:** `/Library/Logs/DiagnosticReports/gpuEvent-manifold_rendere-2026-07-17-184055.ips` (bug_type 284, process `manifold_rendere[r]`) and a second unattributed `gpuEvent-<unknown>-2026-07-18-133620.ips`. Display freezes for seconds while audio/system stay alive.
+**Root cause:** unknown. Suspects: a gpu-proofs kernel with an out-of-bounds access or runaway dispatch; related prior art: `agx-0x78-crash` memory (known AGX setVertexTexture crash class), `ui-present-content-gpu-contention`.
+**Fix shape:** parse both .ips reports for the faulting encoder/pipeline; correlate 07-17 18:40 with which gpu-proofs run was active; reproduce with the suite narrowed module-by-module. Until then: avoid full gpu-proofs runs while performing/recording.
