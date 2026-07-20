@@ -29,11 +29,13 @@ use manifold_foundation::{AudioSendId, LayerId};
 
 use super::{GraphParamTarget, PanelAction};
 use super::drawer::DrawerIds;
-use super::param_card::{ParamCardConfig, ParamInfo, RowGeometry};
+use super::param_card::{RowGeometry, RowMod};
 use super::param_slider_shared::{
-    AbletonConfigIds, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab, ParamModState,
-    RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions, match_param_row_click,
+    AbletonConfigIds, AudioCardState, DriverConfigIds, EnvelopeConfigIds, EnvelopeTargetIds, ModTab,
+    ParamModState, RowClick, TrimHandleIds, build_param_row, enum_value_cell_actions,
+    match_param_row_click,
 };
+use crate::param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
@@ -165,7 +167,7 @@ impl RowAddr {
 /// row's stable owned `ParamId` from its write address's `node_doc_id` +
 /// the graph node's own param name. The ONE definition both sides of the
 /// UI/app boundary use: `ScenePanel::build_world_param_row` (this crate)
-/// calls it when building the row's `ParamInfo`/id map; `state_sync`'s VM
+/// calls it when building the row's `ParamRow`/id map; `state_sync`'s VM
 /// construction (`manifold-app`, no access to this synthesis logic
 /// otherwise) calls it to look up that same row's driver/envelope/audio-mod
 /// state on `PresetInstance` — a driver armed via `DriverToggle` is stored
@@ -421,7 +423,7 @@ pub struct EnumRowValue {
 /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md): the modulation-carrying
 /// twin of [`EnumRowValue`] — same shape, but `row` is a [`ModulatedRow`] so
 /// enum/axis rows can carry driver/envelope/audio-mod facts through
-/// `build_param_row`'s `ParamInfo.value_labels` path (the card row core
+/// `build_param_row`'s `ParamRow.value_labels` path (the card row core
 /// already supports labeled/enum rows — no bespoke stepper needed, D1's
 /// "check for a card enum row first"). Light's Mode/Cast Shadows/Shadow
 /// Softness rows were the first consumer (C-P1c); C-P1d moved Modifier's
@@ -544,7 +546,7 @@ pub struct SceneSetupVm {
     /// C-P1a: every project audio send, card-level (same for every
     /// converted row on this layer) — the `AudioCardState.send_labels`/
     /// `send_ids` pair the shared `build_audio_mod_drawer`'s Source row
-    /// needs. Mirrors `ParamCardConfig.audio.send_labels`/`send_ids`.
+    /// needs. Mirrors `ParamSurface.audio.send_labels`/`send_ids`.
     pub audio_send_labels: Vec<String>,
     pub audio_send_ids: Vec<AudioSendId>,
     /// P2: the Objects section's rows, in `mesh_k` order.
@@ -651,7 +653,7 @@ fn driven_text(value: f32, fmt: &DrivenFmt) -> String {
 }
 
 struct SceneCardState {
-    param_info: Vec<ParamInfo>,
+    rows: Vec<ParamRow>,
     mod_state: ParamModState,
     /// D2: synthesized owned `ParamId` → `(write address, snapshot value)`.
     /// Rebuilt fresh every `build_nodes` pass (D1 of SCENE_PANEL_UX_DESIGN.md:
@@ -662,7 +664,7 @@ struct SceneCardState {
     /// P2 slice 2a: per-row CURRENT value cache for the unified properties
     /// card's real-param rows — the `id_map`'s value-cache role, without the
     /// `RowAddr` (a real exposed param has no synthesized address to carry).
-    /// Seeded from `ParamInfo.default` at `configure_from_filtered`, kept
+    /// Seeded from `ParamRow.value.base` at `configure_from_filtered`, kept
     /// fresh every frame by `ScenePanel::sync_properties_values`. Always
     /// empty for the five legacy per-family cards (`world_card` etc.) — they
     /// stay on the `id_map` path, unused after this slice.
@@ -705,7 +707,7 @@ struct SceneCardState {
 impl SceneCardState {
     fn new() -> Self {
         Self {
-            param_info: Vec::new(),
+            rows: Vec::new(),
             mod_state: ParamModState::allocate(0),
             id_map: ahash::AHashMap::new(),
             current_values: Vec::new(),
@@ -743,7 +745,7 @@ impl SceneCardState {
     /// `mod_active_tab.resize(n, ..)`, adapted for this fixed-index family
     /// where `n` isn't monotonic across frames.
     fn resize(&mut self, n: usize) {
-        self.param_info.resize(n, placeholder_param_info());
+        self.rows.resize(n, placeholder_param_info());
         self.mod_state = ParamModState::allocate(n);
         self.current_values.resize(n, 0.0);
         self.slider_ids.resize(n, None);
@@ -772,7 +774,7 @@ impl SceneCardState {
 
 
     fn pid_at(&self, i: usize) -> manifold_foundation::ParamId {
-        self.param_info[i].param_id.clone()
+        self.rows[i].id.clone()
     }
 
     /// Replay every materialised slider's `Track + RightClick → reset` intent
@@ -807,8 +809,8 @@ impl SceneCardState {
     /// every build, never stale); the cell node id anchors the dropdown
     /// under the row's own value text.
     fn enum_value_cell_action(&self, i: usize, clicked: NodeId) -> Vec<PanelAction> {
-        let info = &self.param_info[i];
-        let labels = info.value_labels.clone().unwrap_or_default();
+        let info = &self.rows[i];
+        let labels = info.spec.value_labels.clone().unwrap_or_default();
         let pid = self.pid_at(i);
         // P2 slice 2a: the unified properties card has no synthesized
         // `id_map` entry (real param ids carry no `RowAddr`) — read the
@@ -820,72 +822,41 @@ impl SceneCardState {
             .get(i)
             .copied()
             .or_else(|| self.id_map.get(&pid).map(|(_, v)| *v))
-            .unwrap_or(info.default);
+            .unwrap_or(info.spec.default);
         let cell = self
             .slider_ids
             .get(i)
             .and_then(|s| s.as_ref())
             .map(|s| s.value_text)
             .unwrap_or(clicked);
-        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.min, cell)
+        enum_value_cell_actions(GraphParamTarget::Generator, pid, &labels, value, info.spec.min, cell)
     }
 
     /// P2 slice 2a: populate this card from a FILTERED slice of the layer's
-    /// real generator [`ParamCardConfig`] — `retained` is a retained-index
-    /// list into `config.params` (and every parallel per-param vec), applied
-    /// UNIFORMLY so index-alignment survives the filter. Unlike the legacy
-    /// per-family builders, no `id_map`/synthesized id: `param_info[i].
-    /// param_id` IS the real exposed param id already, so writes dispatch
-    /// through the byte-for-byte exposed-param path every other card uses.
-    fn configure_from_filtered(&mut self, config: &ParamCardConfig, retained: &[usize]) {
+    /// real generator [`ParamSurface`] — `retained` is a retained-index
+    /// list into `config.rows`, applied UNIFORMLY so index-alignment
+    /// survives the filter. Unlike the legacy per-family builders, no
+    /// `id_map`/synthesized id: `rows[i].id` IS the real exposed param id
+    /// already, so writes dispatch through the byte-for-byte exposed-param
+    /// path every other card uses.
+    fn configure_from_filtered(&mut self, config: &ParamSurface, retained: &[usize]) {
         let n = retained.len();
         self.resize(n);
-        self.param_info = retained.iter().map(|&i| config.params[i].clone()).collect();
-        self.current_values = retained.iter().map(|&i| config.params[i].default).collect();
+        self.rows = retained.iter().map(|&i| config.rows[i].clone()).collect();
+        self.current_values = retained.iter().map(|&i| config.rows[i].value.base).collect();
         self.id_map.clear();
 
-        let pick_f32 = |src: &[f32]| retained.iter().map(|&i| src.get(i).copied().unwrap_or(0.0)).collect::<Vec<_>>();
-        let pick_bool = |src: &[bool]| retained.iter().map(|&i| src.get(i).copied().unwrap_or(false)).collect::<Vec<_>>();
-        let pick_i32 = |src: &[i32]| retained.iter().map(|&i| src.get(i).copied().unwrap_or(-1)).collect::<Vec<_>>();
-        let pick_opt_f32 =
-            |src: &[Option<f32>]| retained.iter().map(|&i| src.get(i).copied().flatten()).collect::<Vec<_>>();
+        let mods: Vec<RowMod> = retained.iter().map(|&i| config.rows[i].modulation.clone()).collect();
+        self.mod_state.sync_from_config(n, &mods);
 
-        self.mod_state.sync_from_config(
-            n,
-            &pick_bool(&config.driver_active),
-            &pick_bool(&config.envelope_active),
-            &pick_f32(&config.trim_min),
-            &pick_f32(&config.trim_max),
-            &pick_f32(&config.target_norm),
-            &pick_f32(&config.env_decay),
-            &pick_i32(&config.driver_beat_div_idx),
-            &pick_i32(&config.driver_waveform_idx),
-            &pick_bool(&config.driver_reversed),
-            &pick_bool(&config.driver_dotted),
-            &pick_bool(&config.driver_triplet),
-            &pick_opt_f32(&config.driver_free_period),
-            &pick_bool(&config.automation_active),
-            &pick_bool(&config.automation_overridden),
-        );
-        // `AudioCardState` bundles per-param state + the card-level send
-        // list — filter its per-param vecs the same way, keep the send
-        // list whole (it's not per-param).
-        let filtered_audio = super::param_slider_shared::AudioCardState {
-            active: pick_bool(&config.audio.active),
-            send_id: retained.iter().map(|&i| config.audio.send_id.get(i).cloned().flatten()).collect(),
-            kind_idx: pick_i32(&config.audio.kind_idx),
-            band_idx: pick_i32(&config.audio.band_idx),
-            range_min: pick_f32(&config.audio.range_min),
-            range_max: pick_f32(&config.audio.range_max),
-            invert: pick_bool(&config.audio.invert),
-            rate: pick_bool(&config.audio.rate),
-            sensitivity: pick_f32(&config.audio.sensitivity),
-            attack_ms: pick_f32(&config.audio.attack_ms),
-            release_ms: pick_f32(&config.audio.release_ms),
-            trigger_mode_idx: pick_i32(&config.audio.trigger_mode_idx),
-            action_idx: pick_i32(&config.audio.action_idx),
-            step_amount: pick_f32(&config.audio.step_amount),
-            wrap_idx: pick_i32(&config.audio.wrap_idx),
+        // `AudioCardState` bundles per-row state + the card-level send
+        // list — filter its per-row vec the same way, keep the send list
+        // whole (it's not per-row).
+        let filtered_audio = AudioCardState {
+            rows: retained
+                .iter()
+                .map(|&i| config.audio.rows.get(i).cloned().unwrap_or_default())
+                .collect(),
             send_labels: config.audio.send_labels.clone(),
             send_ids: config.audio.send_ids.clone(),
         };
@@ -944,31 +915,69 @@ impl SceneCardState {
         );
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
+
+    /// A click on a Listen-row chip — resolves the chip's `AudioFeature` to
+    /// (kind, band) indices and reuses the same set-source action a matrix
+    /// click would issue, one command carrying both axes. Mirrors
+    /// `ParamCardPanel::audio_select_chip_action`.
+    fn audio_select_chip_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        chip: usize,
+    ) -> Vec<PanelAction> {
+        use super::param_slider_shared::{
+            audio_band_from_index, audio_kind_from_index, trigger_source_chips,
+        };
+        let ms = &self.mod_state;
+        let current = crate::types::AudioFeature::new(
+            audio_kind_from_index(ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize),
+            audio_band_from_index(ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize),
+        );
+        let chips = trigger_source_chips(current);
+        let Some(chip) = chips.get(chip) else {
+            return vec![];
+        };
+        let kind_idx = crate::types::AudioFeatureKind::ALL
+            .iter()
+            .position(|&k| k == chip.feature.kind)
+            .unwrap_or(0);
+        let band_idx = crate::types::AudioBand::ALL
+            .iter()
+            .position(|&b| b == chip.feature.band)
+            .unwrap_or(0);
+        self.audio_set_source_action(target, pi, None, Some(kind_idx), Some(band_idx))
+    }
 }
 
-/// Placeholder `ParamInfo` used only to size `SceneCardState::resize`'s
+/// Placeholder `ParamRow` used only to size `SceneCardState::resize`'s
 /// grow step before the real per-row info is written by the build pass —
 /// never observed by a click/drag (every live index is overwritten before
 /// `build_nodes` returns).
-fn placeholder_param_info() -> ParamInfo {
-    ParamInfo {
-        param_id: manifold_foundation::ParamId::from(""),
-        name: String::new(),
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        whole_numbers: false,
-        is_angle: false,
-        exposed: false,
-        is_toggle: false,
-        is_trigger: false,
-        is_trigger_gate: false,
-        value_labels: None,
-        osc_address: None,
-        ableton_display: None,
-        ableton_range: None,
-        mappable: false,
-        section: None,
+fn placeholder_param_info() -> ParamRow {
+    ParamRow {
+        id: manifold_foundation::ParamId::from(""),
+        spec: RowSpec {
+            name: String::new(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.0,
+            whole_numbers: false,
+            is_angle: false,
+            is_toggle: false,
+            is_trigger: false,
+            is_trigger_gate: false,
+            value_labels: None,
+            section: None,
+        },
+        value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
+        modulation: RowMod::default(),
+        mapping: RowMapping {
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        },
     }
 }
 
@@ -1027,7 +1036,7 @@ pub struct ScenePanel {
     /// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the ONE
     /// unified properties card — the selected outliner item's rows, filtered
     /// straight off `full_params` (the layer's REAL generator
-    /// `ParamCardConfig`) by section, rendered through the same
+    /// `ParamSurface`) by section, rendered through the same
     /// `build_param_row`/`match_param_row_click` core every effect/generator
     /// card row uses. Replaces `world_card`/`object_card`/`light_card`/
     /// `camera_card`/`modifier_card`'s ROW rendering above — those five
@@ -1036,13 +1045,13 @@ pub struct ScenePanel {
     /// rows and are never rendered. See `docs/BUG_BACKLOG.md` slice 2b.
     properties_card: SceneCardState,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
-    /// `ParamCardConfig` (every exposed param, every section) — built by
+    /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
-    /// (`gen_params_to_config`), for THIS panel's layer specifically (never
+    /// (`gen_params_to_surface`), for THIS panel's layer specifically (never
     /// `active_layer` — see `configure_params`'s doc comment). The
     /// properties body filters this down to the selected item's sections at
     /// build time.
-    full_params: Option<ParamCardConfig>,
+    full_params: Option<ParamSurface>,
     /// P2 slice 2a: the retained-index list the LAST `build_filtered_properties`
     /// pass filtered `full_params.params` down to — `properties_card`'s
     /// local index `i` corresponds to `full_params.params[properties_retained[i]]`.
@@ -1220,15 +1229,15 @@ impl ScenePanel {
     }
 
     /// P2 slice 2a: hand the panel the layer's FULL generator
-    /// `ParamCardConfig` (state_sync builds it via the SAME
-    /// `gen_params_to_config` the main inspector's generator card uses, for
+    /// `ParamSurface` (state_sync builds it via the SAME
+    /// `gen_params_to_surface` the main inspector's generator card uses, for
     /// THIS panel's bound layer — `live_layer_id()`, never `active_layer`,
     /// the same invariant `resolve_scene_write` established for the old
     /// converted rows: the panel edits the scene of its OWN docked layer,
     /// which can legitimately differ from the app's active layer). The
     /// properties body filters this down to the selected item's sections at
     /// build time — see `build_filtered_properties`.
-    pub fn configure_params(&mut self, config: Option<ParamCardConfig>) {
+    pub fn configure_params(&mut self, config: Option<ParamSurface>) {
         self.full_params = config;
     }
 
@@ -1263,16 +1272,16 @@ impl ScenePanel {
         ] {
             for (slot, ids) in card.slider_ids.iter().enumerate() {
                 let Some(ids) = ids else { continue };
-                let info = &card.param_info[slot];
-                let Some((addr, _)) = card.id_map.get(&info.param_id) else { continue };
+                let info = &card.rows[slot];
+                let Some((addr, _)) = card.id_map.get(&info.id) else { continue };
                 let Some(v) = resolve(addr) else { continue };
-                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.min, info.max);
+                let norm = crate::slider::BitmapSlider::value_to_normalized(v, info.spec.min, info.spec.max);
                 let text = super::param_slider_shared::format_param_value(
                     v,
-                    info.min,
-                    info.whole_numbers,
-                    info.is_angle,
-                    info.value_labels.as_deref(),
+                    info.spec.min,
+                    info.spec.whole_numbers,
+                    info.spec.is_angle,
+                    info.spec.value_labels.as_deref(),
                 );
                 crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
             }
@@ -1286,7 +1295,7 @@ impl ScenePanel {
     /// P2 slice 2a: the unified properties card's per-frame VALUE sync — the
     /// real-param twin of `sync_row_values` above, without the `RowAddr`
     /// indirection (a real exposed param's current value is already
-    /// index-aligned with `full_params.params`/`properties_card.param_info`
+    /// index-aligned with `full_params.rows`/`properties_card.rows`
     /// by construction). `slots` is `ui_translate::param_slots_to_ui(&gp.
     /// params)` for the SAME layer `full_params` was built from — the exact
     /// per-param index space `properties_card`'s filter selected from.
@@ -1299,14 +1308,15 @@ impl ScenePanel {
             let Some(slot) = slots.get(*retained_i) else { continue };
             card.current_values[local_i] = slot.value;
             let Some(ids) = card.slider_ids.get(local_i).and_then(|s| s.as_ref()) else { continue };
-            let info = &card.param_info[local_i];
-            let norm = crate::slider::BitmapSlider::value_to_normalized(slot.value, info.min, info.max);
+            let info = &card.rows[local_i];
+            let norm =
+                crate::slider::BitmapSlider::value_to_normalized(slot.value, info.spec.min, info.spec.max);
             let text = super::param_slider_shared::format_param_value(
                 slot.value,
-                info.min,
-                info.whole_numbers,
-                info.is_angle,
-                info.value_labels.as_deref(),
+                info.spec.min,
+                info.spec.whole_numbers,
+                info.spec.is_angle,
+                info.spec.value_labels.as_deref(),
             );
             crate::slider::BitmapSlider::update_value(tree, ids, norm, &text);
         }
@@ -1801,7 +1811,7 @@ impl ScenePanel {
     /// curated builders, relocated intact (never a generic param-tree
     /// renderer, v1 D3's named wrong turn).
     /// P2 slice 2a: the panel's ONE param-row renderer. Filters
-    /// `self.full_params` (the layer's real generator `ParamCardConfig`)
+    /// `self.full_params` (the layer's real generator `ParamSurface`)
     /// down to `sections` — an ORDERED list; rendered in that order, one
     /// header per distinct section, rows within a section in the manifest's
     /// own order (never re-sorted) — configures `self.properties_card` from
@@ -1828,8 +1838,8 @@ impl ScenePanel {
         };
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
-            for (i, p) in config.params.iter().enumerate() {
-                if p.section.as_deref() == Some(section.as_str()) && !retained.contains(&i) {
+            for (i, p) in config.rows.iter().enumerate() {
+                if p.spec.section.as_deref() == Some(section.as_str()) && !retained.contains(&i) {
                     retained.push(i);
                 }
             }
@@ -1845,12 +1855,12 @@ impl ScenePanel {
 
         let mut i = 0usize;
         while i < retained.len() {
-            let cur_section = config.params[retained[i]].section.clone();
+            let cur_section = config.rows[retained[i]].spec.section.clone();
             if let Some(name) = &cur_section {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, name.as_str(), label_style());
                 cy += ROW_H;
             }
-            while i < retained.len() && config.params[retained[i]].section == cur_section {
+            while i < retained.len() && config.rows[retained[i]].spec.section == cur_section {
                 cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w);
                 i += 1;
             }
@@ -1860,8 +1870,8 @@ impl ScenePanel {
 
     /// One properties-card row, built through the SAME shared core every
     /// effect/generator card row uses — no synthesis, no `RowAddr`: `slot`
-    /// indexes `self.properties_card.param_info` directly, whose
-    /// `param_id` IS the real exposed param — the dispatch identity every
+    /// indexes `self.properties_card.rows` directly, whose
+    /// `id` IS the real exposed param — the dispatch identity every
     /// downstream `PanelAction` carries unchanged.
     fn build_properties_row(
         &mut self,
@@ -1872,7 +1882,7 @@ impl ScenePanel {
         label_width: f32,
         slider_w: f32,
     ) -> f32 {
-        let info = self.properties_card.param_info[slot].clone();
+        let info = self.properties_card.rows[slot].clone();
         let built = build_param_row(
             tree,
             Some(self.content_parent),
@@ -1908,7 +1918,7 @@ impl ScenePanel {
         card.driven_value_ids[slot] = None;
         if let Some(ids) = built.slider {
             card.drag_sliders[slot].set_ids(ids);
-            card.drag_sliders[slot].set_range(info.min, info.max, false);
+            card.drag_sliders[slot].set_range(info.spec.min, info.spec.max, false);
         }
         built.new_cy
     }
@@ -2502,7 +2512,7 @@ impl ScenePanel {
                         &self.properties_card.audio_configs,
                         &self.properties_card.slider_ids,
                         &self.properties_card.osc_addresses,
-                        &self.properties_card.param_info,
+                        &self.properties_card.rows,
                         &self.properties_card.mod_state,
                     ) {
                         // P2 slice 2a: the ONE unified properties card's D/E/A
@@ -2536,6 +2546,15 @@ impl ScenePanel {
                             RowClick::AudioSelectSend(pi, k) => {
                                 self.properties_card.audio_set_source_action(target, pi, Some(k), None, None)
                             }
+                            RowClick::AudioSelectChip(pi, c) => {
+                                self.world_card.audio_select_chip_action(target, pi, c)
+                            }
+                            RowClick::AudioToggleMatrix(pi) => {
+                                if let Some(open) = self.world_card.mod_state.audio_matrix_open.get_mut(pi) {
+                                    *open = !*open;
+                                }
+                                Vec::new()
+                            }
                             RowClick::AudioSelectKind(pi, k) => {
                                 self.properties_card.audio_set_source_action(target, pi, None, Some(k), None)
                             }
@@ -2554,7 +2573,7 @@ impl ScenePanel {
                             RowClick::AudioSelectWrap(pi, w) => {
                                 vec![PanelAction::AudioModSetWrap(target, self.properties_card.pid_at(pi), w)]
                             }
-                            RowClick::LabelCopy(_) => Vec::new(),
+                            RowClick::LabelCopy => Vec::new(),
                             RowClick::EnumValueCell(pi) => {
                                 self.properties_card.enum_value_cell_action(pi, *node_id)
                             }
@@ -3073,7 +3092,7 @@ mod tests {
         assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // P2 slice 2a: the Properties body's actual PARAM ROWS now come from
-        // `self.full_params` (the real generator `ParamCardConfig`, wired by
+        // `self.full_params` (the real generator `ParamSurface`, wired by
         // `configure_params` — see that method's doc comment), not from this
         // hand-built `SceneSetupVm` fixture's own transform/material/
         // modifier fields. This test's fixture never calls
@@ -3081,6 +3100,61 @@ mod tests {
         // `build_filtered_properties_...` tests below for that mechanism.
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
+    }
+
+    /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
+    /// zero click->dispatch coverage — every "eye" hit in this file before
+    /// this test was a comment. A click on a Known object row's eye emits
+    /// `SceneSetupParamChanged` carrying the row's own write address and the
+    /// flipped [0,1] value; a second click on the now-off eye flips back.
+    #[test]
+    fn object_eye_toggle_click_emits_scene_setup_param_changed_and_flips_back() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.outliner_eye_ids.len(), 1, "one Known object row renders a live eye");
+        let (eye_id, row_value) = panel.outliner_eye_ids[0].clone();
+        assert_eq!(row_value.value, 1.0, "azalea fixture starts visible");
+
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: eye_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed, "the eye toggle must be clickable");
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::SceneSetupParamChanged(layer, scope, node, param, value)]
+                if *layer == LayerId::new("layer-1")
+                    && *scope == vec![42]
+                    && *node == 40
+                    && param == "visible"
+                    && *value == 0.0
+        ), "visible eye click must flip to 0.0 at the object's own write address, got {actions:?}");
+
+        // Re-configure with the flipped value (mirrors the real per-frame
+        // sync landing the write) and click again — must flip back to 1.0.
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.visible.value = 0.0;
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let (eye_id_2, _) = panel.outliner_eye_ids[0].clone();
+
+        let (consumed_2, actions_2) = panel.handle_event(&UIEvent::Click {
+            node_id: eye_id_2,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        });
+        assert!(consumed_2);
+        assert!(matches!(
+            actions_2.as_slice(),
+            [PanelAction::SceneSetupParamChanged(_, _, _, param, value)]
+                if param == "visible" && *value == 1.0
+        ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary

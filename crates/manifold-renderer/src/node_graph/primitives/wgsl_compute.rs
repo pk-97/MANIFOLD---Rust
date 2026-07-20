@@ -158,8 +158,7 @@ pub struct WgslCompute {
     dispatch_port: Option<String>,
 
     /// Address mode for the lazily-created gather sampler. Default
-    /// `ClampToEdge` (matches `GpuSamplerDesc::default()` — the historical
-    /// behaviour for every hand-authored kernel). A FUSED region whose gather
+    /// `ClampToEdge`. A FUSED region whose gather
     /// member wraps (a toroidal fluid gradient) carries a
     /// `// @sampler_address_mode: repeat` marker on its `samp` binding, parsed
     /// in [`introspect`] into this field so the sampler is created at the same
@@ -731,8 +730,7 @@ const FRAGMENT_OUT: &str = "out";
 /// stray `@compute fn` (a debug leftover, a copy-paste) BEFORE the generated
 /// `cs_main`, and naga's `entry_points[0]` would then be that leftover — it would
 /// be introspected AND dispatched instead of the real kernel, silently rendering
-/// stale/blank output (BUG-010). The three call sites picked `entry_points[0]`
-/// independently, so they even agreed on the WRONG one.
+/// stale/blank output (BUG-010).
 ///
 /// Rule: a single `@compute` entry wins regardless of name (back-compat with
 /// hand-authored kernels not named `cs_main`); with more than one, only the entry

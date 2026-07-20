@@ -94,7 +94,7 @@ crate::primitive! {
             range: Some((0.0, 4.0)),
             enum_values: &[],
         },
-        // Quality knobs (2026-07-17): the original D9(a) budget (2 slices x
+        // Quality knobs: the original D9(a) budget (2 slices x
         // 4 steps = 16 taps) stays the DEFAULT — existing graphs render
         // bit-identically. Raising them buys real variance reduction (the
         // 16-tap hash noise is the whole grain complaint), still fusable,
@@ -115,7 +115,7 @@ crate::primitive! {
             range: Some((1.0, 16.0)),
             enum_values: &[],
         },
-        // Heightfield mode (2026-07-17, depth-relight probe): `Scene Depth`
+        // Heightfield mode: `Scene Depth`
         // (default) is the committed D9(a) perspective path, bit-identical.
         // `Height Field` treats `depth` as a raw height map in an
         // orthographic frame — position = (uv.x*aspect, uv.y, raw*relief),
@@ -789,9 +789,7 @@ mod gpu_tests {
     /// by more than 0.1, and the observed maximum is 0.194 — comfortably
     /// under the algebraic ceiling of 1.0 (visibility is clamped to [0,1]).
     /// The bound below is set with headroom above these measurements, not
-    /// tightened to them. A same-fixture, same-precision GPU-vs-GPU check
-    /// (`generated_gtao_matches_hand_kernel` below) already proves the
-    /// codegen path itself is bit-exact; this test's job is the
+    /// tightened to them. This test's job is the
     /// algorithm-level cross-check, and the hash-driven jump class above is
     /// accepted as inherent to D9(a)'s committed integer-stepping — NOT
     /// something this phase may fix by substituting a different algorithm
@@ -853,111 +851,7 @@ mod gpu_tests {
         );
     }
 
-    /// **I4** (`docs/ADDING_PRIMITIVES.md` "The codegen path is mandatory"):
-    /// generated kernel vs the hand-authored `ssao_gtao.wgsl` oracle — same
-    /// fixture, independent WGSL source, proves the codegen path itself
-    /// (not just the algorithm) is correct.
-    #[test]
-    fn generated_gtao_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (24u32, 16u32);
-        let raw = depth_ramp_2d(w, h);
-        let depth_tex = upload_depth(&device, w, h, &raw);
 
-        let uniforms = GtaoUniforms {
-            radius: 0.5,
-            intensity: 1.0,
-            // Non-default quality on purpose: the hand-vs-generated check
-            // must prove the DYNAMIC loop bounds agree, not just the default.
-            slices: 4.0,
-            steps: 8.0,
-            projection: 0,
-            relief: 0.2,
-            fov_y: std::f32::consts::FRAC_PI_2,
-            near: 0.1,
-            far: 100.0,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let hand_wgsl = include_str!("shaders/ssao_gtao.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "gtao-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &depth_tex, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
-            .expect("node.ssao_gtao standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "gtao-generated-vs-hand",
-        );
-        let gen_out = dispatch(&device, &gen_pipeline, &depth_tex, w, h, bytes);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..3 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
-
-    /// Heightfield-mode hand-vs-generated parity — same fixture as the
-    /// perspective leg, projection=1: proves the new branch through the
-    /// codegen path, not just the default one.
-    #[test]
-    fn generated_gtao_heightfield_matches_hand_kernel() {
-        let device = crate::test_device();
-        let (w, h) = (24u32, 16u32);
-        let raw = depth_ramp_2d(w, h);
-        let depth_tex = upload_depth(&device, w, h, &raw);
-
-        let uniforms = GtaoUniforms {
-            radius: 0.02,
-            intensity: 1.0,
-            slices: 4.0,
-            steps: 8.0,
-            projection: 1,
-            relief: 0.25,
-            fov_y: std::f32::consts::FRAC_PI_2,
-            near: 0.1,
-            far: 100.0,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        let bytes = bytemuck::bytes_of(&uniforms);
-
-        let hand_wgsl = include_str!("shaders/ssao_gtao.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "gtao-hf-hand");
-        let hand_out = dispatch(&device, &hand_pipeline, &depth_tex, w, h, bytes);
-
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
-            .expect("node.ssao_gtao standalone codegen");
-        let gen_pipeline = device.create_compute_pipeline(
-            &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
-            "gtao-hf-generated",
-        );
-        let gen_out = dispatch(&device, &gen_pipeline, &depth_tex, w, h, bytes);
-
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..3 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "heightfield texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
-    }
 
     /// **Analytic sanity, GPU path** (I8: `gtao_flat_plane_full_visibility`,
     /// GPU leg): the same flat-plane claim as

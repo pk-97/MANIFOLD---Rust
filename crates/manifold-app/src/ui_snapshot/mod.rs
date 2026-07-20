@@ -321,16 +321,7 @@ fn render_ui_scene(
     // P0.1: the viewport is the sole scroll owner (D2) — the header panel
     // reads `viewport.scroll_y_px()` live at draw time, so seeding it here is
     // the only seed needed (mirrors `ui_root.rs`'s settings-restore path).
-    // Before P0.1 this seeded two independent copies to reproduce RC1 ("user
-    // scrolled, then the content shrank"); post-fix, `rebuild_mapper_layout`
-    // (called from `sync_project_data` inside the `--interact` branch below)
-    // re-clamps this same value against the new content height every time
-    // (D3), so RC1 no longer reproduces — see
-    // `docs/evidence/timeline_p0/after/README.md`.
-    // Seeded BEFORE the base render (fixed 2026-07-07): it used to apply
-    // after, so a bare `--scroll` run wrote an unscrolled base PNG while
-    // printing the seed message — the seed only ever showed in an
-    // `--interact` after-render. The re-sync after seeding is load-bearing:
+    // Seeded BEFORE the base render. The re-sync after seeding is load-bearing:
     // the header column bakes its Y offsets at BUILD time (only the lane
     // pass reads `scroll_y_px()` at draw), so rendering without a re-sync
     // draws scrolled lanes under unscrolled headers — a desync the live app
@@ -464,7 +455,7 @@ fn run_graph_preset(preset: &str) {
 /// Render the FULL graph-editor window (preview sidebar + canvas + card lane)
 /// for one generator preset. Builds a one-layer fixture `Project` carrying the
 /// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
-/// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
+/// real `ParamSurface`, not synthesized — see `render::render_graph_editor_to_png`.
 fn run_editor_preset(
     preset: &str,
     want_dump: bool,

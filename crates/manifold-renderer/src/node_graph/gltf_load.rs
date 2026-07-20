@@ -1268,10 +1268,7 @@ pub(crate) const DEFAULT_MATERIAL_SENTINEL: u32 = u32::MAX;
 /// that may be [`DEFAULT_MATERIAL_SENTINEL`] — the single comparison every
 /// skin/morph resolution path in this file must use so a materialless
 /// primitive (glTF `None`) and the synthetic default-material entry mean
-/// the same thing on both sides. BUG-207: before this helper existed, every
-/// call site compared with a bare `Some(material_index as usize)`, which
-/// can never equal `None` — the sentinel entry's geometry could never be
-/// found, so its skin/morph/joints never resolved.
+/// the same thing on both sides.
 fn primitive_material_matches(primitive_material_index: Option<usize>, material_index: u32) -> bool {
     if material_index == DEFAULT_MATERIAL_SENTINEL {
         primitive_material_index.is_none()
@@ -2530,9 +2527,7 @@ fn bind_pose_skin_matrices(
 /// Resolve `key`'s skin — `Some(material_index)` for a real material,
 /// `None` for the synthetic default-material bucket (BUG-207) — the SAME
 /// way for both: exactly one contributing node, and that node carries a
-/// `skin()`. Sharing this function between the per-material loop and the
-/// default-material entry is the fix: before, the default entry was
-/// hardcoded `skin: None` and could never resolve one.
+/// `skin()`.
 fn resolve_skin_for_key(
     nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
     document: &gltf::Document,
@@ -3574,10 +3569,6 @@ mod tests {
 
     /// IMPORT_ANYTHING_WAVE_DESIGN.md W1 (BUG-186): a cube whose only
     /// texture is `EXT_texture_webp` (no fallback source, `extensionsRequired`).
-    /// Before this lane it was rejected at import (extension veto) or, once
-    /// the veto is lifted, hard-failed via `gltf::import_images`'
-    /// `UnsupportedImageEncoding` (its bundled decoder has no webp support)
-    /// — both proven dead ends in-session, hence the manual decode path.
     /// Asserts the decode succeeds and the pixels are a real gradient, not
     /// a flat fallback color.
     #[test]

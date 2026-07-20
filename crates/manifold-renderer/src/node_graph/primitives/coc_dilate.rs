@@ -301,23 +301,19 @@ mod gpu_tests {
         readback_rgba(device, &out.texture, w, h)
     }
 
-    /// **I1**: hand oracle (`coc_dilate.wgsl`) vs the generated standalone
-    /// kernel (`standalone_for_spec::<CocDilate>()`) — both dispatched on the
-    /// same synthetic step+spike fixture — AND both cross-checked against a
-    /// plain-Rust CPU reference implementing the same 3x3-max spec
-    /// independently (the CPU-reference parity pattern this design doc's
-    /// cluster uses everywhere, `docs/CINEMATIC_POST_DESIGN.md` I1).
+    /// **I1**: the generated standalone kernel
+    /// (`standalone_for_spec::<CocDilate>()`), dispatched on a synthetic
+    /// step+spike fixture, cross-checked against a plain-Rust CPU reference
+    /// implementing the same 3x3-max spec independently (the CPU-reference
+    /// parity pattern this design doc's cluster uses everywhere,
+    /// `docs/CINEMATIC_POST_DESIGN.md` I1).
     #[test]
-    fn generated_dilate_matches_hand_kernel_and_cpu_reference() {
+    fn generated_dilate_matches_cpu_reference() {
         let device = crate::test_device();
         let (w, h) = (16u32, 8u32);
         let plane = coc_step_with_spike(w, h);
         let input = plane_to_rgba16f_tex(&device, w, h, &plane, "coc-dilate-in");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
-
-        let hand_wgsl = include_str!("shaders/coc_dilate.wgsl");
-        let hand_pipeline = device.create_compute_pipeline(hand_wgsl, "cs_main", "coc-dilate-hand");
-        let hand_out = dispatch_dilate(&device, &hand_pipeline, &sampler, &input, w, h);
 
         let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocDilate>()
             .expect("node.coc_dilate standalone codegen");
@@ -327,18 +323,6 @@ mod gpu_tests {
             "coc-dilate-generated",
         );
         let gen_out = dispatch_dilate(&device, &gen_pipeline, &sampler, &input, w, h);
-
-        assert_eq!(hand_out.len(), gen_out.len());
-        for (i, (h_px, g_px)) in hand_out.iter().zip(gen_out.iter()).enumerate() {
-            for c in 0..3 {
-                assert!(
-                    (h_px[c] - g_px[c]).abs() < 1e-4,
-                    "texel {i} channel {c}: hand={} gen={}",
-                    h_px[c],
-                    g_px[c]
-                );
-            }
-        }
 
         let cpu = cpu_dilate(&plane, w, h);
         for (i, g_px) in gen_out.iter().enumerate() {

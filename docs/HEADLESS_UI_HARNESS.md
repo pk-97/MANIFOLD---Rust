@@ -5,6 +5,15 @@ subcommand of `manifold-app` (feature `ui-snapshot`), run via the `cargo xtask` 
 Extended 2026-06-30 with the `inspector` and `graph` scenes, and 2026-07-01 with the `editor`
 scene (see **Scenes** below).
 
+**Testing doctrine (2026-07-20):** Pixels are for looking, not asserting. Nearly every UI bug of
+2026-07 was a state/wiring bug with a visual symptom — PNG assertions are slow, GPU-bound, and
+green while click paths are dead. The gate tests state on the REAL dispatch path (real
+EditingService, real state sync): hit-test geometry as pure math, click→command dispatch,
+display-value resolution (BUG-260 conviction test and the undo baseline `1bdb69a9` are the only
+permitted patterns — replicate, never invent harness). Headless PNG render stays as an on-demand
+look oracle for humans/Fable, out of the automated gate. See
+`docs/SYSTEM_UPGRADE_2026_07_PLAN.md` §Testing doctrine.
+
 **Usage:**
 ```
 cargo xtask ui-snap timeline --dump                      # whole timeline + tree dump

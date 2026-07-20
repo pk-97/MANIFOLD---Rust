@@ -487,7 +487,7 @@ pub fn relight_field_to_editing(v: UiRelightField) -> manifold_core::effects::Re
 }
 
 /// Project a `PresetInstance`'s relight state into the card's config —
-/// shared by `preset_to_config` and `empty_generator_config` so both the
+/// shared by `param_surface` and `empty_generator_surface` so both the
 /// populated and zero-param generator arms carry the same live toggle/knobs
 /// (`docs/DEPTH_RELIGHT_DESIGN.md` P5b: "3D Shading" is independent of the
 /// graph's own param list).

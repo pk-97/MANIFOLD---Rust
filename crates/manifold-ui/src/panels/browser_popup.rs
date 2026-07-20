@@ -254,7 +254,7 @@ impl BrowserPopupPanel {
         }
     }
 
-    /// Popups open instantly at full size/opacity (Peter, 2026-07-14 — no
+    /// Popups open instantly at full size/opacity (no
     /// enter/exit motion). Kept as a no-op so callers can still poll/call it
     /// unconditionally every frame without special-casing.
     pub fn update(&mut self, _tree: &mut UITree) {}
@@ -421,8 +421,8 @@ impl BrowserPopupPanel {
         session.layout.cell_ids.clear();
         session.layout.chip_ids.clear();
 
-        // Popups appear instantly at full size/opacity (Peter, 2026-07-14 —
-        // no enter/exit motion). Every position below derives from these
+        // Popups appear instantly at full size/opacity (no
+        // enter/exit motion). Every position below derives from these
         // four locals (never `session.layout.popup_x`/`total_height`
         // directly), so this is just the plain popup rect now.
         let px = session.layout.popup_x;

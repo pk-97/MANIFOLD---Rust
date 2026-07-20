@@ -1124,7 +1124,7 @@ fn states_scene() -> SceneData {
 
 /// Fixture for the `editor` scene: a single generator layer carrying `preset`
 /// at registry defaults, so `editor_card_config` resolves the real card — the
-/// same `ParamCardConfig` the live editor's left lane builds from. `None` if
+/// same `ParamSurface` the live editor's left lane builds from. `None` if
 /// `preset` isn't a generator id (the scene only covers the `GraphTarget::Generator`
 /// arm today; an effect needs a chain to live in, which this fixture doesn't build).
 pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, UIState)> {

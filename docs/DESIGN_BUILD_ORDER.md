@@ -1,6 +1,6 @@
 # Design Build Order — dependency-sequenced roadmap for the approved designs
 
-**Status: NORMATIVE, living · 2026-07-03 · Fable (part of the doc hardening pass) · corpus-refreshed 2026-07-10 by the cross-design coherence audit (`docs/DESIGN_COHERENCE_AUDIT_2026-07-10.md`): 10 missing designs added, 6 shipped rows removed, 2 stale ⏸ annotations fixed, render_scene same-file sequencing note added**
+**Status: NORMATIVE, living · 2026-07-03 · Fable (part of the doc hardening pass) · corpus-refreshed 2026-07-10 by the cross-design coherence audit (`docs/archive/DESIGN_COHERENCE_AUDIT_2026-07-10.md`): 10 missing designs added, 6 shipped rows removed, 2 stale ⏸ annotations fixed, render_scene same-file sequencing note added**
 **Scope: every APPROVED-not-built design doc. Update when a design ships, a new one
 lands, or Peter re-ranks.**
 

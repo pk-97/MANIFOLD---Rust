@@ -38,8 +38,7 @@ use crate::preset_def::{PresetDef, PresetKind};
 
 // ─── StringParamDef ───
 //
-// Generator-only state carried on `PresetDef::string_param_defs`. Lived
-// in the old `generator_definition_registry`; moved here with the merge.
+// Generator-only state carried on `PresetDef::string_param_defs`.
 
 /// A string parameter definition for generators that accept text input.
 #[derive(Debug, Clone)]

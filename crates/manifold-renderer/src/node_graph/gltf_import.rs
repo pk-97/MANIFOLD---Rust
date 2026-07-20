@@ -410,7 +410,7 @@ fn card_binding(
     }
 }
 
-/// GLTF_ANIMATION_DESIGN.md A4, revised 2026-07-18 (Peter): ONE set of
+/// ONE set of
 /// animation card knobs per glb, not one per animated object. Clips are
 /// file-level in glTF — every `node.gltf_animation_source` /
 /// `node.gltf_skeleton_pose` / `node.gltf_morph_weights` in one import
@@ -2021,9 +2021,7 @@ fn build_import_graph(
     // geometry gets its own render_scene object, never a truncated prefix.
     // `OBJECT_SAFETY_MAX` (1024) is a real GPU/port-list safety bound, not a
     // curation cap: an asset beyond it errors loudly instead of silently
-    // dropping geometry (the AMG GT3's black body, BUG-163, was exactly
-    // this — 14 of 78 materials, including the livery, dropped over the old
-    // 64-object cap).
+    // dropping geometry.
     if summary.materials.len() > OBJECT_SAFETY_MAX as usize {
         return Err(format!(
             "{}: {} materials with geometry exceeds the {}-object safety bound — \
@@ -2041,9 +2039,7 @@ fn build_import_graph(
     materials.sort_by(|a, b| b.vertex_count.cmp(&a.vertex_count));
     let n = materials.len();
     if summary.default_material_vertex_count > 0 {
-        // BUG-171 made this geometry import as a real object (a synthetic
-        // default-material entry); BUG-207 made that entry resolve its own
-        // skin/morph/animation too. This log line is informational, not a
+        // This log line is informational, not a
         // warning about dropped data — kept at `warn!` so it's still easy
         // to spot in a log dump when triaging an import.
         log::warn!(
@@ -2079,7 +2075,7 @@ fn build_import_graph(
     // the SAME value; a duplicated literal is how BUG-206-style drift
     // happens in the first place.
     let fov_y = 0.9_f32;
-    // BUG-206 fix: `2.2 * radius` alone frames by the bbox half-DIAGONAL,
+    // `2.2 * radius` alone frames by the bbox half-DIAGONAL,
     // which for an elongated (tall/thin) object barely exceeds its dominant
     // axis — the frame's vertical span contains the object with almost no
     // margin, and camera tilt + perspective push it past the top/bottom
@@ -2108,11 +2104,7 @@ fn build_import_graph(
     // with `radius` below ~0.042 (BoomBox: 0.0172, MetalRoughSpheresNoTextures:
     // 0.0056 — both real-world-scale Khronos assets authored in meters),
     // the fixed near plane sits IN FRONT of the object and the whole frame
-    // clips to black every frame (confirmed via `--trace`: io_pending goes
-    // false almost immediately and the frame stays byte-stable-black from
-    // frame 0/1 — not a decode race, ruling out the BUG-165 (a) hypothesis;
-    // BUG-169's "lighting/material" hypothesis was also wrong — same
-    // mechanism, not a texture-less-material bug).
+    // clips to black every frame.
     //
     // Fix: `near` tracks the object's own front-face distance (with a 2x
     // safety margin so the surface never grazes the plane), capped at the
@@ -2248,9 +2240,8 @@ fn build_import_graph(
     }
 
     // Physical lens (CINEMATIC_POST D6): sits between the raw orbit camera
-    // and render_scene/ao. No depth-of-field consumer wired anymore (the
-    // "dof" group was removed 2026-07-15 for buggy visuals) and no
-    // motion_blur consumer either (see the motion_blur removal note below),
+    // and render_scene/ao. No depth-of-field consumer wired anymore
+    // and no motion_blur consumer either (see the motion_blur removal note below),
     // so `shutter_angle`/`focus_distance`/`f_stop` are along for the ride
     // only insofar as `node.camera_lens` requires them — nothing downstream
     // reads them today.
@@ -2362,7 +2353,7 @@ fn build_import_graph(
         any_animated |= out.animated;
     }
 
-    // One "Animation" section per glb (Peter, 2026-07-18): clips are
+    // One "Animation" section per glb: clips are
     // file-level, so Rate/Clip/Loop/Retrigger are a single linked control
     // fanning out to every animation clock the loop above bound. Prepended
     // so the section leads the card, ahead of the per-object sections.
@@ -2381,7 +2372,7 @@ fn build_import_graph(
 
     nodes.push(render_node);
 
-    // No atmosphere node (fog + god rays removed, Peter 2026-07-15): the
+    // No atmosphere node: the
     // BUG-149 scene-scaled fog and shaft knobs never produced the look he
     // wanted on imports — the cinematic void-haze treatment is a pending
     // design of its own (`project_void_haze_design_pending`), not two
@@ -2459,7 +2450,7 @@ fn build_import_graph(
     }));
     nodes.push(ao_group_node);
 
-    // Depth of Field group removed (Peter, 2026-07-15): the coc_dilate/
+    // Depth of Field group removed: the coc_dilate/
     // bokeh_gather chain read as buggy in practice and made imported scenes
     // hard to look at. `render_scene → ao → final` now, no dof stage; the
     // "lens" node stays — it still feeds render_scene's/ao's `camera` input
@@ -2588,7 +2579,7 @@ fn build_import_graph(
     // it's just no longer exposed on the outer card.
 
     // No Atmosphere section: fog + god rays removed with the atmosphere
-    // node (Peter 2026-07-15) — see the removal comment in
+    // node — see the removal comment in
     // `build_import_graph`.
 
     // Category "Geometry" matches the existing 3D-geometry generator
@@ -2682,7 +2673,7 @@ fn max_node_id_recursive(nodes: &[EffectGraphNode]) -> u32 {
         .unwrap_or(0)
 }
 
-/// BUG-195's real fix: the largest KNOWN `source_bbox_radius` (BUG-194's
+/// the largest KNOWN `source_bbox_radius` (BUG-194's
 /// import-time provenance param, stamped on every `node.gltf_mesh_source`/
 /// `node.gltf_skinned_mesh_source` this session's importer creates) among
 /// every mesh-source node already in the target def, searched recursively
@@ -2854,7 +2845,7 @@ fn merge_import_into_graph(
     let incoming_radius =
         ((dims[0] * dims[0] + dims[1] * dims[1] + dims[2] * dims[2]).sqrt() * 0.5).max(1e-3);
 
-    // BUG-195 real fix: prefer a STORED per-object radius (BUG-194's
+    // Prefer a STORED per-object radius (BUG-194's
     // `source_bbox_radius` provenance param) over the orbit-camera proxy
     // below — the largest known radius among the target's own existing
     // mesh-source nodes is a real fact about the scene's geometry, not an
@@ -3771,7 +3762,7 @@ mod tests {
         assert_eq!(report.textures_wired, 1);
 
         // Top level: two per-object group boxes PLUS the "ao" presentation
-        // group (CINEMATIC_POST; "dof" removed 2026-07-15), no bare producer
+        // group, no bare producer
         // nodes.
         let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
         assert_eq!(groups.len(), 3, "2 object groups + ao");
@@ -5946,7 +5937,7 @@ mod tests {
     }
 
     /// Regression for the glTF-import "unknown parameter 'pos_x_N'" load
-    /// failure (Peter, 2026-07-05), REWRITTEN for
+    /// failure, REWRITTEN for
     /// SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md §2 D3/P2 — the original
     /// subject (a per-object param that only existed once `render_scene`
     /// reconfigured to a higher object count) no longer exists: per-object
@@ -5963,9 +5954,8 @@ mod tests {
     /// validation for the new port-based surface too.
     #[test]
     fn render_scene_with_three_objects_loads_object_port() {
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: `transform_2` (the
-        // subject of the original "unknown parameter 'pos_x_2'" regression
-        // this test was written for) no longer exists as a render_scene
+        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4/P2: `transform_2` no
+        // longer exists as a render_scene
         // port at all — `node.scene_object` owns `transform` now, and
         // render_scene's per-object surface is `object_k` only. The
         // analogous regression under the new shape: `object_2`, a port
@@ -7742,7 +7732,7 @@ mod tests {
         println!("AMG GT3 import report: {report:?}");
         // GLB_CONFORMANCE_DESIGN.md G-P2 conformance gate: the AMG GT3 has
         // 78 materials with geometry; with the cap dead, ALL of them must be
-        // wired (pre-G-P2 this was 64, dropping the livery — BUG-163).
+        // wired.
         assert_eq!(
             report.object_count, 78,
             "AMG GT3 import must be 1:1 — 78 materials, 78 objects, no cap-drop (BUG-163)"
@@ -8211,8 +8201,7 @@ mod tests {
         }
         clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
 
-        // BUG-212 fix (mirrors `DuplicateSceneObjectCommand`'s shipped fix,
-        // not a demo-only workaround): `string_bindings` (the "Model File" →
+        // `string_bindings` (the "Model File" →
         // mesh-source `path` binding every importer object carries)
         // addresses its target by stable NodeId, which `clone_fresh` just
         // minted fresh for every cloned node (D11). Clone every

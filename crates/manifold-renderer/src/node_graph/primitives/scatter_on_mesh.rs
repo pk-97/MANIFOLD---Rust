@@ -399,9 +399,7 @@ mod tests {
         );
     }
 
-    /// Scene 2 bug (2026-07-11): capacity sized from `count` at build time
-    /// silently capped the density fader at whatever the card read when the
-    /// graph was built (slider 48, 18 drawn). `max_capacity` > 0 must win;
+    /// `max_capacity` > 0 must win;
     /// 0/absent falls back to count (Garden.json back-compat).
     #[test]
     fn max_capacity_overrides_count_as_ceiling() {
@@ -640,10 +638,7 @@ mod gpu_tests {
         }
     }
 
-    /// BUG found by the Scene 2 look-dev (2026-07-11): lowering `count`
-    /// below a previously-written value left the tail slots holding stale
-    /// placements, and render_scene draws every buffer slot — the density
-    /// fader appeared dead. place_main must park [count, capacity).
+    /// place_main must park [count, capacity).
     #[test]
     fn slots_beyond_count_park_at_zero_scale() {
         let device = crate::test_device();
@@ -669,10 +664,7 @@ mod gpu_tests {
         }
     }
 
-    /// BUG found by the Scene 2 look-dev (2026-07-11): on NEAR-FLAT faces —
-    /// the common terrain case — align_to_normal produced rotations that
-    /// made ~98% of instances vanish from the render (BlossomField showed
-    /// ~25 of 420 flowers; disabling align carpeted the field). Flat ground
+    /// Flat ground
     /// with align ON must behave like align OFF: every instance finite and
     /// upright (R·(0,1,0) ≈ (0,1,0)) for EVERY yaw the hash produces.
     #[test]

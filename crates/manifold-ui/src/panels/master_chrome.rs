@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn right_click_on_either_slider_track_resolves_to_slider_reset_with_declared_default() {
-        // BUG-061: both master-chrome sliders' reset now rides the generic
+        // both master-chrome sliders' reset now rides the generic
         // SliderReset trio (not a bespoke *RightClick), and each carries its
         // own declared default (1.0 for both opacity and LED brightness).
         let mut tree = UITree::new();

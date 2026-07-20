@@ -29,6 +29,7 @@ pub mod interaction_overlay;
 pub mod layout;
 pub mod node;
 pub mod panels;
+pub mod param_surface;
 pub mod scroll_container;
 pub mod slider;
 pub mod snap;
@@ -62,6 +63,7 @@ pub use graph_edit::GraphEditCommand;
 pub use hit_targets::{HitTargetEntry, HitTargets};
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
+pub use param_surface::{ParamRow, ParamSurface, RowMapping, RowSpec, RowValue};
 pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;
 pub use panels::dropdown::{DropdownAction, DropdownItem, DropdownPanel};
@@ -72,8 +74,7 @@ pub use panels::layer_chrome::LayerChromePanel;
 pub use panels::layer_header::{LayerHeaderPanel, LayerInfo};
 pub use panels::master_chrome::MasterChromePanel;
 pub use panels::param_card::{
-    ParamCardConfig, ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, ParamInfo,
-    RelightCardConfig,
+    ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, RelightCardConfig, RowMod,
 };
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{

@@ -332,12 +332,11 @@ struct TrimOriginal {
     is_looping: bool,
 }
 
-// ── TrimDrag / RegionDrag (P7.4) ─────────────────────────────────
+// ── TrimDrag / RegionDrag ─────────────────────────────────
 // The grabbed clip's own pre-trim geometry (for the shared edge-delta snap
 // context) plus every selected clip's `TrimOriginal` the delta fans over —
 // the fold target for the grabbed-clip-id field, the three grabbed-clip
-// geometry fields, and the fan-over Vec that previously sat as four
-// parallel fields on `InteractionOverlay` directly.
+// geometry fields, and the fan-over Vec.
 #[derive(Debug, Clone)]
 struct TrimDrag {
     clip_id: ClipId,
@@ -357,17 +356,14 @@ struct TrimDrag {
 }
 
 /// Rubber-band region-select's grab geometry — the fold target for the two
-/// parallel grab-beat/grab-layer fields that previously sat directly on
-/// `InteractionOverlay`.
+/// parallel grab-beat/grab-layer fields.
 #[derive(Debug, Clone, Copy)]
 struct RegionDrag {
     start_beat: Beats,
     start_layer: usize,
 }
 
-/// The live timeline's move drag — the highest-stakes fold in all of P7
-/// (P7.5). The fold target for eleven loose fields that previously sat
-/// directly on `InteractionOverlay`: the anchor clip id (was `Option<ClipId>`
+/// The fold target for eleven loose fields: the anchor clip id (was `Option<ClipId>`
 /// — P7.5's entry-proof established every path that arms a move drag also
 /// sets an anchor in the same synchronous call, so it's non-optional here by
 /// construction), the start-layer index, the per-clip snapshot Vec + id set,
@@ -377,7 +373,7 @@ struct RegionDrag {
 /// (`lift_anim`, `ghost_alpha`, `settle_dx`, `drag_visual_clip_ids`,
 /// `landing_flash*`, `error_shake`, `was_layer_blocked`) stay OUTSIDE this
 /// payload by design — they deliberately keep easing after release, so their
-/// lifetime outlaps the drag (D11).
+/// lifetime outlaps the drag.
 #[derive(Debug, Clone)]
 struct MoveDrag {
     anchor_clip_id: ClipId,
@@ -738,7 +734,7 @@ impl InteractionOverlay {
         // a breakpoint, click-on-dot selects it, double-click-on-dot deletes
         // it — and never falls through to clip/region logic below.
         //
-        // BUG-184: a right-click on a lane (strip, segment, or dot) opens the
+        // a right-click on a lane (strip, segment, or dot) opens the
         // lane's context menu (Clear Automation / Remove Lane) instead of
         // falling through to clip/track right-click handling — resolved
         // BEFORE the left-click automation handler below so a right-click
@@ -1822,7 +1818,7 @@ impl InteractionOverlay {
         };
         host.commit_command_batch(desc);
 
-        // D15 landing-line flash — re-hooked at drag-end (2026-07-07). P1.4's
+        // landing-line flash — re-hooked at drag-end. P1.4's
         // continuous snap deleted the discrete `finalize_move_snap` trigger
         // (see the dormancy note at the drawer, `app_render.rs`); the drag-END
         // commit is the new discrete moment. Fires once, only when a move
@@ -2041,15 +2037,6 @@ impl InteractionOverlay {
     /// themselves), then clamps the resulting delta so the group's leftmost
     /// clip cannot cross beat 0. `handle_move_drag` calls this every frame —
     /// the on-screen position IS the landed position, snap included.
-    ///
-    /// This used to be computed twice: once inline here, once inline in
-    /// `finalize_move_snap` at release (reading the anchor's already-moved
-    /// `start_beat` back from the host and re-snapping it — a no-op in
-    /// practice since the per-frame value was already a valid snap
-    /// candidate, but a second, independently-maintained implementation of
-    /// the same math — exactly the "two authorities" bug class P0 named).
-    /// `finalize_move_snap` is deleted; nothing was left for it to do that
-    /// the last frame didn't already show (D5).
     ///
     /// B12: Cmd held mid-drag bypasses snap entirely (raw position) — checked
     /// here, at the ONE call site of the shared `magnetic_snap`, not by
@@ -2956,7 +2943,7 @@ mod p1_4_gesture_integrity_tests {
             Vec<(Beats, f32, UiSegmentShape)>,
             Option<Vec<(Beats, f32, UiSegmentShape)>>,
         )>,
-        // BUG-184: records every `on_automation_lane_right_click` call.
+        // records every `on_automation_lane_right_click` call.
         automation_lane_right_clicks: Vec<(UiGraphTarget, ParamId)>,
     }
 
@@ -3400,7 +3387,7 @@ mod p1_4_gesture_integrity_tests {
         assert!(new.1 > old.1, "dragging up must raise the value");
     }
 
-    /// BUG-184: a right-click on an automation lane's dot opens the lane's
+    /// a right-click on an automation lane's dot opens the lane's
     /// context menu (via `on_automation_lane_right_click`) instead of falling
     /// through to `handle_automation_click`'s point-delete/select logic —
     /// the panel/dispatch layer (BUG_BACKLOG.md's fix note) is only reachable
@@ -4047,7 +4034,7 @@ mod p1_4_gesture_integrity_tests {
         );
     }
 
-    /// D15 landing-line flash, re-hooked at drag-end (2026-07-07): a move
+    /// a move
     /// that actually lands somewhere new fires the flash with the landed
     /// beat + layer span; a gesture that never moved stays dark (the flash
     /// marks a landing, not a click).

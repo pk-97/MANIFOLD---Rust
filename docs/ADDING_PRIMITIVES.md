@@ -89,12 +89,14 @@ buffer gather):
        .expect("node.<name> standalone codegen");
    gpu.device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "node.<name>")
    ```
-4. **Keep a hand `shaders/<name>.wgsl` as the parity oracle** and prove the two agree
-   in `gpu_tests`: dispatch the hand kernel and the `standalone_for_spec` kernel on the
-   same fixture, assert element-wise equality (see `displace_mesh.rs`'s
-   `generated_displace_matches_hand_kernel_with_inactive_passthrough`). **This
-   generated-vs-hand parity test is the machine check that proves the atom is genuinely
-   on the fusable path** — a per-element GPU atom is not done without it.
+4. **Prove the kernel's values in `gpu_tests`**: dispatch the `standalone_for_spec`
+   kernel on a fixture and assert element-wise equality against CPU-computed expected
+   output (the `*matches_hand_formula*` pattern, e.g. `mesh_ramp.rs`). If the atom can
+   fuse with a neighbor, the fused-vs-unfused fusion proof is the second mandatory check.
+   **RETIRED (Peter, 2026-07-20, W1-B):** the former generated-vs-hand-KERNEL parity
+   tests and their mirror `shaders/<name>.wgsl` oracles — both runtime paths are
+   generated now; the hand kernels only re-proved the node-graph migration. Do not add
+   new ones.
 
 **Scope — the in/out test (2026-07-11).** An atom is IN the mandate iff its kernel is a
 **barrier-free pure per-element function**: one thread computes one output element,
@@ -353,7 +355,7 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
 - **Don't ship a fused single-effect / single-generator bundle.** If your primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
-- **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`docs/NODE_VOCABULARY_AUDIT.md` §2.6) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
+- **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`docs/archive/NODE_VOCABULARY_AUDIT.md` §2.6) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
 - **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
 
 ## Parity-without-fusion

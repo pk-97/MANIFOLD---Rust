@@ -29,6 +29,14 @@ pub fn label_width_for_row(row_w: f32) -> f32 {
     (row_w * 0.28).clamp(DEFAULT_LABEL_WIDTH, MAX_LABEL_WIDTH)
 }
 pub const TRACK_RADIUS: f32 = 6.0;
+
+/// Explicit-key sub-tags for [`BitmapSlider::build`]'s three flat-parented
+/// nodes (D4) — OR'd into the caller's role-scoped key base. Fill/thumb need
+/// no tag of their own: they nest under the (now-stable) track and inherit
+/// its identity through the parent chain.
+pub(crate) const SLIDER_KEY_LABEL: u64 = 0;
+pub(crate) const SLIDER_KEY_TRACK: u64 = 1;
+pub(crate) const SLIDER_KEY_VALUE: u64 = 2;
 const FILL_INSET: f32 = 1.0;
 /// The thumb is a slim WHITE trim flush at the fill's right end — one uniform
 /// rounded bar `(======|)`, not a fat handle sitting in empty track. Narrow so
@@ -257,7 +265,7 @@ impl BitmapSlider {
         match (zone, g) {
             (Track, RightClick) => Some(SliderIntent::ResetToDefault),
             (Label, RightClick) => Some(SliderIntent::OpenMapping),
-            // D13 correction (2026-07-13, P3): DoubleClick, not Click —
+            // DoubleClick, not Click —
             // chrome's shipped type-in gesture (inspector.rs:2375 →
             // route_value_typein). P1's committed table said Click,
             // transcribing slider.rs's aspirational "click to type" comment
@@ -303,6 +311,15 @@ impl BitmapSlider {
 
     /// Build slider nodes into the tree. Returns node IDs for event routing.
     /// `rect` is the full bounding box for the entire slider row (label + track + value).
+    ///
+    /// `key` is `None` for every caller outside the widget-tree row model
+    /// (chrome sliders, macros, the graph canvas's own draw path never calls
+    /// this at all) — unchanged, auto-salted by sibling index. Param-card row
+    /// builders pass `Some(base)` (D4, `docs/WIDGET_TREE_DESIGN.md`): the
+    /// label/track/value-cell are the only three of this widget's five nodes
+    /// parented flat alongside the row's OTHER controls (fill/thumb nest
+    /// under the track and inherit its stability automatically), so only
+    /// those three need explicit sub-keys.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         tree: &mut UITree,
@@ -316,6 +333,7 @@ impl BitmapSlider {
         label_width: f32,
         default_normalized: f32,
         reset: PanelAction,
+        key: Option<u64>,
     ) -> Slider {
         // track/fill/thumb/value_text are placeholders overwritten below before
         // any read; label stays None unless a label is actually built.
@@ -351,19 +369,32 @@ impl BitmapSlider {
         if let Some(label_text) = label
             && !label_text.is_empty()
         {
-            ids.label = Some(tree.add_node(
-                parent_id,
-                z.label.expect("has_label true implies zones() returns a label rect"),
-                UINodeType::Label,
-                UIStyle {
-                    text_color: colors.text,
-                    font_size,
-                    text_align: TextAlign::Right,
-                    ..UIStyle::default()
-                },
-                Some(label_text),
-                UIFlags::VISIBLE | UIFlags::INTERACTIVE,
-            ));
+            let label_style = UIStyle {
+                text_color: colors.text,
+                font_size,
+                text_align: TextAlign::Right,
+                ..UIStyle::default()
+            };
+            let label_rect = z.label.expect("has_label true implies zones() returns a label rect");
+            ids.label = Some(match key {
+                Some(base) => tree.add_node_keyed(
+                    parent_id,
+                    label_rect,
+                    UINodeType::Label,
+                    label_style,
+                    Some(label_text),
+                    UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+                    base | SLIDER_KEY_LABEL,
+                ),
+                None => tree.add_node(
+                    parent_id,
+                    label_rect,
+                    UINodeType::Label,
+                    label_style,
+                    Some(label_text),
+                    UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+                ),
+            });
         }
 
         // ── Track (flexible width; the value lives in a fixed gutter at its
@@ -374,20 +405,25 @@ impl BitmapSlider {
         let value_box_x = z.value_cell.x;
         ids.track_span = TrackSpan::of(track_rect);
 
-        ids.track = tree.add_node(
-            parent_id,
-            track_rect,
-            UINodeType::Button,
-            UIStyle {
-                bg_color: colors.track,
-                hover_bg_color: colors.track_hover,
-                pressed_bg_color: colors.track_pressed,
-                corner_radius: TRACK_RADIUS,
-                ..UIStyle::default()
-            },
-            None,
-            UIFlags::INTERACTIVE,
-        );
+        let track_style = UIStyle {
+            bg_color: colors.track,
+            hover_bg_color: colors.track_hover,
+            pressed_bg_color: colors.track_pressed,
+            corner_radius: TRACK_RADIUS,
+            ..UIStyle::default()
+        };
+        ids.track = match key {
+            Some(base) => tree.add_node_keyed(
+                parent_id,
+                track_rect,
+                UINodeType::Button,
+                track_style,
+                None,
+                UIFlags::INTERACTIVE,
+                base | SLIDER_KEY_TRACK,
+            ),
+            None => tree.add_node(parent_id, track_rect, UINodeType::Button, track_style, None, UIFlags::INTERACTIVE),
+        };
 
         // ── Fill (child of track, non-interactive) ──
         let fill_w = compute_fill_width(track_rect.width, normalized_value, FILL_INSET);
@@ -428,22 +464,27 @@ impl BitmapSlider {
         // ── Value box (its own rounded cell, separated from the track by
         // VALUE_GAP, click-to-type). Centered in the cell. Opaque bg (track
         // colour) to clear stale glyphs during incremental atlas re-render.
-        ids.value_text = tree.add_label(
-            parent_id,
-            value_box_x,
-            y,
-            VALUE_BOX_W,
-            h,
-            value_text,
-            UIStyle {
-                bg_color: colors.track,
-                corner_radius: TRACK_RADIUS,
-                text_color: colors.text,
-                font_size,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        );
+        let value_rect = Rect::new(value_box_x, y, VALUE_BOX_W, h);
+        let value_style = UIStyle {
+            bg_color: colors.track,
+            corner_radius: TRACK_RADIUS,
+            text_color: colors.text,
+            font_size,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        };
+        ids.value_text = match key {
+            Some(base) => tree.add_node_keyed(
+                parent_id,
+                value_rect,
+                UINodeType::Label,
+                value_style,
+                Some(value_text),
+                UIFlags::empty(),
+                base | SLIDER_KEY_VALUE,
+            ),
+            None => tree.add_node(parent_id, value_rect, UINodeType::Label, value_style, Some(value_text), UIFlags::empty()),
+        };
         // The value box is the `ValueCell` zone — interactive per this type's
         // own contract (`ids.value_text`: "interactive — double-click to
         // type"). Without the flag the hit-test skips it and every value-cell
@@ -915,6 +956,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.75,
             placeholder_reset(),
+            None,
         )
         .ids;
 
@@ -950,6 +992,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.75,
             reset.clone(),
+            None,
         );
 
         let mut reg = IntentRegistry::new();
@@ -980,6 +1023,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.75,
             placeholder_reset(),
+            None,
         )
         .ids;
         assert!(ids.label.is_some());
@@ -1010,6 +1054,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.75,
             placeholder_reset(),
+            None,
         )
         .ids;
         assert!(ids.label.is_none());
@@ -1038,6 +1083,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.75,
             placeholder_reset(),
+            None,
         )
         .ids;
 
@@ -1065,6 +1111,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.5,
             placeholder_reset(),
+            None,
         )
         .ids;
 
@@ -1092,6 +1139,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.5,
             placeholder_reset(),
+            None,
         )
         .ids;
 
@@ -1135,6 +1183,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
             0.5,
             placeholder_reset(),
+            None,
         )
         .ids;
 

@@ -29,7 +29,7 @@ Peter's directives (2026-07-05, verbatim — these decided the shape):
   to be as strong, safe, performant, and well designed and architected as
   possible."
 
-Companion docs: `docs/PARAM_STORAGE_REDESIGN_BRIEF.md` (Opus's grounded census —
+Companion docs: `docs/archive/PARAM_STORAGE_REDESIGN_BRIEF.md` (Opus's grounded census —
 the input this design was built from; its §5 blast-radius categories still
 apply). `docs/NODE_GROUPS_DESIGN.md` (the derive-don't-store discipline this
 design copies: positional views are computed at boundaries, never stored as

@@ -45,18 +45,15 @@ const STATUS_PAD: f32 = 6.0;
 /// Label glyph box height inside a status strip — matches the Ableton drawer.
 const STATUS_LABEL_H: f32 = 12.0;
 
-/// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` P3c,
-/// BUG-082's fix) — height reserved below an Amount slider whose
+/// D6 fire meter — height reserved below an Amount slider whose
 /// `show_meter` is set: a thin track+fill+threshold-tick underline,
-/// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter
-/// (470228ec, `audio_setup_panel.rs`), generalized from a fixed per-send row
+/// mirroring the deleted `TriggerRowIds`/`update_trigger_levels` meter,
+/// generalized from a fixed per-send row
 /// to every audio-mod drawer's Amount row (2026-07-11: every drawer, not just
 /// fire-mode ones — see `show_amount_meter`). `pub(crate)` so
 /// `param_slider_shared::audio_config_height` — a caller reserving height for
 /// a drawer it isn't itself building — can add this term without duplicating
-/// the literal and drifting from what [`DrawerRow::height`] actually builds
-/// (the under-reservation this closes: a metered drawer used to overflow its
-/// reserved slot by exactly this many pixels).
+/// the literal and drifting from what [`DrawerRow::height`] actually builds.
 pub(crate) const METER_STRIP_H: f32 = 6.0;
 /// Bar thickness within the reserved strip.
 const METER_BAR_H: f32 = 3.0;
@@ -242,7 +239,7 @@ pub(crate) fn uniform_rows_height(n: usize) -> f32 {
     TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
 }
 
-/// BUG-109 §7.1 item 3: the content-thread signal this meter displays decays
+/// the content-thread signal this meter displays decays
 /// in milliseconds (a transient's shaped envelope), but `ContentState`
 /// snapshots only reach the UI at UI-tick cadence — an instantaneous fill
 /// between two snapshots is invisible. `PEAK_HOLD_SECONDS` is the minimum
@@ -391,6 +388,13 @@ fn uniform_widths(n: usize, content_w: f32) -> Vec<f32> {
 
 /// Build a drawer's `UITree` nodes under `parent` at `(x, y)` spanning width
 /// `w`. Returns the created ids + the height consumed.
+///
+/// `key`, when `Some` (D4, `docs/WIDGET_TREE_DESIGN.md`), pins the
+/// container's own `WidgetId` — the ONE node this function mints directly
+/// under the caller's (possibly flat, possibly shared) `parent`. Every button
+/// and slider a drawer builds nests under `container`, so once it's stable
+/// they inherit that stability through the parent chain with no key of their
+/// own; callers outside the row model pass `None` (auto-salted, unchanged).
 pub fn build(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -398,6 +402,7 @@ pub fn build(
     y: f32,
     w: f32,
     spec: &DrawerSpec,
+    key: Option<u64>,
 ) -> DrawerIds {
     let height = spec.height();
     // Contents-only container: the source-tinted backing + accent spine are drawn
@@ -405,7 +410,18 @@ pub fn build(
     // `build_param_row`, so the drawer itself is transparent — its rows render on
     // that one shared card, which is what makes the drawer read as belonging to its
     // slider. The theme still colours the rows (option fills, slider fills, labels).
-    let container = tree.add_panel(parent, x, y, w, height, UIStyle::default());
+    let container = match key {
+        Some(k) => tree.add_node_keyed(
+            parent,
+            Rect::new(x, y, w, height),
+            UINodeType::Panel,
+            UIStyle::default(),
+            None,
+            UIFlags::empty(),
+            k,
+        ),
+        None => tree.add_panel(parent, x, y, w, height, UIStyle::default()),
+    };
 
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
@@ -490,6 +506,7 @@ pub fn build(
                     *label_w,
                     default_norm.clamp(0.0, 1.0),
                     reset.clone(),
+                    None,
                 );
                 sliders.push(built.ids);
                 slider_resets.push(built.reset);
@@ -652,7 +669,7 @@ mod tests {
 
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
 
         assert_eq!(ids.button_count(), 19, "11 + 8 buttons");
 
@@ -692,7 +709,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
 
         assert_eq!(ids.button_count(), 0);
         assert_eq!(ids.sliders.len(), 1);
@@ -726,7 +743,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         let meter = ids.meters[0].as_ref().expect("show_meter=true builds a MeterIds");
 
         // Simulate `ScrollContainer::offset_content`: shift every node's
@@ -780,7 +797,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         assert_eq!(ids.button_count(), 8);
         let w0 = tree.get_node(ids.button_ids[0]).unwrap().bounds.width;
         let w7 = tree.get_node(ids.button_ids[7]).unwrap().bounds.width;
@@ -809,7 +826,7 @@ mod tests {
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
-        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec, None);
         // The INV button is the only addressable control.
         assert_eq!(ids.button_count(), 1);
         // Container height = TOP_PAD*2 + strip height = 8 + 16 = 24 (matches ABL).

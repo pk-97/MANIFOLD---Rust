@@ -308,34 +308,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("var<storage, read> buf_outline"), "gather input is read-only global");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-
-        let hand = include_str!("shaders/extrude_curve.wgsl");
-        let outline = vec![mk_curve(0.0, 0.0), mk_curve(1.0, 0.0), mk_curve(0.5, 1.0)];
-        const STEPS: i32 = 3;
-        const DST_CAP: u32 = 4 * 4 + 5; // closed cols=4, rows=4, plus slack
-
-        for &close in &[false, true] {
-            let from_gen = dispatch_extrude(&device, &gen_wgsl, &outline, DST_CAP, 2.0, STEPS, close);
-            let from_hand = dispatch_extrude(&device, hand, &outline, DST_CAP, 2.0, STEPS, close);
-            for i in 0..DST_CAP as usize {
-                for c in 0..3 {
-                    assert!(
-                        (from_gen[i].position[c] - from_hand[i].position[c]).abs() < 1e-5,
-                        "close={close} vertex {i} position[{c}]: gen={} hand={}",
-                        from_gen[i].position[c],
-                        from_hand[i].position[c]
-                    );
-                }
-                assert_eq!(from_gen[i].uv, from_hand[i].uv, "close={close} vertex {i} uv");
-            }
-        }
-    }
 
     #[test]
     fn no_end_caps_open_solid_row_zero_and_last_match_outline_exactly() {

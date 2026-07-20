@@ -720,8 +720,8 @@ fn chain_is_absorbable(
     // explodes kernel compile time. FilmGrain was the proof: noise absorbed
     // into gaussian_blur = 35 fetch sites × 4 × ~6 KB ≈ 860 KB of inlined
     // WGSL, ~50 s of synchronous spirv-opt + Metal compile per build on the
-    // content thread — twice, once more for the specialized variant (the
-    // 2026-07-16 stage freeze). Watercolor's warp-into-blur (~75 KB) is the
+    // content thread — twice, once more for the specialized variant.
+    // Watercolor's warp-into-blur (~75 KB) is the
     // largest absorption that must keep fusing.
     let consumer_fetch_sites = def
         .nodes
@@ -1076,8 +1076,7 @@ pub(crate) fn classify_node(
     // Every param must lay out in the fused per-node namespaced uniform —
     // scalar (`param_wgsl_type`), OR Vec3 (three consecutive `_x`/`_y`/`_z`
     // f32 fields) / Vec4/Color (four `_x`/`_y`/`_z`/`_w` f32 fields, no
-    // padding needed) via `param_is_fusable` (P5/D4, 2026-07-14 scope
-    // expansion — see FUSION_SOTA_DESIGN.md D4). Table/String stay boundary:
+    // padding needed) via `param_is_fusable`. Table/String stay boundary:
     // Table is storage-shaped data (a fixed-size array-of-vec4 the per-node
     // namespacing doesn't extend to) and String has no GPU representation —
     // neither is debt, both are a deliberate boundary by nature (D4 #5).
@@ -3090,7 +3089,7 @@ mod tests {
     /// and `node.channel_mixer` (StarField) all converted onto the freeze
     /// codegen path that wave — `fusion_kind() == Pointwise` with a real
     /// `wgsl_body` — but every one of them carries a Color/Vec3/Vec4 param.
-    /// Before P5 (D4's scope expansion, 2026-07-14) `classify_node`'s
+    /// Before P5 `classify_node`'s
     /// scalar-only cut rule rejected all five, so none was ever a region
     /// member. P5 lifts Vec3/Vec4/Color (three/four namespaced uniform
     /// fields, same mechanism as the standalone codegen's "P3 wave 2"

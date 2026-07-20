@@ -339,8 +339,7 @@ mod trigger_latch_release_tests {
         assert_eq!(seen.lock().unwrap().take(), Some(1.0));
 
         // Frame 1: value changes to 2.0 but trigger hasn't moved — held
-        // stays at the captured 1.0 (the "goes dead" half of BUG-104: a
-        // continuous fader driving `value` has no effect while latched).
+        // stays at the captured 1.0.
         g.set_param(value, "value", ParamValue::Float(2.0)).unwrap();
         run_frame(&mut g, &mut exec, &mut store);
         assert_eq!(
@@ -357,8 +356,7 @@ mod trigger_latch_release_tests {
         // Frame 2: trigger STILL hasn't moved (mirrors "Trigger disabled,
         // no new edge fires") — with the latch released, first-observation
         // semantics re-arm and the now-current value=2.0 is recaptured
-        // immediately, instead of staying stuck on 1.0 forever (the "stays
-        // dead after Trigger is disabled" half of BUG-104).
+        // immediately, instead of staying stuck on 1.0 forever.
         run_frame(&mut g, &mut exec, &mut store);
         assert_eq!(
             seen.lock().unwrap().take(),

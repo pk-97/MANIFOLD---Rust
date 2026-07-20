@@ -282,34 +282,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("var<storage, read> buf_profile"), "gather input is read-only global");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-
-        let hand = include_str!("shaders/revolve_curve.wgsl");
-        let profile = vec![mk_curve(0.5, 0.0), mk_curve(1.0, 0.5), mk_curve(0.3, 1.0)];
-        const SEGMENTS: i32 = 6;
-        const DST_CAP: u32 = 3 * 7 + 5; // exact + slack to exercise padding
-
-        for &sweep in &[std::f32::consts::TAU, std::f32::consts::PI, 3.0 * std::f32::consts::TAU] {
-            let from_gen = dispatch_revolve(&device, &gen_wgsl, &profile, DST_CAP, SEGMENTS, sweep);
-            let from_hand = dispatch_revolve(&device, hand, &profile, DST_CAP, SEGMENTS, sweep);
-            for i in 0..DST_CAP as usize {
-                for c in 0..3 {
-                    assert!(
-                        (from_gen[i].position[c] - from_hand[i].position[c]).abs() < 1e-5,
-                        "sweep={sweep} vertex {i} position[{c}]: gen={} hand={}",
-                        from_gen[i].position[c],
-                        from_hand[i].position[c]
-                    );
-                }
-                assert_eq!(from_gen[i].uv, from_hand[i].uv, "sweep={sweep} vertex {i} uv");
-            }
-        }
-    }
 
     /// The chain rule (DECOMPOSING_GENERATORS.md §9 / design §4 invariant
     /// table): revolve -> make_triangles on a small profile, assert the

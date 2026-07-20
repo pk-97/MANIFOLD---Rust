@@ -119,7 +119,7 @@ impl Primitive for Rotate3D {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path). rotate_3d.wgsl is the parity oracle.
+            // coincident path).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.rotate_3d standalone codegen"),
@@ -201,94 +201,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — rotate_3d had no GPU test
-    //! before the cutover. The generated kernel must reproduce the hand
-    //! `rotate_3d.wgsl` vertex-for-vertex: rotated position + normal, uv passed
-    //! through. Trig is computed on-GPU both ways → bit-identical. Compares the
-    //! meaningful fields (position/normal/uv), not the std430 padding.
-    use super::*;
-
-    fn mesh_vertex(pos: [f32; 3], norm: [f32; 3], uv: [f32; 2]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: norm, _pad1: 0.0, uv, _pad2: [0.0; 2] }
-    }
-
-    fn dispatch_rotate3d(wgsl: &str, verts: &[MeshVertex], uniform: &[u8]) -> Vec<MeshVertex> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "rot3d-oracle");
-        let n = verts.len() as u32;
-        let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
-        unsafe {
-            in_buf.write(0, bytemuck::cast_slice(verts));
-        }
-        let mut enc = device.create_encoder("rot3d-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
-            ],
-            [n.div_ceil(64), 1, 1],
-            "rot3d-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, verts.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_rotate3d_matches_hand_kernel() {
-        let verts = [
-            mesh_vertex([0.3, 0.7, 0.5], [0.0, 0.0, 1.0], [0.1, 0.2]),
-            mesh_vertex([-0.2, 0.4, 1.0], [1.0, 0.0, 0.0], [0.3, 0.4]),
-            mesh_vertex([0.6, -0.5, -0.3], [0.0, 1.0, 0.0], [0.5, 0.6]),
-            mesh_vertex([-0.4, -0.4, 0.8], [0.577, 0.577, 0.577], [0.7, 0.8]),
-        ];
-        let n = verts.len() as u32;
-        let (ax, ay, az) = (0.5f32, 1.0f32, -0.7f32);
-
-        // Hand layout: active_count(u32)=n, capacity(u32)=n, pad, pad, ax, ay, az, pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 8]);
-        hand.extend_from_slice(&ax.to_le_bytes());
-        hand.extend_from_slice(&ay.to_le_bytes());
-        hand.extend_from_slice(&az.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 4]);
-
-        // Generated layout: ax, ay, az, dispatch_count(u32).
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&ax.to_le_bytes());
-        gen_bytes.extend_from_slice(&ay.to_le_bytes());
-        gen_bytes.extend_from_slice(&az.to_le_bytes());
-        gen_bytes.extend_from_slice(&n.to_le_bytes());
-
-        let hand_wgsl = include_str!("shaders/rotate_3d.wgsl");
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Rotate3D>()
-            .expect("rotate_3d buffer codegen");
-
-        let from_hand = dispatch_rotate3d(hand_wgsl, &verts, &hand);
-        let from_gen = dispatch_rotate3d(&gen_wgsl, &verts, &gen_bytes);
-
-        for i in 0..verts.len() {
-            for c in 0..3 {
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "vertex {i} position[{c}]: hand={} gen={}",
-                    from_hand[i].position[c],
-                    from_gen[i].position[c]
-                );
-                assert!(
-                    (from_hand[i].normal[c] - from_gen[i].normal[c]).abs() < 1e-6,
-                    "vertex {i} normal[{c}]"
-                );
-            }
-            assert_eq!(from_hand[i].uv, from_gen[i].uv, "vertex {i} uv passthrough");
-        }
-    }
-}

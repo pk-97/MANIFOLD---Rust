@@ -112,7 +112,7 @@ impl Primitive for InstanceRotationJitter {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path; noise_common prepended via wgsl_includes for
-            // hash_u32). instance_rotation_jitter.wgsl is the parity oracle.
+            // hash_u32).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.rotation_jitter standalone codegen"),
@@ -221,91 +221,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — instance_rotation_jitter had no
-    //! GPU test. The generated kernel (noise_common prepended for hash_u32,
-    //! same-named in/out `instances` disambiguated to buf_out_instances) must
-    //! reproduce the hand kernel instance-for-instance: jittered rot.xyz, position
-    //! + scale + rot.w passed through. Integer hash on-GPU both ways → bit-exact.
-    use super::*;
-
-    fn dispatch_rotjitter(
-        wgsl: &str,
-        instances: &[InstanceTransform],
-        uniform: &[u8],
-        count: u32,
-    ) -> Vec<InstanceTransform> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "rotjitter-oracle");
-        let in_buf = device.create_buffer_shared(std::mem::size_of_val(instances) as u64);
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(instances) as u64);
-        unsafe {
-            in_buf.write(0, bytemuck::cast_slice(instances));
-        }
-        let mut enc = device.create_encoder("rotjitter-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "rotjitter-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let slice =
-            unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, instances.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_rotjitter_matches_hand_kernel() {
-        let instances = [
-            InstanceTransform { pos_scale: [0.2, 0.3, 0.1, 1.5], rot_pad: [0.1, 0.2, 0.3, 0.0] },
-            InstanceTransform { pos_scale: [-0.4, 0.6, -0.2, 2.0], rot_pad: [0.4, -0.1, 0.0, 0.0] },
-            InstanceTransform { pos_scale: [0.7, -0.5, 0.4, 0.8], rot_pad: [-0.2, 0.3, 0.1, 0.0] },
-            InstanceTransform { pos_scale: [0.0, 0.0, 0.0, 1.0], rot_pad: [0.0, 0.0, 0.0, 0.0] },
-        ];
-        let n = instances.len() as u32;
-        let amplitude = 0.2f32;
-
-        // Hand layout: count(u32), amplitude(f32), pad, pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&amplitude.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 8]);
-
-        // Generated layout: amplitude(f32), dispatch_count(u32), pad, pad.
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&amplitude.to_le_bytes());
-        gen_bytes.extend_from_slice(&n.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 8]);
-
-        let hand_wgsl =
-            format!("{}\n{}", NOISE_COMMON, include_str!("shaders/instance_rotation_jitter.wgsl"));
-        let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<InstanceRotationJitter>()
-                .expect("instance_rotation_jitter buffer codegen");
-
-        let from_hand = dispatch_rotjitter(&hand_wgsl, &instances, &hand, n);
-        let from_gen = dispatch_rotjitter(&gen_wgsl, &instances, &gen_bytes, n);
-
-        for i in 0..instances.len() {
-            for c in 0..4 {
-                assert!(
-                    (from_hand[i].rot_pad[c] - from_gen[i].rot_pad[c]).abs() < 1e-6,
-                    "instance {i} rot_pad[{c}]: hand={} gen={}",
-                    from_hand[i].rot_pad[c],
-                    from_gen[i].rot_pad[c]
-                );
-                assert!(
-                    (from_hand[i].pos_scale[c] - from_gen[i].pos_scale[c]).abs() < 1e-6,
-                    "instance {i} pos_scale[{c}] passthrough"
-                );
-            }
-        }
-    }
-}

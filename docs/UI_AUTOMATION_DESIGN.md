@@ -12,7 +12,7 @@ Peter, 2026-07-03: *"we will likely need custom infra so you can interact with M
 
 The governing insight: **Playwright works because the DOM gives it three things — find, act, wait. MANIFOLD's bitmap UI already has two-thirds of the substrate**: a real retained tree with durable widget identity (`WidgetId`), a headless harness that renders the real UI and drives one real click, and a proven input seam. This design finishes the triad: the tree dump becomes the selector surface (the "DOM"), a gesture driver acts by widget identity through the production input path, and explicit sync replaces auto-wait. One interaction core, two transports: the headless harness (scripted, deterministic) and a dev-only live door into the running app.
 
-Companion docs: `docs/HEADLESS_UI_HARNESS.md` (the shipped harness this extends — read it whole before P1) · `docs/MCP_INTERFACE_DESIGN.md` (the product AI surface; §9 pins how it may later forward to this layer — this design is NOT part of it) · `docs/INPUT_IDENTITY_UNIFICATION.md` (why `WidgetId` exists and how input tracks it).
+Companion docs: `docs/HEADLESS_UI_HARNESS.md` (the shipped harness this extends — read it whole before P1) · `docs/MCP_INTERFACE_DESIGN.md` (the product AI surface; §9 pins how it may later forward to this layer — this design is NOT part of it) · `docs/archive/INPUT_IDENTITY_UNIFICATION.md` (why `WidgetId` exists and how input tracks it).
 
 ---
 

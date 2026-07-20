@@ -1636,8 +1636,7 @@ mod tests {
 
     /// `get_node`/`get_node_mut` are the accessors a cached `NodeId` field
     /// goes through (e.g. `ToastPanel::bg_id`/`text_id` repainted every frame
-    /// while animating) — the one place a stale id used to be able to reach
-    /// `&self.nodes[..]` directly via a release-only `debug_assert`. They must
+    /// while animating). They must
     /// give the same `None`/no-op inertness as every other accessor here.
     #[test]
     fn get_node_on_stale_id_is_none_not_a_panic() {

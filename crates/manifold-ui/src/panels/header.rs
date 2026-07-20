@@ -27,7 +27,7 @@ const PROGRESS_BAR_W: f32 = 140.0;
 const PROGRESS_BAR_H: f32 = 10.0;
 const PROGRESS_BAR_INSET: f32 = 5.0;
 
-// BUG-083: export progress strip, right of centre (mirrors the import
+// export progress strip, right of centre (mirrors the import
 // status + progress bar above, same visibility-toggle-not-rebuild pattern).
 const EXPORT_STATUS_W: f32 = 220.0;
 
@@ -53,7 +53,7 @@ pub struct HeaderPanel {
     import_status: String,
     import_progress: f32,
     import_progress_visible: bool,
-    /// BUG-083 — export status text + progress (0.0..1.0), same
+    /// export status text + progress (0.0..1.0), same
     /// always-emit/toggle-visibility pattern as the import fields above.
     export_status: String,
     export_progress: f32,
@@ -98,7 +98,7 @@ impl HeaderPanel {
         self.import_progress_visible = show;
     }
 
-    /// BUG-083 — export progress strip. `show` is `content_state.is_exporting`;
+    /// export progress strip. `show` is `content_state.is_exporting`;
     /// `status`/`progress` come straight off the content thread's
     /// `send_export_progress` snapshots (`export_status`/`export_progress`).
     pub fn set_export_status(&mut self, status: &str, progress: f32, show: bool) {
@@ -205,7 +205,7 @@ impl HeaderPanel {
     }
 
     fn right_group(&self) -> View {
-        // BUG-083: export progress strip — same fixed-track/inset-fill
+        // export progress strip — same fixed-track/inset-fill
         // pattern as `left_group`'s import progress bar, always emitted and
         // shown/hidden via `.visible()` so toggling it never rebuilds the
         // tree (mirrors `progress_toggle_is_in_place` for the import bar).
@@ -474,10 +474,9 @@ mod tests {
         assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
     }
 
-    /// BUG-083 — the export progress strip follows the same
+    /// the export progress strip follows the same
     /// always-emit/toggle-visibility contract as the import bar above, and
-    /// its text is actually reachable via the tree (the UI consumer this
-    /// bug was missing).
+    /// its text is actually reachable via the tree.
     #[test]
     fn export_progress_toggle_is_in_place_and_text_updates() {
         let mut tree = UITree::new();

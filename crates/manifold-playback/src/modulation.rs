@@ -557,13 +557,15 @@ fn evaluate_instance_audio_mods(
         // BUG-082's fix; widened 2026-07-11 — this used to sit inside the
         // `is_trigger_gate` arm below, so a continuous/Step/Random drawer's
         // Amount meter never had a level to show): capture the SAME
-        // pre-range-map `conditioned` signal any edge detector below reads,
-        // keyed on this mod's owning effect/generator + param — the drawer
-        // meter shows exactly what the mod is reading, gate or not. Push
-        // happens unconditionally, above every mode fork, so every enabled
-        // audio-mod drawer gets a live meter regardless of threshold or mode.
-        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), conditioned);
-
+        // pre-range-map signal any edge detector below reads, keyed on this
+        // mod's owning effect/generator + param — the drawer meter shows
+        // exactly what the mod is reading, gate or not. The push happens per
+        // arm below (2026-07-19, param-drawer unification): the
+        // `is_trigger_gate` arm fires on the sensitivity-scaled RAW edge
+        // (BUG-242), so its meter shows THAT, not the shaped envelope the
+        // gate ignores — tuning sensitivity against a smoothed meter lied
+        // about where the fire threshold sat. Every other arm keeps
+        // `conditioned`, the signal they actually read.
         if is_trigger_gate {
             // §9 U1: the mod's target is a trigger-gate card (e.g.
             // `clip_trigger`) — never write the toggle's value (R2's
@@ -588,6 +590,10 @@ fn evaluate_instance_audio_mods(
             } else {
                 (raw * shape.sensitivity).clamp(0.0, 1.0)
             };
+            fire_meters.push(
+                fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()),
+                edge_level,
+            );
             if m.trigger_edge.advance(edge_level, 0.5)
                 && m.trigger_mode.unwrap_or(TriggerFireMode::Both).wants_transient()
             {
@@ -595,6 +601,8 @@ fn evaluate_instance_audio_mods(
             }
             continue;
         }
+
+        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), conditioned);
 
         if is_trigger {
             // §8 D5b: a fire-button target wants a monotonic count, not a
@@ -1021,7 +1029,7 @@ mod tests {
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
-    /// Post-unification behavior (the bug fix): an envelope binds to the
+    /// An envelope binds to the
     /// instance it sits on, so two same-type effects no longer collide —
     /// each effect's own envelope modulates only that effect.
     #[test]

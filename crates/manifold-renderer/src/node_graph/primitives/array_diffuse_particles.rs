@@ -146,8 +146,7 @@ impl Primitive for ArrayDiffuseParticles {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
-            // coincident path; derived frame_count:u32). array_diffuse_particles.wgsl
-            // is the parity oracle.
+            // coincident path; derived frame_count:u32).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.spread_out standalone codegen"),
@@ -235,101 +234,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — array_diffuse_particles had no
-    //! GPU test. The generated kernel (self-contained hash; derived frame_count
-    //! as an exact u32; aliased in/out on slots 1 and 2) must reproduce the hand
-    //! kernel particle-for-particle: velocity kicked by the same per-particle
-    //! hash. Integer hash on-GPU both ways → bit-exact. Exercises the typed
-    //! `derived_uniforms: ["frame_count:u32"]` path.
-    use super::*;
-
-    fn dispatch_diffuse(
-        wgsl: &str,
-        particles: &[Particle],
-        uniform: &[u8],
-        count: u32,
-        is_generated: bool,
-    ) -> Vec<Particle> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "diffuse-oracle");
-        let buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
-        unsafe {
-            buf.write(0, bytemuck::cast_slice(particles));
-        }
-        let mut bindings = vec![
-            GpuBinding::Bytes { binding: 0, data: uniform },
-            GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
-        ];
-        if is_generated {
-            bindings.push(GpuBinding::Buffer { binding: 2, buffer: &buf, offset: 0 });
-        }
-        let mut enc = device.create_encoder("diffuse-oracle");
-        enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "diffuse-oracle");
-        enc.commit_and_wait_completed();
-        let ptr = buf.mapped_ptr().expect("shared particle buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const Particle, particles.len()) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_diffuse_matches_hand_kernel() {
-        let mk = |vel: [f32; 3]| Particle {
-            position: [0.5, 0.5, 0.5],
-            _pad0: 0.0,
-            velocity: vel,
-            life: 1.0,
-            age: 0.5,
-            _pad1: [0.0; 3],
-            color: [0.2, 0.4, 0.6, 1.0],
-        };
-        let particles = [
-            mk([0.1, 0.2, 0.3]),
-            mk([-0.4, 0.0, 0.5]),
-            mk([0.7, -0.5, 0.1]),
-            mk([0.0, 0.0, 0.0]),
-        ];
-        let n = particles.len() as u32;
-        let diffusion = 0.04f32;
-        let frame_count = 137u32;
-
-        // Hand layout: active_count(u32), frame_count(u32), diffusion(f32), pad.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&n.to_le_bytes());
-        hand.extend_from_slice(&frame_count.to_le_bytes());
-        hand.extend_from_slice(&diffusion.to_le_bytes());
-        hand.extend_from_slice(&0u32.to_le_bytes());
-
-        // Generated layout: diffusion(f32), active_count(i32), frame_count(u32), dispatch_count(u32).
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&diffusion.to_le_bytes());
-        gen_bytes.extend_from_slice(&(n as i32).to_le_bytes());
-        gen_bytes.extend_from_slice(&frame_count.to_le_bytes());
-        gen_bytes.extend_from_slice(&n.to_le_bytes());
-
-        let hand_wgsl = include_str!("shaders/array_diffuse_particles.wgsl");
-        let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<ArrayDiffuseParticles>()
-                .expect("array_diffuse_particles buffer codegen");
-        assert!(gen_wgsl.contains("frame_count: u32"), "frame_count kept as exact u32");
-
-        let from_hand = dispatch_diffuse(hand_wgsl, &particles, &hand, n, false);
-        let from_gen = dispatch_diffuse(&gen_wgsl, &particles, &gen_bytes, n, true);
-
-        for i in 0..particles.len() {
-            for c in 0..3 {
-                assert!(
-                    (from_hand[i].velocity[c] - from_gen[i].velocity[c]).abs() < 1e-6,
-                    "particle {i} velocity[{c}]: hand={} gen={}",
-                    from_hand[i].velocity[c],
-                    from_gen[i].velocity[c]
-                );
-                assert!(
-                    (from_hand[i].position[c] - from_gen[i].position[c]).abs() < 1e-6,
-                    "particle {i} position[{c}] passthrough"
-                );
-            }
-        }
-    }
-}

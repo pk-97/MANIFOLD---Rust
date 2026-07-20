@@ -212,8 +212,7 @@ impl Primitive for CurlSlopeForce3D {
             ],
             // Grid must match the GENERATED kernel's 4x4x4 workgroup
             // (codegen::VOLUME_WORKGROUP_3D), not the hand shader's 8x8x8 -
-            // div_ceil(8) covered only an eighth of the volume (the FluidSim3D
-            // "top-right cube" bug, 2026-07-10).
+            // div_ceil(8) covered only an eighth of the volume.
             [
                 vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
                 vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),

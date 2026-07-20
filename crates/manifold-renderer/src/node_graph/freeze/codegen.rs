@@ -391,13 +391,7 @@ pub fn generate_standalone(
 }
 
 /// [`generate_standalone`] with the STENCIL-FETCH body ABI flag and shared
-/// WGSL library includes (CINEMATIC_POST P1: the texture-domain standalone
-/// path previously had no way to thread `wgsl_includes` at all — only
-/// [`generate_standalone_buffer`] did — so a texture atom whose body called a
-/// shared helper (`depth_common.wgsl`'s `linearize_depth`, the
-/// synthesis-drift-prevention header every depth consumer must use) failed
-/// naga parsing both at dispatch time and at `region.rs`'s classify gate,
-/// permanently boundary-stuck. `includes` mirrors the buffer path's handling
+/// WGSL library includes. `includes` mirrors the buffer path's handling
 /// exactly: deduped-by-caller, prepended verbatim before the body so its
 /// helper calls resolve (same shape as `generate_standalone_buffer`'s
 /// identical block). When
@@ -2654,8 +2648,7 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
 
     // --- shared WGSL library includes (e.g. depth_common's linearize_depth),
     // prepended so the bodies' helper calls resolve — mirrors
-    // generate_fused_buffer's identical block (BUG-135: this texture path
-    // previously never emitted node_includes at all). ---
+    // generate_fused_buffer's identical block. ---
     for inc in &includes {
         out.push_str(inc.trim_end());
         out.push_str("\n\n");
@@ -3135,8 +3128,7 @@ mod dispatch_contract_tests {
     /// Pins the `dim_forms` D3 workgroup string to [`VOLUME_WORKGROUP_3D`], the
     /// constant every volume primitive's `run()` sizes its dispatch grid with.
     /// If either side changes without the other, generated kernels and host
-    /// dispatches silently disagree and only a fraction of the volume computes
-    /// (the FluidSim3D one-octant force field, 2026-07-10).
+    /// dispatches silently disagree and only a fraction of the volume computes.
     #[test]
     fn volume_workgroup_constant_matches_emitted_kernel() {
         let n = VOLUME_WORKGROUP_3D;
@@ -3232,7 +3224,7 @@ mod dispatch_contract_tests {
         );
     }
 
-    /// P3 wave 2 (2026-07-14): a `ParamType::Color` param (the shading-family
+    /// a `ParamType::Color` param (the shading-family
     /// atoms' `color`/`color_a`/`color_x_low`/... tint) now lays out on the
     /// standalone codegen path exactly like Vec3 does — four consecutive f32
     /// fields (`<name>_x/_y/_z/_w`), reassembled at the body call as a
@@ -4161,160 +4153,6 @@ mod gpu_tests {
         }
     }
 
-    /// Dispatch a fused kernel: uniform(0), single external src(1), output at
-    /// `dst_binding`. No sampler (fused kernels textureLoad — read once).
-    fn dispatch_fused_kernel(
-        device: &GpuDevice,
-        wgsl: &str,
-        input: &GpuTexture,
-        param_bytes: &[u8],
-        dst_binding: u32,
-    ) -> RenderTarget {
-        let (w, h) = (input.width, input.height);
-        let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "fused-test");
-        let out = RenderTarget::new(device, w, h, FMT, "fused-out");
-        let mut enc = device.create_encoder("fused-test");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: param_bytes },
-                GpuBinding::Texture { binding: 1, texture: input },
-                GpuBinding::Texture { binding: dst_binding, texture: &out.texture },
-            ],
-            [w.div_ceil(16), h.div_ceil(16), 1],
-            "fused-test",
-        );
-        enc.commit_and_wait_completed();
-        out
-    }
-
-    /// THE step-3 headline: the multi-atom generator chains all 7 ColorGrade
-    /// bodies into ONE kernel (register threading + the source->{chain, mix.a}
-    /// fork + helper dedup + namespacing + merged uniform), and its output
-    /// matches the hand-fused colorgrade_fused.wgsl bit-for-bit through the
-    /// oracle. This is the auto-generated 7.4× ColorGrade.
-    #[test]
-    fn fused_colorgrade_generated_matches_hand_kernel() {
-        use crate::node_graph::primitive::PrimitiveSpec;
-        use crate::node_graph::primitives::{
-            ClampTexture, Colorize, Contrast, Gain, HueSaturation, Mix, Saturation,
-        };
-
-        let device = crate::test_device();
-        let (w, h) = (256u32, 256u32);
-        let input = gradient(&device, w, h);
-        let id = NodeInstanceId;
-
-        // ColorGrade region: gain -> saturation -> hue -> contrast -> colorize,
-        // then mix(a=source fork, b=colorize) -> clamp. Bodies/params from the
-        // atom types' consts.
-        let region = FusionRegion {
-            nodes: vec![
-                RegionNode { node_id: id(0), fusion_kind: Gain::FUSION_KIND, body: Gain::WGSL_BODY.unwrap(), params: Gain::PARAMS, inputs: vec![InputSource::External(0)], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(1), fusion_kind: Saturation::FUSION_KIND, body: Saturation::WGSL_BODY.unwrap(), params: Saturation::PARAMS, inputs: vec![InputSource::Node(id(0))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(2), fusion_kind: HueSaturation::FUSION_KIND, body: HueSaturation::WGSL_BODY.unwrap(), params: HueSaturation::PARAMS, inputs: vec![InputSource::Node(id(1))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(3), fusion_kind: Contrast::FUSION_KIND, body: Contrast::WGSL_BODY.unwrap(), params: Contrast::PARAMS, inputs: vec![InputSource::Node(id(2))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(4), fusion_kind: Colorize::FUSION_KIND, body: Colorize::WGSL_BODY.unwrap(), params: Colorize::PARAMS, inputs: vec![InputSource::Node(id(3))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(5), fusion_kind: Mix::FUSION_KIND, body: Mix::WGSL_BODY.unwrap(), params: Mix::PARAMS, inputs: vec![InputSource::External(0), InputSource::Node(id(4))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-                RegionNode { node_id: id(6), fusion_kind: ClampTexture::FUSION_KIND, body: ClampTexture::WGSL_BODY.unwrap(), params: ClampTexture::PARAMS, inputs: vec![InputSource::Node(id(5))], input_access: vec![], node_inputs: &[], node_outputs: &[], node_includes: &[], derived_uniforms: &[], type_id: String::new(), derived_camera_ext: None, output_storage: "rgba16float", stencil_fetch: false, quantize_f16: false },
-            ],
-            num_external_inputs: 1,
-            outputs: vec![(id(6), "out".to_string())],
-            in_place_alias: None,
-            sampler_address_mode: "clamp",
-            dispatch_count_field: None,
-            virtual_chains: Vec::new(),
-            sampled_externals: Vec::new(), camera_externals: 0,
-        };
-        let fused = generate_fused(&region).expect("fuse ColorGrade region");
-
-        // Structural: shared helpers deduped (hue_saturation + colorize both
-        // carry rgb2hsv/hsv2rgb), every body namespaced, one entry.
-        assert_eq!(
-            fused.wgsl.matches("fn rgb2hsv").count(),
-            1,
-            "rgb2hsv must be deduped to one copy"
-        );
-        assert_eq!(fused.wgsl.matches("fn hsv2rgb").count(), 1, "hsv2rgb deduped");
-        assert!(!fused.wgsl.contains("fn body("), "every body must be namespaced");
-        assert!(fused.wgsl.contains("fn n5_body"), "mix body namespaced as n5_body");
-        assert_eq!(fused.wgsl.matches("fn cs_main").count(), 1, "exactly one entry");
-
-        // Pack the generated uniform per its param_order. Same logical values
-        // as the hand kernel below; mix.mode is the one u32.
-        let slot_bytes = |nid: u32, name: &str| -> [u8; 4] {
-            if (nid, name) == (5, "mode") {
-                return 0u32.to_le_bytes();
-            }
-            let v: f32 = match (nid, name) {
-                (0, "gain") => 1.15,
-                (1, "saturation") => 1.3,
-                (2, "hue") => 25.0,
-                (2, "saturation") => 1.2,
-                (2, "value") => 1.0,
-                (3, "contrast") => 1.2,
-                (4, "amount") => 0.4,
-                (4, "hue") => 210.0,
-                (4, "saturation") => 0.8,
-                (4, "focus") => 0.6,
-                (5, "amount") => 1.0,
-                (6, "min") => 0.0,
-                (6, "max") => 65000.0,
-                _ => panic!("unexpected param {nid}.{name}"),
-            };
-            v.to_le_bytes()
-        };
-        let mut bytes = Vec::new();
-        for (nid, name) in &fused.param_order {
-            bytes.extend_from_slice(&slot_bytes(nid.0, name));
-        }
-        while bytes.len() % 16 != 0 {
-            bytes.push(0);
-        }
-        let from_generated = dispatch_fused_kernel(&device, &fused.wgsl, &input, &bytes, 2);
-
-        // Hand kernel (colorgrade_fused.wgsl) via the reference module, same values.
-        let hand_params = crate::node_graph::freeze::reference::ColorGradeParams {
-            gain: 1.15,
-            sat_s: 1.3,
-            hue_deg: 25.0,
-            sat_h: 1.2,
-            val_h: 1.0,
-            contrast: 1.2,
-            col_amount: 0.4,
-            col_hue: 210.0,
-            col_sat: 0.8,
-            col_focus: 0.6,
-            mix_amount: 1.0,
-            mix_mode: 0,
-            clamp_min: 0.0,
-            clamp_max: 65000.0,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
-        let pipeline = crate::node_graph::freeze::reference::colorgrade_pipeline(&device);
-        let hand_out = RenderTarget::new(&device, w, h, FMT, "hand-cg");
-        {
-            let mut enc = device.create_encoder("hand-cg");
-            crate::node_graph::freeze::reference::dispatch_fused_colorgrade(
-                &mut enc,
-                &pipeline,
-                &input,
-                &hand_out.texture,
-                &hand_params,
-            );
-            enc.commit_and_wait_completed();
-        }
-
-        let differ = TextureDiff::new(&device);
-        let r = differ.compare(&device, &hand_out.texture, &from_generated.texture, 1e-4, 1e-4);
-        assert_eq!(
-            r.over_count, 0,
-            "auto-generated fused ColorGrade must match the hand kernel \
-             (max_abs={}, max_rel={})",
-            r.max_abs, r.max_rel
-        );
-    }
 
     /// The coincident two-input path: the generated standalone mix kernel
     /// reproduces mix.wgsl (two textures, blend mode + alpha lerp). Exercises
@@ -5699,9 +5537,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
 
     /// 3D CoincidentTexel parity (dual-packed): node.swirl_force_3d reads its
     /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
-    /// combines curl + slope around the single CPU-normalized ref_axis (the
-    /// legacy fused-pass force law; the corner-degenerate per-voxel wobble was
-    /// removed 2026-07-10). The hand uniform pads vol_res/vol_depth to 16 (48
+    /// combines curl + slope around the single CPU-normalized ref_axis. The hand uniform pads vol_res/vol_depth to 16 (48
     /// bytes); the generated Params are contiguous (32 bytes) — pack each from
     /// the same logical values.
     #[test]

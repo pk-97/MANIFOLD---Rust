@@ -1,10 +1,6 @@
 // ColorTransferFunctions.h — shared Metal Shading Language snippet for the
 // piecewise sRGB OETF (linear -> encoded) and EOTF (encoded -> linear).
 //
-// BUG-128: MetalEncoderPlugin.m's SDR copy shader used to bake a plain
-// pow(1/2.2) power curve, and MetalVideoDecoderPlugin.m's YCbCr->RGB shader
-// used a plain pow(2.2) to linearize — an approximation that diverges from
-// the true sRGB transfer function most in the shadows (below ~0.04 linear).
 // The live display (scanout, ExtendedLinearSRGB surface) and the still
 // exporter both use the true piecewise function, so video was the odd one
 // out. This header is the ONE shared definition both native plugins use, so

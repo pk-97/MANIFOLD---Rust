@@ -8,8 +8,7 @@
 // mode=Add. Matches blinn_specular.wgsl exactly.
 // PARAMS order: [light_x, light_y, light_z, view_x, view_y, view_z, power,
 // color]. `color` is a Color param — the codegen expands it to four
-// consecutive f32 fields and reassembles it as vec4<f32> (2026-07-14, P3
-// wave 2 — see freeze/codegen.rs's ParamType::Color branch).
+// consecutive f32 fields and reassembles it as vec4<f32>.
 fn body(
     c_normal: vec4<f32>,
     uv: vec2<f32>,

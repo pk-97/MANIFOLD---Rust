@@ -348,54 +348,6 @@ mod gpu_tests {
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, a.len()) }.to_vec()
     }
 
-    #[test]
-    fn generated_matches_hand_kernel_all_modes() {
-        let device = crate::test_device();
-        let gen_wgsl = generated_wgsl();
-        assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
-        assert!(gen_wgsl.contains("var<storage, read> buf_in"), "in bound read storage");
-        assert!(gen_wgsl.contains("var<storage, read> buf_b"), "b bound read storage");
-        assert!(gen_wgsl.contains("var<storage, read> buf_weights"), "weights bound read storage");
-        assert!(gen_wgsl.contains("weights_len: u32"), "derived weights_len injected");
-        assert!(gen_wgsl.contains("var<storage, read_write> buf_out"), "out bound read_write");
-        let hand = include_str!("shaders/morph_mesh.wgsl");
-
-        let a = vec![
-            mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
-            mk_vertex([1.0, 2.0, -1.0], [0.577, 0.577, 0.577], [0.5, 0.25]),
-            mk_vertex([-3.0, 1.0, 2.0], [0.0, 0.0, 1.0], [0.75, 0.9]),
-            mk_vertex([2.0, -1.0, 0.5], [1.0, 0.0, 0.0], [0.2, 0.8]),
-        ];
-        let b = vec![
-            mk_vertex([4.0, 1.0, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
-            mk_vertex([-1.0, 0.5, 2.0], [0.0, 1.0, 0.0], [0.0, 0.5]),
-            mk_vertex([0.5, -2.0, -1.0], [0.0, 0.0, 1.0], [0.25, 0.1]),
-            mk_vertex([1.5, 1.5, 1.5], [0.577, 0.577, 0.577], [0.6, 0.3]),
-        ];
-        let weights = [0.3f32, 0.8, 1.0, 0.5];
-        for &use_w in &[false, true] {
-            let w = if use_w { Some(&weights[..]) } else { None };
-            for &t in &[0.0f32, 0.3, 0.73, 1.0] {
-                let from_gen = dispatch_morph(&device, &gen_wgsl, &a, &b, w, None, t);
-                let from_hand = dispatch_morph(&device, hand, &a, &b, w, None, t);
-                for i in 0..a.len() {
-                    for c in 0..3 {
-                        assert!(
-                            (from_gen[i].position[c] - from_hand[i].position[c]).abs() < 1e-5,
-                            "w={use_w} t={t} vertex {i} pos[{c}]: gen={} hand={}",
-                            from_gen[i].position[c],
-                            from_hand[i].position[c]
-                        );
-                        assert!(
-                            (from_gen[i].normal[c] - from_hand[i].normal[c]).abs() < 1e-4,
-                            "w={use_w} t={t} vertex {i} normal[{c}]"
-                        );
-                    }
-                    assert_eq!(from_gen[i].uv, from_hand[i].uv);
-                }
-            }
-        }
-    }
 
     #[test]
     fn matches_hand_formula_analytically_and_uv_from_a() {

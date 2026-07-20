@@ -51,7 +51,7 @@ fn fmt_macro(v: f32) -> String {
     format!("{:.2}", v)
 }
 
-// P8 (docs/UI_WIDGET_UNIFICATION_DESIGN.md, BUG-143): what an Ableton-range
+// what an Ableton-range
 // trim-bar drag targets — folds the old `i32` slot-index sentinel (−1 idle)
 // plus its parallel min/max bool onto `DragController`, the same
 // sentinel-pair disease P7.1's `ParamDragTarget` was built to cure (D8).
@@ -79,8 +79,8 @@ pub struct MacrosPanel {
     ableton_displays: [Option<AbletonMappingDisplay>; MACRO_COUNT],
     /// Cached Ableton range per slot (for drag updates + build).
     ableton_ranges: [Option<(f32, f32)>; MACRO_COUNT],
-    /// Which macro slot's Ableton trim bar is being dragged, if any — P8
-    /// (BUG-143): replaces the old `i32` slot-index sentinel (−1 idle) plus
+    /// Which macro slot's Ableton trim bar is being dragged, if any —
+    /// replaces the old `i32` slot-index sentinel (−1 idle) plus
     /// its parallel min/max bool field.
     ableton_trim_drag: DragController<AbletonTrimDrag>,
     is_collapsed: bool,
@@ -336,7 +336,7 @@ impl MacrosPanel {
                     .map(|id| tree.get_bounds(id))
                 {
                     self.ableton_config_ids[i] =
-                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display));
+                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display, None));
                 } else {
                     self.ableton_config_ids[i] = None;
                 }
@@ -571,13 +571,8 @@ mod tests {
 
     #[test]
     fn ableton_trim_drag_lifecycle_matches_press_drag_release_contract() {
-        // BUG-143 / P8 pinning: exercises the real handle_press/handle_drag/
-        // handle_release path for the Ableton range trim-bar drag. Written and
-        // green BEFORE folding the old `i32` slot-index sentinel (+ its
-        // parallel min/max bool) onto `DragController<AbletonTrimDrag>`,
-        // re-verified green AFTER — the PanelAction sequence and computed
-        // [min,max] values must be
-        // byte-identical, proving only the internal plumbing changed.
+        // exercises the real handle_press/handle_drag/
+        // handle_release path for the Ableton range trim-bar drag.
         let mut tree = UITree::new();
         let mut panel = MacrosPanel::new();
         panel.set_collapsed(false);
@@ -642,10 +637,9 @@ mod tests {
         assert!(matches!(release_max.as_slice(), [PanelAction::AbletonMacroTrimCommit(0)]));
     }
 
-    /// BUG-257 class, macros-panel instance: after an in-place scroll (every
+    /// after an in-place scroll (every
     /// content node's y shifted, no rebuild), an Ableton trim drag must place
-    /// the bars at the track's LIVE y — before the fix this block read the
-    /// build-time cached rect and teleported the bars to the pre-scroll row.
+    /// the bars at the track's LIVE y.
     #[test]
     fn ableton_trim_bars_follow_the_track_after_scroll() {
         let mut tree = UITree::new();
@@ -687,9 +681,8 @@ mod tests {
 
     #[test]
     fn right_click_on_macro_track_resolves_to_slider_reset_with_zero_default() {
-        // BUG-061: the per-macro reset now rides the generic SliderReset trio
-        // (the old per-panel right-click reset action was deleted), carrying
-        // the macro's own default of 0.0.
+        // the per-macro reset now rides the generic SliderReset trio,
+        // carrying the macro's own default of 0.0.
         let mut tree = UITree::new();
         let mut panel = MacrosPanel::new();
         panel.set_collapsed(false);

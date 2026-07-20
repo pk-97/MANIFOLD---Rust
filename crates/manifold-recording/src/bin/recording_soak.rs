@@ -56,7 +56,7 @@ fn run() -> i32 {
         }
     };
 
-    // D7 — HDR is deferred behind BUG-053; refuse loudly before touching
+    // HDR is deferred behind BUG-053; refuse loudly before touching
     // anything (disk, GPU, encoder).
     if args.hdr {
         println!(
@@ -388,27 +388,15 @@ fn execute(args: &Args) -> i32 {
     }
 
     // Audio coverage sanity gate (both modes): the decoded audio track must
-    // exist and must not have catastrophically collapsed. BUG-086
-    // (docs/BUG_BACKLOG.md) tracked a real, VARIABLE residual shortfall here
-    // (repeated 2-minute 1920x1080 unpaced runs measured audio_duration_s at
-    // 116.0s-118.5s against an intended 120.0s), root-caused this session:
-    // `push_realtime_audio_chunk`'s synthetic-audio ring buffer (bounded
-    // `HeapRb`, ~5s capacity) can transiently fill under unpaced/
-    // encoder-stress timing bursts, and the old code advanced its
-    // `pushed_frames` bookkeeping by the INTENDED push amount regardless of
-    // what `ringbuf::Producer::push_slice` actually accepted -- so a
-    // transient overflow was silently discarded rather than retried, a
-    // permanent loss this binary's own harness caused, not the native
-    // encoder's (confirmed: `audio_frames_dropped` measured 0 on runs that
-    // still fell short). Fixed by tracking the real accepted count, which
+    // exist and must not have catastrophically collapsed. Fixed by tracking
+    // the real accepted count, which
     // self-heals the backlog on the next call. Repeated 2-minute unpaced
     // runs post-fix measured audio_duration_s at 120.006s-120.012s (<0.01%
     // off) -- the WARNING threshold below is tightened accordingly; the 50%
     // floor remains as a defense against a genuinely different collapse.
     if args.audio {
         // BUG-084/BUG-086 instrument: the native encoder's backpressure-drop
-        // counter, now live (previously this drop path returned success and
-        // logged nothing at all). Always printed when audio is on, whether
+        // counter, now live. Always printed when audio is on, whether
         // or not the coverage gate below fires -- a 0 reading on a take that
         // still falls short is itself an observation (rules the gate out as
         // BUG-086's cause for that run).
@@ -612,9 +600,7 @@ fn submit_frame_realtime(
 /// of this function advanced `pushed_frames` by the intended `to_push`
 /// regardless of what `push_slice` actually accepted -- so any shortfall was
 /// silently discarded rather than retried on the next call, a permanent loss
-/// with nothing recording that it happened. This is the harness's own bug,
-/// not the native encoder's: the caller (`execute`) confirmed a decoded
-/// `audio_frames_dropped` of 0 on runs that still fell short. Tracking the
+/// with nothing recording that it happened. Tracking the
 /// real accepted count here self-heals -- the next call's `to_push`
 /// naturally includes whatever didn't fit last time -- and the caller
 /// reports any residual shortfall against the intended total once, at the

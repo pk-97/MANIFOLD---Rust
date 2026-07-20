@@ -148,13 +148,12 @@ impl LiveTriggerState {
                 // edge level below needs the pre-tick value to recompute the
                 // sensitivity-scaled raw signal for edge detection.
                 let prev_raw_before_condition = follower.prev_raw;
-                // Edge-detect the pre-range-map `conditioned` signal — the
-                // exact same split the trigger-gate arm in
-                // `modulation::evaluate_instance_audio_mods` uses (never the
-                // range-mapped value `AudioModShape::apply` would produce),
-                // so *whether* a clip fires can never be distorted by a trim
-                // handle even if one is ever exposed on this drawer.
-                let conditioned = cfg.shape.condition(
+                // The return value is unused (firing AND the meter both read
+                // `edge_level`), but
+                // the call itself is load-bearing: it advances
+                // `follower.prev_raw`, which the rate-of-change arm of
+                // `edge_level` differences against next tick.
+                let _conditioned = cfg.shape.condition(
                     raw,
                     dt_s,
                     &mut follower.smoothed,
@@ -177,16 +176,19 @@ impl LiveTriggerState {
                 } else {
                     (raw * cfg.shape.sensitivity).clamp(0.0, 1.0)
                 };
-                // D6 (P3c, BUG-082's fix): capture the same shaped signal the
-                // edge check below reads, keyed on the owning layer + this
-                // config's index — the drawer meter shows exactly what
-                // decides whether the clip fires. Pushed before the edge
-                // check so the meter reflects the level every tick, not only
-                // on a fire — and, since BUG-109, whether or not `fire_enabled`
-                // is set, so the meter breathes with the music while stopped.
+                // D6 (P3c, BUG-082's fix): capture the signal the edge check
+                // below reads, keyed on the owning layer + this config's
+                // index — the drawer meter shows exactly what decides whether
+                // the clip fires. Pushed before the edge check so the meter
+                // reflects the level every tick, not only on a fire — and,
+                // since BUG-109, whether or not `fire_enabled` is set, so the
+                // meter breathes with the music while stopped. That signal is
+                // `edge_level`, NOT `conditioned`: BUG-242 moved firing onto
+                // the sensitivity-scaled raw edge, and a meter showing the
+                // shaped envelope lied about where the threshold sat.
                 fire_meters.push(
                     fire_meter_key_for_clip_trigger(layer.layer_id.as_str(), idx as u64),
-                    conditioned,
+                    edge_level,
                 );
                 if fire_enabled && follower.edge.advance(edge_level, 0.5) {
                     fires.push(FireRequest {
@@ -277,11 +279,7 @@ mod tests {
     fn two_impulses_80ms_apart_both_fire_with_default_shape_release() {
         // BUG-242: with the DEFAULT shape (release_ms = 120, untouched),
         // two onsets landing ~80ms apart — well inside the release tail —
-        // must both fire. Before the fix, `TransientEdge::advance` read the
-        // shape-CONDITIONED envelope, which was still decaying above the
-        // 0.5 * REARM_RATIO re-arm floor 80ms after the first onset (a
-        // 120ms release hasn't cleared that floor by then), so the second
-        // onset never re-armed the edge. After the fix the edge reads the
+        // must both fire. After the fix the edge reads the
         // sensitivity-scaled RAW signal, which drops straight back to 0 the
         // tick after each onset (mirroring the upstream transient
         // detector's own decaying-impulse-per-onset shape), clearing the

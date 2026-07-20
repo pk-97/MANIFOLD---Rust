@@ -76,7 +76,7 @@ struct LayerTexture {
 /// stamping each slot claim and blocking if the GPU hasn't retired the
 /// command buffer that last wrote it — not from this depth alone.
 /// 16 = 8 frames of cover at this ring's 2 claims per frame (Pass 4a grid +
-/// Pass 4c overview/lanes): fence logs at 4K project load (2026-07-12)
+/// Pass 4c overview/lanes): fence logs at 4K project load
 /// showed the UI queue running 4-5 frames behind, so the previous 8-slot
 /// depth (4 frames) sat inside the backlog window and hit wait timeouts.
 const VBUF_RING_SIZE: usize = 16;

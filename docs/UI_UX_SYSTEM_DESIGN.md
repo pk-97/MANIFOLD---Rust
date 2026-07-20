@@ -1,6 +1,6 @@
 # MANIFOLD — Graph & Parameter UI/UX System Design
 
-Status: **rationale doc — partly built** (2026-05-31, status corrected 2026-06-13).
+Status: **rationale doc — partly built** (2026-05-31).
 This is the original vision for the UI/UX pass on the effect/generator/graph/node
 surfaces. It is the human-facing half of the node "UX backend" initiative
 ([project_node_descriptor_ux_backend], `docs/NODE_CATALOG.md`): the descriptor

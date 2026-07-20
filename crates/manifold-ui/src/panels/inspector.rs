@@ -3,7 +3,8 @@ use super::layer_chrome::LayerChromePanel;
 use super::audio_trigger_section::AudioTriggerSection;
 use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
-use super::param_card::{CardContext, ParamCardConfig, ParamCardPanel};
+use super::param_card::{CardContext, ParamCardPanel};
+use crate::param_surface::ParamSurface;
 use super::{InspectorTab, Panel, PanelAction};
 use crate::chrome::{self, Pad, View};
 use crate::color;
@@ -130,13 +131,20 @@ pub struct InspectorCompositePanel {
     macros_panel: MacrosPanel,
     /// P3b: layer-owned clip-trigger authoring (AUDIO_SETUP_DOCK_AND_TRIGGER_
     /// UNIFICATION_DESIGN.md). Pinned at the TOP of the layer column's
-    /// content, above `gen_params`/`layer_effects` — see `build_in_rect`.
+    /// content, above `gen_params`/the layer scope's effect cards — see
+    /// `build_in_rect`.
     audio_trigger_section: AudioTriggerSection,
     master_chrome: MasterChromePanel,
     layer_chrome: LayerChromePanel,
     clip_chrome: ClipChromePanel,
-    master_effects: Vec<ParamCardPanel>,
-    layer_effects: Vec<ParamCardPanel>,
+    /// one storage for both scopes, indexed by
+    /// [`Self::scope_idx`] (`SCOPE_MASTER` / `SCOPE_LAYER`) instead of two
+    /// parallel `Vec<ParamCardPanel>` fields. `Layer`/`Group`/`Clip` all
+    /// canonicalize to `SCOPE_LAYER` — every former per-tab touchpoint now
+    /// routes through [`Self::cards_for_tab`] / [`Self::cards_for_tab_mut`]
+    /// (or, when it genuinely needs both scopes at once, `self.effects[..]`
+    /// directly) instead of duplicating a match arm per touchpoint.
+    effects: [Vec<ParamCardPanel>; 2],
     gen_params: Option<ParamCardPanel>,
     /// D17 "delete collapse" (exit-state pattern, `anim.rs`'s doc comment) —
     /// cards `reconcile_cards` no longer finds a config for, kept alive here
@@ -149,7 +157,7 @@ pub struct InspectorCompositePanel {
     /// `update()` once `ParamCardPanel::is_delete_finished` is true.
     master_dying: Vec<ParamCardPanel>,
     layer_dying: Vec<ParamCardPanel>,
-    /// The layer whose effects `layer_effects` currently holds. When
+    /// The layer whose effects `effects[SCOPE_LAYER]` currently holds. When
     /// `configure_layer_effects` is called for a DIFFERENT scope (a different
     /// selected layer, or none), that's navigation — not an edit of the
     /// current chain — so the old cards are dropped instantly rather than
@@ -157,7 +165,7 @@ pub struct InspectorCompositePanel {
     /// deleted, just navigated away from). Only a same-scope reconcile keeps
     /// the exit animation. Twin of `configure_gen_params`, which already keys
     /// panel reuse on the layer id.
-    layer_effects_scope: Option<LayerId>,
+    layer_scope_id: Option<LayerId>,
 
     /// Chrome context applied to every card this panel owns (Perform on the
     /// main window's inspector, Author on the graph-editor window's — set
@@ -272,6 +280,20 @@ pub struct InspectorCompositePanel {
 }
 
 impl InspectorCompositePanel {
+    // BUG-267 — the two canonical scopes `effects` is indexed by. `Layer`,
+    // `Group`, and `Clip` all canonicalize to `SCOPE_LAYER` via `scope_idx`.
+    const SCOPE_MASTER: usize = 0;
+    const SCOPE_LAYER: usize = 1;
+
+    /// Canonicalize a tab to its `effects` storage index — the single place
+    /// that decides "Master effects" vs "Layer/Group/Clip effects".
+    fn scope_idx(tab: InspectorTab) -> usize {
+        match tab {
+            InspectorTab::Master => Self::SCOPE_MASTER,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => Self::SCOPE_LAYER,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             macros_panel: MacrosPanel::new(),
@@ -279,12 +301,11 @@ impl InspectorCompositePanel {
             master_chrome: MasterChromePanel::new(),
             layer_chrome: LayerChromePanel::new(),
             clip_chrome: ClipChromePanel::new(),
-            master_effects: Vec::new(),
-            layer_effects: Vec::new(),
+            effects: [Vec::new(), Vec::new()],
             gen_params: None,
             master_dying: Vec::new(),
             layer_dying: Vec::new(),
-            layer_effects_scope: None,
+            layer_scope_id: None,
             card_context: CardContext::Perform,
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
@@ -346,10 +367,7 @@ impl InspectorCompositePanel {
     /// `build()`) when this is `true`.
     pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
         let mut any = false;
-        for card in &mut self.master_effects {
-            any |= card.skip_to_settled(tree);
-        }
-        for card in &mut self.layer_effects {
+        for card in self.effects.iter_mut().flatten() {
             any |= card.skip_to_settled(tree);
         }
         if let Some(gp) = self.gen_params.as_mut() {
@@ -511,10 +529,7 @@ impl InspectorCompositePanel {
     /// cards and the generator-param card) so their drawers hide/show together.
     fn apply_mods_compact(&mut self) {
         let c = self.mods_compact;
-        for card in &mut self.master_effects {
-            card.set_compact(c);
-        }
-        for card in &mut self.layer_effects {
+        for card in self.effects.iter_mut().flatten() {
             card.set_compact(c);
         }
         if let Some(gp) = self.gen_params.as_mut() {
@@ -526,10 +541,10 @@ impl InspectorCompositePanel {
     fn active_column_card_count(&self) -> usize {
         let mut n = 0;
         if self.master_visible() {
-            n += self.master_effects.len();
+            n += self.effects[Self::SCOPE_MASTER].len();
         }
         if self.layer_visible() || self.clip_visible() {
-            n += self.layer_effects.len();
+            n += self.effects[Self::SCOPE_LAYER].len();
         }
         n
     }
@@ -537,11 +552,13 @@ impl InspectorCompositePanel {
     /// True if any effect card in the active column is currently expanded — the
     /// collapse-all control collapses when this holds, expands otherwise.
     fn any_active_card_expanded(&self) -> bool {
-        if self.master_visible() && self.master_effects.iter().any(|c| !c.is_collapsed()) {
+        if self.master_visible()
+            && self.effects[Self::SCOPE_MASTER].iter().any(|c| !c.is_collapsed())
+        {
             return true;
         }
         if (self.layer_visible() || self.clip_visible())
-            && self.layer_effects.iter().any(|c| !c.is_collapsed())
+            && self.effects[Self::SCOPE_LAYER].iter().any(|c| !c.is_collapsed())
         {
             return true;
         }
@@ -559,8 +576,9 @@ impl InspectorCompositePanel {
     /// what was actually built. No `*_visible()` gate; the node range is the
     /// single source of truth for "live this frame".
     pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
-        let mut ranges =
-            Vec::with_capacity(4 + self.master_effects.len() + self.layer_effects.len() + 1);
+        let mut ranges = Vec::with_capacity(
+            4 + self.effects[Self::SCOPE_MASTER].len() + self.effects[Self::SCOPE_LAYER].len() + 1,
+        );
         let push = |ranges: &mut Vec<(usize, usize)>, first: usize, count: usize| {
             if first != usize::MAX && count > 0 {
                 ranges.push((first, first + count));
@@ -576,7 +594,7 @@ impl InspectorCompositePanel {
             self.master_chrome.first_node(),
             self.master_chrome.node_count(),
         );
-        for card in &self.master_effects {
+        for card in &self.effects[Self::SCOPE_MASTER] {
             push(&mut ranges, card.first_node(), card.node_count());
         }
         push(
@@ -587,7 +605,7 @@ impl InspectorCompositePanel {
         if let Some(ref gp) = self.gen_params {
             push(&mut ranges, gp.first_node(), gp.node_count());
         }
-        for card in &self.layer_effects {
+        for card in &self.effects[Self::SCOPE_LAYER] {
             push(&mut ranges, card.first_node(), card.node_count());
         }
         push(
@@ -598,13 +616,13 @@ impl InspectorCompositePanel {
         ranges
     }
 
-    pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
-        let existing = std::mem::take(&mut self.master_effects);
-        self.master_effects =
+    pub fn configure_master_effects(&mut self, configs: &[ParamSurface]) {
+        let existing = std::mem::take(&mut self.effects[Self::SCOPE_MASTER]);
+        self.effects[Self::SCOPE_MASTER] =
             Self::reconcile_cards(existing, configs, &mut self.master_dying, self.card_context);
     }
 
-    pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig], scope: Option<&LayerId>) {
+    pub fn configure_layer_effects(&mut self, configs: &[ParamSurface], scope: Option<&LayerId>) {
         // A change of scope is navigation, not an edit of the current chain:
         // the previously-shown layer's effects weren't removed from the model,
         // so they must not play the delete-collapse exit animation.
@@ -613,19 +631,19 @@ impl InspectorCompositePanel {
         // one of them into `layer_dying` and the whole stale chain would linger
         // mid-collapse over the new selection. Drop them instantly instead, and
         // abandon any in-flight death carried over from the old scope.
-        if scope != self.layer_effects_scope.as_ref() {
-            self.layer_effects.clear();
+        if scope != self.layer_scope_id.as_ref() {
+            self.effects[Self::SCOPE_LAYER].clear();
             self.layer_dying.clear();
-            self.layer_effects_scope = scope.cloned();
+            self.layer_scope_id = scope.cloned();
         }
-        let existing = std::mem::take(&mut self.layer_effects);
-        self.layer_effects =
+        let existing = std::mem::take(&mut self.effects[Self::SCOPE_LAYER]);
+        self.effects[Self::SCOPE_LAYER] =
             Self::reconcile_cards(existing, configs, &mut self.layer_dying, self.card_context);
     }
 
     pub fn configure_gen_params(
         &mut self,
-        config: Option<&ParamCardConfig>,
+        config: Option<&ParamSurface>,
         layer_id: Option<LayerId>,
     ) {
         // The generator card is a single optional, distinct from the effect
@@ -658,9 +676,9 @@ impl InspectorCompositePanel {
     pub fn set_card_context(&mut self, context: CardContext) {
         self.card_context = context;
         for card in self
-            .master_effects
+            .effects
             .iter_mut()
-            .chain(self.layer_effects.iter_mut())
+            .flatten()
             .chain(self.gen_params.iter_mut())
             .chain(self.master_dying.iter_mut())
             .chain(self.layer_dying.iter_mut())
@@ -674,9 +692,9 @@ impl InspectorCompositePanel {
     /// generator). `None` when no card currently exposes that param as a
     /// mappable row (wrong context, not built yet, or param unknown).
     pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
-        self.master_effects
+        self.effects
             .iter()
-            .chain(self.layer_effects.iter())
+            .flatten()
             .chain(self.gen_params.iter())
             .find_map(|card| card.mapping_chevron_rect(tree, param_id))
     }
@@ -699,7 +717,7 @@ impl InspectorCompositePanel {
     /// state every sync and re-allocated every panel each frame.
     fn reconcile_cards(
         mut existing: Vec<ParamCardPanel>,
-        configs: &[ParamCardConfig],
+        configs: &[ParamSurface],
         dying: &mut Vec<ParamCardPanel>,
         card_context: CardContext,
     ) -> Vec<ParamCardPanel> {
@@ -767,11 +785,7 @@ impl InspectorCompositePanel {
         fx_idx: usize,
         param_id: &str,
     ) -> bool {
-        let cards = match tab {
-            InspectorTab::Master => &self.master_effects,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
-        };
-        cards
+        self.cards_for_tab(tab)
             .get(fx_idx)
             .is_some_and(|card| card.param_has_ableton_mapping(param_id))
     }
@@ -789,11 +803,9 @@ impl InspectorCompositePanel {
     /// [`Self::is_effect_ableton_mapped`], read by the card context menu to
     /// gate Revert/Push to Library.
     pub fn effect_has_graph_mod(&self, tab: InspectorTab, fx_idx: usize) -> bool {
-        let cards = match tab {
-            InspectorTab::Master => &self.master_effects,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
-        };
-        cards.get(fx_idx).is_some_and(|card| card.has_graph_mod())
+        self.cards_for_tab(tab)
+            .get(fx_idx)
+            .is_some_and(|card| card.has_graph_mod())
     }
 
     /// Whether the layer's generator has diverged from its library entry
@@ -804,10 +816,10 @@ impl InspectorCompositePanel {
     }
 
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
-        self.master_effects.get_mut(idx)
+        self.effects[Self::SCOPE_MASTER].get_mut(idx)
     }
     pub fn layer_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
-        self.layer_effects.get_mut(idx)
+        self.effects[Self::SCOPE_LAYER].get_mut(idx)
     }
     /// `master_effect_mut`/`layer_effect_mut`, picked by `tab` — mirrors
     /// `is_effect_ableton_mapped`'s Master vs Layer|Group|Clip split. The one
@@ -815,12 +827,7 @@ impl InspectorCompositePanel {
     /// wants to reach into the specific card's own UI-only state (e.g. P2
     /// `begin_value_snapback`) rather than just mutate the model.
     pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {
-        match tab {
-            InspectorTab::Master => self.master_effects.get_mut(idx),
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
-                self.layer_effects.get_mut(idx)
-            }
-        }
+        self.cards_for_tab_mut(tab).get_mut(idx)
     }
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
@@ -868,10 +875,7 @@ impl InspectorCompositePanel {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
-        for card in &self.master_effects {
-            card.update_fire_meters(tree, fire_level, dt);
-        }
-        for card in &self.layer_effects {
+        for card in self.effects.iter().flatten() {
             card.update_fire_meters(tree, fire_level, dt);
         }
         if let Some(gp) = &self.gen_params {
@@ -887,12 +891,7 @@ impl InspectorCompositePanel {
     /// walk order as [`Self::update_fire_meters`]. First match wins (the app
     /// doesn't let a performer open two fire-mode drawers at once today).
     pub fn open_fire_mode_drawer_send(&self) -> Option<manifold_foundation::AudioSendId> {
-        for card in &self.master_effects {
-            if let Some(id) = card.open_fire_mode_drawer_send() {
-                return Some(id);
-            }
-        }
-        for card in &self.layer_effects {
+        for card in self.effects.iter().flatten() {
             if let Some(id) = card.open_fire_mode_drawer_send() {
                 return Some(id);
             }
@@ -909,12 +908,7 @@ impl InspectorCompositePanel {
     /// inspector is reading, if any — same walk order and pairing as
     /// [`Self::open_fire_mode_drawer_send`] (both read off the same open row).
     pub fn open_fire_mode_drawer_band(&self) -> Option<crate::types::AudioBand> {
-        for card in &self.master_effects {
-            if let Some(b) = card.open_fire_mode_drawer_band() {
-                return Some(b);
-            }
-        }
-        for card in &self.layer_effects {
+        for card in self.effects.iter().flatten() {
             if let Some(b) = card.open_fire_mode_drawer_band() {
                 return Some(b);
             }
@@ -935,8 +929,7 @@ impl InspectorCompositePanel {
             || self.master_chrome.is_dragging()
             || self.layer_chrome.is_dragging()
             || self.clip_chrome.is_dragging()
-            || self.master_effects.iter().any(|e| e.is_dragging())
-            || self.layer_effects.iter().any(|e| e.is_dragging())
+            || self.effects.iter().flatten().any(|e| e.is_dragging())
             || self.gen_params.as_ref().is_some_and(|p| p.is_dragging())
     }
 
@@ -1008,7 +1001,7 @@ impl InspectorCompositePanel {
         }
         let mut h = SECTION_CARD_PAD + self.master_chrome.compute_height();
         if !self.master_chrome.is_collapsed() {
-            for card in &self.master_effects {
+            for card in &self.effects[Self::SCOPE_MASTER] {
                 h += card.compute_height() + SECTION_GAP;
             }
             h += ADD_EFFECT_BTN_H + SECTION_GAP;
@@ -1024,16 +1017,14 @@ impl InspectorCompositePanel {
         if self.layer_visible() {
             h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
-                // AUDIO TRIGGERS (P3b) sits at the top of the layer's detail
-                // content — above gen params and layer effects (Peter,
-                // 2026-07-10: "a single section that sits at the top of the
-                // inspector for the layer").
+                // AUDIO TRIGGERS sits at the top of the layer's detail
+                // content — above gen params and layer effects.
                 h += self.audio_trigger_section.height() + SECTION_GAP;
                 // Gen params sit above layer effects
                 if let Some(ref gp) = self.gen_params {
                     h += gp.compute_height() + SECTION_GAP;
                 }
-                for card in &self.layer_effects {
+                for card in &self.effects[Self::SCOPE_LAYER] {
                     h += card.compute_height() + SECTION_GAP;
                 }
                 h += ADD_EFFECT_BTN_H + SECTION_GAP;
@@ -1097,12 +1088,11 @@ impl InspectorCompositePanel {
 
     /// Get the selection set and cards vec for a given tab.
     fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
-        match tab {
-            InspectorTab::Master => (&self.selected_master_ids, &self.master_effects),
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
-                (&self.selected_layer_ids, &self.layer_effects)
-            }
-        }
+        let set = match tab {
+            InspectorTab::Master => &self.selected_master_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.selected_layer_ids,
+        };
+        (set, self.cards_for_tab(tab))
     }
 
     fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
@@ -1233,11 +1223,7 @@ impl InspectorCompositePanel {
             self.selection_set_mut(tab).clear();
             self.set_last_clicked_for_tab(tab, None);
         }
-        for card in self
-            .master_effects
-            .iter_mut()
-            .chain(self.layer_effects.iter_mut())
-        {
+        for card in self.effects.iter_mut().flatten() {
             card.update_selection_visual(tree, false);
         }
     }
@@ -1316,7 +1302,7 @@ impl InspectorCompositePanel {
         // No scope gate: a card that didn't build this frame is not live and its
         // `value_cell_typein` returns None, so only the active scope's cards can
         // match. The card's liveness is the single source of truth.
-        for card in &self.master_effects {
+        for card in &self.effects[Self::SCOPE_MASTER] {
             if let Some(a) = card.value_cell_typein(node_id, tree) {
                 return vec![a];
             }
@@ -1326,7 +1312,7 @@ impl InspectorCompositePanel {
         {
             return vec![a];
         }
-        for card in &self.layer_effects {
+        for card in &self.effects[Self::SCOPE_LAYER] {
             if let Some(a) = card.value_cell_typein(node_id, tree) {
                 return vec![a];
             }
@@ -1339,7 +1325,7 @@ impl InspectorCompositePanel {
     fn route_driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
         // No scope gate — a non-live card's `driver_period_typein` returns None
         // (see `route_value_typein`).
-        for card in &self.master_effects {
+        for card in &self.effects[Self::SCOPE_MASTER] {
             if let Some(a) = card.driver_period_typein(node_id, tree) {
                 return vec![a];
             }
@@ -1349,7 +1335,7 @@ impl InspectorCompositePanel {
         {
             return vec![a];
         }
-        for card in &self.layer_effects {
+        for card in &self.effects[Self::SCOPE_LAYER] {
             if let Some(a) = card.driver_period_typein(node_id, tree) {
                 return vec![a];
             }
@@ -1391,7 +1377,7 @@ impl InspectorCompositePanel {
         ) {
             return Some(PressedTarget::MasterChrome);
         }
-        for (i, card) in self.master_effects.iter().enumerate() {
+        for (i, card) in self.effects[Self::SCOPE_MASTER].iter().enumerate() {
             if in_range(idx, card.first_node(), card.node_count()) {
                 return Some(PressedTarget::MasterEffect(i));
             }
@@ -1412,7 +1398,7 @@ impl InspectorCompositePanel {
         {
             return Some(PressedTarget::GenParam);
         }
-        for (i, card) in self.layer_effects.iter().enumerate() {
+        for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
             if in_range(idx, card.first_node(), card.node_count()) {
                 return Some(PressedTarget::LayerEffect(i));
             }
@@ -1489,13 +1475,11 @@ impl InspectorCompositePanel {
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag(pos, tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag(pos, tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag(pos, tree),
-                PressedTarget::MasterEffect(i) => self
-                    .master_effects
+                PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                     .get_mut(i)
                     .map(|c| c.handle_drag(pos, tree))
                     .unwrap_or_default(),
-                PressedTarget::LayerEffect(i) => self
-                    .layer_effects
+                PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER]
                     .get_mut(i)
                     .map(|c| c.handle_drag(pos, tree))
                     .unwrap_or_default(),
@@ -1527,13 +1511,11 @@ impl InspectorCompositePanel {
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag_end(tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag_end(tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag_end(tree),
-                PressedTarget::MasterEffect(i) => self
-                    .master_effects
+                PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                     .get_mut(i)
                     .map(|c| c.handle_drag_end(tree))
                     .unwrap_or_default(),
-                PressedTarget::LayerEffect(i) => self
-                    .layer_effects
+                PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER]
                     .get_mut(i)
                     .map(|c| c.handle_drag_end(tree))
                     .unwrap_or_default(),
@@ -1683,26 +1665,33 @@ impl InspectorCompositePanel {
             );
         }
 
-        // Compute target card index from Y position
+        // Compute target card index from Y position. Hit-test against live
+        // tree bounds (scroll-current, animation-current), not the
+        // build-time `card_y` snapshot / animated `compute_height()` — those
+        // go stale by exactly the scroll delta on the in-place scroll path
+        // (BUG-265). Cards without a live rect (never built) are skipped.
         let tab = self.card_drag_tab;
         let (target, indicator_y) = {
             let cards = self.cards_for_tab(tab);
             let card_count = cards.len();
             let mut t = card_count; // default: after last card
             for (i, card) in cards.iter().enumerate() {
-                let cy = card.card_y();
-                let ch = card.compute_height();
-                let mid = cy + ch * 0.5;
+                let Some(b) = card.live_bounds(tree) else {
+                    continue;
+                };
+                let mid = b.y + b.height * 0.5;
                 if pos.y < mid {
                     t = i;
                     break;
                 }
             }
             let iy = if t < card_count {
-                cards[t].card_y()
+                cards[t].live_bounds(tree).map(|b| b.y).unwrap_or(vp.y)
             } else if card_count > 0 {
-                let last = &cards[card_count - 1];
-                last.card_y() + last.compute_height()
+                cards[card_count - 1]
+                    .live_bounds(tree)
+                    .map(|b| b.y + b.height)
+                    .unwrap_or(vp.y)
             } else {
                 vp.y
             };
@@ -1763,7 +1752,13 @@ impl InspectorCompositePanel {
             if to_card < cards.len() {
                 cards[to_card].effect_index()
             } else if !cards.is_empty() {
-                cards.last().unwrap().effect_index() + 1
+                // After-last drop: one past the HIGHEST effect index in the
+                // tab's cards, not `cards.last()`'s index — the tab's cards
+                // are a contiguous run of the flat effects list today, but
+                // list order isn't guaranteed to track index order, and
+                // `.last()` silently breaks the moment it doesn't (BUG-265
+                // root cause 3).
+                cards.iter().map(|c| c.effect_index()).max().unwrap() + 1
             } else {
                 0
             }
@@ -1810,7 +1805,7 @@ impl InspectorCompositePanel {
     fn find_drag_handle(&self, node_id: NodeId) -> Option<(InspectorTab, usize, usize, String)> {
         // No scope gate: `is_drag_handle` is false on a non-live card, so only the
         // active scope's cards can match (the node range is the source of truth).
-        for (i, card) in self.master_effects.iter().enumerate() {
+        for (i, card) in self.effects[Self::SCOPE_MASTER].iter().enumerate() {
             if card.is_drag_handle(node_id) {
                 return Some((
                     InspectorTab::Master,
@@ -1820,7 +1815,7 @@ impl InspectorCompositePanel {
                 ));
             }
         }
-        for (i, card) in self.layer_effects.iter().enumerate() {
+        for (i, card) in self.effects[Self::SCOPE_LAYER].iter().enumerate() {
             if card.is_drag_handle(node_id) {
                 return Some((
                     InspectorTab::Layer,
@@ -1834,17 +1829,11 @@ impl InspectorCompositePanel {
     }
 
     fn cards_for_tab(&self, tab: InspectorTab) -> &[ParamCardPanel] {
-        match tab {
-            InspectorTab::Master => &self.master_effects,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
-        }
+        &self.effects[Self::scope_idx(tab)]
     }
 
     fn cards_for_tab_mut(&mut self, tab: InspectorTab) -> &mut Vec<ParamCardPanel> {
-        match tab {
-            InspectorTab::Master => &mut self.master_effects,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &mut self.layer_effects,
-        }
+        &mut self.effects[Self::scope_idx(tab)]
     }
 
     // ── Internal event routing ───────────────────────────────────
@@ -1852,12 +1841,10 @@ impl InspectorCompositePanel {
     /// Check if an effect target is already part of the current selection.
     fn is_effect_target_selected(&self, target: &PressedTarget) -> bool {
         match *target {
-            PressedTarget::MasterEffect(i) => self
-                .master_effects
+            PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                 .get(i)
                 .is_some_and(|c| self.selected_master_ids.contains(c.effect_id())),
-            PressedTarget::LayerEffect(i) => self
-                .layer_effects
+            PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER]
                 .get(i)
                 .is_some_and(|c| self.selected_layer_ids.contains(c.effect_id())),
             _ => false,
@@ -1874,7 +1861,7 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers) -> Vec<PanelAction> {
+    fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers, tree: &UITree) -> Vec<PanelAction> {
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
             return vec![PanelAction::SelectInspectorTab(*tab)];
@@ -1908,10 +1895,9 @@ impl InspectorCompositePanel {
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_click(node_id),
                 PressedTarget::MasterEffect(i) => {
-                    let mut actions = self
-                        .master_effects
+                    let mut actions = self.effects[Self::SCOPE_MASTER]
                         .get_mut(i)
-                        .map(|c| c.handle_click(node_id))
+                        .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
                     if actions
@@ -1923,8 +1909,7 @@ impl InspectorCompositePanel {
                         // Only auto-select if not already in multi-selection
                         self.auto_select_effect(&PressedTarget::MasterEffect(i));
                     }
-                    let ei = self
-                        .master_effects
+                    let ei = self.effects[Self::SCOPE_MASTER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0);
@@ -1937,10 +1922,9 @@ impl InspectorCompositePanel {
                     actions
                 }
                 PressedTarget::LayerEffect(i) => {
-                    let mut actions = self
-                        .layer_effects
+                    let mut actions = self.effects[Self::SCOPE_LAYER]
                         .get_mut(i)
-                        .map(|c| c.handle_click(node_id))
+                        .map(|c| c.handle_click(node_id, tree))
                         .unwrap_or_default();
 
                     if actions
@@ -1951,8 +1935,7 @@ impl InspectorCompositePanel {
                     } else if !self.is_effect_target_selected(&PressedTarget::LayerEffect(i)) {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
                     }
-                    let ei = self
-                        .layer_effects
+                    let ei = self.effects[Self::SCOPE_LAYER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0);
@@ -1967,7 +1950,7 @@ impl InspectorCompositePanel {
                 PressedTarget::GenParam => self
                     .gen_params
                     .as_mut()
-                    .map(|gp| gp.handle_click(node_id))
+                    .map(|gp| gp.handle_click(node_id, tree))
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => Vec::new(),
             }
@@ -2005,13 +1988,13 @@ impl InspectorCompositePanel {
             // For effect targets, prepend EffectCardClicked to trigger visual update
             let select_action = match target {
                 PressedTarget::MasterEffect(i) => Some(PanelAction::EffectCardClicked(
-                    self.master_effects
+                    self.effects[Self::SCOPE_MASTER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0),
                 )),
                 PressedTarget::LayerEffect(i) => Some(PanelAction::EffectCardClicked(
-                    self.layer_effects
+                    self.effects[Self::SCOPE_LAYER]
                         .get(i)
                         .map(|c| c.effect_index())
                         .unwrap_or(0),
@@ -2031,13 +2014,11 @@ impl InspectorCompositePanel {
                     self.layer_chrome.handle_pointer_down(node_id, pos)
                 }
                 PressedTarget::ClipChrome => self.clip_chrome.handle_pointer_down(node_id, pos),
-                PressedTarget::MasterEffect(i) => self
-                    .master_effects
+                PressedTarget::MasterEffect(i) => self.effects[Self::SCOPE_MASTER]
                     .get_mut(i)
                     .map(|c| c.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
-                PressedTarget::LayerEffect(i) => self
-                    .layer_effects
+                PressedTarget::LayerEffect(i) => self.effects[Self::SCOPE_LAYER]
                     .get_mut(i)
                     .map(|c| c.handle_pointer_down(node_id, pos, tree))
                     .unwrap_or_default(),
@@ -2099,10 +2080,7 @@ impl InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_mut() {
             gp.clear_nodes();
         }
-        for card in &mut self.master_effects {
-            card.clear_nodes();
-        }
-        for card in &mut self.layer_effects {
+        for card in self.effects.iter_mut().flatten() {
             card.clear_nodes();
         }
 
@@ -2223,7 +2201,7 @@ impl InspectorCompositePanel {
                 cy += chrome_h;
 
                 if !self.master_chrome.is_collapsed() {
-                    for card in &mut self.master_effects {
+                    for card in &mut self.effects[Self::SCOPE_MASTER] {
                         let card_h = card.compute_height();
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
@@ -2299,7 +2277,7 @@ impl InspectorCompositePanel {
                         cy += gp_h + SECTION_GAP;
                     }
 
-                    for card in &mut self.layer_effects {
+                    for card in &mut self.effects[Self::SCOPE_LAYER] {
                         let card_h = card.compute_height();
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
@@ -2395,7 +2373,7 @@ impl Panel for InspectorCompositePanel {
             .unwrap_or(0.0);
         self.motion_last_tick = Some(Instant::now());
         let mut any = false;
-        for card in self.master_effects.iter_mut().chain(self.layer_effects.iter_mut()) {
+        for card in self.effects.iter_mut().flatten() {
             any |= card.tick_drawers(dt_ms);
             // P2 value-change flash + D1 tab-ink slide's ink tween both live in
             // this same per-param vocabulary; the flash needs `tree` (a style
@@ -2441,7 +2419,7 @@ impl Panel for InspectorCompositePanel {
                 if !typein.is_empty() {
                     return typein;
                 }
-                self.route_click(*node_id, *modifiers)
+                self.route_click(*node_id, *modifiers, tree)
             }
             UIEvent::PointerDown {
                 node_id,
@@ -2507,7 +2485,7 @@ impl Panel for InspectorCompositePanel {
         if self.master_chrome.node_count() > 0 {
             self.master_chrome.register_intents(intents);
         }
-        for card in &self.master_effects {
+        for card in &self.effects[Self::SCOPE_MASTER] {
             card.register_intents(intents);
         }
         if self.layer_chrome.node_count() > 0 {
@@ -2516,7 +2494,7 @@ impl Panel for InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_ref() {
             gp.register_intents(intents);
         }
-        for card in &self.layer_effects {
+        for card in &self.effects[Self::SCOPE_LAYER] {
             card.register_intents(intents);
         }
     }
@@ -2546,7 +2524,7 @@ fn in_range(idx: usize, first: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::param_card::RelightCardConfig;
+    use crate::panels::param_card::{RelightCardConfig, RowMod};
     use crate::tree::UITree;
 
     fn inspector_layout() -> ScreenLayout {
@@ -2689,36 +2667,51 @@ mod tests {
         assert_eq!(panel.active_tab(), InspectorTab::Clip);
     }
 
-    fn mk_param(id: &'static str, name: &str) -> super::super::param_card::ParamInfo {
-        super::super::param_card::ParamInfo {
-            param_id: std::borrow::Cow::Borrowed(id),
-            name: name.into(),
-            min: 0.0,
-            max: 1.0,
-            default: 0.5,
-            whole_numbers: false,
-            is_angle: false,
-            exposed: true,
-            is_toggle: false,
-            is_trigger: false,
-            is_trigger_gate: false,
-            value_labels: None,
-            osc_address: None,
-            ableton_display: None,
-            ableton_range: None,
-            mappable: false,
-            section: None,
+    fn mk_param(id: &'static str, name: &str) -> crate::param_surface::ParamRow {
+        use crate::param_surface::{ParamRow, RowMapping, RowSpec, RowValue};
+        ParamRow {
+            id: std::borrow::Cow::Borrowed(id),
+            spec: RowSpec {
+                name: name.into(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                whole_numbers: false,
+                is_angle: false,
+                is_toggle: false,
+                is_trigger: false,
+                is_trigger_gate: false,
+                value_labels: None,
+                section: None,
+            },
+            value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+            modulation: RowMod::default(),
+            mapping: RowMapping {
+                osc_address: None,
+                ableton_display: None,
+                ableton_range: None,
+                mappable: false,
+            },
         }
     }
 
-    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamCardConfig {
-        let params: Vec<_> = (0..n)
-            .map(|i| mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}")))
+    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamSurface {
+        // Unique id per row (D4, `docs/WIDGET_TREE_DESIGN.md`): a real
+        // manifest never repeats a `ParamId` within one card, and P2 keys
+        // every row widget off it — the old `["a","b","c","d"][i % 4]` cycle
+        // synthesized a duplicate-id collision no real card can produce, once
+        // `n > 4` (caught by `drag_hit_test_target_index_with_mixed_height_cards`).
+        let rows: Vec<_> = (0..n)
+            .map(|i| {
+                let mut row = mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}"));
+                row.id = std::borrow::Cow::Owned(format!("row{i}"));
+                row
+            })
             .collect();
-        ParamCardConfig {
+        ParamSurface {
             kind,
-            name: name.into(),
-            params,
+            title: name.into(),
+            rows,
             string_params: vec![],
             collapsed: false,
             effect_index: 0,
@@ -2729,26 +2722,9 @@ mod tests {
             effect_id: EffectId::new(name),
             enabled: true,
             supports_envelopes: true,
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            driver_active: vec![false; n],
-            envelope_active: vec![false; n],
-            trim_min: vec![0.0; n],
-            trim_max: vec![1.0; n],
-            target_norm: vec![1.0; n],
-            env_decay: vec![1.0; n],
-            driver_beat_div_idx: vec![-1; n],
-            driver_waveform_idx: vec![-1; n],
-            driver_reversed: vec![false; n],
-            driver_dotted: vec![false; n],
-            driver_triplet: vec![false; n],
-            driver_free_period: vec![None; n],
             audio: Default::default(),
-            automation_active: vec![false; n],
-            automation_overridden: vec![false; n],
             relight: RelightCardConfig::default(),
         }
     }
@@ -2895,8 +2871,8 @@ mod tests {
         };
 
         let mut config = mk_config(ParamCardKind::Effect, "Mirror", 2);
-        config.params[1].mappable = true;
-        let mappable_id = config.params[1].param_id.to_string();
+        config.rows[1].mapping.mappable = true;
+        let mappable_id = config.rows[1].id.to_string();
 
         // Author-context host (the graph-editor window's inspector).
         let mut author_tree = UITree::new();
@@ -2944,7 +2920,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 400.0, 600.0);
 
         let config = mk_config(ParamCardKind::Effect, "Mirror", 2);
-        let param_id = config.params[0].param_id.to_string();
+        let param_id = config.rows[0].id.to_string();
 
         let mut author_tree = UITree::new();
         let mut author_panel = InspectorCompositePanel::new();
@@ -3049,9 +3025,9 @@ mod tests {
         // section header — the reported card's exact shape (a section run
         // covering the card's tail, header stacked above its own rows).
         let mut config = mk_config(ParamCardKind::Effect, "SceneFX", 4);
-        config.params[2].section = Some("Sun".to_string());
-        config.params[3].section = Some("Sun".to_string());
-        let last_param_id = config.params[3].param_id.to_string();
+        config.rows[2].spec.section = Some("Sun".to_string());
+        config.rows[3].spec.section = Some("Sun".to_string());
+        let last_param_id = config.rows[3].id.to_string();
         panel.configure_layer_effects(&[config], None);
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],
@@ -3066,8 +3042,7 @@ mod tests {
             .expect("layer add-effect button must build below the sectioned card");
         let btn_bounds = tree.get_bounds(btn_id);
 
-        let card = panel
-            .layer_effects
+        let card = panel.effects[InspectorCompositePanel::SCOPE_LAYER]
             .last()
             .expect("the sectioned layer effect card must have built");
         assert!(
@@ -3399,6 +3374,11 @@ mod tests {
 
         // A full rebuild at the new offset lands the same node at the same y —
         // in-place and rebuild agree, so no jump when the next rebuild lands.
+        // Clear first: the live path truncates the inspector region before
+        // re-minting, so two live copies of one card never coexist — and
+        // card roots are identity-keyed (D4), so a no-clear double build
+        // would (correctly) trip the tree's duplicate-WidgetId assert.
+        tree.clear();
         panel.build(&mut tree, &layout);
         let y_rebuilt = tree
             .get_node(tree.id_at(panel.layer_chrome.first_node()))
@@ -3423,7 +3403,7 @@ mod tests {
     #[test]
     fn layer_column_height_matches_settled_heights_with_armed_audio_drawers_on_first_configure() {
         use super::super::param_card::ParamCardKind;
-        use super::super::param_slider_shared::AudioCardState;
+        use super::super::param_slider_shared::{AudioCardState, AudioRowState};
 
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
@@ -3441,7 +3421,12 @@ mod tests {
                 let mut c = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 4);
                 if i % 2 == 0 {
                     c.audio = AudioCardState {
-                        active: vec![true, false, false, false],
+                        rows: vec![
+                            AudioRowState { active: true, ..Default::default() },
+                            AudioRowState::default(),
+                            AudioRowState::default(),
+                            AudioRowState::default(),
+                        ],
                         ..Default::default()
                     };
                 }
@@ -3460,7 +3445,7 @@ mod tests {
         // Ticking further must not change any card's reported height — if
         // it did, `reported_height` (taken before any tick) was reading a
         // mid-tween value instead of the settled one, i.e. undercounting.
-        for card in &mut panel.layer_effects {
+        for card in &mut panel.effects[InspectorCompositePanel::SCOPE_LAYER] {
             for _ in 0..20 {
                 card.tick_drawers(20.0);
             }
@@ -3532,6 +3517,396 @@ mod tests {
         assert!(panel.layer_scroll.scroll_offset() > 0.0);
     }
 
+    /// BUG-265: `update_card_drag`'s hit-test must track the ACTUAL
+    /// on-screen card position, not the `card_y()` snapshot written only at
+    /// `build()` time. Wheel/scrollbar scroll moves the tree nodes in place
+    /// (`try_scroll_in_place` → `ScrollContainer::offset_content`) WITHOUT a
+    /// rebuild, so `card_y()` goes stale by exactly the scroll delta while
+    /// the live tree bounds (what `live_bounds()` reads) stay correct.
+    fn find_drag_handle_id(card: &ParamCardPanel, tree: &UITree) -> NodeId {
+        for i in card.first_node()..card.first_node() + card.node_count() {
+            let id = tree.id_at(i);
+            if card.is_drag_handle(id) {
+                return id;
+            }
+        }
+        panic!("card has no drag handle node in its build range");
+    }
+
+    #[test]
+    fn drag_hit_test_uses_live_bounds_after_in_place_scroll() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let effects: Vec<_> = (0..12)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&effects, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "test needs scrollable content"
+        );
+
+        // Begin a card drag (the source card is unrelated to the hit-test
+        // math below — any drag handle will do).
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        // Scroll in place — no rebuild. Content nodes move; `card_y()` does not.
+        let cursor_x = layout.inspector().x + 10.0;
+        let scrolled = panel.try_scroll_in_place(-30.0, cursor_x, &mut tree);
+        assert!(scrolled, "sanity: must scroll in place");
+
+        // The ACTUAL, post-scroll on-screen position of a card well past the
+        // scroll delta — read via the same live-tree source the fix uses.
+        let target_idx = 5;
+        let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+        let cursor_y = target_bounds.y + 1.0; // just inside the card's top edge
+
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+
+        assert_eq!(
+            panel.card_drag_target_index, target_idx,
+            "drop target must match the scrolled on-screen card position, not \
+             a `card_y()` snapshot stale by the scroll delta"
+        );
+        let indicator_bounds = tree.get_bounds(panel.card_drag_indicator_id.unwrap());
+        assert!(
+            (indicator_bounds.y - (target_bounds.y - DRAG_INDICATOR_H * 0.5)).abs() < 0.5,
+            "indicator must be drawn at the scrolled on-screen card position: \
+             got y={}, expected~{}",
+            indicator_bounds.y,
+            target_bounds.y - DRAG_INDICATOR_H * 0.5
+        );
+    }
+
+    /// BUG-265 root cause 2: `compute_height()` re-derives from animated
+    /// state (`collapse_frac()`) — mid-tween, without a rebuild, it
+    /// disagrees with what's actually still painted on screen (the frozen
+    /// tree bounds from the last `build()`). The fix must hit-test against
+    /// the frozen tree, matching the screen, not the ticked model state.
+    #[test]
+    fn drag_hit_test_uses_frozen_tree_bounds_mid_animation_without_rebuild() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let mut configs: Vec<_> = (0..6)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Snapshot the still-on-screen (frozen) position of a card below the
+        // one about to collapse — this is what the cursor must still hit.
+        let watch_idx = 3;
+        let before_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][watch_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+
+        // Retarget an earlier card's collapse animation, then tick it
+        // PARTWAY — mid-tween, no rebuild, so the tree/screen is untouched.
+        configs[1].collapsed = true;
+        panel.configure_layer_effects(&configs, None);
+        panel.effects[InspectorCompositePanel::SCOPE_LAYER][1].tick_drawers(20.0);
+        assert!(
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER][1].is_collapse_animating(),
+            "sanity: must actually be mid-tween, not settled"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        let cursor_y = before_bounds.y + 1.0;
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+
+        assert_eq!(
+            panel.card_drag_target_index, watch_idx,
+            "hit-test must track the frozen, still-on-screen tree bounds — not \
+             `compute_height()`, which now reads the mid-tween collapse_frac \
+             and disagrees with what's actually painted until the next build()"
+        );
+    }
+
+    /// Regression guard: an unscrolled, settled (no in-flight animation)
+    /// layout must hit-test identically before and after the fix — the fix
+    /// changes the geometry SOURCE, not the math, so plain builds are
+    /// unaffected.
+    #[test]
+    fn drag_hit_test_matches_settled_unscrolled_layout() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let configs: Vec<_> = (0..6)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        for target_idx in 0..configs.len() {
+            let bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+                .live_bounds(&tree)
+                .expect("built card has live bounds");
+            let cursor_y = bounds.y + 1.0;
+            panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+            assert_eq!(
+                panel.card_drag_target_index, target_idx,
+                "unscrolled, settled layout: fix must agree with pre-fix \
+                 behavior for card {target_idx}"
+            );
+        }
+    }
+
+    /// P3 geometry monopoly, case (b): the hit-test loop in
+    /// `update_card_drag` sums PER-CARD live bounds, not a uniform stride —
+    /// a mixed-height list (one card settled collapsed, others expanded at
+    /// different row counts) must still resolve the correct drop-target
+    /// index at every card boundary. This is new coverage: the W2-B
+    /// (BUG-265) test family above only exercises uniform-height cards.
+    #[test]
+    fn drag_hit_test_target_index_with_mixed_height_cards() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+
+        let mut configs = vec![
+            mk_config(ParamCardKind::Effect, "FX0", 3), // expanded
+            mk_config(ParamCardKind::Effect, "FX1", 3), // collapsed below
+            mk_config(ParamCardKind::Effect, "FX2", 6), // expanded, taller
+            mk_config(ParamCardKind::Effect, "FX3", 1), // expanded, short
+        ];
+        configs[1].collapsed = true;
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Sanity: the mixed-height premise actually holds — the collapsed
+        // card is shorter than its expanded neighbors, so the boundary math
+        // below is exercising real height variation, not a uniform stride
+        // that happens to pass.
+        let collapsed_h = panel.effects[InspectorCompositePanel::SCOPE_LAYER][1]
+            .live_bounds(&tree)
+            .unwrap()
+            .height;
+        let expanded_h = panel.effects[InspectorCompositePanel::SCOPE_LAYER][0]
+            .live_bounds(&tree)
+            .unwrap()
+            .height;
+        assert!(
+            collapsed_h < expanded_h,
+            "test needs a real height difference: collapsed={collapsed_h} expanded={expanded_h}"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        let cursor_x = layout.inspector().x + 10.0;
+        for target_idx in 0..configs.len() {
+            let bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+                .live_bounds(&tree)
+                .expect("built card has live bounds");
+            let cursor_y = bounds.y + 1.0;
+            panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+            assert_eq!(
+                panel.card_drag_target_index, target_idx,
+                "mixed-height layout: card {target_idx} (height {}) must hit-test \
+                 to its own index, not a uniform-stride guess",
+                bounds.height
+            );
+        }
+    }
+
+    /// P3 geometry monopoly, case (d): `end_card_drag`'s target→effect-index
+    /// mapping, isolated from the hit-test geometry (covered above). Exact
+    /// regression pin for BUG-265 root cause 3 (findings doc): the
+    /// after-last-drop branch must use the HIGHEST `effect_index` among the
+    /// tab's cards, not `cards.last()`'s — this test builds a card list
+    /// whose Vec order deliberately diverges from effect_index order so the
+    /// two computations disagree, and pins the correct (max-based) one.
+    /// Also covers the ordinary to_card < cards.len() branch with the same
+    /// non-contiguous index set.
+    #[test]
+    fn end_card_drag_maps_target_index_to_effect_index_with_non_contiguous_indices() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+
+        let mut configs: Vec<_> = (0..4)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 2))
+            .collect();
+        // Non-monotonic effect_index, and the LAST card in Vec order (FX3)
+        // is deliberately NOT the max — the divergence root cause 3 fixed.
+        configs[0].effect_index = 7; // max
+        configs[1].effect_index = 1; // drag source
+        configs[2].effect_index = 3;
+        configs[3].effect_index = 2; // last in Vec order, but not max
+        panel.configure_layer_effects(&configs, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        // Middle drop: to_card < cards.len() reads the target card's own
+        // effect_index directly.
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+        panel.card_drag_target_index = 2; // FX2, effect_index 3
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(from, to) => {
+                assert_eq!(*from, 1, "dragged card's effect_index");
+                assert_eq!(*to, 3, "middle drop reads the target card's own effect_index");
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+
+        // After-last drop: to_card == cards.len() must use max(effect_index)
+        // + 1 (7 + 1 = 8), NOT cards.last()'s effect_index + 1 (2 + 1 = 3 —
+        // the pre-fix bug, and coincidentally equal to the middle-drop
+        // target above, so a regression here would be easy to miss without
+        // this explicit pin).
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][1], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+        panel.card_drag_target_index = panel.effects[InspectorCompositePanel::SCOPE_LAYER].len();
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(from, to) => {
+                assert_eq!(*from, 1, "dragged card's effect_index");
+                assert_eq!(
+                    *to, 8,
+                    "after-last drop must land past the HIGHEST effect_index (7), \
+                     not past cards.last()'s effect_index (2)"
+                );
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+    }
+
+    /// INV-3 regression pin (WIDGET_TREE_DESIGN §6/§7 P3): the drag
+    /// interaction path reads no geometry snapshot — it follows the live
+    /// tree end to end, from a post-scroll cursor position through to the
+    /// emitted `PanelAction`. The `drag_hit_test_uses_live_bounds_after_in_
+    /// place_scroll` test above (W2-B/BUG-265) already pins the target-index
+    /// half of this; this test extends the same repro through `end_card_
+    /// drag` to the dispatched command, closing the loop the invariant
+    /// actually promises.
+    #[test]
+    fn inv3_drag_targets_follow_live_bounds_after_in_place_scroll() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let effects: Vec<_> = (0..12)
+            .map(|i| {
+                let mut cfg = mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3);
+                // `mk_config` defaults every card's effect_index to 0 — fine
+                // for the target-index-only assertions the W2-B tests make,
+                // but this test asserts through to the dispatched command's
+                // effect_index, so the cards need distinct, position-
+                // matching indices like the real flat effects list has.
+                cfg.effect_index = i;
+                cfg
+            })
+            .collect();
+        panel.configure_layer_effects(&effects, None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "test needs scrollable content"
+        );
+
+        let handle_id =
+            find_drag_handle_id(&panel.effects[InspectorCompositePanel::SCOPE_LAYER][0], &tree);
+        assert!(panel.try_begin_card_drag(Some(handle_id), &mut tree));
+
+        // Scroll in place via the same API the app uses on wheel/scrollbar
+        // input — no rebuild, so any snapshot geometry would go stale.
+        let cursor_x = layout.inspector().x + 10.0;
+        let scrolled = panel.try_scroll_in_place(-30.0, cursor_x, &mut tree);
+        assert!(scrolled, "sanity: must scroll in place");
+
+        let target_idx = 5;
+        let target_bounds = panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx]
+            .live_bounds(&tree)
+            .expect("built card has live bounds");
+        let expected_effect_index =
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER][target_idx].effect_index();
+        let cursor_y = target_bounds.y + 1.0;
+
+        panel.update_card_drag(Vec2::new(cursor_x, cursor_y), &mut tree);
+        assert_eq!(panel.card_drag_target_index, target_idx);
+
+        let actions = panel.end_card_drag(&mut tree);
+        assert_eq!(actions.len(), 1, "expected one action: {actions:?}");
+        match &actions[0] {
+            PanelAction::EffectReorder(_from, to) => {
+                assert_eq!(
+                    *to, expected_effect_index,
+                    "the dispatched command must target the effect_index of the \
+                     card actually under the cursor post-scroll, not a stale \
+                     geometry snapshot's idea of it"
+                );
+            }
+            other => panic!("expected EffectReorder, got {other:?}"),
+        }
+    }
+
     #[test]
     fn find_target_for_scrollbar() {
         let mut tree = UITree::new();
@@ -3571,6 +3946,7 @@ mod tests {
         let actions = panel.route_click(
             tree.id_at(panel.master_chrome.first_node() + 1),
             Modifiers::NONE,
+            &tree,
         );
         // Node at first_node+1 is the chevron button in master chrome build order
         // This should return MasterCollapseToggle
@@ -3613,7 +3989,7 @@ mod tests {
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         tree.clear();
         panel.build(&mut tree, &layout);
-        assert!(panel.master_effects[0].node_count() > 0);
+        assert!(panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].node_count() > 0);
 
         // Switch to Layer with a layer effect; the master effect is not built.
         panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)], None);
@@ -3625,9 +4001,9 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // The inactive master effect reports not-built (empty range)…
-        assert_eq!(panel.master_effects[0].node_count(), 0);
+        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].node_count(), 0);
         // …and a node in the live layer effect routes to LayerEffect.
-        let lc = &panel.layer_effects[0];
+        let lc = &panel.effects[InspectorCompositePanel::SCOPE_LAYER][0];
         assert!(lc.node_count() > 0);
         let probe = lc.first_node();
         let target = panel.find_target_for_node(tree.id_at(probe));
@@ -3673,16 +4049,25 @@ mod tests {
         use super::super::param_card::ParamCardKind;
         let mut panel = InspectorCompositePanel::new();
         panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
-        assert!(panel.master_effects[0].is_spawning(), "a genuinely new card pops in");
+        assert!(
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].is_spawning(),
+            "a genuinely new card pops in"
+        );
 
         // Settle it, then reconfigure with the SAME effect identity — reused,
         // must not re-pop just because the panel rebuilt.
         for _ in 0..20 {
-            panel.master_effects[0].tick_drawers(20.0);
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].tick_drawers(20.0);
         }
-        assert!(!panel.master_effects[0].is_spawning(), "settled");
+        assert!(
+            !panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].is_spawning(),
+            "settled"
+        );
         panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
-        assert!(!panel.master_effects[0].is_spawning(), "a reused card never re-pops on reconfigure");
+        assert!(
+            !panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].is_spawning(),
+            "a reused card never re-pops on reconfigure"
+        );
     }
 
     #[test]
@@ -3692,13 +4077,16 @@ mod tests {
         panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "A", 2)]);
         // Settle the spawn-pop so it doesn't interfere with reading collapse state.
         for _ in 0..20 {
-            panel.master_effects[0].tick_drawers(20.0);
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER][0].tick_drawers(20.0);
         }
         assert!(panel.master_dying.is_empty());
 
         // Reconfigure with an EMPTY config list — "A" was removed from the model.
         panel.configure_master_effects(&[]);
-        assert!(panel.master_effects.is_empty(), "no longer a live card");
+        assert!(
+            panel.effects[InspectorCompositePanel::SCOPE_MASTER].is_empty(),
+            "no longer a live card"
+        );
         assert_eq!(panel.master_dying.len(), 1, "removed card moves to the exit-state list");
         assert!(panel.master_dying[0].is_collapse_animating(), "starts collapsing");
         assert!(!panel.master_dying[0].is_delete_finished(), "not finished the instant it dies");
@@ -3726,11 +4114,11 @@ mod tests {
             Some(&layer_a),
         );
         for _ in 0..20 {
-            for c in &mut panel.layer_effects {
+            for c in &mut panel.effects[InspectorCompositePanel::SCOPE_LAYER] {
                 c.tick_drawers(20.0);
             }
         }
-        assert_eq!(panel.layer_effects.len(), 2);
+        assert_eq!(panel.effects[InspectorCompositePanel::SCOPE_LAYER].len(), 2);
         assert!(panel.layer_dying.is_empty());
 
         // Navigate to layer B (a different scope, a different chain). Layer A's
@@ -3742,7 +4130,11 @@ mod tests {
             &[mk_config(ParamCardKind::Effect, "B1", 2)],
             Some(&layer_b),
         );
-        assert_eq!(panel.layer_effects.len(), 1, "now showing layer B's chain");
+        assert_eq!(
+            panel.effects[InspectorCompositePanel::SCOPE_LAYER].len(),
+            1,
+            "now showing layer B's chain"
+        );
         assert!(
             panel.layer_dying.is_empty(),
             "a layer switch drops the old cards instantly — no stale collapse"
@@ -3782,7 +4174,7 @@ mod tests {
 
         let viewport = panel.master_scroll.viewport();
         assert!(viewport.height > 0.0, "sanity: master column viewport exists");
-        let card = &panel.master_effects[0];
+        let card = &panel.effects[InspectorCompositePanel::SCOPE_MASTER][0];
         let (start, end) = (card.first_node(), card.first_node() + card.node_count());
         assert!(end > start, "sanity: card built nodes");
 

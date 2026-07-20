@@ -72,7 +72,17 @@ def test_main_source_relative_denies():
 
 def test_docs_deny():
     r = run_hook(edit(str(PROJ / "docs/BUG_BACKLOG.md"), tool="Write"))
-    check("main-checkout docs -> deny (docs not exempt)", r is not None, r)
+    check("docs/BUG_BACKLOG.md -> allow (doc fast path, 2026-07-20)", r is None, r)
+
+
+def test_docs_design_doc_still_denies():
+    r = run_hook(edit(str(PROJ / "docs/VULKAN_BACKEND_DESIGN.md")))
+    check("docs/*_DESIGN.md -> deny (stays on worktree path)", r is not None, r)
+
+
+def test_docs_non_md_still_denies():
+    r = run_hook(edit(str(PROJ / "docs/diagram.png"), tool="Write"))
+    check("docs non-markdown -> deny", r is not None, r)
 
 
 def test_cargo_toml_denies():
@@ -162,9 +172,9 @@ def test_merge_conflicted_file_allowed():
 
 def test_merge_nonconflicted_file_still_denies():
     orig = hook.merge_conflict_paths
-    hook.merge_conflict_paths = lambda: {(PROJ / "docs/OTHER.md").resolve()}
+    hook.merge_conflict_paths = lambda: {(PROJ / "crates/other.rs").resolve()}
     try:
-        r = run_hook(edit(str(PROJ / "docs/BUG_BACKLOG.md")))
+        r = run_hook(edit(str(PROJ / "crates/manifold-app/src/ui_root.rs")))
     finally:
         hook.merge_conflict_paths = orig
     check("non-conflicted file during live merge -> deny", r is not None, r)
@@ -174,7 +184,7 @@ def test_no_merge_denies():
     orig = hook.merge_conflict_paths
     hook.merge_conflict_paths = lambda: set()
     try:
-        r = run_hook(edit(str(PROJ / "docs/BUG_BACKLOG.md")))
+        r = run_hook(edit(str(PROJ / "crates/manifold-app/src/ui_root.rs")))
     finally:
         hook.merge_conflict_paths = orig
     check("no merge in progress -> deny unchanged", r is not None, r)
@@ -185,6 +195,8 @@ def main():
         test_main_source_absolute_denies,
         test_main_source_relative_denies,
         test_docs_deny,
+        test_docs_design_doc_still_denies,
+        test_docs_non_md_still_denies,
         test_cargo_toml_denies,
         test_tooling_hook_allowed,
         test_tooling_settings_allowed,

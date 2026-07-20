@@ -27,8 +27,7 @@ pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`mode`
 /// Enum → u32, `proj_scale` f32, `proj_dist` f32), then the derived fields —
 /// `active_count` (f32, unchanged), then the camera-branch block added for
-/// the optional `camera: Camera` port (docs/CAMERA_AND_LENS_DESIGN.md §2 D3,
-/// Amendment 2026-07-12): `cam_right`/`cam_up`/`cam_fwd`/`cam_pos` (vec3 each
+/// the optional `camera: Camera` port: `cam_right`/`cam_up`/`cam_fwd`/`cam_pos` (vec3 each
 /// → 3 scalars per codegen.rs:852-862), `proj_f` (= `1/tan(fov_y/2)` at
 /// aspect 1), `cam_near` (the wired camera's near-plane cull threshold), and
 /// `use_camera` (u32, 1 = wired) — then the codegen-injected `dispatch_count`
@@ -202,7 +201,6 @@ impl Primitive for Project3D {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer
             // coincident path, type-changing in/out + derived active_count).
-            // project_3d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.flatten_3d standalone codegen"),
@@ -303,113 +301,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain parity oracle (freeze §12) — project_3d had NO GPU test
-    //! before the freeze cutover, so this is added with the conversion: the
-    //! GENERATED kernel must reproduce the hand `project_3d.wgsl` point-for-point
-    //! in BOTH projection modes, including the inactive-slot collapse to origin.
-    //! Direct dispatch (uniform(0), verts(1) read, points(2) read_write).
-    use super::*;
-
-    fn mesh_vertex(pos: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv: [0.0; 2], _pad2: [0.0; 2] }
-    }
-
-    /// Dispatch over `capacity` slots and read the CurvePoints back. Group count
-    /// uses div_ceil(64) so it covers both the hand (64-wide) and generated
-    /// (256-wide) kernels — extra threads in the wider kernel are guarded out.
-    fn dispatch_project3d(wgsl: &str, verts: &[MeshVertex], capacity: u32, uniform: &[u8]) -> Vec<CurvePoint> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "p3d-oracle");
-        let in_buf =
-            device.create_buffer_shared(capacity as u64 * std::mem::size_of::<MeshVertex>() as u64);
-        let out_buf =
-            device.create_buffer_shared(capacity as u64 * std::mem::size_of::<CurvePoint>() as u64);
-        unsafe {
-            in_buf.write(0, bytemuck::cast_slice(verts));
-        }
-        let mut enc = device.create_encoder("p3d-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &in_buf, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: &out_buf, offset: 0 },
-            ],
-            [capacity.div_ceil(64), 1, 1],
-            "p3d-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = out_buf.mapped_ptr().expect("shared out buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const CurvePoint, capacity as usize) };
-        slice.to_vec()
-    }
-
-    #[test]
-    fn generated_project3d_matches_hand_kernel_both_modes() {
-        let verts = [
-            mesh_vertex([0.3, 0.7, 0.5]),
-            mesh_vertex([-0.2, 0.4, 1.0]),
-            mesh_vertex([0.6, -0.5, -0.3]),
-            mesh_vertex([0.1, 0.1, 2.0]),
-            mesh_vertex([-0.4, -0.4, 0.0]),
-        ];
-        const CAPACITY: u32 = 16; // active < capacity → exercises inactive collapse
-        let active = verts.len() as u32;
-        let proj_scale = 0.25f32;
-        let proj_dist = 3.0f32;
-
-        for mode in [0u32, 1u32] {
-            // Hand layout: active_count(u32), capacity(u32), mode(u32), pad,
-            //              proj_scale(f32), proj_dist(f32), pad, pad.
-            let mut hand = Vec::new();
-            hand.extend_from_slice(&active.to_le_bytes());
-            hand.extend_from_slice(&CAPACITY.to_le_bytes());
-            hand.extend_from_slice(&mode.to_le_bytes());
-            hand.extend_from_slice(&0u32.to_le_bytes());
-            hand.extend_from_slice(&proj_scale.to_le_bytes());
-            hand.extend_from_slice(&proj_dist.to_le_bytes());
-            hand.extend_from_slice(&[0u8; 8]);
-
-            // Generated layout (docs/CAMERA_AND_LENS_DESIGN.md I3, amended
-            // 2026-07-12 after the P1 escalation): mode(u32), proj_scale(f32),
-            // proj_dist(f32), active_count(f32) — unchanged, 4 words — then
-            // the 15-word camera-branch derived block (cam_right/up/fwd/pos
-            // vec3s + proj_f + cam_near + use_camera), all zero here since
-            // `use_camera = 0` makes the whole block dead (this test never
-            // wires a camera — legacy-mode math only), then dispatch_count,
-            // then no padding (4 + 15 + 1 = 20 words ≡ 0 mod 4). Only this
-            // packing changed; the hand layout/kernel and every assertion
-            // below are untouched.
-            let mut gen_bytes = Vec::new();
-            gen_bytes.extend_from_slice(&mode.to_le_bytes());
-            gen_bytes.extend_from_slice(&proj_scale.to_le_bytes());
-            gen_bytes.extend_from_slice(&proj_dist.to_le_bytes());
-            gen_bytes.extend_from_slice(&(active as f32).to_le_bytes());
-            gen_bytes.extend_from_slice(&[0u8; 15 * 4]);
-            gen_bytes.extend_from_slice(&CAPACITY.to_le_bytes());
-
-            let hand_wgsl = include_str!("shaders/project_3d.wgsl");
-            let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Project3D>()
-                .expect("project_3d buffer codegen");
-
-            let from_hand = dispatch_project3d(hand_wgsl, &verts, CAPACITY, &hand);
-            let from_gen = dispatch_project3d(&gen_wgsl, &verts, CAPACITY, &gen_bytes);
-
-            for i in 0..CAPACITY as usize {
-                assert!(
-                    (from_hand[i].xy[0] - from_gen[i].xy[0]).abs() < 1e-6
-                        && (from_hand[i].xy[1] - from_gen[i].xy[1]).abs() < 1e-6,
-                    "mode {mode} slot {i}: hand={:?} gen={:?}",
-                    from_hand[i].xy,
-                    from_gen[i].xy
-                );
-            }
-            // Inactive slots collapsed to origin in both.
-            for pt in from_gen.iter().skip(active as usize) {
-                assert_eq!(pt.xy, [0.0, 0.0], "mode {mode}: inactive slot not origin");
-            }
-        }
-    }
-}

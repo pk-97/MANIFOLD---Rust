@@ -96,7 +96,7 @@ impl Primitive for GridUvField {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             // Single-source: kernel generated from the `wgsl_body` (buffer source
-            // path, 0 array inputs). grid_uv_field.wgsl is the parity oracle.
+            // path, 0 array inputs).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.grid_uv_field standalone codegen"),
@@ -185,75 +185,3 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    //! Buffer-domain SOURCE parity oracle (freeze §12). The generated standalone
-    //! kernel (buffer source path — 0 array inputs) must reproduce the hand
-    //! `grid_uv_field.wgsl` UV-for-UV. Confirms the synthesized
-    //! `struct Element { x, y }` is byte-identical to `array<vec2<f32>>`.
-    use super::*;
-
-    /// Dispatch a grid-uv kernel (uniform(0), uv_out(1) read_write) and read the
-    /// vec2 cells back. `uniform` is in that kernel's layout.
-    fn dispatch_grid(wgsl: &str, count: u32, uniform: &[u8]) -> Vec<[f32; 2]> {
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "grid-oracle");
-        let buf = device.create_buffer_shared((count as u64) * 8);
-        let mut enc = device.create_encoder("grid-oracle");
-        enc.dispatch_compute(
-            &pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: uniform },
-                GpuBinding::Buffer { binding: 1, buffer: &buf, offset: 0 },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "grid-oracle",
-        );
-        enc.commit_and_wait_completed();
-        let ptr = buf.mapped_ptr().expect("shared buffer");
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const [f32; 2], count as usize) };
-        slice.to_vec()
-    }
-
-    /// Generated grid_uv_field reproduces the hand kernel: every cell-centre UV
-    /// matches on an 8×8 grid (64 cells). Same WGSL ops → bit-identical.
-    #[test]
-    fn generated_grid_uv_matches_hand_kernel() {
-        const GRID: u32 = 8;
-        let count = GRID * GRID;
-
-        // Hand layout: grid_size(u32) + 3 pad words.
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&GRID.to_le_bytes());
-        hand.extend_from_slice(&[0u8; 12]);
-
-        // Generated layout: grid_size(i32), dispatch_count(u32), 2 pad words.
-        let mut gen_bytes = Vec::new();
-        gen_bytes.extend_from_slice(&(GRID as i32).to_le_bytes());
-        gen_bytes.extend_from_slice(&count.to_le_bytes());
-        gen_bytes.extend_from_slice(&[0u8; 8]);
-
-        let hand_wgsl = include_str!("shaders/grid_uv_field.wgsl");
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<GridUvField>()
-            .expect("grid_uv_field buffer source codegen");
-        assert!(gen_wgsl.contains("struct Element"), "vec2 element struct synthesized");
-        assert!(
-            gen_wgsl.contains("var<storage, read_write> buf_uv"),
-            "output array bound read_write"
-        );
-        assert!(!gen_wgsl.contains("var<storage, read>"), "source has no input arrays");
-
-        let from_hand = dispatch_grid(hand_wgsl, count, &hand);
-        let from_gen = dispatch_grid(&gen_wgsl, count, &gen_bytes);
-
-        for i in 0..count as usize {
-            assert!(
-                (from_hand[i][0] - from_gen[i][0]).abs() < 1e-7
-                    && (from_hand[i][1] - from_gen[i][1]).abs() < 1e-7,
-                "cell {i}: hand={:?} gen={:?}",
-                from_hand[i],
-                from_gen[i]
-            );
-        }
-    }
-}

@@ -86,9 +86,7 @@ struct Expectation {
     /// "playing, having started from `beat` at `anchored_at`" — because both
     /// engines advance while the ack is in flight. Comparing a frozen beat
     /// against Ableton's advancing position gives a ~ε-wide ack window that
-    /// real listener latency blows straight past (the 2026-07-07 L4 escape:
-    /// retries then re-seeked Ableton BACK to the stale beat, visibly
-    /// yanking its playhead once per retry).
+    /// real listener latency blows straight past.
     anchored_at: f64,
 }
 
@@ -126,8 +124,7 @@ struct ObservedAbleton {
 
 impl ObservedAbleton {
     /// One-line snapshot for the `[ABL-SYNC]` diagnostics — the evidence a
-    /// live run produces when acks starve (the 2026-07-07 escape's open
-    /// question: which observation was missing or stale on the real rig).
+    /// live run produces when acks starve.
     fn describe(&self, now: f64) -> String {
         let playing = match self.is_playing {
             Some(true) => "playing",
@@ -613,10 +610,9 @@ mod tests {
         assert_eq!(drain_actions(&mut m), vec![]);
     }
 
-    /// Regression for the 2026-07-07 L4 escape: the ack arrives AFTER
-    /// Ableton has already played several beats past the anchor (real
-    /// listener latency at real tempo). A playing expectation is an
-    /// interval, not a point — this must still acknowledge.
+    /// The ack arrives AFTER Ableton has already played several beats past
+    /// the anchor (real listener latency at real tempo). A playing
+    /// expectation is an interval, not a point — this must still acknowledge.
     #[test]
     fn t5b_late_ack_after_ableton_advanced_still_acks() {
         let mut m = settled_stopped_at_9();

@@ -53,7 +53,6 @@ impl OverlayId {
 
 /// Who owns the in-flight pointer drag. Resolved once per gesture (D1) by
 /// [`UIRoot::resolve_drag_owner`], cleared by the terminal broadcast (D2).
-/// `docs/DRAG_CAPTURE_DESIGN.md` §3.1 — replaces the old boolean drag-active latch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DragOwner {
     /// An open overlay claimed it (modal, or origin inside its rect — §3.2).
@@ -124,14 +123,6 @@ pub(crate) fn build_picker_session(
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
-    // Most menus now use typed DropdownItem::with_action, needing no context /
-    // index→action map (2b.11). Retired: BlendMode, MidiNote, MidiChannel,
-    // MidiDevice, Resolution, ClkDevice, ClipContext, TrackContext, AudioInputDevice,
-    // LayerAudioSend, ClipDetectQuantize, ClipDetectLayer, AudioTriggerLayer,
-    // AudioSetupDevice, MasterExitPath, CardContext, ParamContext, MacroSlotContext,
-    // GenStringParamDropdown, AudioSendRoutings (§7.2 item 7, P8, 2026-07-11 —
-    // the Cap chip that opened it is gone, its content lives in the Inputs
-    // section's read-only routing display now).
     LayerContext(manifold_core::LayerId), // survives only for its color swatches (text items are typed)
 }
 
@@ -284,10 +275,6 @@ pub struct UIRoot {
     /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
     /// selected; read when an instrument's layer dropdown opens.
     clip_detect_layers: Vec<(manifold_core::LayerId, String)>,
-    // `audio_trigger_layers` (the matrix's target-layer dropdown cache) is
-    // deleted with the matrix (P3, D2).
-    // `audio_layers` (Inputs section "+ Layer" dropdown candidates) deleted
-    // with the section's authoring (§7.2 item 7, P8, 2026-07-11).
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -1107,10 +1094,7 @@ impl UIRoot {
 
     /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw keepalive as ONE
     /// aggregate predicate, OR-ed into each window's own `offscreen_dirty` by
-    /// its caller (never a per-window keepalive list). Replaces the old
-    /// pattern of each animation source hand-wiring its own poll into the
-    /// main tick — a missed wire there was a frozen animation in exactly one
-    /// window, the redraw-side sibling of BUG-151.
+    /// its caller (never a per-window keepalive list).
     ///
     /// Membership re-derived at P2 impl via `rg "is_animating|tick\(" crates/
     /// manifold-ui/src/panels/`, not assumed from the design doc's original
@@ -1564,12 +1548,6 @@ impl UIRoot {
         self.input.process_key(&self.tree, key, modifiers);
     }
 
-    // `open_dropdown_at` (generic DropdownContext-carrying opener) deleted
-    // (§7.2 item 7, P8, 2026-07-11) — its only caller was
-    // `AudioSendRoutingsClicked`. The one surviving `DropdownContext`
-    // (`LayerContext`, the layer-color swatches) sets `dropdown_context`
-    // directly at its own call site instead.
-
     /// Open a dropdown whose items carry their own actions (2b.11). No
     /// `DropdownContext` is stored — each item returns
     /// `DropdownAction::SelectedAction`, which the drain fires directly, so there
@@ -1589,11 +1567,6 @@ impl UIRoot {
     ) {
         self.clip_detect_layers = layers;
     }
-
-    // `set_audio_trigger_layers` (the matrix's target-layer dropdown cache
-    // setter) is deleted with the matrix (P3, D2). `set_audio_layers`
-    // (Inputs section "+ Layer" candidates) is deleted with the section's
-    // authoring (§7.2 item 7, P8, 2026-07-11).
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
@@ -1786,10 +1759,9 @@ impl UIRoot {
                 self.last_right_click_pos = *pos;
             }
 
-            // Self-heal (§3.3 failure story (b)): a stale owner can only mean
+            // Self-heal: a stale owner can only mean
             // the previous gesture's terminal event never reached the
-            // broadcast (a lost OS release at the window seam — BUG-028
-            // precedent). The next PointerDown clears it, firing the same
+            // broadcast. The next PointerDown clears it, firing the same
             // unconditional broadcast a normal terminal event would.
             if matches!(event, UIEvent::PointerDown { .. }) && self.drag_owner.is_some() {
                 self.broadcast_gesture_end();
@@ -2004,7 +1976,7 @@ impl UIRoot {
                 self.viewport_events.push(event.clone());
             }
 
-            // Owner lifetime (BUG-075 / D2/§3.3): the stash read just above
+            // Owner lifetime: the stash read just above
             // still needs `drag_owner`, so the terminal clear happens HERE —
             // after both the fire-hooks (in the match arm) and the stash
             // classification — never earlier. This is the fix's whole point:
@@ -2133,10 +2105,6 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            // `AudioSendAddLayerClicked` (Inputs section "+ Layer") is deleted
-            // with the section's authoring (§7.2 item 7, P8, 2026-07-11) — the
-            // layer header's own Send dropdown (`AudioSendClicked` above) is
-            // the one surviving path to `SetLayerAudioSend`.
             PanelAction::AddEffectClicked(tab) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
@@ -2249,11 +2217,6 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
-            // `AudioSendRoutingsClicked` (the Cap chip's click-to-reveal
-            // routings popup) is deleted (§7.2 item 7, P8, 2026-07-11) — its
-            // content (device + feeding layers) lives in the Inputs
-            // section's read-only routing display now, always visible, no
-            // click needed.
             PanelAction::AudioSetupDeviceClicked => {
                 // Enumerate input devices + tappable sources on demand for the
                 // Audio Setup modal. The list is three sections: the default, the
@@ -2329,7 +2292,7 @@ impl UIRoot {
                 // source builds its true layout, grouped by subdevice, with
                 // platform channel names. Each row carries its typed channel action
                 // (2b.11) — the list itself enumerates stereo pairs AND single
-                // channels (§7.2 item 7, P8), so mono is just picking one.
+                // channels, so mono is just picking one.
                 let items = if self
                     .audio_setup_panel
                     .current_device()
@@ -2499,8 +2462,7 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
-            // BUG-184: `ClearLaneCommand`/`RemoveLaneCommand` had no UI
-            // callers. Two-item menu, same typed with_action shape as
+            // Two-item menu, same typed with_action shape as
             // ClipRightClicked/TrackRightClicked above.
             PanelAction::AutomationLaneRightClicked(target, param_id) => {
                 let items = vec![
@@ -2825,7 +2787,7 @@ impl UIRoot {
                 self.open_dropdown_typed(items, cell_trigger);
                 true
             }
-            // BUG-250: the shared card row core's enum value-cell click
+            // The shared card row core's enum value-cell click
             // (3+ labels) — same overlay as `SceneSetupEnumClicked`, but
             // generic over `GraphParamTarget` + `ParamId` so inspector card
             // rows and scene rows share the one path. Each item dispatches
@@ -3361,15 +3323,11 @@ impl UIRoot {
         self.audio_setup_panel.update_scope_lane_labels(&mut self.tree);
     }
 
-    // `update_audio_trigger_levels` (the matrix's per-row trigger meter
-    // driver) is deleted with the matrix (P3, D2). The D6 fire meter that
-    // replaces it lives in the audio-mod drawer — deferred to a follow-up
-    // phase (see this phase's landing notes).
 }
 
-/// The `AudioSetSendChannels` action for an explicit channel set (§7.2 item 7,
-/// P8, 2026-07-11: the channel dropdown carries stereo pairing directly now —
-/// no separate St/Mo toggle, mono falls out of picking a single channel).
+/// The `AudioSetSendChannels` action for an explicit channel set (the channel
+/// dropdown carries stereo pairing directly now — no separate St/Mo toggle,
+/// mono falls out of picking a single channel).
 fn send_channels_action(send_id: &manifold_core::AudioSendId, channels: Vec<u16>) -> PanelAction {
     PanelAction::AudioSetSendChannels(send_id.clone(), channels)
 }
@@ -3996,32 +3954,36 @@ mod tick_parity_tests {
     /// A minimal one-param effect card config, built from scratch (not
     /// reused from `manifold-ui`'s own private `mk_config` test helper,
     /// which isn't reachable across the crate boundary) — every field is
-    /// `pub` on `ParamCardConfig`, so this fixture is a direct, honest
+    /// `pub` on `ParamSurface`, so this fixture is a direct, honest
     /// construction of the same shape `ui_bridge::state_sync` builds from
     /// real project state.
-    fn fixture_config(collapsed: bool) -> manifold_ui::ParamCardConfig {
-        let n = 1;
-        manifold_ui::ParamCardConfig {
+    fn fixture_config(collapsed: bool) -> manifold_ui::ParamSurface {
+        manifold_ui::ParamSurface {
             kind: manifold_ui::ParamCardKind::Effect,
-            name: "Fixture".into(),
-            params: vec![manifold_ui::ParamInfo {
-                param_id: std::borrow::Cow::Borrowed("amount"),
-                name: "Amount".into(),
-                min: 0.0,
-                max: 1.0,
-                default: 0.5,
-                whole_numbers: false,
-                is_angle: false,
-                exposed: true,
-                is_toggle: false,
-                is_trigger: false,
-                is_trigger_gate: false,
-                value_labels: None,
-                osc_address: None,
-                ableton_display: None,
-                ableton_range: None,
-                mappable: false,
-                section: None,
+            title: "Fixture".into(),
+            rows: vec![manifold_ui::ParamRow {
+                id: std::borrow::Cow::Borrowed("amount"),
+                spec: manifold_ui::RowSpec {
+                    name: "Amount".into(),
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    whole_numbers: false,
+                    is_angle: false,
+                    is_toggle: false,
+                    is_trigger: false,
+                    is_trigger_gate: false,
+                    value_labels: None,
+                    section: None,
+                },
+                value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
+                modulation: manifold_ui::RowMod::default(),
+                mapping: manifold_ui::RowMapping {
+                    osc_address: None,
+                    ableton_display: None,
+                    ableton_range: None,
+                    mappable: false,
+                },
             }],
             string_params: Vec::new(),
             collapsed,
@@ -4029,26 +3991,9 @@ mod tick_parity_tests {
             effect_id: manifold_core::EffectId::new("bug160-fixture"),
             enabled: true,
             supports_envelopes: true,
-            has_drv: false,
-            has_env: false,
-            has_abl: false,
             has_graph_mod: false,
             layer_id: None,
-            driver_active: vec![false; n],
-            envelope_active: vec![false; n],
-            trim_min: vec![0.0; n],
-            trim_max: vec![1.0; n],
-            target_norm: vec![1.0; n],
-            env_decay: vec![1.0; n],
-            driver_beat_div_idx: vec![-1; n],
-            driver_waveform_idx: vec![-1; n],
-            driver_reversed: vec![false; n],
-            driver_dotted: vec![false; n],
-            driver_triplet: vec![false; n],
-            driver_free_period: vec![None; n],
             audio: Default::default(),
-            automation_active: vec![false; n],
-            automation_overridden: vec![false; n],
             relight: manifold_ui::RelightCardConfig::default(),
         }
     }

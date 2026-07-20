@@ -270,10 +270,7 @@ pub enum LoadError {
     /// `output_format(port)`. Most primitives have a no-op default
     /// `set_output_format` (their WGSL shaders hardcode a format),
     /// so writing `outputFormats` against them at JSON-load time
-    /// silently dropped to default. That used to be a debugging
-    /// nightmare: the persistent slot, the producer chain, and the
-    /// state-store texture would all disagree on format and the
-    /// per-frame `copy_texture_to_texture` would silently corrupt.
+    /// silently dropped to default.
     /// Now it's a load-time error — fix the JSON (remove the
     /// override) or implement `set_output_format` on the primitive
     /// (plus an fp32 shader variant if needed).
@@ -1128,10 +1125,7 @@ mod tests {
         );
     }
 
-    // Note: `output_format_override_round_trips_through_json` and
-    // `declared_output_format_lands_in_compiled_plan` previously
-    // exercised the legacy `wgsl_compute_0in_1tex` / `_1tex_1tex` /
-    // `_2tex_1tex` variants' `set_output_format` shim. The generic
+    // The generic
     // `node.wgsl_compute` derives its output format from the WGSL
     // source's `texture_storage_2d<F, write>` declaration and ignores
     // JSON overrides — so the round-trip story for that mechanism no

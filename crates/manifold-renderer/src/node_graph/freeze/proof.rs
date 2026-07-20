@@ -1029,10 +1029,6 @@ fn every_fused_preset_executes_one_frame() {
 
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         let preset_id = type_id.as_str().to_string();
-        // (The long-standing WireframeDepth skip is gone: the 42×42 same-size-
-        // blit panic in its depth path was fixed 2026-06-12 — the source →
-        // analysis copy is a sampling resize now — and the graph decomposition
-        // replaced the legacy impl under the WireframeDepth type id.)
         let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
             continue;
         };
@@ -2698,7 +2694,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     // atoms (grad → scale → rotate) fuse through the q16 f16-faithful tier:
     // an f16 `dst` plus the `q16(...)` register-rounding wrapper that
     // reproduces the unfused f16 store/load. f16 is the engine's texture
-    // currency (2026-06-10 decision): the old rgba32float overrides existed
+    // currency: the old rgba32float overrides existed
     // only as a pre-q16 parity workaround, and they doubled every downstream
     // consumer's bandwidth AND broke the gaussian blur's bilinear tap-pair
     // trick (fp32 textures aren't filterable on Apple GPUs). No rgba32float
@@ -3154,7 +3150,7 @@ fn feedback_pingpong_matches_copy_path() {
 }
 
 /// Stencil tier A proof on the real OilyFluid: its feedback-loop f16 chains
-/// (previously hard boundaries) now fuse with `q16` register rounding, and
+/// now fuse with `q16` register rounding, and
 /// the fused render must match the unfused one BIT-EXACTLY through the raw
 /// executor — the loop amplifies any rounding mismatch, so 8 frames at
 /// 256² is a real drift test, not a smoke test. (Raw harness, not

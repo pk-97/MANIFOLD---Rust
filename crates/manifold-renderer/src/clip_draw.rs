@@ -94,7 +94,7 @@ pub fn clip_strip_height(h: f32) -> Option<f32> {
 /// The preview-well colour: the identity colour scaled toward black (hue-
 /// preserving), standing in for the thumbnail until §F populates it. Carries
 /// the input's own alpha through unchanged — a preview well is a solid
-/// backstop against the lane grid (Peter, 2026-06-28) EXCEPT during a P2
+/// backstop against the lane grid EXCEPT during a P2
 /// duplicate-drag ghost (`ClipBody::alpha` < 1.0, see [`body_alpha`]), where
 /// the whole clip — well included — is meant to read as translucent.
 fn well_color(c: Color32) -> Color32 {

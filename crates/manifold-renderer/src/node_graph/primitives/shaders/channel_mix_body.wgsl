@@ -2,8 +2,7 @@
 // matrix transform: out = M . in, M's rows are the four Vec4 params.
 // Matches channel_mix.wgsl exactly. PARAMS: [row0, row1, row2, row3], each
 // a Vec4 param expanded to four consecutive f32 fields and reassembled as
-// vec4<f32> (freeze/codegen.rs's ParamType::Vec4 branch, 2026-07-14 P3
-// wave 2).
+// vec4<f32>.
 fn body(
     c: vec4<f32>,
     uv: vec2<f32>,

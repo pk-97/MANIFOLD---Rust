@@ -2,8 +2,7 @@
 // two-stop gradient (color_a at luma 0 -> color_b at luma 1), preserving
 // input coverage (premultiplied alpha in/out). Matches color_ramp.wgsl
 // exactly. PARAMS: [color_a, color_b], each a Color param expanded to four
-// consecutive f32 fields and reassembled as vec4<f32> (freeze/codegen.rs's
-// ParamType::Color branch, 2026-07-14 P3 wave 2).
+// consecutive f32 fields and reassembled as vec4<f32>.
 fn body(
     c: vec4<f32>,
     uv: vec2<f32>,

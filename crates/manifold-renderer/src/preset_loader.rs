@@ -672,7 +672,7 @@ fn apply_reload() -> u64 {
         &effect_meta,
         &generator_meta,
     );
-    // PRESET_LIBRARY_DESIGN P3 entry-state fix: the Add-effect/Add-generator
+    // the Add-effect/Add-generator
     // browser popup reads `preset_type_registry`, a SEPARATE store from
     // `PRESET_DEFINITIONS` above — it used to be a `LazyLock` computed once
     // and never refreshed, so a preset saved into the user dir at runtime

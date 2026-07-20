@@ -17,6 +17,13 @@ use std::collections::{HashMap, HashSet};
 /// `is_active` as an independent stored flag that gestures forgot to clear.
 /// Derived conveniences (region bounds of a clip selection, etc.) are computed
 /// on demand by callers that have the project, never stored here.
+/// What "the same selection" means for the inspector tab pin: the
+/// primary layer, primary clip, and the layer selection set. Two syncs with
+/// an equal tuple are the same selection even if `selection_version` moved
+/// between them (a command side effect touched the version, not the
+/// selection). Cheap — no allocation beyond the existing `HashSet` clone.
+type SelectionIdentity = (Option<LayerId>, Option<ClipId>, HashSet<LayerId>);
+
 #[derive(Debug, Clone, Default)]
 pub enum TimelineSelection {
     #[default]
@@ -78,16 +85,17 @@ pub struct UIState {
 
     // ── Inspector scope ──
     /// The inspector scope the user pinned by clicking a tab, plus the
-    /// `selection_version` it was pinned at. The pin is a *view* over the live
-    /// timeline selection: clicking a tab points the inspector at that rung
-    /// (Clip / Layer / Group / Master) WITHOUT changing what's selected, so the
-    /// full ownership chain stays available and you keep your place. It is
-    /// active only while still on the same `selection_version` — any selection
-    /// change already bumps the version, so the pin auto-clears and the
-    /// inspector falls back to the selection-derived default scope. This is the
-    /// one piece of inspector state that isn't pure selection. See
-    /// docs/UI_LAYOUT_DESIGN.md.
-    scope_pin: Option<(InspectorTab, u64)>,
+    /// selection *identity* it was pinned under (BUG-266: `selection_version`
+    /// alone was too coarse — command side effects like add-effect's
+    /// behind-the-scenes selection touch bump it without changing WHICH
+    /// layer/clip is selected, and used to kill the pin along with them). The
+    /// pin is a *view* over the live timeline selection: clicking a tab points
+    /// the inspector at that rung (Clip / Layer / Group / Master) WITHOUT
+    /// changing what's selected, so the full ownership chain stays available
+    /// and you keep your place. It clears only on a genuine identity change —
+    /// see `pinned_scope()`. This is the one piece of inspector state that
+    /// isn't pure selection. See docs/UI_LAYOUT_DESIGN.md.
+    scope_pin: Option<(InspectorTab, SelectionIdentity)>,
 
     /// Automation-mode view toggle (Live's `A`, P4 `docs/AUTOMATION_LANES_DESIGN.md`
     /// §7): show/hide lane strips across the timeline. Purely a view-state
@@ -187,25 +195,48 @@ impl UIState {
 
     // ── Inspector scope ─────────────────────────────────────────────
 
+    /// The current selection identity — see `SelectionIdentity`.
+    fn selection_identity(&self) -> SelectionIdentity {
+        (
+            self.primary_selected_layer_id.clone(),
+            self.primary_selected_clip_id.clone(),
+            self.selected_layer_ids.clone(),
+        )
+    }
+
+    fn identity_is_empty(identity: &SelectionIdentity) -> bool {
+        identity.0.is_none() && identity.1.is_none() && identity.2.is_empty()
+    }
+
     /// The inspector scope currently pinned by a tab click, if the pin is still
-    /// live (no selection change since). `None` ⇒ fall back to the
-    /// selection-derived default scope.
+    /// live. `None` ⇒ fall back to the selection-derived default scope.
+    ///
+    /// live means selection *identity*, not `selection_version` — a
+    /// version bump alone (a command side effect, e.g. add-effect's
+    /// behind-the-scenes selection touch) does not clear the pin. It clears
+    /// only when the identity changes to a different, NON-EMPTY value; a
+    /// transient empty selection (clear-then-reselect churn) holds the pin so
+    /// it can reassert once the identity returns.
     pub fn pinned_scope(&self) -> Option<InspectorTab> {
-        self.scope_pin
-            .filter(|(_, v)| *v == self.selection_version)
-            .map(|(tab, _)| tab)
+        let (tab, pinned_identity) = self.scope_pin.as_ref()?;
+        let current = self.selection_identity();
+        if Self::identity_is_empty(&current) || &current == pinned_identity {
+            Some(*tab)
+        } else {
+            None
+        }
     }
 
     /// Pin the inspector to a scope (a tab click) WITHOUT touching the timeline
     /// selection. Bumps `selection_version` so the inspector rebuilds; the pin
-    /// is recorded against the new version and auto-clears on the next selection
-    /// change (which bumps the version again). Idempotent for the active scope.
+    /// is recorded against the current selection identity — see
+    /// `pinned_scope()` for when it clears. Idempotent for the active scope.
     pub fn pin_scope(&mut self, tab: InspectorTab) {
         if self.pinned_scope() == Some(tab) {
             return;
         }
         self.selection_version += 1;
-        self.scope_pin = Some((tab, self.selection_version));
+        self.scope_pin = Some((tab, self.selection_identity()));
     }
 
     /// Release any scope pin without changing the timeline selection, so the

@@ -18,7 +18,7 @@
 // Adapted verbatim from `effects/shaders/fx_depth_of_field_compute.wgsl`'s
 // blur_*tap routines.
 //
-// BUG-138 fix (2026-07-13): see gaussian_blur_variable_width_body.wgsl's
+// see gaussian_blur_variable_width_body.wgsl's
 // header for the full rationale — each logical tap now densifies into
 // `subtap_count(step_size)` sub-samples that fill the gap back toward the
 // previous tap when spacing exceeds GAP_THRESHOLD_PX, so a large per-pixel

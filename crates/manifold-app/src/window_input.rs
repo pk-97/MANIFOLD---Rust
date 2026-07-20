@@ -1,13 +1,10 @@
-//! The window input owner (Phase 7 — "one shared input owner for both windows").
+//! The window input owner.
 //!
 //! Both the timeline/inspector window and the graph-editor window enter their
 //! pointer / scroll / keyboard handling through the `input_*` dispatchers here.
 //! `App::window_event` is a thin router: each input arm is one delegation into
 //! this module, and the `is_graph_editor` / `is_primary` branching lives in the
-//! dispatcher — not smeared across the match. This replaces the two parallel
-//! event *policies* the audit flagged ("two parallel event loops"): the primary
-//! window's bodies used to be inlined in `window_event`, the editor's in a
-//! separate `editor_input.rs`. Now there is one owner.
+//! dispatcher — not smeared across the match. Now there is one owner.
 //!
 //! The shared core both windows route through:
 //! - **Gesture production** — `UIInputSystem` (`ui_root.input`), already the

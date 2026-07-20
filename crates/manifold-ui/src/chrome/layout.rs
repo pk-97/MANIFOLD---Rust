@@ -41,6 +41,9 @@ pub struct LaidNode {
     /// for overlay anchoring (the "stable semantic addressing" the Chrome API
     /// gives panels in place of hand-stored `self.*_id` fields).
     pub key: Option<u64>,
+    /// Opt-in durable-WidgetId pin copied from [`View::identity`] — the host
+    /// mints this node via `add_node_keyed` (D4 card-root identity).
+    pub identity: Option<u64>,
     /// Automation component name copied from [`View::name`] — applied to the
     /// built node via `UITree::set_name` (`UI_AUTOMATION_DESIGN.md` D8/§3).
     pub name: Option<&'static str>,
@@ -153,6 +156,7 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
         intent: view.intent.clone(),
         slider: view.slider.clone(),
         key: view.key,
+        identity: view.identity,
         name: view.name,
     });
 
