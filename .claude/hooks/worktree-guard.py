@@ -17,7 +17,13 @@ Denies when the target file resolves INSIDE the main checkout, EXCEPT:
     require a worktree. Repo memory lives outside the project dir and never trips;
   - unmerged (conflicted) files while .git/MERGE_HEAD exists — landing-protocol
     merges happen in the main checkout, so conflict resolution edits exactly
-    those files there. See merge_conflict_paths() for scope and failure story.
+    those files there. See merge_conflict_paths() for scope and failure story;
+  - quick docs: docs/**/*.md EXCEPT *_DESIGN.md (approved by Peter 2026-07-20 —
+    the worktree ceremony is overkill for non-breaking doc edits like findings,
+    backlog entries, tombstones). Design docs stay on the worktree path: they
+    carry supersession-sweep obligations that deserve a deliberate landing.
+    Adding/renaming a doc still requires gen_docs_index.py in the same commit
+    or the freshness meta-test goes red.
 
 The deny repeats on every attempt (no once-per-session sentinel): the only way to
 make the edit land is to actually move into a worktree, at which point the target
@@ -66,6 +72,18 @@ def in_main_checkout(resolved):
 
 def is_tooling(resolved):
     return resolved == _CLAUDE_DIR or _CLAUDE_DIR in resolved.parents
+
+
+_DOCS_DIR = _PROJECT_DIR / "docs"
+
+
+def is_doc_fast_path(resolved):
+    """docs/**/*.md except *_DESIGN.md — see module docstring."""
+    if resolved.suffix != ".md":
+        return False
+    if resolved.name.endswith("_DESIGN.md"):
+        return False
+    return resolved == _DOCS_DIR or _DOCS_DIR in resolved.parents
 
 
 def merge_conflict_paths():
@@ -130,6 +148,8 @@ def main():
     if not in_main_checkout(resolved):
         return 0
     if is_tooling(resolved):
+        return 0
+    if is_doc_fast_path(resolved):
         return 0
     if resolved in merge_conflict_paths():
         return 0
