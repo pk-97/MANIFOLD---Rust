@@ -600,7 +600,7 @@ Pinned to GAUSSIAN_SPLATS_DESIGN.md §3 (`splat_source`, `mask_splats_by_color`,
 
 ## B1. Monolith Collapse (set-piece composition)
 
-**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: VISUAL_BRAINSTORM_2026_07_08.md §4.)
+**Intent.** A photoreal column/facade at 1:1 on the tower, static long enough to be filed as architecture — then it fails, physically, and the screen goes dark. (Full dramaturgy: archive/VISUAL_BRAINSTORM_2026_07_08.md §4.)
 
 **Variant a — statue/organic (splat dissolve):** `splat_source(scan)` → `mask_splats_by_bounds` (crop + reveal volume) → `displace_splats(simplex, amount = Collapse card, mask-weighted so failure starts at the top)` → `render_splats(look_at_camera, static, 1:1 framing)`. D5's displacement-comes-home gives the rebuild for free: Collapse back to 0 re-forms the statue over the outro.
 
