@@ -191,6 +191,11 @@ System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md)
 
 ## Open
 
+### BUG-283 (manifold-app-clippy-tests-target-drift) — `cargo clippy -p manifold-app --tests -- -D warnings` fails on three pre-existing files; the standard gates never compile the test target so the drift is invisible
+**Status:** OPEN (logged 2026-07-21, surfaced by the widget-tree P4 lane while gating its own test-only diff).
+**Severity:** LOW — no runtime impact; a gate-hygiene gap. The failures: `tests/tree_render_call_sites.rs` (doc_lazy_continuation), `src/app_lifecycle.rs` (cloned_ref_to_slice_refs), `src/text_input.rs` (approx_constant). None touched by recent widget-tree work (verified via git log — last modified by unrelated prior commits); likely clippy/toolchain version drift.
+**Root cause:** the house clippy gates (`-p <crate> -- -D warnings` at commit; `--workspace -- -D warnings` at landing) don't enable `cfg(test)` compilation, so lints that only fire in test targets accumulate silently until someone runs `--tests`.
+**Fix shape:** one cleanup pass over the three files, then decide whether the landing gate should add `--tests` (cheap on a warm checkout) — a gate-policy call for Peter/orchestrator, not a lane.
 ### BUG-282 (graph-canvas-unbound-param-scrub-floods-undo-stack) — dragging an unbound graph-node-face param scrub records one undo entry PER POINTER-MOVE TICK instead of batching to one per gesture
 **Status:** OPEN (logged 2026-07-20, W2-C drag-surfaces survey).
 **Severity:** MEDIUM — not data corruption, but breaks the undo contract every other drag family in the codebase honors: a single scrub gesture can push dozens of entries into the 200-entry-capped undo stack, evicting older history and making Undo require many presses to unwind one visual drag.
