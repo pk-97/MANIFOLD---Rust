@@ -33,7 +33,7 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 - **W1-C BUG-266:** tab pin dies on incidental selection changes — decouple pin invalidation from `selection_version` (disjoint: `ui_state.rs`/`state_sync.rs`).
 - **W1-D BUG-267:** unify master/layer card vecs in `inspector.rs` (the wave's real-code lane; structural, goes BEFORE BUG-265 which touches the same lines).
 
-## Wave 1.5 — comment/noise sweep (approved by Peter 2026-07-20; runs after Wave 1 lands)
+## Wave 1.5 — comment/noise sweep (COMPLETE 2026-07-20 — W15-C `f23eb8fa`, W15-D `dc95ea94`, W15-B `6ae3cd12`, W15-A `b8edad81`. Net ~−600 comment lines + 11 design-doc headers de-genealogized; board verified stable. Finding: majority of flagged comments were live constraints with BUG tags — codebase comments less rotten than assumed. One discipline breach: W15-A spawned sub-agents against the brief; contained by lane self-review + orchestrator sampling; one over-deletion caught and reverted by the lane, one live DEBT note restored at landing.)
 
 The class: history narrated in code comments — dates, BUG-NNN provenance, "previously/used to", status-corrected notes. Measured 2026-07-20: ~1,400 such comment lines across 265 files in `crates/`. Git already holds all of it; in code it is context tax on every session and agent. The CLAUDE.md comment rule stops new instances; this wave clears the backlog.
 
